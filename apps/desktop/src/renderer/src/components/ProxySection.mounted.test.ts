@@ -7,8 +7,9 @@ import { ProxySection } from "./ProxySection.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-it.each<[ProxyCheckVerdict, string, string]>([
+it.each<[ProxyCheckVerdict, string, string, boolean?]>([
   ["ok", "settings-notice-ok", "status"],
+  ["ok", "settings-notice-neutral", "status", true],
   ["direct", "settings-notice-neutral", "status"],
   ["bypassed_by_no_proxy", "settings-notice-neutral", "status"],
   ["socks_unsupported", "settings-notice-neutral", "status"],
@@ -16,11 +17,11 @@ it.each<[ProxyCheckVerdict, string, string]>([
   ["proxy_auth", "settings-notice", "alert"],
   ["tls", "settings-notice", "alert"],
   ["target_unreachable", "settings-notice", "alert"],
-])("presents %s with the appropriate tone and announcement", async (verdict, className, role) => {
+])("presents %s with the appropriate tone and announcement", async (verdict, className, role, shellOverride) => {
   const previous = window.anycode;
   Object.defineProperty(window, "anycode", { configurable: true, value: {
     settings: { proxyCheck: vi.fn().mockResolvedValue({
-      ok: true, verdict, targetUrl: "https://api.example.com/", proxyUsed: verdict === "ok",
+      ok: true, verdict, shellOverride, targetUrl: "https://api.example.com/", proxyUsed: verdict === "ok",
     }) },
   } });
   const container = document.createElement("div");

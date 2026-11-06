@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
@@ -53,4 +54,47 @@ it("captures raw SSE bytes and request bodies while forwarding authentication on
     expect((await readFile(join(dir, name), "utf8"))).not.toContain("fixture-secret");
   }
   expect((await fetch(`${baseUrl}/other`)).status).toBe(404);
+});
+
+it.each([
+  ["--out"], ["--out", "--port", "8787"], ["--out", "x", "--port"],
+  ["--out", "x", "--port", "bad"], ["--out", "x", "--port", "65536"],
+  ["--out", "x", "--port", "-1"], ["--out", ""],
+  ["--out", "x", "--port", ""], ["--out", "x", "--upstream"],
+  ["--out", "x", "--unknown", "value"],
+])("prints usage for invalid flags %j", (...args) => {
+  const result = spawnSync(process.execPath, ["scripts/capture-responses-stream.mjs", "--upstream", "https://gateway.example/v1", ...args], { encoding: "utf8", timeout: 2000 });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Usage:");
+  expect(result.stderr).not.toContain("TypeError");
+  expect(result.stderr).not.toContain("ERR_SOCKET_BAD_PORT");
+  expect(result.stderr).not.toContain("./private-capture");
+});
+
+it("forwards response headers before the first upstream body byte", async () => {
+  let release = () => {};
+  const upstream = createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.flushHeaders();
+    release = () => res.end("data: [DONE]\n\n");
+  });
+  servers.push(upstream);
+  upstream.listen(0, "127.0.0.1"); await once(upstream, "listening");
+  const dir = await mkdtemp(join(tmpdir(), "responses-capture-")); dirs.push(dir);
+  const proxy = await startCapture({ upstream: `http://127.0.0.1:${(upstream.address() as AddressInfo).port}/v1`, out: dir }); servers.push(proxy);
+  const response = fetch(`http://127.0.0.1:${(proxy.address() as AddressInfo).port}/v1/responses`, { method: "POST", body: "{}" });
+  const early = await Promise.race([response.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 500))]);
+  release();
+  await (await response).text();
+  expect(early).toBe(true);
+});
+
+it("reports startup errors without usage, stack or checkout path", () => {
+  const result = spawnSync(process.execPath, ["scripts/capture-responses-stream.mjs", "--upstream", "https://gateway.example/v1", "--out", "package.json/child"], { encoding: "utf8", timeout: 2000 });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("ENOTDIR");
+  expect(result.stderr).not.toContain("Usage:");
+  expect(result.stderr).not.toContain(process.cwd());
+  expect(result.stderr).not.toContain("    at ");
 });

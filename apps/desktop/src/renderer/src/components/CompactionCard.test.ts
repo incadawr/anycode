@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CompactionCard, CompactionDetail, compactionMeta, compactionRowText } from "./CompactionCard.js";
+import { CompactionCard, CompactionDetail, compactionMeta, compactionRowText, compactionRunningLabel } from "./CompactionCard.js";
 import { COMPACTION_INSTRUCTION_MIRROR } from "../compaction-prompt.js";
 import type { TranscriptBlock } from "../store.js";
 
@@ -198,4 +198,13 @@ describe("compaction activity dots", () => {
     expect(html).toContain(compactionRowText(block));
   });
 
+});
+
+it("shares complete running labels between the text and animated row", () => {
+  for (const trigger of ["auto", "manual"] as const) {
+    const block = card({ status: "running", trigger });
+    expect(compactionRunningLabel(block)).toBe(trigger === "auto" ? "Context window full — compacting conversation" : "Compacting conversation");
+    expect(compactionRowText(block)).toBe(`${compactionRunningLabel(block)}…`);
+    expect(render(block)).toContain(`${compactionRunningLabel(block)}<span`);
+  }
 });

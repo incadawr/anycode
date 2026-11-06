@@ -719,7 +719,8 @@ export type HostToUiMessage =
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
   | { type: "user_message_accepted"; requestId: string; turnId: string }
-  | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" | "input_not_sent" }
+  /** runtimeRecoveryTurnId links an unsent request to its durable pending input. */
+  | { type: "turn_rejected"; requestId: string; runtimeRecoveryTurnId?: string; reason: "busy" | "not_ready" | "unsupported_images" | "input_not_sent" }
   | { type: "runtime_input_recovery"; turnId: string; text: string; status: "pending" | "uncertain" }
   | { type: "user_message_invalid"; requestId: string }
   /** Diagnostic for this frame only; requestId may already name an accepted turn. */
@@ -1043,6 +1044,7 @@ export type HostToUiMessage =
   // engine is live and the old one disposed, so receiving it means every later
   // message flows through the replacement engine.
   | { type: "context_usage_checkpoint"; contextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null }
+  | { type: "claude_restart_state"; available: boolean }
   | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId; generation?: number; projection?: EngineSwitchProjection }
   // non-silent refusal for engine_switch_request — mirror of
   // rewind_result's failure shape (the UI must be able to show WHY the switch

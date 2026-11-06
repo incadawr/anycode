@@ -68,11 +68,13 @@ function tryClipboardWrite(text: string, onSuccess: () => void): void {
  * failure keeps the "Not applied" frame — it names a cause, not an outcome, so
  * the row supplies the verdict there and nowhere else.
  */
+export function compactionRunningLabel(block: CompactionBlock): string {
+  return block.trigger === "auto" ? "Context window full — compacting conversation" : "Compacting conversation";
+}
+
 export function compactionRowText(block: CompactionBlock): string {
   if (block.status === "running") {
-    return block.trigger === "auto"
-      ? "Context window full — compacting conversation…"
-      : "Compacting conversation…";
+    return `${compactionRunningLabel(block)}…`;
   }
   if (block.status === "failed") {
     // UI audit v0.0.49 §C3: a STRUCTURAL SKIP is not a refusal. Core's reason
@@ -151,7 +153,7 @@ export function CompactionCard({ block, enter = false }: { block: CompactionBloc
               <Chevron />
             </span>
             <span className="compaction-running-label">
-              {compactionRowText(block).slice(0, -1)}
+              {compactionRunningLabel(block)}
               <span className="compaction-dots" aria-hidden="true">
                 <span>.</span><span>.</span><span>.</span>
               </span>

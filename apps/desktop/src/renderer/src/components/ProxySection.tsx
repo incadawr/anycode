@@ -532,7 +532,7 @@ export function ProxySection({
     outcome.verdict === "tls" || outcome.verdict === "target_unreachable"
   );
   const checkClass = checkFailed ? "settings-notice"
-    : outcome?.verdict === "ok" ? "settings-notice-ok" : "settings-notice-neutral";
+    : outcome?.verdict === "ok" && !outcome.shellOverride ? "settings-notice-ok" : "settings-notice-neutral";
 
   return (
     <section className="settings-section">

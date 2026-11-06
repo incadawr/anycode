@@ -3332,7 +3332,7 @@ body {
 
 .compaction-dots {
   display: inline-flex;
-  width: 1em;
+  width: 1.2em;
   justify-content: space-between;
 }
 

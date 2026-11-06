@@ -82,11 +82,14 @@ describe("gateway Responses stream hypotheses", () => {
   it("preserves initial answer text carried only by content_part.added", async () => {
     const result = await run([added, part("output_text", "K"), delta("afka down"), done]);
     expect(result.text).toBe("Kafka down");
+    expect(result.events.filter(e => e.type === "error")).toEqual([]);
   });
 
   it("recovers reasoning carried only by content_part.added", async () => {
     const result = await run([part("reasoning_text", "Think."), added, delta("Kafka down"), done]);
     expect(result.reasoning).toBe("Think.");
+    expect(result.text).toBe("Kafka down");
+    expect(result.events.filter(e => e.type === "error")).toEqual([]);
   });
 
   it("preserves a delta arriving before output_item.added", async () => {

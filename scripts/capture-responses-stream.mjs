@@ -2,7 +2,8 @@ import { createServer } from "node:http";
 import { createWriteStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { once } from "node:events";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** Explicitly started local diagnostic proxy; response bytes are saved before any SDK parsing. */
@@ -45,6 +46,7 @@ export async function startCapture({ upstream, out, port = 0 }) {
       const responseHeaders = Object.fromEntries([...response.headers].filter(([key]) =>
         !["content-encoding", "content-length", "transfer-encoding", "connection"].includes(key)));
       res.writeHead(response.status, responseHeaders);
+      res.flushHeaders();
       if (response.body) {
         for await (const chunk of response.body) {
           if (!file.write(chunk)) await once(file, "drain");
@@ -68,13 +70,31 @@ export async function startCapture({ upstream, out, port = 0 }) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
-  const option = name => args[args.indexOf(name) + 1];
-  if (!args.includes("--upstream") || !args.includes("--out")) {
-    console.error("Usage: node scripts/capture-responses-stream.mjs --upstream https://gateway.example/v1 --out ./private-capture [--port 8787]");
+  const usage = `Usage: node scripts/capture-responses-stream.mjs --upstream https://gateway.example/v1 --out "${join(tmpdir(), "responses-capture")}" [--port 8787]`;
+  let options;
+  try {
+    const flags = new Map();
+    for (let i = 0; i < args.length; i += 2) {
+      const name = args[i], value = args[i + 1];
+      if (!["--upstream", "--out", "--port"].includes(name) || flags.has(name) || !value?.trim() || value.startsWith("--")) throw new Error("Invalid flag");
+      flags.set(name, value);
+    }
+    const upstream = flags.get("--upstream"), out = flags.get("--out");
+    const port = flags.has("--port") ? Number(flags.get("--port")) : 8787;
+    if (!upstream || !out || !Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid options");
+    options = { upstream, out: resolve(out), port };
+  } catch {
+    console.error(usage);
     process.exitCode = 1;
-  } else {
-    const server = await startCapture({ upstream: option("--upstream"), out: resolve(option("--out")), port: args.includes("--port") ? Number(option("--port")) : 8787 });
+  }
+  if (options) try {
+    const server = await startCapture(options);
     console.log(`Capture proxy: http://127.0.0.1:${server.address().port}/v1`);
     console.log("Request bodies and response text are saved locally. Stop with Ctrl+C after reproducing.");
+  } catch (error) {
+    // Filesystem diagnostics include absolute paths: keep the cause, omit paths.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(message.replaceAll(process.cwd(), "<checkout>").replace(/'[^']*'/g, "'<path>'"));
+    process.exitCode = 1;
   }
 }

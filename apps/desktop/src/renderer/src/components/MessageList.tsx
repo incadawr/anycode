@@ -14,7 +14,7 @@
  * whole column breathes in as one `fade-in` instead). A `role="status"`
  * region outside the aria-live column announces turn start/end exactly once.
  */
-import { useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useContext, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useStore } from "zustand";
 import type {
   ConnectionPhase,
@@ -778,7 +778,18 @@ export function MessageList({
   // nothing extra — MessageList is only ever mounted inside the active tab's
   // `<TabContext.Provider>` (App.tsx's ActiveTabBody). Optional-chained since
   // no render test wraps this component in a provider.
-  const tabId = useContext(TabContext)?.tabId ?? null;
+  const tabContext = useContext(TabContext);
+  const tabId = tabContext?.tabId ?? null;
+  const orchestrating = useSyncExternalStore(
+    (notify) => tabContext?.store.subscribe(notify) ?? (() => {}),
+    () => tabContext?.store.getState().orchestrateActive ?? false,
+    () => tabContext?.store.getState().orchestrateActive ?? false,
+  );
+  const restartAvailable = useSyncExternalStore(
+    (notify) => tabContext?.store.subscribe(notify) ?? (() => {}),
+    () => tabContext?.store.getState().claudeRestartAvailable ?? false,
+    () => tabContext?.store.getState().claudeRestartAvailable ?? false,
+  );
   // S14: "is this list a replay surface" is DERIVED here, from the
   // same tab context, rather than passed down by each owner — the root's list
   // and a replayed child's pane are both rendered under the armed tab's
@@ -1240,7 +1251,7 @@ export function MessageList({
                     {block.error.message ? `: ${block.error.message}` : ""}
                     {formatErrorRetrySuffix(block.retry)}
                   </div>
-                  {!readOnly && tabId && block.error.message?.startsWith("Claude exited while idle") && (
+                  {!readOnly && tabId && restartAvailable && !orchestrating && !block.restartResolved && block.error.message?.startsWith("Claude exited while idle") && (
                     <Button size="sm" className="claude-restart-button" disabled={running || connection !== "ready"}
                       onClick={() => tabRegistry.sendToTab(tabId, { type: "claude_restart_request" })}>
                       Restart Claude

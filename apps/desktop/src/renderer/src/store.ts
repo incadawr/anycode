@@ -513,7 +513,7 @@ export type TranscriptBlock =
    * wording mirrors cli/render.ts) and, via `lastErrorRetry` below, the
    * terminal Try-again offer.
    */
-  | { kind: "error"; id: string; error: SerializedError; retry?: ErrorRetryMeta }
+  | { kind: "error"; id: string; error: SerializedError; restartResolved?: boolean; retry?: ErrorRetryMeta }
   /** Renderer-only quota diagnostic; never reconstructed into prompt history. */
   | { kind: "usage_limit"; id: string; notice: UsageLimitNotice }
   | { kind: "output_truncated"; id: string }
@@ -1341,6 +1341,8 @@ export interface DesktopState {
   beginOrchestrationToggle(requestId: string): string | null;
   beginOrchestrationSubmit(requestId: string): string | null;
 
+  /** Current host verdict, refreshed after reconnect replay. */
+  claudeRestartAvailable: boolean;
   /** Host-authoritative external-engine projection; null means historical core wire. */
   engine: EnginePresentation | null;
   /**
@@ -1835,6 +1837,7 @@ export interface RewindResultInfo {
 }
 
 interface SessionSlice {
+  claudeRestartAvailable: boolean;
   engine: EnginePresentation | null;
   /** Codex-fixes (cut §2(k).3): see `PendingEngineChange`'s own doc comment. */
   pendingEngineChange: PendingEngineChange | null;
@@ -1917,6 +1920,7 @@ interface SessionSlice {
 
 function initialSessionSlice(): SessionSlice {
   return {
+    claudeRestartAvailable: false,
     engine: null,
     pendingEngineChange: null,
     engineSwitch: null,
@@ -3912,6 +3916,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         event.type !== "compaction_end" &&
         !(turnId === "detached-subagent" && (event.type === "subagent_start" || event.type === "subagent_progress" || event.type === "subagent_end")) &&
         !isEngineSwitchNotice &&
+        !(event.type === "engine_notice" && turnId === "claude-restart") &&
         !isMaintenanceEvent
       ) {
         return;
@@ -4838,6 +4843,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             });
             return;
           }
+          if (turnId === "claude-restart" && event.level === "info") {
+            set(state => ({ transcript: state.transcript.map(block => block.kind === "error" ? { ...block, restartResolved: true } : block) }));
+          }
           set({ notice: { kind: "engine_notice", text: event.message } });
           return;
 
@@ -5128,6 +5136,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         switch (message.type) {
           case "todo_reminder_snapshot":
             set({ todoReminderState: message.state });
+            return;
+          case "claude_restart_state":
+            set({ claudeRestartAvailable: message.available });
             return;
           case "host_ready":
             // A `host_ready` on a store that already has session state only
@@ -5432,7 +5443,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const state = get();
             const id = `runtime-recovery:${message.turnId}`;
             set({
-              ...(message.status === "pending" && !state.promptQueue.some(item => item.id === id) ? {
+              ...(message.status === "pending" && !state.promptQueue.some(item => item.id === id || item.runtimeRecoveryTurnId === message.turnId) ? {
                 promptQueue:[...state.promptQueue,{id,text:message.text,images:[],requiresRestore:true,runtimeRecoveryTurnId:message.turnId}],
                 queuePaused:true,queuePauseReason:"cancelled" as const,
               } : {}),
@@ -5467,6 +5478,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 : null;
             const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : rejectedSteer && !rejectedSteer.pendingEcho ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSteer.sentMessage.text,images:rejectedSteer.sentMessage.images.map(image => ({...image,attachment:{...image.attachment}})),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
             const enabledAfterRejection = get().orchestration.observedEnabled ?? get().orchestrateActive;
+            const reconciled = reconcileQueuedRetries((restore ?? restoreDirect)?.promptQueue ?? promptQueue, updatedDeliveries);
             set({
               ...(atomicRejected ? { orchestrateActive: enabledAfterRejection, orchestration: { ...get().orchestration, posture: enabledAfterRejection ? "on" as const : "off" as const, pendingSubmit: null, observedEnabled: null }, queuePaused: true, queuePauseReason: "rejected" as const } : {}),
               ...((rejectedSystem || (delivery && queueInFlight?.requestId === message.requestId)) ? {queueInFlight:null} : {}),
@@ -5482,10 +5494,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     : "Message rejected: the host is not ready yet.",
               },
               ...(restore ?? restoreDirect ?? {}),
-              ...reconcileQueuedRetries((restore ?? restoreDirect)?.promptQueue ?? promptQueue,updatedDeliveries),
+              ...reconciled,
               ...(message.reason === "input_not_sent" ? {
                 queuePaused: true, queuePauseReason: "rejected" as const,
-                promptQueue: ((restore ?? restoreDirect)?.promptQueue ?? promptQueue).map(item => (item.id === message.requestId || item.id === queueInFlight?.item.id) ? { ...item, requiresRestore: true } : item),
+                promptQueue: reconciled.promptQueue.map(item => (item.id === message.requestId || item.id === queueInFlight?.item.id) ? { ...item, requiresRestore: true, ...(message.runtimeRecoveryTurnId ? { runtimeRecoveryTurnId: message.runtimeRecoveryTurnId } : {}) } : item),
               } : {}),
               // a rejected steer never becomes transcript text —
               // drop the matching pending entry, keep unrelated ones.

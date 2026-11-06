@@ -1046,6 +1046,11 @@ it("restores input submitted during replacement and serves a retried turn on the
     await h.waitFor(m => m.type === "host_ready");
     replaced = engine.replaceTransport({ resume: sessionRef });
     await entered;
+    const renderer = createDesktopStore({ schedule: fn => fn() });
+    for (const message of h.received) renderer.getState().applyHostMessage(message);
+    const offset = h.received.length;
+    renderer.getState().recordSentMessage("keep my draft", [], "during-restart");
+    renderer.getState().appendUserText("during-restart", "keep my draft");
     h.send({ type: "user_message", requestId: "during-restart", text: "keep my draft" });
     const recovery = await h.waitFor(m => m.type === "runtime_input_recovery");
     if (recovery.type !== "runtime_input_recovery") throw new Error("missing input recovery");
@@ -1054,9 +1059,12 @@ it("restores input submitted during replacement and serves a retried turn on the
     expect(fake.userMessages).toEqual([]);
     expect(h.received).toContainEqual(expect.objectContaining({ type: "agent_event", event: expect.objectContaining({ type: "engine_notice", message: expect.stringContaining("restarting") }) }));
     expect(h.received.some(m => m.type === "fatal" || (m.type === "agent_event" && m.event.type === "error"))).toBe(false);
-    const renderer = createDesktopStore({ schedule: fn => fn() });
-    for (const message of h.received) renderer.getState().applyHostMessage(message);
-    expect(renderer.getState().promptQueue).toContainEqual(expect.objectContaining({ text: "keep my draft", requiresRestore: true }));
+    await h.flush();
+    expect(resetInput).toHaveBeenCalledWith("test-session", expect.any(String), recovery.turnId);
+    expect(history.recoveries()).toMatchObject([{ turnId: recovery.turnId, state: "pending" }]);
+    expect(h.received).toContainEqual({ type: "turn_rejected", requestId: "during-restart", reason: "input_not_sent", runtimeRecoveryTurnId: recovery.turnId });
+    for (const message of h.received.slice(offset)) renderer.getState().applyHostMessage(message);
+    expect(renderer.getState().promptQueue).toMatchObject([{ id: "during-restart", text: "keep my draft", requiresRestore: true, runtimeRecoveryTurnId: recovery.turnId }]);
     release();
     await replaced;
     expect(fake.streams).toHaveLength(2);

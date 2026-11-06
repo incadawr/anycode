@@ -14,7 +14,7 @@ it("reserves dot width and disables the animation for reduced motion", () => {
   try {
     const style = window.getComputedStyle(dots);
     expect(style.display).toBe("inline-flex");
-    expect(style.width).toBe("1em");
+    expect(style.width).toBe("1.2em");
     const children = Array.from(dots.children).map(dot => window.getComputedStyle(dot));
     expect(children.every(dot => dot.animation.includes("compaction-dot-pulse"))).toBe(true);
     expect(new Set(children.map(dot => dot.animationDelay)).size).toBe(3);

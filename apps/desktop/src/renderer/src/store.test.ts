@@ -6409,6 +6409,41 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(store.getState().turn).toMatchObject({ status: "running", turnId: "t1", requestId: "req-1" });
   });
 
+  it("keeps retry reconciliation when an input was not sent", () => {
+    const store = readyStore();
+    store.setState({ promptQueue: [{ id: "retry", text: "stale retry", images: [], retryOf: "missing" }] });
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "unsent", reason: "input_not_sent" });
+    expect(store.getState().promptQueue).toEqual([]);
+  });
+
+  it.each([false, true])("merges durable unsent recovery by turn id for queued input %s", queued => {
+    const store = readyStore();
+    const image = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    if (queued) {
+      store.getState().enqueuePrompt({ text: "draft", images: [image] });
+      store.getState().takeQueueHead("request");
+    } else {
+      store.getState().recordSentMessage("draft", [image], "request");
+      store.getState().appendUserText("request", "draft");
+    }
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "request", reason: "input_not_sent", runtimeRecoveryTurnId: "turn" });
+    const recovery = { type: "runtime_input_recovery" as const, turnId: "turn", text: "draft", status: "pending" as const };
+    store.getState().applyHostMessage(recovery);
+    store.getState().applyHostMessage(recovery);
+    expect(store.getState().promptQueue).toMatchObject([{ text: "draft", images: [image], requiresRestore: true, runtimeRecoveryTurnId: "turn" }]);
+    expect(store.getState().queueInFlight).toBeNull();
+    // Identical text from a different turn must remain independently recoverable.
+    store.getState().applyHostMessage({ ...recovery, turnId: "another" });
+    expect(store.getState().promptQueue).toHaveLength(2);
+  });
+
+  it("retires restart actions after successful recovery while preserving errors", () => {
+    const store = readyStore();
+    store.setState({ transcript: [{ kind: "error", id: "dead", error: { name: "Error", message: "Claude exited while idle." } }] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "claude-restart", event: { type: "engine_notice", level: "info", message: "Claude restarted. Restore the saved message to send it." } });
+    expect(store.getState().transcript[0]).toMatchObject({ kind: "error", restartResolved: true });
+  });
+
   it("unsent Claude input keeps its images and requires restoration before retry", () => {
     const store = readyStore();
     const image = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };

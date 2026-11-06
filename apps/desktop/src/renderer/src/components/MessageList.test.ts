@@ -31,7 +31,9 @@ import { createDesktopStore, type ErrorRetryMeta, type RetryOffer, type ToolCall
 import { agentMessageText, type AgentEnvelope } from "../../../shared/communication.js";
 
 it("offers a distinct restart action for an idle Claude exit", () => {
-  const html = renderToStaticMarkup(createElement(TabContext.Provider, { value: { tabId: "stopped", store: createDesktopStore() } },
+  const store = createDesktopStore();
+  store.getState().applyHostMessage({ type: "claude_restart_state", available: true });
+  const html = renderToStaticMarkup(createElement(TabContext.Provider, { value: { tabId: "stopped", store } },
     createElement(MessageList, {
       blocks: [{ kind: "error", id: "idle-error", error: { name: "ProviderError", message: "Claude exited while idle. Automatic resume failed." } }],
       turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
@@ -40,6 +42,30 @@ it("offers a distinct restart action for an idle Claude exit", () => {
   expect(html).toContain(">Restart Claude</button>");
   expect(html).toContain("claude-restart-button");
   expect(html).not.toContain('class="retry-try-again-button"');
+});
+
+it("hides the persisted idle error action after reconnect to a running host", () => {
+  const store = createDesktopStore();
+  store.getState().applyHostMessage({ type: "claude_restart_state", available: false });
+  const html = renderToStaticMarkup(createElement(TabContext.Provider, { value: { tabId: "running", store } },
+    createElement(MessageList, {
+      blocks: [{ kind: "error", id: "persisted", error: { name: "Error", message: "Claude exited while idle." } }],
+      turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
+      onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 1,
+    })));
+  expect(html).not.toContain("claude-restart-button");
+});
+
+it.each(["orchestrating", "recovered"])("hides restart when %s", mode => {
+  const store = createDesktopStore();
+  store.setState({ orchestrateActive: mode === "orchestrating", claudeRestartAvailable: true });
+  const html = renderToStaticMarkup(createElement(TabContext.Provider, { value: { tabId: "stopped", store } },
+    createElement(MessageList, {
+      blocks: [{ kind: "error", id: "idle-error", restartResolved: mode === "recovered", error: { name: "Error", message: "Claude exited while idle." } }],
+      turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
+      onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 1,
+    })));
+  expect(html).not.toContain("claude-restart-button");
 });
 
 describe("agent deliveries in the minimap", () => {

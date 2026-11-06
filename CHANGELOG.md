@@ -20,6 +20,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Auto reasoning replay retries once without input reasoning when the provider rejects it, with a transcript notice. Connection settings restore remembered reasoning replay rejections for the matching endpoint and model, show the Auto-off state, and clear it when On is saved.
 - Reasoning replay is now on by default for Anthropic Messages and Chat Completions connections, including custom endpoints and OpenCode Go, and for original encrypted reasoning on Responses. Responses text-only reasoning has no documented replay form.
 - Reasoning replay can be enabled or disabled separately for each model, including catalog connections.
+- Refined compaction indicators and kept proxy checks neutral when a shell override bypasses the proxy.
 
 ## [0.0.85] - 2026-11-06
 

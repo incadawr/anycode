@@ -1789,6 +1789,7 @@ export class Session {
   private childSafeError: string | undefined;
   /** latched when an engine error event carried safe.code "engine_dead" — no live engine remains, so queued steers are rejected, never drained into a turn that can only die again. */
   private childEngineDead = false;
+  private claudeRestartAvailable = false;
   /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
   private childTerminalFinalized = false;
   private childFinalTurnFinishReason: "length" | undefined;
@@ -3053,6 +3054,7 @@ export class Session {
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         this.pushEnvStatus();
         this.pushPendingEngineSettings();
+        this.pushClaudeRestartState();
         // срез 3 §2: always pushed, unconditionally — unlike
         // pushTaskList's `supportsTasks` gate (an ENGINE capability), a
         // detached child is a CORE-engine-only feature (spec §5: claude/codex
@@ -3399,7 +3401,8 @@ export class Session {
         }
         this.busy = true;
         void this.engine.restartStopped().then(ok => {
-          if (ok) this.childEngineDead = false;
+          if (ok) { this.childEngineDead = false; this.claudeRestartAvailable = false; }
+          this.pushClaudeRestartState();
           this.outbound.emit({ type: "agent_event", turnId: "claude-restart", event: {
             type: "engine_notice", level: ok ? "info" : "warning",
             message: ok ? "Claude restarted. Restore the saved message to send it." : "Claude could not restart. Close and reopen this session; your unsent message is saved.",
@@ -4545,6 +4548,8 @@ export class Session {
       committed = true;
       candidate = undefined;
       this.engine = next;
+      this.claudeRestartAvailable = false;
+      this.pushClaudeRestartState();
       this.preOrchestrateMode = this.orchestrate ? targetBase : null;
       this.orchestrationRestore = Promise.resolve();
       this.pendingEngineEffort = undefined;
@@ -5766,6 +5771,9 @@ export class Session {
       if (this.postureBlocked(false)) return;
       if (controller.signal.aborted || this.shuttingDown) {
         recordResult("cancelled");
+        if (this.engine.id === "claude" && text !== undefined) {
+          this.outbound.emit({ type: "turn_rejected", requestId, reason: "input_not_sent" });
+        }
         if (!this.shuttingDown) {
           const event = { type: "loop_end" as const, reason: "cancelled" as const, turns: 0 };
           const at = Date.now();
@@ -5791,15 +5799,19 @@ export class Session {
         this.engineSwitchImportPending = null;
       }
       if (this.engine.id === "claude" && text !== undefined) {
+        // Keep the pending journal row durable; link the renderer draft so
+        // the later recovery announcement merges with it instead of duplicating it.
         const notSent = deliveryHooks.onInputNotSent;
         deliveryHooks.onInputNotSent = () => {
           notSent?.();
-          if (!this.runtimeHistory) this.outbound.emit({ type: "turn_rejected", requestId, reason: "input_not_sent" });
+          this.outbound.emit({ type: "turn_rejected", requestId, reason: "input_not_sent",
+            ...(this.runtimeHistory ? { runtimeRecoveryTurnId: turnId } : {}),
+          });
         };
         const accepted = deliveryHooks.onInputAccepted;
         let reported = false;
-        deliveryHooks.onInputAccepted = () => {
-          accepted?.();
+        deliveryHooks.onInputAccepted = (nativeTurnId) => {
+          accepted?.(nativeTurnId);
           if (reported) return;
           reported = true;
           this.outbound.emit({ type: "user_message_accepted", requestId, turnId });
@@ -5849,6 +5861,10 @@ export class Session {
           publicText.clear();
         }
         if (event.type === "error") {
+          if (this.engine.id === "claude" && event.safe?.code === "engine_dead") {
+            this.claudeRestartAvailable = true;
+            this.pushClaudeRestartState();
+          }
           const wire = sanitizeAgentEvent(event, this.engine.id);
           if (wire.type === "error") { turnErrorText = wire.error.message; turnError = wire.error; }
         }
@@ -6124,6 +6140,10 @@ export class Session {
         this.pushRuntimeInputRecovery();
       }
     }
+  }
+
+  private pushClaudeRestartState(): void {
+    this.outbound.sendDirect({ type: "claude_restart_state", available: this.engine.id === "claude" && this.claudeRestartAvailable });
   }
 
   private pushRuntimeInputRecovery(): void {

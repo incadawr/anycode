@@ -13,7 +13,8 @@
  * another by a passing test.
  */
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -23,6 +24,8 @@ import { claudeUsageRecord } from "../../claude-usage.js";
 import { bindClaudeUsage } from "../../native-usage.js";
 import { createHarness } from "../../test-harness.js";
 import { createDesktopStore } from "../../../renderer/src/store.js";
+import { saveRecovery, loadRecovery } from "../../../renderer/src/orchestration-recovery-storage.js";
+import { RuntimeSessionHistory } from "../../runtime-session-history.js";
 import { summarizeProviderUsage } from "../../session.js";
 import {
   CLAUDE_ENGINE_CAPABILITIES,
@@ -941,14 +944,11 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     const turn = (async () => {
       for await (const event of engine.runTurn("long job", { signal: controller.signal })) {
         events.push(event);
-        // Stop as soon as the turn is genuinely under way.
-        if (event.type === "turn_start") {
-          controller.abort();
-          // The CLI answers an interrupt by terminating the turn itself.
-          queueMicrotask(() => transport.push({ ...(terminal as object), terminal_reason: "aborted_streaming" } as never));
-        }
       }
     })();
+    while (transport.sent.length === 0) await new Promise(resolve => setTimeout(resolve, 0));
+    controller.abort();
+    transport.push({ ...(terminal as object), terminal_reason: "aborted_streaming" } as never);
     await turn;
 
     expect(transport.interrupts).toBe(1);
@@ -1087,6 +1087,38 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(factory).not.toHaveBeenCalled();
     expect(dead.sent).toEqual(["side effects"]);
     expect(events.some(event => event.type === "error")).toBe(true);
+    await engine.dispose("session-close");
+  });
+
+  it("classifies a rejected read while waiting for a foreign turn as restartable", async () => {
+    const transport = new FakeTransport({ rejectStreamOnce: new Error("read failed") });
+    const engine = engineWith(transport);
+    transport.push(foreignAssistantFrame("foreign", "background"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const events: AgentEvent[] = [];
+    for await (const event of engine.runTurn("unsent", { signal: new AbortController().signal })) {
+      events.push(event);
+      if (event.type === "turn_start") setTimeout(() => transport.releaseStreamReject(), 0);
+    }
+    expect(transport.sent).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "error", safe: expect.objectContaining({ message: expect.stringContaining("while idle") }) }));
+    await engine.dispose("session-close");
+  });
+
+  it("can explicitly restart after a foreign turn loses its transport without replaying input", async () => {
+    const dead = new FakeTransport();
+    const resumed = new FakeTransport();
+    const factory = vi.fn(async () => ({ client: resumed, approvals: undefined!, close: () => resumed.close() }));
+    const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false, factory);
+    dead.push(foreignAssistantFrame("foreign", "background"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await dead.close();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const events = await collect(engine.runTurn("unsent", { signal: new AbortController().signal }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "error", safe: expect.objectContaining({ message: expect.stringContaining("while idle") }) }));
+    expect(factory).not.toHaveBeenCalled();
+    expect(await engine.restartStopped()).toBe(true);
+    expect(resumed.sent).toEqual([]);
     await engine.dispose("session-close");
   });
 
@@ -1278,7 +1310,87 @@ describe("ClaudeEngine — cancellation and disposal", () => {
 });
 
 describe("Claude session — messages racing the final context read", () => {
-  it.each(["transport death", "cancel after write", "cancel before write", "input not sent"])("resolves pending echo on %s", async mode => {
+  it("refreshes restart availability after successful restart and reconnect", async () => {
+    const dead = new FakeTransport();
+    const resumed = new FakeTransport();
+    const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false,
+      vi.fn(async () => ({ client: resumed, approvals: undefined!, close: () => resumed.close() })).mockRejectedValueOnce(new Error("resume failed")));
+    engine.nativeMaterialized = true;
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      await dead.close(); await new Promise(resolve => setTimeout(resolve, 0));
+      h.send({ type: "user_message", requestId: "unsent", text: "draft" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      await h.flush();
+      expect(h.received.filter(m => m.type === "claude_restart_state").at(-1)).toMatchObject({ available: true });
+      h.send({ type: "claude_restart_request" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.turnId === "claude-restart"));
+      h.send({ type: "ui_ready" }); await h.flush();
+      const renderer = createDesktopStore({ schedule: fn => fn() });
+      for (const m of h.received) renderer.getState().applyHostMessage(m);
+      expect(h.received.filter(m => m.type === "claude_restart_state").at(-1)).toMatchObject({ available: false });
+      expect(renderer.getState().claudeRestartAvailable).toBe(false);
+    } finally { await h.session.shutdown(); h.close(); }
+  });
+
+  it("restores an explicitly unsent input once, including after renderer reload and database reopen", async () => {
+    const engine = engineWith(new FakeTransport());
+    vi.spyOn(engine, "runTurn").mockImplementation(async function* (_input, options) {
+      options.onInputNotSent?.();
+      yield { type: "loop_end", reason: "cancelled", turns: 1 };
+    });
+    const root = mkdtempSync(join(tmpdir(), "unsent-recovery-"));
+    const path = join(root, "history.sqlite");
+    let db = new SqlitePersistenceAdapter(path);
+    await db.createSession({ id: "test-session", workspace: "/workspace", model: "scripted-model", mode: "build" });
+    const history = new RuntimeSessionHistory(db, "test-session");
+    const h = createHarness({ steps: [], engine, runtimeHistory: history });
+    const renderer = createDesktopStore({ schedule: fn => fn() });
+    const saved = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", { setItem: (k: string, v: string) => saved.set(k, v), getItem: (k: string) => saved.get(k) ?? null });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready"); await h.flush();
+      for (const m of h.received) renderer.getState().applyHostMessage(m);
+      renderer.getState().recordSentMessage("draft", [], "request");
+      renderer.getState().appendUserText("request", "draft");
+      const offset = h.received.length;
+      h.send({ type: "user_message", requestId: "request", text: "draft" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      await h.flush();
+      for (const m of h.received.slice(offset)) renderer.getState().applyHostMessage(m);
+      expect(renderer.getState().promptQueue).toMatchObject([{ id: "request", text: "draft", requiresRestore: true }]);
+      const [pending] = history.recoveries();
+      expect(history.recoveries()).toHaveLength(1);
+      expect(pending).toMatchObject({ text: "draft", state: "pending" });
+      expect(renderer.getState().promptQueue[0]?.runtimeRecoveryTurnId).toBe(pending!.turnId);
+      expect(h.received.filter(m => m.type === "runtime_input_recovery")).toHaveLength(1);
+      expect(saveRecovery("tab", renderer.getState())).toBe(true);
+      const reloaded = createDesktopStore();
+      reloaded.setState(loadRecovery("tab")!);
+      expect(reloaded.getState().promptQueue).toEqual(renderer.getState().promptQueue);
+      await h.session.shutdown(); h.close();
+      // A fresh app has no renderer storage or pending request map.
+      saved.clear();
+      await db.close();
+      db = new SqlitePersistenceAdapter(path);
+      const reopened = createHarness({ steps: [], runtimeHistory: new RuntimeSessionHistory(db, "test-session") });
+      try {
+        reopened.send({ type: "ui_ready" });
+        await reopened.waitFor(m => m.type === "host_ready"); await reopened.flush();
+        const fresh = createDesktopStore({ schedule: fn => fn() });
+        for (const m of reopened.received) fresh.getState().applyHostMessage(m);
+        expect(reopened.received.filter(m => m.type === "runtime_input_recovery")).toHaveLength(1);
+        expect(fresh.getState().promptQueue).toMatchObject([{ text: "draft", requiresRestore: true, runtimeRecoveryTurnId: pending!.turnId }]);
+        // Reconnection can reannounce the durable row without duplicating it.
+        reopened.send({ type: "ui_ready" }); await reopened.flush();
+        for (const m of reopened.received) fresh.getState().applyHostMessage(m);
+        expect(fresh.getState().promptQueue).toHaveLength(1);
+      } finally { await reopened.session.shutdown(); reopened.close(); }
+    } finally { vi.unstubAllGlobals(); await h.session.shutdown(); h.close(); await db.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it.each(["transport death", "cancel after write", "cancel before write", "input not sent"].flatMap(mode => [[mode, false], [mode, true]] as const))("resolves pending echo on %s with runtime history %s", async (mode, runtime) => {
     const transport = new FakeTransport({ rejectStreamOnce: new Error("transport gone") });
     const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 30 } });
     if (mode === "cancel before write") {
@@ -1289,7 +1401,11 @@ describe("Claude session — messages racing the final context read", () => {
         return runTurn(input, { ...options, signal: controller.signal });
       });
     }
-    const h = createHarness({ steps: [], engine });
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "test-session", workspace: "/workspace", model: "scripted-model", mode: "build" });
+    const history = runtime ? new RuntimeSessionHistory(db, "test-session") : undefined;
+    const resetInput = vi.spyOn(db, "resetRuntimeInput");
+    const h = createHarness({ steps: [], engine, runtimeHistory: history });
     const store = createDesktopStore({ schedule: fn => fn() });
     try {
       h.send({ type: "ui_ready" });
@@ -1306,7 +1422,13 @@ describe("Claude session — messages racing the final context read", () => {
         transport.releaseStreamReject();
       }
       await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      await h.flush();
       for (const message of h.received.slice(offset)) store.getState().applyHostMessage(message);
+      if (mode === "cancel before write") {
+        expect(h.received).toContainEqual(expect.objectContaining({ type: "agent_event", event: { type: "loop_end", reason: "cancelled", turns: 1 } }));
+        expect(h.received.some(m => m.type === "agent_event" && m.event.type === "error")).toBe(false);
+        expect(transport.interrupts).toBe(0);
+      }
       expect(store.getState().pendingSteers).toEqual([]);
       expect(store.getState().orchestrationDeliveries).toEqual([]);
       if (mode === "input not sent" || mode === "cancel before write") {
@@ -1317,8 +1439,56 @@ describe("Claude session — messages racing the final context read", () => {
       } else {
         expect(transport.sent).toEqual(["hello"]);
         expect(store.getState().transcript.filter(block => block.id === "pending")).toHaveLength(1);
+        expect(store.getState().promptQueue).toEqual([]);
+        expect(history?.recoveries().some(input => input.state === "pending")).not.toBe(true);
+        expect(resetInput.mock.calls.some(call => call[3] === true)).toBe(false);
       }
-    } finally { h.close(); await engine.dispose("session-close"); }
+    } finally { h.close(); await engine.dispose("session-close"); await db.close(); }
+  });
+
+  it("forwards the native acceptance id to runtime history", async () => {
+    const engine = engineWith(new FakeTransport());
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "test-session", workspace: "/workspace", model: "scripted-model", mode: "build" });
+    const history = new RuntimeSessionHistory(db, "test-session");
+    const accepted = vi.fn();
+    vi.spyOn(history, "prepare").mockReturnValue({ text: "draft", hooks: { onInputAccepted: accepted } });
+    vi.spyOn(engine, "runTurn").mockImplementation(async function* (_input, options) {
+      options.onInputAccepted?.("native-accepted");
+      yield { type: "loop_end", reason: "cancelled", turns: 0 };
+    });
+    const h = createHarness({ steps: [], engine, runtimeHistory: history });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "accepted", text: "draft" });
+      await h.waitUntil(() => accepted.mock.calls.length > 0);
+      expect(accepted).toHaveBeenCalledWith("native-accepted");
+    } finally { h.close(); await engine.dispose("session-close"); await db.close(); }
+  });
+
+  it.each([false, true])("cancels before the engine call with runtime history %s", async runtime => {
+    const engine = engineWith(new FakeTransport());
+    const db = new SqlitePersistenceAdapter(":memory:");
+    await db.createSession({ id: "test-session", workspace: "/workspace", model: "scripted-model", mode: "build" });
+    const history = runtime ? new RuntimeSessionHistory(db, "test-session") : undefined;
+    const h = createHarness({ steps: [], engine, runtimeHistory: history });
+    const store = createDesktopStore({ schedule: fn => fn() });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      for (const message of h.received) store.getState().applyHostMessage(message);
+      Object.assign(h.session, { settingsBarrierActive: true, settingsBarrier: new Promise<void>(() => {}) });
+      store.getState().recordSentMessage("draft", [], "cancelled");
+      store.getState().appendUserText("cancelled", "draft");
+      const offset = h.received.length;
+      h.send({ type: "user_message", requestId: "cancelled", text: "draft" });
+      h.send({ type: "cancel_turn" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      await h.flush();
+      for (const message of h.received.slice(offset)) store.getState().applyHostMessage(message);
+      expect(store.getState().transcript.some(block => block.id === "cancelled")).toBe(false);
+      expect(store.getState().promptQueue).toMatchObject([{ text: "draft", requiresRestore: true }]);
+      expect(h.received).toContainEqual({ type: "turn_rejected", requestId: "cancelled", reason: "input_not_sent" });
+    } finally { h.close(); await engine.dispose("session-close"); await db.close(); }
   });
 
   it("keeps a late prompt pending and delivers it once after the previous turn settles", async () => {
@@ -1353,6 +1523,7 @@ describe("Claude session — messages racing the final context read", () => {
       usage.resolve({ totalTokens: 1, maxTokens: 2 });
       await h.waitUntil(() => h.received.some(m => m.type === "turn_started" && m.requestId === "late"));
       await h.waitUntil(() => transport.sent.length === 2);
+      await h.flush();
       for (const message of h.received.slice(offset)) store.getState().applyHostMessage(message);
       expect(store.getState().pendingSteers.map(entry => entry.requestId)).toEqual(["late"]);
       expect(store.getState().transcript.filter(block => block.id === "late")).toEqual([]);

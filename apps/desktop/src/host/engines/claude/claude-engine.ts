@@ -1355,6 +1355,7 @@ export class ClaudeEngine implements SessionEngine {
   async restartStopped(): Promise<boolean> {
     if (!(this.terminalError instanceof ClaudeStoppedError) || this.terminalError.phase !== "while idle"
       || this.disposed || this.turnActive || this.replacement || this.orchestrationState !== "off") return false;
+    this.foreignTurn = null;
     this.idleFailure = this.terminalError;
     this.terminalError = null;
     this.stoppedErrorReported = false;
@@ -1369,7 +1370,7 @@ export class ClaudeEngine implements SessionEngine {
     const failure = this.idleFailure;
     this.idleFailure = null;
     if (!this.transportFactory || this.foreignTurn || this.orchestrationState !== "off") {
-      this.terminalError = new ClaudeStoppedError(this.foreignTurn ? "during a turn" : "while idle", failure);
+      this.terminalError = new ClaudeStoppedError("while idle", failure);
       return;
     }
     try {
@@ -1482,10 +1483,7 @@ export class ClaudeEngine implements SessionEngine {
       barrier: for (;;) {
         if (this.disposed) { sendCancelled = true; break barrier; }
         if (!abortObserved && options.signal.aborted) {
-          // Stop before anything was sent: no owner input is injected. The
-          // interrupt still fires (the CLI may be running something we did
-          // not detect); the owner loop below consumes the CLI's terminal
-          // result, with the settle deadline as backstop.
+          if (!this.foreignTurn) { sendCancelled = true; break barrier; }
           abortObserved = true;
           usageDeliveryActive = false;
           beginInterrupt();
@@ -1665,6 +1663,7 @@ export class ClaudeEngine implements SessionEngine {
         if (this.readyFrame !== null) continue barrier;
         if (this.disposed) { sendCancelled = true; break barrier; }
         if (!abortObserved && options.signal.aborted) {
+          if (!this.foreignTurn) { sendCancelled = true; break barrier; }
           abortObserved = true;
           usageDeliveryActive = false;
           beginInterrupt();
@@ -1844,8 +1843,10 @@ export class ClaudeEngine implements SessionEngine {
       }
     } catch (error) {
       const terminalError = this.terminalError ?? (error instanceof Error ? error : new Error(String(error)));
-      this.terminalError = inputDispatched && this.client.terminalFailure
-        ? new ClaudeStoppedError("during a turn", this.client.terminalFailure) : terminalError;
+      this.terminalError = !inputDispatched && this.foreignTurn
+        ? new ClaudeStoppedError("while idle", terminalError)
+        : inputDispatched && this.client.terminalFailure
+          ? new ClaudeStoppedError("during a turn", this.client.terminalFailure) : terminalError;
       this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
       // A turn that lost its transport releases the child.
       void this.client.close().catch(() => {});

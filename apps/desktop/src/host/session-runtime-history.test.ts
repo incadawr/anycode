@@ -158,6 +158,19 @@ describe("canonical reconnect hydration", () => {
       expect(reopened.received.some(m => m.type === "session_history" && m.items.some(item => item.message.content === "removed text"))).toBe(false);
     } finally { await reopened.session.shutdown(); reopened.close(); await store.close(); }
   });
+  it("announces a pending input once after restart without a not-sent report", async () => {
+    const db = await switchedStore();
+    new RuntimeSessionHistory(db, "test-session").prepare("crash", "saved draft", "saved draft", true);
+    const h = createHarness({ steps: [], runtimeHistory: new RuntimeSessionHistory(db, "test-session") });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready"); await h.flush();
+      const renderer = createDesktopStore({ schedule: fn => fn() });
+      for (const m of h.received) renderer.getState().applyHostMessage(m);
+      expect(h.received.filter(m => m.type === "runtime_input_recovery")).toMatchObject([{ turnId: "crash", status: "pending" }]);
+      expect(renderer.getState().promptQueue).toMatchObject([{ text: "saved draft", requiresRestore: true }]);
+    } finally { await h.session.shutdown(); h.close(); await db.close(); }
+  });
+
   it("recovers a lost acceptance signal after a checked absence and serves the next turn", async () => {
     const store = await switchedStore();
     const history = new RuntimeSessionHistory(store,"test-session");
