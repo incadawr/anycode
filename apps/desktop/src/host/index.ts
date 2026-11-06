@@ -1433,9 +1433,10 @@ function hostSwitchFactory(
       if (!binaryPath?.trim()) return undefined;
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
       let raw: ClaudeEngine | undefined;
+      let adopted: SwitchRuntime | undefined;
       const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser,
         ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
-          authority: () => ({ root: raw !== undefined && session?.ownsRuntime(raw) === true,
+          authority: () => ({ root: adopted !== undefined && session?.ownsRuntime(adopted.engine) === true,
             mode: claudeAgentPermissionMode(raw?.snapshot().activePresetId ?? "read-only"), orchestrate: routing.foreign.isEnabled() }) }) } : {}),
         onEvent: event => raw?.pushBridgeEvent(event) });
       const mcpBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: stamp.listTools, callTool: stamp.callTool });
@@ -1451,6 +1452,7 @@ function hostSwitchFactory(
         }),
         selection: { presetId: "read-only", origin: "draft" },
       }, configure: runtime => {
+        adopted = runtime;
         raw = runtime.engine as ClaudeEngine;
         routing.configure(runtime);
         runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);

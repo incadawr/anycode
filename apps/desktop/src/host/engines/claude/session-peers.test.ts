@@ -7,6 +7,7 @@ import { createSessionPeerBridge } from "../session-peer-bridge.js";
 import { createSessionPeersPort } from "../../session-peers-port.js";
 import { createSessionPeersHandler, type PeerHost } from "../../../main/session-peers.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
+import { createSessionPeerTools } from "@anycode/core";
 
 function fixture(enabled = true) {
   const events: any[] = [], sent: any[] = [];
@@ -56,6 +57,9 @@ it("actual MCP list/call works with empty profiles and shared declarations", asy
   try {
     expect((await f.wire("tools/list")).result.tools.map((t: any) => t.name)).toEqual([
       "sessions_list", "session_open", "session_send", "who_edits"]);
+    // Positional declarations must track the shared inventory's names AND order.
+    expect(f.door.listTools().map(t => t.name)).toEqual(createSessionPeerTools(() => ({ mode: "build" }))
+      .map(t => t.metadata.name.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase()));
     expect(JSON.parse((await f.call("sessions_list")).result.content[0].text)).toMatchObject({ status: "ok", sessions: [{ sessionId: "a" }] });
     const pending = f.call("session_send", input);
     await vi.waitFor(() => expect(f.events).toHaveLength(1));
