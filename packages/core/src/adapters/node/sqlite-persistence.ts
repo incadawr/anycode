@@ -22,6 +22,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { HistorySink } from "../../context/history.js";
 import type { RuntimeSegment, RuntimeSessionSnapshot, RuntimeSegmentStore } from "../../ports/runtime-segments.js";
+import { scopeRuntimeHistory } from "../../context/runtime-history.js";
 import type {
   CheckpointMeta,
   CheckpointReason,
@@ -1151,6 +1152,36 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       const handoff = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,row.active);
       return { revision: row.revision, activeSegmentId: row.active, segments, items, boundaries, handoff: handoff ? JSON.parse(handoff.data as string) : null };
     });
+  }
+
+  private mergeRuntimeHistoryInDb(db: DatabaseSync, sessionId: string, segmentId: string, items: readonly HistoryItem[]): void {
+    const handoff = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+    const scoped = scopeRuntimeHistory(segmentId,items,handoff ? JSON.parse(handoff.data as string) : null);
+    const insert = db.prepare(`INSERT INTO runtime_transcript(session_id,segment_id,item_id,data) VALUES(?,?,?,?)
+      ON CONFLICT(session_id,segment_id,item_id) DO UPDATE SET data=excluded.data`);
+    for (const item of scoped) insert.run(sessionId,segmentId,item.sourceItemId!,JSON.stringify(item));
+    touchSessionActivity(db,sessionId,items);
+  }
+
+  mergeRuntimeTranscript(sessionId: string, segmentId: string, items: readonly HistoryItem[]): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId) throw new Error("Stale runtime history writer");
+      this.mergeRuntimeHistoryInDb(db,sessionId,segmentId,items);
+    },"immediate");
+  }
+
+  /** Only the active core segment owns executable model history; display history is never replaced. */
+  writeRuntimeModelHistory(sessionId: string, segmentId: string, items: readonly HistoryItem[], replace: boolean): void {
+    this.transaction(db => {
+      const active = db.prepare(`SELECT r.engine FROM runtime_segments r JOIN sessions s ON s.id=r.session_id
+        WHERE s.id=? AND s.active_runtime_segment=r.segment_id AND r.segment_id=?`).get(sessionId,segmentId);
+      if (active?.engine !== "core") throw new Error("Stale core model history writer");
+      if (replace) db.prepare("DELETE FROM history_items WHERE session_id=? AND COALESCE(json_extract(data,'$.kind'),'')!='turn_error'").run(sessionId);
+      const insert = db.prepare("INSERT INTO history_items(session_id,item_id,data) VALUES(?,?,?)");
+      for (const item of items) insert.run(sessionId,item.id,JSON.stringify(item));
+      this.mergeRuntimeHistoryInDb(db,sessionId,segmentId,items);
+    },"immediate");
   }
 
   /** Atomically transfer a native reference only while its source still owns it.
@@ -2355,7 +2386,7 @@ export class WriteBehindHistorySink implements HistorySink {
   private readonly logger: HistorySinkLogger;
 
   constructor(
-    private readonly persistence: PersistencePort,
+    private readonly persistence: Pick<PersistencePort, "appendHistory" | "replaceHistory">,
     private readonly sessionId: string,
     opts?: { logger?: HistorySinkLogger },
   ) {
@@ -2416,5 +2447,12 @@ export class WriteBehindHistorySink implements HistorySink {
         // A broken logger must not poison the queue for subsequent writes.
       }
     });
+  }
+}
+
+export class RuntimeHistorySink extends WriteBehindHistorySink {
+  constructor(store: SqlitePersistenceAdapter, sessionId: string, segmentId: string, opts?: { logger?: HistorySinkLogger }) {
+    super({ appendHistory: async (_id,items) => store.writeRuntimeModelHistory(sessionId,segmentId,items,false),
+      replaceHistory: async (_id,items) => store.writeRuntimeModelHistory(sessionId,segmentId,items,true) },sessionId,opts);
   }
 }

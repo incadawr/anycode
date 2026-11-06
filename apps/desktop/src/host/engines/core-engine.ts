@@ -221,6 +221,11 @@ export class CoreEngine implements SessionEngine {
     return this.options.loop.history.items;
   }
 
+  async readTranscript() {
+    await this.options.loop.history.flushChecked();
+    return this.historyItems();
+  }
+
   replaceHistory(items: Parameters<NonNullable<SessionEngine["replaceHistory"]>>[0], persist = true): void {
     if (persist) this.options.loop.history.replaceAll(items);
     else this.options.loop.history.replaceAll(items, false);

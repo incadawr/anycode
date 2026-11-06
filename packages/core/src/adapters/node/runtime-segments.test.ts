@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SqlitePersistenceAdapter } from "./sqlite-persistence.js";
+import { RuntimeHistorySink, SqlitePersistenceAdapter } from "./sqlite-persistence.js";
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root,{recursive:true,force:true}); });
@@ -61,6 +61,35 @@ describe("runtime segment schema", () => {
     expect(store.ensureRuntimeSession("fresh").segments).toHaveLength(1);
     expect(store.ensureRuntimeSession("fresh").segments[0]).toMatchObject({engine:"core",nativeState:"fresh"});
     expect(() => store.ensureRuntimeSession("missing")).toThrow("missing");
+    await store.close();
+  });
+});
+
+describe("segment model history custody", () => {
+  it("retains complete display coverage when core compaction replaces model context", async () => {
+    const store = new SqlitePersistenceAdapter(":memory:");
+    await store.createSession({id:"s",workspace:"/w",model:"m",mode:"plan"});
+    store.ensureRuntimeSession("s");
+    const sink = new RuntimeHistorySink(store,"s","legacy");
+    sink.append([{id:"original",createdAt:1,message:{role:"user",content:"full original"}}]);
+    sink.replaceAll([{id:"summary",createdAt:2,kind:"compact_summary",message:{role:"user",content:"available summary"}}]);
+    await sink.flushChecked();
+    expect((await store.loadHistory("s")).map(item => item.id)).toEqual(["summary"]);
+    expect(store.loadRuntimeSession("s")?.items.map(item => item.sourceItemId)).toEqual(["original","summary"]);
+    store.mergeRuntimeTranscript("s","legacy",await store.loadHistory("s"));
+    expect(store.loadRuntimeSession("s")?.items).toHaveLength(2);
+    await store.close();
+  });
+  it("rejects stale segment writers and surfaces checked write failures", async () => {
+    const store = new SqlitePersistenceAdapter(":memory:");
+    await store.createSession({id:"s",workspace:"/w",model:"m",mode:"plan"});
+    store.ensureRuntimeSession("s");
+    const log = {error:vi.fn()};
+    const sink = new RuntimeHistorySink(store,"s","retired",{logger:log});
+    sink.append([{id:"lost",createdAt:1,message:{role:"user",content:"text"}}]);
+    await expect(sink.flushChecked()).rejects.toThrow("persistence failed");
+    expect(store.loadRuntimeSession("s")?.items).toEqual([]);
+    expect(() => store.mergeRuntimeTranscript("s","retired",[])).toThrow("Stale");
     await store.close();
   });
 });

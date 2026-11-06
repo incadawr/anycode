@@ -15,15 +15,34 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { SqlitePersistenceAdapter } from "@anycode/core";
 import type { AgentEvent, HistoryItem } from "@anycode/core";
 import type { RunTurnOptions, SessionEngine } from "../session-engine.js";
 import {
   ClaudeShadowTranscriptEngine,
+  SqliteClaudeShadowTranscript,
   projectClaudeTurn,
   type ClaudeShadowTranscriptPort,
 } from "./shadow-transcript.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeSystemInitMessage } from "./protocol.js";
+
+describe("checked Claude transcript mirror", () => {
+  it("retains failed writes for a checked retry instead of reporting a partial snapshot as complete", async () => {
+    const store = new SqlitePersistenceAdapter(":memory:");
+    const sink = new SqliteClaudeShadowTranscript(store);
+    const error = vi.spyOn(console,"error").mockImplementation(() => {});
+    const write = vi.spyOn(store,"recordClaudeTranscriptItem").mockRejectedValue(new Error("disk failure"));
+    sink.record("native",[{itemId:"1",turnOrdinal:0,positionInTurn:0,data:{id:"user",createdAt:1,message:{role:"user",content:"original"}}}]);
+    await expect(sink.flushChecked()).rejects.toThrow("disk failure");
+    expect(await sink.list("native")).toEqual([]);
+    write.mockRestore();
+    await sink.flushChecked();
+    await sink.flushChecked();
+    expect(await sink.list("native")).toHaveLength(1);
+    error.mockRestore(); await store.close();
+  });
+});
 
 function tick(): () => number {
   let n = 0;
