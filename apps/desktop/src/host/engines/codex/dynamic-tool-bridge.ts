@@ -4,6 +4,7 @@ import type { JsonRpcServerRequest } from "./protocol.js";
 import type { ServerRequestResponder } from "./app-server-client.js";
 import type { CodexAgentCardLogPort } from "./agent-card-log.js";
 import type { ActiveCodexTurn } from "./approval-bridge.js";
+import type { createSessionPeerBridge } from "../session-peer-bridge.js";
 import type { EngineBrowserBridge, EngineBrowserSpec } from "../browser-bridge.js";
 
 export const ANYCODE_AGENT_TOOL = "anycode_agent";
@@ -34,7 +35,8 @@ export class CodexDynamicToolBridge {
    */
   constructor(readonly catalog: readonly AgentBridgeCatalogEntry[], private readonly port: SessionSubagentPort | undefined, private readonly cardLog?: CodexAgentCardLogPort,
     private readonly resolveCatalog?: () => Promise<readonly AgentBridgeCatalogEntry[]>, private readonly browser?: EngineBrowserBridge,
-    private readonly callAgent: (input: AgentBridgeCallInput, deps: AgentBridgeCallDeps) => Promise<AgentBridgeCallResult> = runAgentBridgeCall) {}
+    private readonly callAgent: (input: AgentBridgeCallInput, deps: AgentBridgeCallDeps) => Promise<AgentBridgeCallResult> = runAgentBridgeCall,
+    private readonly peers?: ReturnType<typeof createSessionPeerBridge>) {}
 
   declarations(): Record<string, unknown>[] {
     // `detach` is safe to offer here: host/index.ts wires this bridge's port
@@ -51,7 +53,9 @@ export class CodexDynamicToolBridge {
       description: spec.description,
       inputSchema: spec.inputSchema,
     }));
-    return [...agentDecls, ...browserDecls];
+    const peerDecls = (this.peers?.tools ?? []).map(tool => ({ type: "function",
+      name: this.peerName(tool.metadata.name), description: tool.metadata.description, inputSchema: tool.rawInputJsonSchema }));
+    return [...agentDecls, ...browserDecls, ...peerDecls];
   }
 
   cancel(): void {
@@ -148,6 +152,48 @@ export class CodexDynamicToolBridge {
     });
   }
 
+  private peerName(canonical: string): string {
+    return `anycode_${canonical.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase()}`;
+  }
+
+  private async handlePeer(name: string, p: Record<string, unknown>, respond: ServerRequestResponder,
+    emit: (event: AgentEvent) => void): Promise<void> {
+    const id = p.callId as string;
+    const controller = new AbortController();
+    this.pending.set(id, controller);
+    this.seenCalls.add(id);
+    const input = p.arguments;
+    emit({ type: "tool_call", toolCall: { id, name, input } });
+    emit({ type: "tool_execution_start", toolCallId: id, toolName: name, input });
+    const startedAt = Date.now();
+    let onAbort = () => {};
+    const cancelled = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new Error("Peer wait cancelled"));
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      const execution = this.peers!.call(name, input, controller.signal, id);
+      this.work.add(execution);
+      void execution.then(() => this.work.delete(execution), () => this.work.delete(execution));
+      const result = await Promise.race([execution, cancelled]);
+      const text = result.ok ? JSON.stringify(result.output) ?? "null" : result.error ?? "Peer operation failed.";
+      emit({ type: "tool_result", outcome: { toolCallId: id, toolName: name,
+        status: controller.signal.aborted ? "cancelled" : result.ok ? "success" : "error",
+        modelText: text, durationMs: Date.now() - startedAt, result } });
+      respond.result({ success: result.ok && !controller.signal.aborted, contentItems: [{ type: "inputText", text }] });
+    } catch {
+      // Dispatch may already have reached main. Stop cancels only our wait.
+      const text = JSON.stringify({ status: "unknown" });
+      emit({ type: "tool_result", outcome: { toolCallId: id, toolName: name,
+        status: controller.signal.aborted ? "cancelled" : "error", modelText: text,
+        durationMs: Date.now() - startedAt, result: { ok: false, error: text } } });
+      respond.result({ success: false, contentItems: [{ type: "inputText", text }] });
+    } finally {
+      controller.signal.removeEventListener("abort", onAbort);
+      this.pending.delete(id);
+    }
+  }
+
   async handle(request: JsonRpcServerRequest, respond: ServerRequestResponder,
     active: ActiveCodexTurn | null, emit: (event: AgentEvent) => void): Promise<void> {
     const p = request.params as Record<string, unknown> | undefined;
@@ -155,8 +201,9 @@ export class CodexDynamicToolBridge {
     // the validations below run for ALL bridge tools (agent and
     // browser alike); only the tool-name dispatch differs.
     const browserSpec = typeof p?.tool === "string" ? this.browser?.byCodexName(p.tool) : undefined;
+    const peerTool = this.peers?.tools.find(tool => this.peerName(tool.metadata.name) === p?.tool);
     if (!p || !active || p.threadId !== active.threadId || p.turnId !== active.turnId ||
-      (p.tool !== ANYCODE_AGENT_TOOL && p.tool !== ANYCODE_AGENT_STATUS_TOOL && browserSpec === undefined) || (p.namespace !== undefined && p.namespace !== null) ||
+      (p.tool !== ANYCODE_AGENT_TOOL && p.tool !== ANYCODE_AGENT_STATUS_TOOL && browserSpec === undefined && peerTool === undefined) || (p.namespace !== undefined && p.namespace !== null) ||
       typeof p.callId !== "string" || !p.callId || this.pending.has(p.callId)) {
       fail("AnyCode rejected an unknown, duplicate or out-of-turn agent call");
       return;
@@ -168,6 +215,10 @@ export class CodexDynamicToolBridge {
     }
     if (this.seenCalls.has(p.callId)) {
       fail("AnyCode rejected a repeated agent call");
+      return;
+    }
+    if (peerTool !== undefined) {
+      await this.handlePeer(peerTool.metadata.name, p, respond, emit);
       return;
     }
     if (browserSpec !== undefined) {

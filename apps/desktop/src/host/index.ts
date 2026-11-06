@@ -1404,7 +1404,10 @@ function hostSwitchFactory(
       const mcp = await forward("codex");
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
       let candidate: SwitchRuntime | undefined;
-      const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call);
+      const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call,
+        sessionPeersPort ? createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+          authority: () => ({ root: candidate !== undefined && session?.ownsRuntime(candidate.engine) === true,
+            mode: routing.foreign.childMode(), orchestrate: routing.foreign.isEnabled() }) }) : undefined);
       return { options: {
         ...buildCodexLaunchOptions({
           workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules, agentBridge, processOwnership: ownership,
@@ -1674,7 +1677,10 @@ async function bootCodexSession(
       routed.attach(port);
       codexChildPort = port;
     }
-    codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge, foreignComposition.call);
+    codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge, foreignComposition.call,
+      sessionPeersPort ? createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+        authority: () => ({ root: codexParentEngine !== undefined && session?.ownsRuntime(codexParentEngine) === true,
+          mode: foreignComposition.childMode(), orchestrate: foreignComposition.isEnabled() }) }) : undefined);
   }
   if (args.child !== undefined) {
     prepareChildPrompt = (prompt) => engineChildPrompt(prompt, codexChildPort !== undefined);
