@@ -153,6 +153,43 @@ describe("updater: consent-first (autoDownload=false)", () => {
   });
 });
 
+describe("updater: progress normalization", () => {
+  it("forwards download sizes when available", () => {
+    const { deps, autoUpdater, sent } = makeDeps();
+    const controller = createUpdaterController(deps);
+    autoUpdater.fire("download-progress", { percent: 50, transferred: 100, total: 200 });
+    expect(sent.at(-1)).toEqual({ kind: "downloading", percent: 50, transferred: 100, total: 200 });
+    controller.stop();
+  });
+  it.each([[20.99, 20], [-2, 0], [105, 100], [NaN, 0], [Infinity, 100], [-Infinity, 0]])("forwards %s as %s", (input, expected) => {
+    const { deps, autoUpdater, sent } = makeDeps();
+    const controller = createUpdaterController(deps);
+    autoUpdater.fire("download-progress", { percent: input });
+    expect(sent.at(-1)).toEqual({ kind: "downloading", percent: expected });
+    controller.stop();
+  });
+  it.each([
+    {},
+    { transferred: 100, total: 0 },
+    { transferred: -1, total: 200 },
+    { transferred: NaN, total: 200 },
+    { transferred: Infinity, total: 200 },
+  ])("omits invalid download sizes %o", (sizes) => {
+    const { deps, autoUpdater, sent } = makeDeps();
+    const controller = createUpdaterController(deps);
+    autoUpdater.fire("download-progress", { percent: 50, ...sizes });
+    expect(sent.at(-1)).toEqual({ kind: "downloading", percent: 50 });
+    controller.stop();
+  });
+  it("clamps transferred bytes to the total", () => {
+    const { deps, autoUpdater, sent } = makeDeps();
+    const controller = createUpdaterController(deps);
+    autoUpdater.fire("download-progress", { percent: 100, transferred: 201, total: 200 });
+    expect(sent.at(-1)).toEqual({ kind: "downloading", percent: 100, transferred: 200, total: 200 });
+    controller.stop();
+  });
+});
+
 describe("updater: full status chain", () => {
   it("check -> available -> progress -> downloaded -> install, each status forwarded to the renderer in order", async () => {
     const { deps, autoUpdater, sent } = makeDeps();
@@ -185,6 +222,7 @@ describe("updater: full status chain", () => {
     // install(): only valid now that status is "downloaded".
     expect(controller.install()).toEqual({ ok: true });
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
 
     expect(sent).toEqual([
       { kind: "checking" },
@@ -438,6 +476,7 @@ describe("updater: darwin honest manual-only path (defect 2)", () => {
     autoUpdater.fire("update-downloaded", { version: "1.2.3" });
     expect(controller.install()).toEqual({ ok: true });
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 });
 

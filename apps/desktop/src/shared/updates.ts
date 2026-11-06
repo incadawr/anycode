@@ -49,6 +49,23 @@ export const UPDATE_STATUS_CHANNEL = "anycode:update-status";
  */
 export const UPDATE_RELEASES_URL = "https://github.com/incadawr/anycode/releases/latest";
 
+export function normalizeUpdatePercent(percent: number): number {
+  return Number.isNaN(percent) ? 0 : Math.min(100, Math.max(0, Math.floor(percent)));
+}
+
+/** Returns download sizes only when both values are usable. */
+export function validUpdateSizes(
+  transferred: number | undefined,
+  total: number | undefined,
+): { transferred: number; total: number } | undefined {
+  if (transferred == null || total == null ||
+      !Number.isFinite(transferred) || !Number.isFinite(total) ||
+      transferred < 0 || total <= 0) {
+    return undefined;
+  }
+  return { transferred: Math.min(transferred, total), total };
+}
+
 /**
  * Update lifecycle status — one variant per electron-updater event (design
  * §6), plus `idle` (the initial/never-checked state). `error` carries a
@@ -67,7 +84,7 @@ export type UpdateStatus =
   | { kind: "idle" }
   | { kind: "checking" }
   | { kind: "available"; version: string; manualOnly?: boolean }
-  | { kind: "downloading"; percent: number }
+  | { kind: "downloading"; percent: number; transferred?: number; total?: number }
   | { kind: "downloaded"; version: string }
   | { kind: "not-available" }
   | { kind: "error"; message: string };

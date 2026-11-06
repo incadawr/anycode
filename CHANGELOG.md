@@ -7,6 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Update downloads show a progress bar with a whole-number percentage and downloaded size.
+- On Windows, applying an update no longer opens the setup wizard; the app restarts on the new version by itself.
+
 ## [0.0.81] - 2026-11-06
 
 ### Fixed

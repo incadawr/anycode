@@ -47,6 +47,8 @@
  */
 import { guardedIpcHandle } from "./ipc-guard.js";
 import {
+  normalizeUpdatePercent,
+  validUpdateSizes,
   UPDATE_CHECK_CHANNEL,
   UPDATE_DOWNLOAD_CHANNEL,
   UPDATE_INSTALL_CHANNEL,
@@ -68,7 +70,7 @@ export interface AutoUpdaterLike {
   on(event: "checking-for-update", listener: () => void): unknown;
   on(event: "update-available", listener: (info: { version: string }) => void): unknown;
   on(event: "update-not-available", listener: () => void): unknown;
-  on(event: "download-progress", listener: (info: { percent: number }) => void): unknown;
+  on(event: "download-progress", listener: (info: { percent: number; transferred?: number; total?: number }) => void): unknown;
   on(event: "update-downloaded", listener: (info: { version: string }) => void): unknown;
   on(event: "error", listener: (error: Error) => void): unknown;
   checkForUpdates(): Promise<unknown>;
@@ -228,7 +230,7 @@ export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
     if (status.kind !== "downloaded") {
       return { ok: false, reason: "invalid_state" };
     }
-    deps.autoUpdater.quitAndInstall();
+    deps.autoUpdater.quitAndInstall(true, true);
     return { ok: true };
   }
 
@@ -269,7 +271,14 @@ export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
       ),
     );
     deps.autoUpdater.on("update-not-available", () => emit({ kind: "not-available" }));
-    deps.autoUpdater.on("download-progress", (info) => emit({ kind: "downloading", percent: info.percent }));
+    deps.autoUpdater.on("download-progress", (info) => {
+      const sizes = validUpdateSizes(info.transferred, info.total);
+      emit({
+        kind: "downloading",
+        percent: normalizeUpdatePercent(info.percent),
+        ...sizes,
+      });
+    });
     deps.autoUpdater.on("update-downloaded", (info) => emit({ kind: "downloaded", version: info.version }));
     deps.autoUpdater.on("error", (error) => emit({ kind: "error", message: error.message }));
 

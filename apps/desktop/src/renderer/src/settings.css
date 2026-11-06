@@ -3631,3 +3631,19 @@
 .go-quota-row { display: flex; flex-wrap: wrap; gap: 0 6px; }
 .go-quota-warning { color: var(--warning); }
 .go-quota-danger { color: var(--danger); }
+
+.settings-update-progress {
+  width: 100%;
+}
+.settings-update-progress-track {
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.settings-update-progress-fill {
+  height: 100%;
+  background: var(--accent);
+}
+.settings-update-progress-placeholder { visibility: hidden; }

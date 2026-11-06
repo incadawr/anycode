@@ -1,3 +1,4 @@
+import { normalizeUpdatePercent, validUpdateSizes } from "../../../shared/updates.js";
 import { Badge, Button, Select, Switch } from "../ui/index.js";
 /**
  * Settings UI (slice 2.2, design/slice-2.2-cut.md §2/§3, ruling
@@ -713,6 +714,28 @@ export function isOwnDialogCancel(event: { target: EventTarget | null; currentTa
 
 // ── auto-updater pure helpers (slice 2.6 §6) ──
 
+/** Update status and accessible download progress. */
+export function UpdateProgressStatus({ status }: { status: UpdateStatus }) {
+  const percent = status.kind === "downloading" ? normalizeUpdatePercent(status.percent) : 0;
+  return (
+    <div className="settings-update-progress">
+      <span className="settings-update-status">{updateStatusText(status)}</span>
+      {status.kind === "downloading" ? (
+        <div
+          className="settings-update-progress-track"
+          role="progressbar"
+          aria-label="Update download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+        >
+          <div className="settings-update-progress-fill" style={{ width: `${percent}%` }} />
+        </div>
+      ) : <div className="settings-update-progress-track settings-update-progress-placeholder" aria-hidden="true" />}
+    </div>
+  );
+}
+
 /** Human-readable status line for the Updates section / global banner — renders only what `UpdateStatus` already carries (version/percent/message), never anything else. */
 export function updateStatusText(status: UpdateStatus): string {
   switch (status.kind) {
@@ -726,8 +749,13 @@ export function updateStatusText(status: UpdateStatus): string {
       return status.manualOnly
         ? `Update v${status.version} available — download from GitHub Releases.`
         : `Update v${status.version} available.`;
-    case "downloading":
-      return `Downloading update… ${status.percent}%`;
+    case "downloading": {
+      const sizes = validUpdateSizes(status.transferred, status.total);
+      const sizeText = sizes
+        ? ` (${(sizes.transferred / 1048576).toFixed(1)} / ${(sizes.total / 1048576).toFixed(1)} MB)`
+        : "";
+      return `Downloading update… ${normalizeUpdatePercent(status.percent)}%${sizeText}`;
+    }
     case "downloaded":
       return `Update v${status.version} downloaded — restart to install.`;
     case "not-available":
@@ -2292,7 +2320,7 @@ export function SettingsScreen({
               <section className="settings-section">
                 <div className="settings-section-title">Updates</div>
                 <div className="settings-field-row">
-                  <span className="settings-update-status">{updateStatusText(updateStatus)}</span>
+                  <UpdateProgressStatus status={updateStatus} />
                 </div>
                 <div className="settings-field-row">
                   {updateStatus.kind === "downloaded" ? (
