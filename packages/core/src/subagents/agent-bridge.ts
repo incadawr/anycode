@@ -150,6 +150,7 @@ export function buildAgentBridgeToolDecl(
     description: z.string().min(1).describe("Short 3-5 word description of the subagent task"),
     prompt: z.string().min(1).describe("The task the subagent should carry out"),
     agent_type: z.enum(names).describe("AnyCode subagent profile to run"),
+    provider: z.string().min(1).regex(/\S/).optional().describe("Connection selector for a new core child whose profile and role do not pin a route. Cannot be combined with continue_session."),
     model: z
       .string()
       .min(1)
@@ -182,6 +183,7 @@ export interface BuildSessionSubagentRequestParams {
   prompt: string;
   /** The caller's own model override (an explicit `Agent(model:…)` argument, or the bridge call's own `model` field) — NOT yet resolved against `profile.model`. */
   model?: string;
+  provider?: string;
   spawnToolCallId: string;
   restrictions?: SessionProfileRestrictions;
   profile?: { systemPrompt: string; model?: string; engine?: EngineProfileInfo["engine"] };
@@ -194,9 +196,8 @@ export interface BuildSessionSubagentRequestParams {
 /**
  * Builds ONE SessionSubagentRequest (§3.2), extracted byte-for-byte out of
  * the pre-S1 body of tools/agent.ts's runSessionTier (срез S1):
- * `provider` and `detach` are deliberately NOT set here — `provider` rides
- * only the native Agent tool's own request (agent.ts §2.1 p.2); `detach` is
- * added by each caller that honors it (agent.ts, `runAgentBridgeCall`).
+ * An explicit provider is forwarded without resolving it; main validates the
+ * selected connection and model. Each caller adds its own detach policy.
  */
 export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestParams): SessionSubagentRequest {
   const { agentType, description, prompt, model, spawnToolCallId, profile, effort, maxTurns, restrictions } = params;
@@ -210,6 +211,7 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
     spawnToolCallId,
     ...(restrictions !== undefined ? { restrictions, nativeRestrictionsUnsupported: true } : {}),
     ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
+    ...(params.provider !== undefined ? { provider: params.provider } : {}),
     ...(profile?.engine !== undefined ? { engine: profile.engine } : {}),
     // Preserve the declared tier until the target model is known.
     ...(effort !== undefined ? { effort } : {}),
@@ -523,6 +525,7 @@ export interface AgentBridgeCallInput {
   description: string;
   prompt: string;
   model?: string;
+  provider?: string;
   /** Background run: `run()` settles at admit; the report arrives later as a parent turn. */
   detach?: boolean;
   /** Follow-up to an earlier finished child of this session: its id; the child resumes with its own history. */
@@ -548,10 +551,12 @@ export function decodeAgentBridgeCallInput(args: Record<string, unknown>): Agent
   const description = args.description;
   const prompt = args.prompt;
   const model = args.model;
+  const provider = args.provider;
   if (typeof agentType !== "string" || agentType.length === 0) return null;
   if (typeof description !== "string" || description.length === 0) return null;
   if (typeof prompt !== "string" || prompt.length === 0) return null;
   if (model !== undefined && (typeof model !== "string" || model.length === 0)) return null;
+  if (provider !== undefined && (typeof provider !== "string" || provider.trim().length === 0)) return null;
   const detach = args.detach;
   if (detach !== undefined && typeof detach !== "boolean") return null;
   const continueSession = args.continue_session;
@@ -561,6 +566,7 @@ export function decodeAgentBridgeCallInput(args: Record<string, unknown>): Agent
     description,
     prompt,
     ...(model !== undefined ? { model: model as string } : {}),
+    ...(provider !== undefined ? { provider: provider as string } : {}),
     ...(detach !== undefined ? { detach: detach as boolean } : {}),
     ...(continueSession !== undefined ? { continue_session: continueSession as string } : {}),
   };
@@ -605,6 +611,7 @@ export interface AgentBridgeCallResult {
   /** The exact text an MCP `tools/call` response's `content[0].text` should carry (§3.1) — identical to what the native Agent tool feeds the model for the same outcome. */
   text: string;
   isError: boolean;
+  errorKind?: "invalid_input";
   /** Present only once the child actually started (CUT-S1 §3 W1: never fabricated) — the host's event-translator rides this onto the paired tool_result (§3.3). */
   presentation?: ToolResultPresentation;
 }
@@ -642,6 +649,19 @@ export async function runAgentBridgeCall(
   }
 
   const continueSession = input.continue_session;
+  if (input.provider !== undefined) {
+    const refuse = (text: string): AgentBridgeCallResult => ({ text, isError: true, errorKind: "invalid_input" });
+    if (!input.provider.trim()) return refuse('Agent: "provider" must be a nonempty connection selector.');
+    if (continueSession !== undefined) {
+      return refuse('Agent: "continue_session" cannot be combined with "provider" — the resumed child keeps the connection it was started on. Start a new call instead.');
+    }
+    if (entry.engine !== undefined) {
+      return refuse('Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account; omit "provider" or choose an unpinned core profile.');
+    }
+    if (entry.connection !== undefined || entry.provider !== undefined) {
+      return refuse(`Agent: "provider" cannot be combined with profile "${entry.name}" — the profile selects its own connection; omit "provider" or choose an unpinned core profile.`);
+    }
+  }
   if (continueSession !== undefined && entry.engine !== undefined && !(deps.policy?.resolveRoleRoute && isRoleRouteName(entry.name))) {
     return {
       text: `Agent: continue_session is supported only for AnyCode (core) profiles; "${entry.name}" runs on ${entry.engine}. Start a new call instead.`,
@@ -653,7 +673,14 @@ export async function runAgentBridgeCall(
   const route = continueSession === undefined && resolveRoute !== undefined && isRoleRouteName(entry.name)
     ? await resolveRoute(entry.name)
     : undefined;
-  if (continueSession === undefined && resolveRoute !== undefined && isRoleRouteName(entry.name) && (route === undefined || route.entries.length === 0)) {
+  if (input.provider !== undefined && route !== undefined && [...route.entries, ...route.skipped.map(skip => skip.entry)]
+    .some(target => target.connection !== undefined || target.provider !== undefined || target.engine !== undefined || target.model !== undefined)) {
+    return {
+      text: `Agent: "provider" cannot override the configured route for role "${entry.name}"; omit "provider" or choose an unpinned core profile. Change the role route in Settings → Roles.`,
+      isError: true, errorKind: "invalid_input",
+    };
+  }
+  if (input.provider === undefined && continueSession === undefined && resolveRoute !== undefined && isRoleRouteName(entry.name) && (route === undefined || route.entries.length === 0)) {
     const reasons = route?.skipped.map(({ reason }) => reason).filter(Boolean).join("; ");
     const fix = deps.claimedRoles?.has(entry.name) === true
       ? `Remove the engine line from the "${entry.name}" profile file; it overrides role settings.`
@@ -672,6 +699,7 @@ export async function runAgentBridgeCall(
     description: input.description,
     prompt: input.prompt,
     model: continueSession === undefined ? input.model : undefined,
+    provider: input.provider,
     spawnToolCallId: deps.spawnToolCallId,
     profile,
     ...(continueSession === undefined && entry.restrictions !== undefined ? { restrictions: entry.restrictions } : {}),
@@ -691,6 +719,7 @@ export async function runAgentBridgeCall(
     ...(continueSession === undefined && route === undefined && entry.connection !== undefined ? { connectionId: entry.connection } : {}),
     ...(continueSession === undefined && route === undefined && entry.provider !== undefined ? { provider: entry.provider } : {}),
     ...(continueSession === undefined ? buildRoleRouteRequestFields(route, {
+      provider: input.provider,
       model: input.model,
       engineTurnBudget: entry.engine !== undefined ? entry.maxTurns : undefined,
       degraded: false,

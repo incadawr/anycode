@@ -52,6 +52,94 @@ const BASE_OUTCOME: SessionSubagentOutcome = {
   spawnToolCallId: "toolu_bridge_1",
 };
 
+describe("bridge explicit provider contract", () => {
+  const entry: AgentBridgeCatalogEntry = { name: "worker", description: "work", systemPrompt: "body" };
+  const args = { agent_type: "worker", description: "d", prompt: "p", provider: " second connection " };
+  const makeDeps = (profile = entry) => {
+    const run = vi.fn(async (_request: SessionSubagentRequest) => BASE_OUTCOME);
+    const port: SessionSubagentPort = { run, send: async () => ({ ok: false, reason: "unavailable", message: "unused" }) };
+    return { catalog: [profile], port, spawnToolCallId: "call", run };
+  };
+
+  it("declares an optional nonempty provider", () => {
+    const schema = buildAgentBridgeToolDecl([entry])!.inputSchema as { required: string[]; properties: Record<string, { type: string; minLength: number }> };
+    expect(schema.required).not.toContain("provider");
+    expect(schema.properties.provider).toMatchObject({ type: "string", minLength: 1 });
+  });
+
+  it("preserves the selector through decode and run", async () => {
+    const input = decodeAgentBridgeCallInput(args)!;
+    expect(input).toEqual(args);
+    const deps = makeDeps();
+    const result = await runAgentBridgeCall(input, deps);
+    expect(result.isError).toBe(false);
+    expect(deps.run.mock.calls[0]![0]).toMatchObject({ provider: args.provider });
+  });
+
+  it("carries provider through the common request builder", () => {
+    expect(buildSessionSubagentRequest({ agentType: "worker", description: "d", prompt: "p", spawnToolCallId: "call", provider: args.provider })).toHaveProperty("provider", args.provider);
+  });
+
+  it.each(["", "   ", 42, null, {}, []].map(provider => ({ provider })))("refuses malformed provider $provider at decode", ({ provider }) => {
+    expect(decodeAgentBridgeCallInput({ ...args, provider })).toBeNull();
+  });
+
+  it.each([
+    { connection: "pinned" }, { provider: "pinned" },
+    { engine: "claude" as const }, { engine: "codex" as const },
+  ])("rejects profile routing conflict %j without a spawn", async (routing) => {
+    const deps = makeDeps({ ...entry, ...routing });
+    const result = await runAgentBridgeCall(args, deps);
+    expect(result).toMatchObject({ isError: true, errorKind: "invalid_input" });
+    expect(result.text).toMatch(/provider/);
+    expect(result.text).toMatch(/omit|new call/);
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
+  it("rejects provider on a continued child without a spawn", async () => {
+    const deps = makeDeps();
+    const result = await runAgentBridgeCall({ ...args, continue_session: "child" }, deps);
+    expect(result).toMatchObject({ isError: true, errorKind: "invalid_input" });
+    expect(result.text).toMatch(/keeps the connection/);
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { entries: [{ connection: "configured" }], skipped: [] },
+    { entries: [{ engine: "codex" as const }], skipped: [] },
+    { entries: [], skipped: [{ entry: { provider: "configured" }, reason: "unhealthy" }] },
+  ])("rejects configured role routes and exhausted fallbacks without a spawn", async (route) => {
+    const deps = makeDeps({ ...entry, name: "reviewer" });
+    const result = await runAgentBridgeCall({ ...args, agent_type: "reviewer" }, { ...deps, policy: { resolveRoleRoute: () => route } });
+    expect(result).toMatchObject({ isError: true, errorKind: "invalid_input" });
+    expect(deps.run).not.toHaveBeenCalled();
+  });
+
+  it("allows a role without a configured route to carry an explicit provider", async () => {
+    const deps = makeDeps({ ...entry, name: "reviewer" });
+    const result = await runAgentBridgeCall({ ...args, agent_type: "reviewer" }, { ...deps, policy: { resolveRoleRoute: () => undefined } });
+    expect(result.isError).toBe(false);
+    expect(deps.run.mock.calls[0]![0]).toHaveProperty("provider", args.provider);
+  });
+
+  it("preserves omission and profile routing when provider is absent", async () => {
+    const deps = makeDeps({ ...entry, connection: "pinned" });
+    const input = decodeAgentBridgeCallInput({ agent_type: "worker", description: "d", prompt: "p" })!;
+    expect(input).not.toHaveProperty("provider");
+    await runAgentBridgeCall(input, deps);
+    expect(deps.run.mock.calls[0]![0]).toMatchObject({ connectionId: "pinned" });
+    expect(deps.run.mock.calls[0]![0]).not.toHaveProperty("provider");
+  });
+
+  it("keeps restrictions and model overrides on an explicit core route", async () => {
+    const restrictions = { tools: ["Read"], readOnly: true };
+    const deps = makeDeps({ ...entry, restrictions, model: "default-model" });
+    await runAgentBridgeCall({ ...args, model: "chosen-model" }, deps);
+    expect(deps.run.mock.calls[0]![0]).toMatchObject({ provider: args.provider, model: "chosen-model", restrictions, nativeRestrictionsUnsupported: true });
+    expect(deps.run.mock.calls[0]![0]).not.toHaveProperty("engine");
+  });
+});
+
 describe("bridge role routing policy", () => {
   const catalog: AgentBridgeCatalogEntry[] = ["planner", "executor", "reviewer", "explore"].map((name) => ({
     name, description: name, systemPrompt: `body ${name}`, engine: "claude", model: "old-model", effort: "low",
