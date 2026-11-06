@@ -1,13 +1,14 @@
 /** Production, opt-in, local-only MCP. Independent of automation and CDP. */
 import { createServer } from "node:http";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readFile, rm, realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Server, StreamableHTTPServerTransport, CallToolRequestSchema, ListToolsRequestSchema } from "@anycode/core/communication-mcp";
 import { z } from "zod";
 import { createCommunicationLedger, writePrivateFile, type CommunicationRecord } from "./communication-ledger.js";
+import { createCommunicationDispatch } from "./communication-dispatch.js";
 export { writePrivateFile } from "./communication-ledger.js";
-import type { AgentDelivery, AgentEnvelope, SessionActivityState } from "../shared/communication.js";
+import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 
 export interface CommunicationManager {
   listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
@@ -277,47 +278,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   if (!isAbsolute(discoveryFile)) throw new Error("Communication discoveryFile must be absolute");
   const ledgerFile = `${discoveryFile}.messages`;
   const token = randomBytes(32).toString("hex");
-  // This credential represents one supervisor, not an arbitrary client-asserted agent/session.
-  const sender = "authenticated-local-supervisor";
   const ledger = await createCommunicationLedger(ledgerFile, options.writeLedger);
   const { messages, persist } = ledger;
-  /**
-   * GitHub #21: ids whose dispatch is not settled yet — the record exists (its
-   * write may even be still open), but the envelope has not reached the host or
-   * its outcome is unknown. Such a record must NEVER be eligible for
-   * `restore_agent_messages`: the host keeps the messageId as a known delivery
-   * and answers the real envelope with that stale record instead of starting the
-   * turn (the record then reads "unknown / Dispatch pending" forever). This is
-   * tracked by id, NOT by the displayed detail, because the dispatch deadline
-   * rewrites that detail while the dispatch is still in flight.
-   */
-  const inFlight = new Set<string>();
-  const dispatchTimeoutMs = options.dispatchTimeoutMs ?? 20_000;
-  const expiryTimers = new Map<string, NodeJS.Timeout>();
-  const clearExpiry = (messageId: string) => {
-    const timer = expiryTimers.get(messageId);
-    if (timer !== undefined) { clearTimeout(timer); expiryTimers.delete(messageId); }
-  };
-  /**
-   * One timer per record at its own deadline (no 1 s scan): a record that still
-   * reads "Dispatch pending" at `createdAt + dispatchTimeoutMs` cannot stay
-   * pending for a caller. `createdAt` is the envelope's, so the deadline does not
-   * drift with how long the ledger write or the post takes.
-   */
-  const scheduleExpiry = (record: CommunicationRecord) => {
-    const messageId = record.envelope.messageId;
-    clearExpiry(messageId);
-    const due = Date.parse(record.envelope.createdAt) + dispatchTimeoutMs - Date.now();
-    const timer = setTimeout(() => {
-      expiryTimers.delete(messageId);
-      if (record.detail !== "Dispatch pending") return;
-      record.state = "unknown";
-      record.detail = "Host response unavailable; do not blindly resend";
-      void persist().catch(() => {});
-    }, Math.max(0, due));
-    timer.unref();
-    expiryTimers.set(messageId, timer);
-  };
   const markLostGeneration = async (record: CommunicationRecord) => {
     if (record.state !== "queued") return false;
     const tab = options.manager.listTabs().find((t) => t.sessionId === record.envelope.recipientSessionId);
@@ -422,39 +384,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const parseOr = <T>(schema: z.ZodType<T>, raw: unknown, hint: string): T => {
     try { return schema.parse(raw); } catch (error) { if (error instanceof z.ZodError) throw new Error(hint); throw error; }
   };
-  /** Shared by `send_message` and `create_session`'s firstMessage: idempotency -> ledger -> persist -> deliver -> persist. */
-  const sendMessage = async (input: z.infer<typeof messageSchema>): Promise<CommunicationRecord> => {
-    const recipient = await requireSession(input.sessionId);
-    const workspace = await resolvePath(recipient.workspace);
-    if (input.idempotencyKey) {
-      const existing = ledger.findByIdempotencyKey(input.idempotencyKey);
-      if (existing) {
-        const e = existing.envelope;
-        if (e.recipientSessionId !== input.sessionId || e.payload !== input.payload || e.mode !== input.mode || e.kind !== input.kind || e.correlationId !== input.correlationId || e.replyTo !== input.replyTo) throw new Error("Idempotency key reused with different input");
-        return existing;
-      }
-    }
-    if (ledger.isFull()) throw new Error("Message ledger full; restart with a new discovery file after archiving ledger");
-    const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
-    const record: CommunicationRecord = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
-    messages.set(envelope.messageId, record);
-    // In flight from the moment the record exists until the post settles: the
-    // window the ledger write and the host request open is exactly when
-    // reconciliation must keep its hands off this record.
-    inFlight.add(envelope.messageId);
-    scheduleExpiry(record);
-    try {
-      await persist(); // Durable acceptance BEFORE any delivery side effect.
-      try {
-        const response = await options.manager.communicationRequest(input.sessionId, "send_message", envelope, recipient.workspace) as AgentDelivery;
-        record.state = response.state; record.detail = response.detail === "Dispatch pending" ? "Host response unavailable; do not blindly resend" : response.detail;
-      } catch { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
-    } finally {
-      inFlight.delete(envelope.messageId);
-    }
-    await markLostGeneration(record);
-    await persist(); return record;
-  };
+  const dispatch = createCommunicationDispatch({
+    ledger, authorize: requireSession, resolvePath, markLostGeneration,
+    dispatchTimeoutMs: options.dispatchTimeoutMs,
+    post: (sessionId, envelope, workspace) => options.manager.communicationRequest(sessionId, "send_message", envelope, workspace),
+  });
+  const { inFlight } = dispatch;
+  // The HTTP supervisor and create_session firstMessage use the same dispatch.
+  const sendMessage = (input: z.infer<typeof messageSchema>, signal?: AbortSignal) => dispatch.send({ kind: "external" }, input, signal);
   // Every in-flight wait, so close() can abort them all (no leaked timers or hosts polled after close).
   const waiters = new Set<AbortController>();
   let closing = false;
@@ -590,7 +527,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         return { ...tab, ...(result as object) };
       }
       case "send_message": {
-        return sendMessage(parseOr(messageSchema, raw, 'send_message expects sessionId, payload (1..32000 chars) and mode ("next_turn" or "steer"); optional: kind, correlationId, replyTo, idempotencyKey'));
+        return sendMessage(parseOr(messageSchema, raw, 'send_message expects sessionId, payload (1..32000 chars) and mode ("next_turn" or "steer"); optional: kind, correlationId, replyTo, idempotencyKey'), signal);
       }
       case "list_agent_projects": {
         z.object({}).strict().parse(raw);
@@ -797,10 +734,10 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const url = `http://127.0.0.1:${address.port}/mcp`;
   try { await writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] })); }
   catch (error) { http.closeAllConnections(); http.close(); throw error; }
-  // Each record carries its own dispatch deadline (see `scheduleExpiry`), so
+  // Each record carries its own dispatch deadline (see communication-dispatch), so
   // expiry never waits for reconciliation's host requests to finish.
   const reconcileTimer = setInterval(() => { void reconcile(); }, 1000);
   reconcileTimer.unref();
   let closed = false;
-  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); for (const messageId of [...expiryTimers.keys()]) clearExpiry(messageId); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await ledger.flush(); try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
+  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); dispatch.dispose(); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await ledger.flush(); try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
 }

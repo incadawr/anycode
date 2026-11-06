@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Sessions API reports malformed host delivery responses as unknown without exposing unexpected response data.
+
 ## [0.0.85] - 2026-11-06
 
 ### Fixed

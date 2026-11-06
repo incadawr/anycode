@@ -277,6 +277,14 @@ describe("production communication MCP over real SDK HTTP", () => {
     }, { timeout: 2500, interval: 30 });
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
   });
+  it("projects malformed host delivery details to an unknown HTTP outcome", async () => {
+    const f = await fixture();
+    f.request.mockResolvedValueOnce({ state: "acknowledged", detail: { secret: "PRIVATE_SENTINEL" } } as never);
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "hello", mode: "next_turn" } }));
+    expect(record.state).toBe("unknown");
+    expect(record.detail).toBe("Host response unavailable; do not blindly resend");
+    expect(JSON.stringify(record)).not.toContain("PRIVATE_SENTINEL");
+  });
   it("reports uncertain transport delivery without automatic retry", async () => {
     const f = await fixture(); f.request.mockRejectedValue(new Error("Host died after applying message"));
     const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "clarification", mode: "steer", idempotencyKey: "uncertain" } }));

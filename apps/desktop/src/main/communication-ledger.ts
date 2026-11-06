@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { readFile, writeFile, rename, mkdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { CommunicationPrincipal } from "./communication-dispatch.js";
 import type { AgentDelivery } from "../shared/communication.js";
 
-export type CommunicationRecord = AgentDelivery & { idempotencyKey?: string; workspace?: string; hostPid?: number | null };
+export type CommunicationRecord = AgentDelivery & { idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
 
 /** Atomic private write (mode 0600, temp file + rename); the default ledger and discovery writer. */
 export async function writePrivateFile(path: string, text: string): Promise<void> {
