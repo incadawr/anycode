@@ -1,4 +1,4 @@
-import { PERSONAS, isRoleRouteName, isReservedPersonaName, runAgentBridgeCall, type AgentBridgeCallDeps, type AgentBridgeCallInput, type AgentBridgeCatalogEntry, type PersonaDefinition, type RoleRouteEntry, type RoleRouteResolution, type SessionSubagentPort } from "@anycode/core";
+import { PERSONAS, isRoleRouteName, isReservedPersonaName, runAgentBridgeCall, type AgentBridgeCallDeps, type AgentBridgeCallInput, type AgentBridgeCatalogEntry, type AgentProfilesResult, type RoleRouteEntry, type RoleRouteResolution, type SessionSubagentPort } from "@anycode/core";
 import { activeConnection, resolveProviderConnection, type AnycodeSettings } from "../shared/settings.js";
 import { resolveProfileRoles } from "../shared/role-profiles.js";
 import { roleCatalog } from "./role-catalog.js";
@@ -14,10 +14,12 @@ export function selectedCodexPreset(engine: { snapshot(): { activePresetId: stri
 /** Composition for a native root. The overlay owner calls capture/clear at its verified transition boundary. */
 export function createForeignOrchestrationComposition(options: {
   settings(): AnycodeSettings | undefined;
-  profiles(): Promise<readonly PersonaDefinition[]>;
+  profiles(): Promise<Pick<AgentProfilesResult, "profiles" | "problems">>;
   projectRoot: string;
   env?: NodeJS.ProcessEnv;
   preset(): string;
+  /** Whether this native parent uses the Claude restricted catalog policy. */
+  restrictedCatalog?(): boolean;
   permissionMode?(preset: string): import("@anycode/core").PermissionMode;
   health: RoleHealthCache;
   routed: ReturnType<typeof createRoutedChildComposition>;
@@ -28,7 +30,11 @@ export function createForeignOrchestrationComposition(options: {
   const facts = new WeakMap<AgentBridgeCatalogEntry, { settings: AnycodeSettings | undefined; claimed: boolean }>();
 
   async function catalog(): Promise<AgentBridgeCatalogEntry[]> {
-    const [profiles, settings] = await Promise.all([options.profiles(), Promise.resolve(options.settings())]);
+    const [discovered, settings] = await Promise.all([options.profiles(), Promise.resolve(options.settings())]);
+    // Boot and ordinary calls preserve discovery's partial catalog. Restricted
+    // calls must never replace an unreadable profile with a builtin role.
+    if (enabled && options.restrictedCatalog?.() && discovered.problems.length > 0) throw new Error("Could not read or validate the agent catalog");
+    const { profiles } = discovered;
     const claimed = new Set(profiles.filter(p => !isReservedPersonaName(p.name)).map(p => p.name));
     const env = (options.env ?? process.env).ANYCODE_SUBAGENT_MAX_TURNS;
     const configured = env !== undefined && env.trim() !== "" ? Number(env) : settings?.tools.subagentMaxTurns;
@@ -121,6 +127,7 @@ export function createForeignOrchestrationComposition(options: {
   }
   return {
     catalog, call,
+    isEnabled: () => enabled,
     childMode: () => authority.read(),
     captureMode(mode: import("@anycode/core").PermissionMode) { authority.capture(mode); enabled = true; },
     captureBaseAuthority(preset: string) { authority.capture(permissionMode(preset)); enabled = true; },

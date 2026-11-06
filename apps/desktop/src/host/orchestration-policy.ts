@@ -1,4 +1,4 @@
-import { PERMISSION_MODES, type PermissionMode } from "@anycode/core";
+import { PERMISSION_MODES, type PermissionMode, type RuntimeNativeBase } from "@anycode/core";
 
 /** Engine-owned, verified state. Base authority is captured before the overlay. */
 export interface OrchestrationSnapshot {
@@ -8,6 +8,7 @@ export interface OrchestrationSnapshot {
 }
 
 export interface OrchestrationPolicy {
+  nativeBase?(): RuntimeNativeBase | undefined;
   availability(): { supported: true } | { supported: false; reason: string };
   apply(enabled: boolean, baseAuthority: unknown): Promise<OrchestrationSnapshot>;
 }

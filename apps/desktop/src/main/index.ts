@@ -1,3 +1,4 @@
+import { claudeOrchestrationEnabled } from "./claude-orchestration-feature.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
 import { automaticGoBootRoute } from "./go-route.js";
@@ -2816,6 +2817,7 @@ void app.whenReady().then(async () => {
     // tab goes through — instead of silently falling back to the ambient
     // `~/.codex` plan.
     resolveDefaultCodexProfile: () => resolveCodexProfileForTab(undefined),
+    claudeOrchestrateEnabled: () => claudeOrchestrationEnabled(bootEnv),
     engineSwitchEnabled: () => bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1",
     shouldRefreshRuntimeIdentity: (sessionId: string) =>
       bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1" || (persistence?.loadRuntimeSession(sessionId)?.revision ?? 0) > 0,
@@ -2856,7 +2858,7 @@ void app.whenReady().then(async () => {
         } else if (!(claudeOnboarding?.readyFor() ?? false)) throw new Error("Claude unavailable");
         const env = hostEnvForConnection(target.engine === "core" ? target.connectionId : tab.connectionId) ?? (target.engine !== "core" ? currentHostEnv : undefined);
         if (!env) throw new Error("Connection environment unavailable");
-        return { launch: { target: target.engine === "codex" ? { ...target, codexProfileId: codexProfile?.id ?? SYSTEM_PROFILE_ID } : target, env: { ...env, ANYCODE_ENGINE: target.engine, ANYCODE_MODEL: target.model }, ...(codexProfile ? { codexProfile } : {}) }, release };
+        return { launch: { claudeOrchestrateEnabled: claudeOrchestrationEnabled(bootEnv), target: target.engine === "codex" ? { ...target, codexProfileId: codexProfile?.id ?? SYSTEM_PROFILE_ID } : target, env: { ...env, ANYCODE_ENGINE: target.engine, ANYCODE_MODEL: target.model }, ...(codexProfile ? { codexProfile } : {}) }, release };
       } catch (error) { release?.(); throw error; }
     },
     commitEngineSwitchIdentity: (sessionId, expectedEngine, target, identity, workspace) => {

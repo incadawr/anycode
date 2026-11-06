@@ -12,6 +12,7 @@
  * notification queue (contract §1/§2).
  */
 
+import { claudeOrchestrationSpawnOptions } from "./orchestration-policy.js";
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
@@ -66,6 +67,7 @@ export class ClaudeClientError extends Error {
 // ── spawn argv (cut §1.3) ──
 
 export interface ClaudeSpawnArgsOptions {
+  orchestrationSpawn?: import("./orchestration-policy.js").ClaudeOrchestrationSpawnSnapshot;
   /**
    * Omitted entirely (no `--permission-mode` in argv) when undefined. That is
    * the RESUME posture: a resumed native session carries its own surviving
@@ -205,6 +207,9 @@ export const CLAUDE_AGENT_BRIDGE_PROMPT =
  * caller supplied it, which is exactly when the bridge is announced.
  */
 export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] {
+  const overlay = options.orchestrationSpawn === undefined ? undefined : claudeOrchestrationSpawnOptions(options.orchestrationSpawn);
+  if (overlay) options = { ...options, permissionModeFlag: overlay.permissionModeFlag, enableSlashPassthrough: false, mcpConfigPath: undefined,
+    agentBridgePrompt: overlay.appendPrompt };
   const args = [
     "-p",
     "--input-format",
@@ -223,7 +228,8 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     // `local` are both workspace files, so the untrusted spawn admits `user`
     // only (value verified against the pinned 2.1.296 binary — see
     // ClaudeSpawnArgsOptions.projectTrusted).
-    options.projectTrusted === false ? "user" : "project,local",
+    overlay ? overlay.settingSources : options.projectTrusted === false ? "user" : "project,local",
+    ...(overlay ? ["--tools", overlay.tools, "--settings", overlay.settings, "--mcp-config", overlay.mcpConfig] : []),
     ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
     "--strict-mcp-config",
     "--append-system-prompt",
@@ -466,6 +472,8 @@ export interface InboundControlRequest {
 }
 
 export interface ClaudeClientOptions {
+  orchestrationSpawn?: ClaudeSpawnArgsOptions["orchestrationSpawn"];
+  onTerminal?: () => void;
   binaryPath: string;
   cwd: string;
   sourceEnv: NodeJS.ProcessEnv;
@@ -626,6 +634,8 @@ export class ClaudeClient {
     );
   }
 
+  get hasPendingRequests(): boolean { return this.pending.size > 0 || this.pendingInbound.size > 0; }
+
   get pid(): number | null {
     return this.child?.pid ?? null;
   }
@@ -654,10 +664,12 @@ export class ClaudeClient {
     }
     try {
       await this.preflightVersion();
+      if (this.closing) throw new ClaudeClientError("claude client closed");
       // Re-validated HERE, immediately before THIS spawn — the preflight's own
       // trust check is stale by a whole `--version` round trip (TOCTOU).
       this.assertTrusted();
       const args = buildClaudeSpawnArgs({
+        orchestrationSpawn: this.options.orchestrationSpawn,
         // An explicit flag always wins. Without one, a FRESH spawn falls back to
         // the fail-closed `manual` (= wire `default`, the Ask preset), while a
         // RESUME sends no `--permission-mode` at all so the native session's own
@@ -789,6 +801,8 @@ export class ClaudeClient {
    */
   close(): Promise<void> {
     if (this.child === null) {
+      this.closing = true;
+      this.failTerminal(new ClaudeClientError("claude client closed"));
       // a close before any child existed still owned the file.
       this.cleanupOwnedMcpConfig();
       return Promise.resolve();
@@ -799,6 +813,8 @@ export class ClaudeClient {
 
   private async teardown(child: ChildProcess): Promise<void> {
     this.closing = true;
+    for (const inbound of this.pendingInbound.values()) inbound.cancel.abort();
+    this.pendingInbound.clear();
     // the file dies with the child, whichever teardown stage runs.
     this.cleanupOwnedMcpConfig();
     // `close` is emitted exactly ONCE, and a listener registered after it has
@@ -1214,5 +1230,6 @@ export class ClaudeClient {
     // parked forever (same leak class as `onControlCancelRequest`).
     for (const inbound of this.pendingInbound.values()) inbound.cancel.abort();
     this.pendingInbound.clear();
+    this.options.onTerminal?.();
   }
 }

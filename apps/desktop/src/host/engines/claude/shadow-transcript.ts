@@ -224,6 +224,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
   }
 
   get orchestrationPolicy() { return this.engine.orchestrationPolicy; }
+  get verifyOrchestrationOff() { return this.engine.verifyOrchestrationOff?.bind(this.engine); }
   get orchestrationComposition() { return this.engine.orchestrationComposition; }
   get orchestrationCompositionReady() { return this.engine.orchestrationCompositionReady; }
 

@@ -1,3 +1,5 @@
+import { checkedNativeBase, nativeConfigDigest, recoveryNativeBase, type NativeRecovery } from "../../native-base.js";
+import type { RuntimeNativeBase } from "@anycode/core";
 /**
  * The small, native Codex session runtime. It intentionally does not compose
  * AnyCode's AgentLoop or any of its tools: the app-server owns those policies.
@@ -225,6 +227,7 @@ export interface ConnectedCodexEngine {
  * one of them is checked here, host-side, before any RPC carries it.
  */
 export interface CodexSessionSelection {
+  orchestrationRecovery?: NativeRecovery;
   model?: string;
   presetId?: string;
   /** Draft effort tier (profile `effort:`), resolved against the live catalog; unrecognized degrades to the model default. */
@@ -257,6 +260,7 @@ export type CodexSettingsChange =
 
 /** Everything the engine needs to re-assert the full effective posture on every turn (cut §2(k).1). */
 interface CodexEngineSettings {
+  offVerified?: boolean;
   workspace: string;
   catalog: CodexModelCatalog;
   model: string;
@@ -345,6 +349,25 @@ function driftNotice(preset: CodexPermissionPresetDefinition, result: ThreadResu
       `Codex reports a weaker sandbox than the "${preset.label}" preset; the preset is re-applied on the next turn.`,
     ),
   );
+}
+
+async function verifyRecoveryOff(client: CodexClient, selection: CodexSessionSelection | undefined,
+  preset: CodexPermissionPresetDefinition, echo: ThreadResult, forwarded: Record<string, unknown> = {}, workspace: string, timeoutMs: number): Promise<boolean> {
+  if (!selection?.orchestrationRecovery) return false;
+  const base = recoveryNativeBase(selection.orchestrationRecovery, "codex");
+  if (base && echo.model !== base.model) throw new Error("Codex OFF model was not confirmed");
+  const expected = preset.threadParams;
+  const sandbox = record(echo.sandbox);
+  const kind = { "read-only": "readOnly", "workspace-write": "workspaceWrite", "danger-full-access": "dangerFullAccess" }[expected.sandbox];
+  if (!sandbox || sandbox.type !== kind || (kind !== "dangerFullAccess" && sandbox.networkAccess !== false)
+    || !(echo.approvalPolicy === expected.approvalPolicy || expected.approvalPolicy === "untrusted" && echo.approvalPolicy === "on-request"))
+    throw new Error("Codex OFF native posture was not confirmed");
+  const response = await client.request<{ config: unknown }>("config/read", { cwd: workspace, includeLayers: true }, { timeoutMs });
+  requireCompleteReadback(response);
+  captureBaseConfig(response, forwarded);
+  if (base?.engine === "codex" && nativeConfigDigest({ config: response.config, forwarded }) !== base.configDigest)
+    throw new Error("Codex base config digest changed");
+  return true;
 }
 
 /** Boot-time settings assembly, shared by the fresh-start and resume paths. */
@@ -614,6 +637,10 @@ export async function createNativeCodexSession(
   bootNotices?: AgentEvent[],
   mcpForward?: { servers?: Record<string, unknown>; notices?: AgentEvent[] },
 ): Promise<ConnectedCodexEngine> {
+  if (selection?.orchestrationRecovery) {
+    const base = recoveryNativeBase(selection.orchestrationRecovery, "codex");
+    selection = { ...selection, presetId: base?.preset ?? "read-only", model: base?.model ?? selection.model, effort: base?.effort };
+  }
   const bounds = timeouts(overrides);
   const readiness = await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined, process.platform);
   const catalog = await CodexModelCatalog.load(client);
@@ -638,9 +665,11 @@ export async function createNativeCodexSession(
       ? { config: { mcp_servers: mcpForward.servers } }
       : {}),
   }, { timeoutMs: bounds.bootRpcMs });
+  const offVerified = await verifyRecoveryOff(client, selection, preset, result, mcpForward?.servers, workspace, bounds.bootRpcMs);
   const native = nativeThread(result, "thread/start");
   const quota = await pullQuotaSnapshot(client, bounds.bootRpcMs);
   const settings = buildSettings(workspace, catalog, preset, result, native.model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir, selection?.fast);
+  settings.offVerified = offVerified;
   return {
     // A fresh thread has zero prior turns: no history to hydrate, and the
     // FIRST turn this launch runs is native turn ordinal 0 (cut §2(e)).
@@ -671,6 +700,10 @@ export async function resumeNativeCodexSession(
   bootNotices?: AgentEvent[],
   mcpForward?: { servers?: Record<string, unknown>; notices?: AgentEvent[] },
 ): Promise<ConnectedCodexEngine> {
+  if (selection?.orchestrationRecovery) {
+    const base = recoveryNativeBase(selection.orchestrationRecovery, "codex");
+    selection = { ...selection, presetId: base?.preset ?? "read-only", model: base?.model ?? selection.model, effort: base?.effort };
+  }
   const bounds = timeouts(overrides);
   const readiness = await initializeAndVerifyAccount(client, bounds.bootRpcMs, agentBridge !== undefined, process.platform);
   const catalog = await CodexModelCatalog.load(client);
@@ -698,6 +731,7 @@ export async function resumeNativeCodexSession(
   try {
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
+    ...(selection?.orchestrationRecovery && selection.model ? { model: selection.model } : {}),
     cwd: workspace,
     ...preset.threadParams,
     // 4764 review F17: the fresh app-server of THIS boot has no memory of the
@@ -716,6 +750,7 @@ export async function resumeNativeCodexSession(
       ? { config: { mcp_servers: mcpForward.servers } }
       : {}),
   }, { timeoutMs: bounds.bootRpcMs });
+  const offVerified = await verifyRecoveryOff(client, selection, preset, resumed, mcpForward?.servers, workspace, bounds.bootRpcMs);
   const native = nativeThread(resumed, "thread/resume");
   if (native.threadId !== externalSessionRef) {
     throw new Error("Codex thread/resume returned a different native thread");
@@ -749,6 +784,7 @@ export async function resumeNativeCodexSession(
   const stored = resolveModel(catalog, selection, notices);
   const model = stored ?? native.model;
   const settings = buildSettings(workspace, catalog, preset, resumed, model, notices, selection?.effort, selection?.excludeTmpRoots, selection?.childTempDir, selection?.fast);
+  settings.offVerified = offVerified;
   return {
     engine: new CodexEngine(client, native.threadId, approvals, overrides, settings, shadowLog, baseTurnOrdinal, historyItems, quota, agentBridge, agentCardLog),
     threadId: native.threadId,
@@ -973,6 +1009,10 @@ export class CodexEngine implements SessionEngine {
     return this.disposed || this.operation === "compact" ? null : this.activeTurn;
   }
 
+  async verifyOrchestrationOff(): Promise<void> {
+    if (!this.settings?.offVerified || this.disposed || this.terminalError || this.orchestrationState !== "off" || this.operation)
+      throw new Error("Codex OFF posture is not verified");
+  }
   denyOrchestrationApprovals(): boolean { return this.orchestrationState !== "off"; }
 
   /** A malformed or incomplete inventory never exposes the toggle. */
@@ -990,7 +1030,9 @@ export class CodexEngine implements SessionEngine {
 
   /** Installs a per-session transport factory. */
   installOrchestration(factory: (overrides: readonly string[]) => { client: CodexClient; start(): Promise<void> }, persistId: (oldId: string, newId: string) => Promise<void>, forwarded: Record<string, unknown> = {}): void {
+    let durable: RuntimeNativeBase | undefined;
     this.orchestrationPolicy = {
+      nativeBase: () => durable ? checkedNativeBase(durable, "codex") : undefined,
       availability: () => !this.orchestrationVerified || this.disposed || this.orchestrationState === "quarantined"
         ? { supported: false, reason: "unavailable" } : { supported: true },
       apply: async (enabled, baseAuthority) => {
@@ -1016,7 +1058,11 @@ export class CodexEngine implements SessionEngine {
           if (enabled) requireCompleteReadback(readback);
           const base = enabled ? captureBaseConfig(readback, forwarded) : this.orchestrationBase;
           if (!base) throw new Error("Missing base Codex config");
+          const nextBase = enabled ? checkedNativeBase({ version: 1, engine: "codex", model: this.settings?.model,
+            effort: this.settings?.effort, preset: this.settings?.preset.id,
+            configDigest: nativeConfigDigest({ config: (readback as { config: unknown }).config, forwarded }) }, "codex") : undefined;
           check();
+          this.settings!.offVerified = false;
           this.unobserve();
           await this.client.close();
           check();
@@ -1030,6 +1076,8 @@ export class CodexEngine implements SessionEngine {
           check();
           const config = await client.request("config/read", { cwd: this.settings?.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs });
           verifyConfig(config, base, enabled);
+          if (!enabled && durable?.engine === "codex" && nativeConfigDigest({ config: (config as { config: unknown }).config, forwarded }) !== durable.configDigest)
+            throw new Error("Codex base config digest changed");
           check();
           const settings = this.settings;
           if (!settings) throw new Error("Codex settings unavailable");
@@ -1059,7 +1107,9 @@ export class CodexEngine implements SessionEngine {
           this.pendingNotification = undefined;
           this.unobserve = client.observeNotifications?.((notification) => this.observeNotification(notification)) ?? (() => {});
           this.orchestrationBase = enabled ? base : undefined;
+          durable = nextBase;
           this.orchestrationState = enabled ? "on" : "off";
+          this.settings!.offVerified = !enabled;
           return { enabled, baseAuthority };
         };
         let timer: ReturnType<typeof setTimeout> | undefined;

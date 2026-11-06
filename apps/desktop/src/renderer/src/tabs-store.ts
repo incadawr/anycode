@@ -164,6 +164,7 @@ export interface TabsState {
    * `["core"]` (Core never depends on external diagnosis) so a reader before
    * the first fetch still sees a safe, non-empty list.
    */
+  claudeOrchestrateEnabled: boolean;
   availableEngines: readonly EngineId[];
   setAvailableEngines(engines: readonly EngineId[]): void;
 
@@ -329,6 +330,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     codexModels: [],
     draftActive: false,
     hiddenWorkspaces: readHiddenWorkspaces(storage),
+    claudeOrchestrateEnabled: false,
     availableEngines: ["core"],
 
     setAvailableEngines(engines): void {

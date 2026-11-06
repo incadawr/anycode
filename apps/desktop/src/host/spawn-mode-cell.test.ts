@@ -66,3 +66,10 @@ describe("foreign spawn authority", () => {
     expect(cell.read()).toBe("plan");
   });
 });
+
+it("keeps missing core authority at plan until explicitly captured", () => {
+  const cell = createSpawnModeCell({ mode: "plan", orchestrate: true }, () => null);
+  expect(cell.read()).toBe("plan");
+  cell.onOrchestrateChanged(true);
+  expect(cell.read()).toBe("build");
+});

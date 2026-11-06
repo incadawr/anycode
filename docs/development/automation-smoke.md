@@ -363,3 +363,37 @@ it, checking duplicate activation and the unchanged saved switch state.
 These doubles do not prove real native MCP connections or hot application.
 The printed private temporary profile contains `result.json` and PNG evidence;
 launch/ownership failures are INCOMPLETE, assertion failures are FAIL.
+
+## Orchestration fixture checks
+
+```bash
+node apps/desktop/scripts/orchestrate-mode-smoke.mjs --fixture-only --engines core,codex,claude --keep
+node --test apps/desktop/scripts/orchestrate-smoke-checks.test.mjs apps/desktop/scripts/engine-smoke-fixtures.test.mjs
+```
+
+The driver launches development Electron with a disposable HOME, userData,
+database and CLI profiles. It uses executable doubles and a loopback provider;
+it never copies account credentials or starts a live Claude CLI. GUI checks
+observe ordinary turns on each engine's request wire, Claude flag-OFF
+unavailability, and a nonce submitted through the same tab after renderer reload.
+
+`protocol-*` checks run an explicit list of integration tests in a separate
+disposable HOME. They exercise production renderer queues, host admission,
+child routing and persistence with scripted transports: dispatch/report/wake,
+failed-save OFF recovery, reload before/after acknowledgement, both successful
+restart directions with pending reports, explicit pre-accept retry, cancellation,
+restricted routing, spoof rejection and error/cancelled child reports. The
+client-restart check uses the real Claude client/wrapper with a fake transport;
+it is distinct from a GUI host-process restart. Mandatory observations missing
+from the runner output fail the corresponding check, even if the runner exits 0.
+
+Each check prints PASS, FAIL or SKIP and writes counts to `result.json` in the
+printed temporary profile. Raw test-runner JSON is removed after judgement.
+Exit 1 means failure; exit 0 allows explicitly listed SKIPs and does not certify
+release readiness. ON menu/slash/role dispatch in the GUI, native enforcement,
+auth equivalence and managed-policy proof remain SKIP. Unknown/unavailable auth
+or managed state must never become a native PASS because a fixture passed.
+Claude ON stays unavailable in production, including when its development flag
+is set: no native version currently has qualified live evidence. Never run this
+driver against a packaged app. The existing automation packaging boundary is
+unchanged.

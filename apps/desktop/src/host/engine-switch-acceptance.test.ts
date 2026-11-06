@@ -14,6 +14,9 @@ import { CLAUDE_ENGINE_CAPABILITIES } from "./engines/claude/claude-engine.js";
 import { persistedCoreMode } from "./engine-switch-runtime.js";
 import type { RunTurnOptions, SessionEngine } from "./engines/session-engine.js";
 import type { SessionOptions, SwitchRuntime } from "./session.js";
+import { ChildReportQueue } from "./child-report-queue.js";
+import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
+import { createForeignSpawnModeCell } from "./spawn-mode-cell.js";
 import { createHarness } from "./test-harness.js";
 
 const engines = ["core", "codex", "claude"] as const;
@@ -68,8 +71,9 @@ function transaction(source: EngineId, target: EngineId, stage?: "resolve" | "fa
     retire: async requestId => { await client.request({ phase: "retire", requestId }); },
   };
   let childLive = admission === "child";
-  const h = createHarness({ steps: [], runtimeHistory: history, backgroundChildren: { list: () => childLive ? [{ childSessionId: "child", agentType: "executor", description: "work", startedAt: 1 }] : [], cancel: () => false, cancelAll: () => {}, onChange: () => () => { if (stage === "cleanup") throw new Error("old listener cleanup failed"); } }, engine: old, switchEngineFactory: (...args) => factory(...args), engineSwitchCoordinator: coordinator });
-  return { ...h, old, next, controls, durableCommit, main, client, clearChildren() { childLive = false; }, setFactory(value: typeof factory) { factory = value; } };
+  const reportQueue = new ChildReportQueue({ sendDirect: message => h.outbound.sendDirect(message) });
+  const h = createHarness({ steps: [], runtimeHistory: history, pendingChildReports: reportQueue, backgroundChildren: { list: () => childLive ? [{ childSessionId: "child", agentType: "executor", description: "work", startedAt: 1 }] : [], cancel: () => false, cancelAll: () => {}, onChange: () => () => { if (stage === "cleanup") throw new Error("old listener cleanup failed"); } }, engine: old, switchEngineFactory: (...args) => factory(...args), engineSwitchCoordinator: coordinator });
+  return { ...h, old, next, controls, durableCommit, main, client, reportQueue, clearChildren() { childLive = false; }, setFactory(value: typeof factory) { factory = value; } };
 }
 
 describe("engine-switch refusal and rollback acceptance", () => {
@@ -236,4 +240,126 @@ describe("engine-switch refusal and rollback acceptance", () => {
       expect(h.controls.at(-1)).toMatchObject({ type: ENGINE_SWITCH_CONTROL, phase: "abort" });
     } finally { h.client.close(); h.close(); }
   });
+});
+
+// Synthetic native policies exercise the switch contract, without qualifying a CLI.
+function compose(runtime: Runtime, base: PermissionMode, supported = true) {
+  let mode = base;
+  const authority = createForeignSpawnModeCell(() => mode);
+  runtime.mode = () => mode;
+  const apply = vi.fn(async (enabled: boolean, baseAuthority: unknown) => ({ enabled, baseAuthority }));
+  Object.assign(runtime, { setMode: (next: PermissionMode) => { mode = next; }, setCoreOrchestrate: () => true,
+    orchestrationPolicy: { availability: () => ({ supported }), apply, nativeBase: () => runtime.id === "claude"
+      ? { version: 1, engine: "claude", model: "chosen", preset: "read-only", permissionMode: "plan", mcpDigest: "a".repeat(64), tools: ["Read"] }
+      : { version: 1, engine: "codex", model: "chosen", preset: "read-only", configDigest: "a".repeat(64) } } });
+  const cleanup = vi.fn();
+  const composition = bindRuntimeOrchestration(runtime, { ownerSessionId: "test-session",
+    port: { hasRunningChildren: () => false, cancelAllBackgroundChildren: vi.fn() },
+    baseMode: () => base, capture: authority.capture, clear: authority.clear, cleanup });
+  vi.spyOn(runtime, "dispose");
+  return { composition, authority, apply, cleanup };
+}
+
+it.each(pairs)("ON $source → $target captures only target authority before commit and retires routing", async ({ source, target }) => {
+  const store = new SqlitePersistenceAdapter(":memory:");
+  await store.createSession({ id: "test-session", workspace: "/workspace", model: "old", mode: "yolo", engineId: source });
+  const h = transaction(source, target, undefined, undefined, new RuntimeSessionHistory(store, "test-session"));
+  const old = compose(h.old, "yolo"), next = compose(h.next, target === "core" ? "edit" : "plan");
+  const base = target === "core" ? "edit" : "plan";
+  Object.assign(h.next, { verifyOrchestrationOff: async () => {} });
+  const commit = h.durableCommit.getMockImplementation()!;
+  h.durableCommit.mockImplementation((selection, identity) => {
+    expect(next.authority.read()).toBe(target === "core" ? "edit" : "build");
+    expect(h.old.dispose).not.toHaveBeenCalled();
+    if (target !== "core") expect(next.apply).toHaveBeenCalledWith(true, { mode: base });
+    commit(selection, identity);
+  });
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h.received.some(m => m.type === "host_ready"));
+    h.send({ type: "set_orchestrate", enabled: true });
+    await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+    expect(h.session.childSpawnMode()).toBe("yolo");
+    h.send({ type: "engine_switch_request", requestId: "authority", generation: 7, engine: target, model: "chosen", ...(target === "core" ? { connectionId: "connection" } : {}) });
+    await h.waitUntil(() => h.received.some(m => m.type === "engine_switched"));
+    expect(h.durableCommit).toHaveBeenCalledOnce();
+    expect(store.loadRuntimeSession("test-session")?.segments.at(-1)?.applied.orchestration?.baseMode).toBe(base);
+    expect(h.session.childSpawnPreOrchestrateMode()).toBe(base);
+    expect(h.session.childSpawnMode()).toBe(target === "core" ? "edit" : "build");
+    expect(old.composition.ready()).toBe(false);
+    expect(() => old.composition.capture("yolo")).toThrow("disposed");
+    expect(next.composition.ready()).toBe(true);
+    expect(h.main.pending).toBe(false);
+    h.send({ type: "set_orchestrate", enabled: false });
+    await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && !m.enabled));
+    if (target === "core") expect(h.next.mode()).toBe("edit");
+    else expect(next.apply).toHaveBeenLastCalledWith(false, { mode: "plan" });
+    h.send({ type: "user_message", requestId: "next", text: "continue" });
+    await h.waitUntil(() => h.next.inputs.length === 1);
+    expect(h.next.inputs[0]).toContain("original conversation");
+  } finally {
+    await h.session.shutdown(); h.client.close(); h.close(); await store.close();
+    expect(next.cleanup).toHaveBeenCalledOnce(); expect(old.cleanup).toHaveBeenCalledOnce();
+  }
+});
+
+it("unavailable Claude candidate leaves an ON source and its captured authority intact", async () => {
+  const h = transaction("codex", "claude");
+  const old = compose(h.old, "yolo"), next = compose(h.next, "plan", false);
+  try {
+    h.send({ type: "set_orchestrate", enabled: true });
+    await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+    h.send({ type: "engine_switch_request", requestId: "unavailable", generation: 7, engine: "claude", model: "chosen" });
+    await h.waitUntil(() => h.received.some(m => m.type === "engine_switch_failed"));
+    await h.waitUntil(() => !h.main.pending);
+    expect(h.session.childSpawnMode()).toBe("yolo");
+    expect(h.old.dispose).not.toHaveBeenCalled();
+    expect(old.composition.ready()).toBe(true); expect(next.composition.ready()).toBe(false);
+    expect(next.apply).not.toHaveBeenCalled(); expect(h.durableCommit).not.toHaveBeenCalled();
+    h.send({ type: "user_message", requestId: "retry", text: "continue" });
+    await h.waitUntil(() => h.old.inputs.length === 1);
+  } finally { await h.session.shutdown(); h.client.close(); h.close(); }
+});
+
+it.each([false, true])("retains a session-owned pending report through candidate abort=%s", async abort => {
+  const h = transaction("codex", "claude", abort ? "commit" : undefined);
+  compose(h.old, "yolo"); compose(h.next, "plan");
+  const make = async () => {
+    h.reportQueue.add("terminal", "child report sentinel");
+    return { engine: h.next, identity: { model: "chosen", mode: "read-only", externalSessionRef: "candidate-ref" } };
+  };
+  h.setFactory(make);
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h.received.some(m => m.type === "host_ready"));
+    h.send({ type: "set_orchestrate", enabled: true });
+    await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+    h.send({ type: "engine_switch_request", requestId: "reports", generation: 7, engine: "claude", model: "chosen" });
+    await h.waitUntil(() => h.received.some(m => m.type === (abort ? "engine_switch_failed" : "engine_switched")));
+    await h.waitUntil(() => !h.main.pending);
+    h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h.received.filter(m => m.type === "child_report" && m.id === "terminal").length === 2);
+    expect(h.controls.at(-1)?.phase).toBe(abort ? "abort" : "retire");
+    expect(h.reportQueue.snapshot().reports).toEqual([{ id: "terminal", text: "child report sentinel" }]);
+    h.send({ type: "child_report_ack", id: "terminal" });
+    await vi.waitFor(() => expect(h.reportQueue.snapshot().reports).toHaveLength(0));
+    expect(h.old.dispose).toHaveBeenCalledTimes(abort ? 0 : 1);
+    expect(h.next.dispose).toHaveBeenCalledTimes(abort ? 1 : 0);
+  } finally { await h.session.shutdown(); h.client.close(); h.close(); }
+});
+
+it("refuses an ON switch while source routing owns an admitted child", async () => {
+  const h = transaction("codex", "claude");
+  const old = compose(h.old, "yolo"); compose(h.next, "plan");
+  try {
+    h.send({ type: "set_orchestrate", enabled: true });
+    await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+    old.composition.hasRunningChildren = () => true;
+    h.send({ type: "engine_switch_request", requestId: "child-owner", generation: 7, engine: "claude", model: "chosen" });
+    await h.waitUntil(() => h.received.some(m => m.type === "engine_switch_failed"));
+    expect(h.controls).toEqual([]);
+    expect(h.durableCommit).not.toHaveBeenCalled();
+    expect(h.old.dispose).not.toHaveBeenCalled(); expect(h.next.dispose).not.toHaveBeenCalled();
+    expect(h.session.childSpawnMode()).toBe("yolo");
+  } finally { await h.session.shutdown(); h.client.close(); h.close(); }
 });

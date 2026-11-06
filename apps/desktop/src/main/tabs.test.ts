@@ -8848,3 +8848,51 @@ describe("authoritative runtime identity on respawn", () => {
     await manager.shutdownAllTabHosts();
   });
 });
+
+
+describe("Claude orchestration boot carrier", () => {
+  it.each(["core", "codex", "claude"] as const)("omits root launch intent from a %s child host", async engine => {
+    const { fork, hosts } = shutdownableForkRig();
+    const argv: string[][] = [];
+    const manager = childManager((entry, args, opts) => {
+      argv.push([...args]);
+      return fork(entry, args, opts);
+    }, windowRig().window, { claudeOrchestrateEnabled: () => true, engineReady: () => true });
+    try {
+      expect(manager.createTab({ workspace: "/ws", sessionId: "root-carrier", resume: false }).ok).toBe(true);
+      expect(argv[0]).toContain("--claude-orchestrate-enabled");
+      hosts[0]!.emit("message", spawnRequest({ engine: engine === "core" ? undefined : engine }));
+      await vi.waitFor(() => expect(argv).toHaveLength(2));
+      expect(argv[1]).toContain("--child-parent");
+      expect(argv[1]).not.toContain("--claude-orchestrate-enabled");
+    } finally { await manager.shutdownAllTabHosts(); }
+  });
+
+  it.each([undefined, "0", "1", "true"].flatMap(flag =>
+    [undefined, "0", "1"].flatMap(engineSwitch => [false, true].map(resume => ({ flag, engineSwitch, resume }))),
+  ))("carries main intent on boot $flag / switch $engineSwitch / resume $resume", async ({ flag, engineSwitch, resume }) => {
+    const { claudeOrchestrationEnabled } = await import("./claude-orchestration-feature.js");
+    const { claudeOrchestrationBootEnabled } = await import("../shared/claude-orchestration-feature.js");
+    const argv: string[][] = [];
+    const { fork, hosts } = liveForkRig();
+    const mainEnv = { ANYCODE_CLAUDE_ORCHESTRATE_ENABLED: flag, ANYCODE_ENGINE_SWITCH_ENABLED: engineSwitch };
+    const manager = new TabHostManager({
+      fork: (entry, args, opts) => { argv.push([...args]); return fork(entry, args, opts); },
+      hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => windowRig().window,
+      env: () => ({ ANYCODE_CLAUDE_ORCHESTRATE_ENABLED: "1" }), logger: silentLogger, limits: {},
+      shouldRefreshRuntimeIdentity: () => false,
+      claudeOrchestrateEnabled: () => claudeOrchestrationEnabled(mainEnv),
+      engineSwitchEnabled: () => engineSwitch === "1",
+    });
+    try {
+      expect(manager.createTab({ workspace: "/ws", sessionId: "carrier-session", resume }).ok).toBe(true);
+      expect(argv).toHaveLength(1);
+      expect(claudeOrchestrationBootEnabled(argv[0]!)).toBe(flag === "1");
+      expect(manager.claudeOrchestrationIntentEnabled()).toBe(flag === "1");
+    } finally {
+      const closing = manager.shutdownAllTabHosts();
+      hosts.forEach(host => host.emit("exit", 0));
+      await closing;
+    }
+  });
+});

@@ -1,3 +1,4 @@
+import { IconButton } from "../ui/index.js";
 import { modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { SYSTEM_CODEX_ACCOUNT_ID } from "../../../shared/codex-account.js";
 import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
@@ -636,13 +637,14 @@ export function seedWorkspaceFromRecents(
 
 export function StartScreen({ onToast }: StartScreenProps) {
   const draft = useTabsStore((state) => state.draft);
+  const claudeOrchestrateEnabled = useTabsStore((state) => state.claudeOrchestrateEnabled);
   const hiddenWorkspaces = useTabsStore((state) => state.hiddenWorkspaces);
   const snapshot = useSettingsStore((state) => state.snapshot);
   const accountCatalogs = useAccountSourcesStore((state) => state.snapshot.catalogs);
   const [sessions, setSessions] = useState<readonly SessionSummary[]>([]);
   // Core is always the local compatibility choice. Codex is appended only
   // after main returns its already-validated availability verdict.
-  const [availableEngines, setAvailableEngines] = useState<readonly EngineId[]>(["core"]);
+  const availableEngines = useTabsStore((state) => state.availableEngines);
   // (cut §2(d)/§2(g)/§3.8): the doctor-provided Codex model catalog
   // for the draft picker. the catalog moved from local component
   // state into the tabs store (`codexModels`/`setCodexModels`) so the Send
@@ -892,42 +894,6 @@ export function StartScreen({ onToast }: StartScreenProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    window.anycode
-      .listAvailableEngines()
-      .then(({ engineIds }) => {
-        if (!cancelled) setAvailableEngines(engineIds);
-      })
-      .catch((error: unknown) => {
-        // Absence/failure is fail-closed for optional engines, while the
-        // historical Core start flow remains available.
-        console.warn("[StartScreen] listAvailableEngines failed", error);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // residual (cut §5.5): the one-shot fetch above has no live
-  // listener, so a Codex login/onboarding step completed while a
-  // StartScreen is already mounted would not show up until remount. Wire
-  // the same `engines-changed` push CodexEnginePane already subscribes to
-  // (main fires it after every onboarding step) directly into this
-  // component's own effect, independent of that pane's mount state (Settings
-  // is usually unmounted, so relying solely on it relaying into tabs-store
-  // would be unreliable) — re-fetches and refreshes the Agent selector live.
-  useEffect(() => {
-    return window.anycode.onEnginesChanged(() => {
-      window.anycode
-        .listAvailableEngines()
-        .then(({ engineIds }) => setAvailableEngines(engineIds))
-        .catch((error: unknown) => {
-          console.warn("[StartScreen] listAvailableEngines (live refresh) failed", error);
-        });
-    });
   }, []);
 
   // (cut §2(g)/§3.8/§8): the draft's native model catalog comes from
@@ -1184,7 +1150,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   async function submit(skipRoleGate = false): Promise<void> {
     const rolesSkipped = startRolesSkippedRef.current;
     if (!skipRoleGate && !rolesSkipped && draft !== null) {
-      const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt);
+      const plan = resolveStartOrchestrate(draft.engine, draft.orchestrate, draft.prompt, claudeOrchestrateEnabled);
       if (startSendNeedsRolePicker(plan, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, draft.workspace ?? undefined))) {
         setStartRolePickerIntent("send");
         setStartRolePickerOpen(true);
@@ -1855,6 +1821,16 @@ export function StartScreen({ onToast }: StartScreenProps) {
               // against the frozen table and the model against the LIVE
               // `initialize` catalog before either reaches the wire.
               <>
+                {claudeOrchestrateEnabled && availableEngines.includes("claude") && (
+                  <IconButton
+                    className="orchestrate-toggle"
+                    pressed={draft.orchestrate === true}
+                    label="Orchestrate: request orchestration when the session starts"
+                    title="Request orchestration; availability is checked when the session starts"
+                    onClick={() => toggleDraftOrchestrate(draft.orchestrate !== true)}
+                    icon={<Orchestrate />}
+                  />
+                )}
                 <EnginePresetMenu
                   permissions={{ presets: CLAUDE_DRAFT_PRESETS, activePresetId: claudeDraftPreset }}
                   pendingPresetId={undefined}

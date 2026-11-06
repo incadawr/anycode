@@ -12,9 +12,10 @@
  */
 
 /** Orchestration-discipline text wrapped by withOrchestrateReminder. */
-export type OrchestrationDialect = "core" | "codex";
+export type OrchestrationDialect = "core" | "codex" | "claude";
 
 function agentInvocation(dialect: OrchestrationDialect): string {
+  if (dialect === "claude") return "mcp__anycode__agent tool using detach true";
   return dialect === "core" ? 'Agent tool using tier "session" and detach true' : "anycode_agent tool using detach true";
 }
 
@@ -31,7 +32,7 @@ export function orchestrationDeveloperBlock(dialect: OrchestrationDialect): stri
   return orchestrationInstructions(dialect);
 }
 
-export function orchestrationTurnReminder(dialect: OrchestrationDialect): string {
+export function orchestrationTurnReminder(dialect: Exclude<OrchestrationDialect, "claude">): string {
   const invocation = agentInvocation(dialect);
   return `Remain read-only and delegate through the ${invocation}. Do not wait, poll, or redo delegated work; follow the role-routing and named-profile rules.`;
 }

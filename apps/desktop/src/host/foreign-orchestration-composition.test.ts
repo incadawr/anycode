@@ -4,6 +4,7 @@ import { cloneDefaults } from "../settings/schema.js";
 import { createForeignOrchestrationComposition, selectedCodexPreset } from "./foreign-orchestration-composition.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
 import { entryKey, RoleHealthCache } from "./role-route.js";
+import { claudeAgentPermissionMode } from "./engines/child-permission-map.js";
 import { CodexDynamicToolBridge } from "./engines/codex/dynamic-tool-bridge.js";
 
 function setup() {
@@ -15,7 +16,7 @@ function setup() {
   const health = new RoleHealthCache();
   const routed = createRoutedChildComposition({ health, describeError: String, resolve: () => null, prepare: req => req, record: () => {}, deliver: () => {}, report: () => {} });
   const snapshot = vi.spyOn(routed, "snapshot");
-  const composition = createForeignOrchestrationComposition({ settings: () => settings, profiles: async () => profiles, projectRoot: "/project", preset: () => preset, health, routed });
+  const composition = createForeignOrchestrationComposition({ settings: () => settings, profiles: async () => ({ profiles, problems: [] }), projectRoot: "/project", preset: () => preset, health, routed });
   const run = vi.fn<SessionSubagentPort["run"]>().mockImplementation(async req => ({ status: "completed", finalText: "done", turns: 1, toolCalls: 0, truncated: false, durationMs: 1, childSessionId: "child", parentSessionId: "parent", spawnToolCallId: req.spawnToolCallId }));
   const port: SessionSubagentPort = { run, send: async () => ({ ok: false, reason: "unavailable", message: "unused" }) };
   async function invoke(name: string, extra: { model?: string; detach?: boolean; continue_session?: string } = {}) {
@@ -30,10 +31,25 @@ describe("foreign orchestration composition", () => {
   it("uses an explicit native authority adapter and captures an already verified mode", () => {
     const routed = createRoutedChildComposition({health:new RoleHealthCache(),describeError:String,resolve:() => null,prepare:r => r,record:() => {},deliver:() => {},report:() => {}});
     const mapping = vi.fn(() => "plan" as const);
-    const composition = createForeignOrchestrationComposition({settings:() => undefined,profiles:async () => [],projectRoot:"/project",preset:() => "workspace",permissionMode:mapping,health:new RoleHealthCache(),routed});
+    const composition = createForeignOrchestrationComposition({settings:() => undefined,profiles:async () => ({ profiles: [], problems: [] }),projectRoot:"/project",preset:() => "workspace",permissionMode:mapping,health:new RoleHealthCache(),routed});
     expect(composition.childMode()).toBe("plan"); expect(mapping).toHaveBeenCalledWith("workspace");
     composition.captureMode("edit"); expect(composition.childMode()).toBe("edit");
     composition.clearBaseAuthority(); expect(composition.childMode()).toBe("plan");
+  });
+
+  it("maps Claude pre-bind and captured authority through its own presets", () => {
+    const health = new RoleHealthCache();
+    const routed = createRoutedChildComposition({ health, describeError: String, resolve: () => null, prepare: req => req, record: () => {}, deliver: () => {}, report: () => {} });
+    let preset: string | undefined;
+    const composition = createForeignOrchestrationComposition({ settings: () => undefined, profiles: async () => ({ profiles: [], problems: [] }), projectRoot: "/project", preset: () => preset ?? "read-only", permissionMode: claudeAgentPermissionMode, health, routed });
+    expect(composition.childMode()).toBe("plan");
+    preset = "workspace";
+    expect(composition.childMode()).toBe("build");
+    preset = "read-only";
+    composition.captureBaseAuthority(preset);
+    expect(composition.childMode()).toBe("build");
+    composition.clearBaseAuthority();
+    expect(composition.childMode()).toBe("plan");
   });
 
   it.each([undefined, 0, -5, 200, 300])("stamps role budgets for setting %s", async budget => {

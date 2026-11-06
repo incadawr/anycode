@@ -274,11 +274,18 @@ describe("atomic runtime switch transaction", () => {
   it.each(["runtime_segments","runtime_boundaries","runtime_handoffs","sessions","history_items"])("rolls back every fact when %s fails", async table => {
     const path = await legacyDatabase();
     const store = new SqlitePersistenceAdapter(path);
-    const before = store.ensureRuntimeSession("s");
+    const state = store.ensureRuntimeSession("s");
+    const on = { model: "old", mode: "read-only", orchestration: { enabled: true as const, baseMode: "plan" as const,
+      nativeBase: { version: 1 as const, engine: "codex" as const, model: "old", preset: "read-only" as const, configDigest: "a".repeat(64) } } };
+    store.updateRuntimeSettings("s",state.activeSegmentId,on,on);
+    const before = store.loadRuntimeSession("s");
+    const target = switchRecord();
+    target.segment.selected.orchestration = target.segment.applied.orchestration = { enabled: true, baseMode: "plan",
+      nativeBase: { version: 1, engine: "claude", model: "chosen", preset: "read-only", permissionMode: "plan", mcpDigest: "b".repeat(64), tools: ["Read"] } };
     const raw = new DatabaseSync(path);
     const operation = table === "sessions" ? "UPDATE" : table === "history_items" ? "DELETE" : "INSERT";
     raw.exec(`CREATE TRIGGER switch_fault BEFORE ${operation} ON ${table} BEGIN SELECT RAISE(ABORT,'injected switch fault'); END`);
-    expect(() => store.commitRuntimeSwitch("s","codex",switchRecord())).toThrow("injected switch fault");
+    expect(() => store.commitRuntimeSwitch("s","codex",target)).toThrow("injected switch fault");
     expect(store.loadRuntimeSession("s")).toEqual(before);
     expect((await store.getRootSession("s"))?.externalSessionRef).toBe("old-thread");
     expect((await store.loadHistory("s"))[0]?.id).toBe("original");

@@ -1041,6 +1041,8 @@ export interface OrchestrationDelivery {
   origin?: "system";
   originId?: string;
   retryQueued?: boolean;
+  /** Explicit pre-admission refusal; retry only after a stable host update. */
+  retryAfterPosture?: true;
   parentRequestId?: string;
   status: "pending" | "unknown" | "rejected" | "started" | "finished" | "conflict";
   terminalReason?: "completed" | "error" | "cancelled" | "max_turns";
@@ -5242,7 +5244,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               const direct = pendingSentMessages.get(message.requestId) ?? steer?.sentMessage;
               const draft = inFlight ?? (delivery ? { id: message.requestId, text: delivery.text, images: delivery.images, ...(delivery.orchestrate ? { orchestrate: delivery.orchestrate } : {}), ...(delivery.initialPicks ? { initialPicks: delivery.initialPicks } : {}) } : direct ? { id: message.requestId, ...direct } : undefined);
               if (draft && !state.promptQueue.some(item => item.id === draft.id)) {
-                set({ promptQueue: delivery?.origin === "system" ? state.promptQueue : [{ ...draft, requiresRestore: true }, ...state.promptQueue], queueInFlight: inFlight ? null : state.queueInFlight, ...(delivery?.origin === "system" ? {} : { queuePaused: true, queuePauseReason: "rejected" as const }), pendingSteers: state.pendingSteers.filter(item => item.requestId !== message.requestId), uiSteerPending: state.uiSteerPending.filter(id => id !== message.requestId), orchestrationDeliveries: state.orchestrationDeliveries.map(item => item.requestId === message.requestId && item.status === "pending" ? deliveryRejected(item) : item), orchestration: state.orchestration.pendingSubmit === message.requestId ? { ...state.orchestration, pendingSubmit: null } : state.orchestration, transcript: state.transcript.filter(block => block.kind !== "user_text" || block.id !== message.requestId), notice: { kind: "turn_rejected", text: "Session policy is changing. Restore the draft before sending again." } });
+                set({ promptQueue: delivery?.origin === "system" ? state.promptQueue : [{ ...draft, requiresRestore: true }, ...state.promptQueue], queueInFlight: inFlight ? null : state.queueInFlight, ...(delivery?.origin === "system" ? {} : { queuePaused: true, queuePauseReason: "rejected" as const }), pendingSteers: state.pendingSteers.filter(item => item.requestId !== message.requestId), uiSteerPending: state.uiSteerPending.filter(id => id !== message.requestId), orchestrationDeliveries: state.orchestrationDeliveries.map(item => item.requestId === message.requestId && item.status === "pending" ? { ...deliveryRejected(item), ...(item.origin === "system" ? { retryAfterPosture: true as const } : {}) } : item), orchestration: state.orchestration.pendingSubmit === message.requestId ? { ...state.orchestration, pendingSubmit: null } : state.orchestration, transcript: state.transcript.filter(block => block.kind !== "user_text" || block.id !== message.requestId), notice: { kind: "turn_rejected", text: "Session policy is changing. Restore the draft before sending again." } });
                 pendingSentMessages.delete(message.requestId);
               }
               return;
@@ -6171,8 +6173,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // items and the one currently in flight (already off promptQueue,
             // wire-sent, `turn_started` not yet acked) — re-enqueuing it there
             // would produce a second turn for the same report. Either way
-            // tab-registry.ts acks unconditionally right after this call, so
-            // the host stops resending regardless of which branch ran.
+            // tab-registry.ts acknowledges only after recovery storage commits,
+            // including when this report was already queued.
             const { promptQueue, queueInFlight } = get();
             const alreadyQueued =
               promptQueue.some((prompt) => prompt.originId === message.id) ||

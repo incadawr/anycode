@@ -1,3 +1,4 @@
+import { CLAUDE_ORCHESTRATE_ARG } from "../shared/claude-orchestration-feature.js";
 import { EngineSwitchCoordinator } from "./engine-switch-coordinator.js";
 import { ENGINE_SWITCH_CONTROL, type EngineSwitchIdentity, type EngineSwitchLaunch } from "../shared/engine-switch-control.js";
 import type { EngineSwitchTarget } from "../shared/protocol.js";
@@ -808,10 +809,12 @@ export interface TabHostManagerDeps {
   resolveDefaultCodexProfile?: () => Promise<
     { ok: true; codexProfile?: { id?: string; home?: string; authLink?: string } } | { ok: false }
   >;
-  /** Fresh, engine-specific host-env overlay. It must contain no credentials. */
   engineSwitchEnabled?: () => boolean;
+  /** Main-owned Claude orchestration launch intent for root hosts only. */
+  claudeOrchestrateEnabled?: () => boolean;
   prepareEngineSwitch?: (target: EngineSwitchTarget, tab: TabHost) => Promise<{ launch: EngineSwitchLaunch; release?: () => void }>;
   commitEngineSwitchIdentity?: (sessionId: string, expectedEngine: EngineId, target: EngineSwitchTarget, identity: EngineSwitchIdentity, workspace: string) => void;
+  /** Fresh, engine-specific host-env overlay. It must contain no credentials. */
   engineEnv?: (engine: EngineId, generation: number) => NodeJS.ProcessEnv;
   /**
    * Platform-specific group reaper. Not wired until W0 process-tree evidence
@@ -1376,6 +1379,11 @@ export class TabHostManager {
     return { open: this.rootCount(), max: this.effectiveMaxTabs() };
   }
 
+  /** Projection for start-screen intent, independent of native readiness. */
+  claudeOrchestrationIntentEnabled(): boolean {
+    return this.deps.claudeOrchestrateEnabled?.() === true;
+  }
+
   /**
 
    * the tab-ipc create path can refuse `not_ready` BEFORE prompting for a
@@ -1733,6 +1741,7 @@ export class TabHostManager {
           } finally { result.release?.(); }
         }) : undefined;
     const args = resume ? ["--resume", tab.sessionId] : ["--session", tab.sessionId];
+    if (tab.childOf === undefined && this.deps.claudeOrchestrateEnabled?.() === true) args.push(CLAUDE_ORCHESTRATE_ARG);
     // the draft choice rides argv only on the spawn that CREATES the
     // session. Every later spawn is a `--resume`, where the persisted session row
     // is the authority — replaying the draft there would resurrect it over a

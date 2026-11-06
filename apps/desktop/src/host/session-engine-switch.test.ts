@@ -408,7 +408,7 @@ describe("Session — engine switch", () => {
       expect(requests[0]!.tools.map(tool => tool.name)).not.toContain("ExitPlanMode");
       h.send({ type: "set_orchestrate", enabled: false });
       await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && !m.enabled));
-      expect(target.mode()).toBe("plan"); // Unknown native settings retain the fail-closed base.
+      expect(target.mode()).toBe("build"); // Restore the target core base.
       expect(config.orchestrate).toBe(false);
     } finally { h.close(); targetHarness.close(); }
   });

@@ -17,12 +17,15 @@
  * `listTools` announces the BOOT catalog snapshot (names are
  * fixed for the session, the CLI caches its tools/list handshake), while
  * each `callTool` resolves the catalog per call via `resolveCallCatalog`
- * (fresh bodies/models, boot-declared names only), failing soft to the boot
- * snapshot on a transient re-read failure.
+ * (fresh bodies/models, boot-declared names only). Catalog read failures
+ * use the boot snapshot only outside the restricted posture.
  */
 
 import type {
   AgentBridgeCatalogEntry,
+  AgentBridgeCallDeps,
+  AgentBridgeCallInput,
+  AgentBridgeCallResult,
   McpToolCallResult,
   SessionSubagentPort,
   SubagentCardEvent,
@@ -34,8 +37,12 @@ import type { EngineBrowserBridge } from "../browser-bridge.js";
 export interface BridgePresentationStampDeps {
   /** The boot catalog snapshot the door announced on `tools/list` (also the fail-soft fallback). */
   catalog: readonly AgentBridgeCatalogEntry[];
-  /** per-call catalog re-read; may reject, in which case the boot snapshot is used. */
+  /** Per-call catalog re-read; restricted calls fail closed on rejection. */
   resolveCallCatalog: () => Promise<readonly AgentBridgeCatalogEntry[]>;
+  /** Host-owned dispatch seam; the default preserves ordinary delegation. */
+  callAgent?: (input: AgentBridgeCallInput, deps: AgentBridgeCallDeps) => Promise<AgentBridgeCallResult>;
+  /** Live host posture; restricted parents cannot use the browser door. Defaults to false. */
+  restricted?: () => boolean;
   /**
    * The session-tier child port (`createChildSessionPort`'s result).
    * OPTIONAL — with an empty agent-profile catalog there is no
@@ -56,13 +63,15 @@ export interface BridgePresentationStampDeps {
 /** Builds the door's `listTools`/`callTool` pair over one shared presentation map. */
 export function createBridgePresentationStamp(deps: BridgePresentationStampDeps) {
   const bridgePresentations = new Map<string, ToolResultPresentation>();
+  const declaredNames = new Set(deps.catalog.map((entry) => entry.name));
+  const callAgent = deps.callAgent ?? runAgentBridgeCall;
   return {
     listTools: () => {
       // the agent decl rides first (only when a catalog AND a
       // child port exist, exactly as before), then the browser decls.
       const decl = deps.port === undefined ? null : buildAgentBridgeToolDecl(deps.catalog, { detach: true, continueSession: true });
       const agentDecls = decl === null ? [] : [decl, agentStatusBridgeDecl];
-      const browserDecls = (deps.browser?.specs ?? []).map((spec) => ({
+      const browserDecls = (deps.restricted?.() ? [] : deps.browser?.specs ?? []).map((spec) => ({
         name: spec.claudeName,
         description: spec.description,
         inputSchema: spec.inputSchema,
@@ -75,6 +84,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       signal: AbortSignal,
       meta: { toolUseId?: string },
     ): Promise<McpToolCallResult> => {
+      const isAborted = () => signal.aborted;
       // browser tools route to the shared engine browser bridge.
       // The REAL approval gate lives there (input-aware, through the same
       // IpcPermissionBroker the native tab uses); the CLI's `can_use_tool`
@@ -82,6 +92,9 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       // sees exactly ONE prompt, titled with the canonical tool name.
       const browserSpec = deps.browser?.byClaudeName(name);
       if (browserSpec !== undefined) {
+        if (deps.restricted?.()) {
+          return { text: "Browser tools are unavailable in the restricted parent posture; delegate browser work to a child.", isError: true };
+        }
         if (meta.toolUseId === undefined) {
           return { text: "AnyCode could not correlate this call to a tool_use id", isError: true };
         }
@@ -115,15 +128,25 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       // план §2.3/Ruling 1: no `wallMs` override — the sync v1
       // wall is `runAgentBridgeCall`'s own default (SUBAGENT_TIME_BUDGET_MS,
       // 6h), the SAME stance every other bridge caller takes.
-      // per-call catalog; fail-soft to the boot snapshot on a
-      // disk race (a transient re-read failure must not kill the call).
+      if (!declaredNames.has(input.agent_type)) {
+        return { text: `Agent profile "${input.agent_type}" was not declared at session start. Start a new session to use it.`, isError: true };
+      }
+      // Never dispatch a stale profile while the parent is restricted.
       let callCatalog: readonly AgentBridgeCatalogEntry[];
       try {
         callCatalog = await deps.resolveCallCatalog();
       } catch {
+        if (deps.restricted?.()) {
+          return { text: "Could not refresh the agent catalog; delegation was refused. Retry after the catalog is readable.", isError: true };
+        }
         callCatalog = deps.catalog;
       }
-      const result = await runAgentBridgeCall(input, {
+      callCatalog = callCatalog.filter((entry) => declaredNames.has(entry.name));
+      if (!callCatalog.some((entry) => entry.name === input.agent_type)) {
+        return { text: `Agent profile "${input.agent_type}" is no longer available.`, isError: true };
+      }
+      if (isAborted()) return { text: "Agent call was cancelled.", isError: true };
+      const result = await callAgent(input, {
         catalog: callCatalog,
         port: deps.port,
         spawnToolCallId: meta.toolUseId,
@@ -140,7 +163,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
         // aborted (Stop / CLI cancel) its late progress is dropped, not
         // queued into the next turn's send barrier as a stale card patch.
         onEvent: (event) => {
-          if (signal?.aborted !== true) deps.onEvent(event);
+          if (!isAborted()) deps.onEvent(event);
         },
       });
       // The MCP `tools/call` response itself has no room for a card
@@ -159,7 +182,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       // so an aborted call must not stamp at all — the SAME dropped-
       // late-state discipline the codex door applies to its aborted
       // calls (dynamic-tool-bridge.ts).
-      if (signal?.aborted !== true && result.presentation !== undefined) {
+      if (!isAborted() && result.presentation !== undefined) {
         bridgePresentations.set(meta.toolUseId, result.presentation);
       }
       return { text: result.text, isError: result.isError };

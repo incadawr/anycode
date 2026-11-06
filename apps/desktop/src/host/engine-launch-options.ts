@@ -81,10 +81,14 @@ export function buildCodexLaunchOptions(ctx: CodexLaunchContext): CodexLaunchOpt
 }
 
 export interface ClaudeLaunchContext extends CommonLaunchContext {
+  orchestrationFeatureEnabled?: boolean;
+  orchestrationSpawn?: ClaudeLaunchOptions["orchestrationSpawn"];
+  orchestrationRestricted?: ClaudeLaunchOptions["orchestrationRestricted"];
   broker: ClaudeLaunchOptions["broker"];
   projectTrusted: boolean;
   profileDir?: string;
-  mcpConfigPath: string | null;
+  mcpConfigPath?: string | null;
+  resolveMcpForward?: ClaudeLaunchOptions["resolveMcpForward"];
   bootNotices: NonNullable<ClaudeLaunchOptions["bootNotices"]>;
   mcpBridge?: ClaudeLaunchOptions["mcpBridge"];
   stamp?: ReturnType<typeof createBridgePresentationStamp>;
@@ -94,7 +98,7 @@ export interface ClaudeLaunchContext extends CommonLaunchContext {
 
 export function buildClaudeLaunchOptions(ctx: ClaudeLaunchContext): ClaudeLaunchOptions {
   const { workspace, binaryPath, sourceEnv, binaryTrust, processOwnership, child, broker,
-    projectTrusted, profileDir, mcpConfigPath, bootNotices, mcpBridge, stamp,
+    projectTrusted, profileDir, mcpConfigPath, resolveMcpForward, bootNotices, mcpBridge, stamp,
     agentCatalogNonEmpty, browserToolNames } = ctx;
   return {
     broker,
@@ -102,12 +106,15 @@ export function buildClaudeLaunchOptions(ctx: ClaudeLaunchContext): ClaudeLaunch
     cwd: workspace,
     ...(child?.maxTurns !== undefined ? { maxTurns: child.maxTurns } : {}),
     enableSlashPassthrough: child === undefined,
+    orchestrationFeatureEnabled: child === undefined && ctx.orchestrationFeatureEnabled === true,
+    ...(child === undefined && ctx.orchestrationFeatureEnabled === true ? { orchestrationSpawn: ctx.orchestrationSpawn, orchestrationRestricted: ctx.orchestrationRestricted } : {}),
     projectTrusted,
     profileDir,
     sourceEnv: { ...sourceEnv },
     binaryTrust,
     ...(processOwnership !== undefined ? { processOwnership } : {}),
-    ...(mcpConfigPath !== null ? { mcpConfigPath: mcpConfigPath } : {}),
+    ...(mcpConfigPath != null ? { mcpConfigPath } : {}),
+    ...(resolveMcpForward !== undefined ? { resolveMcpForward } : {}),
     ...(bootNotices.length > 0 ? { bootNotices: bootNotices } : {}),
     ...(mcpBridge !== undefined && stamp !== undefined
       ? {

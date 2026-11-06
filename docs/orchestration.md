@@ -291,3 +291,30 @@ Invoke it like any workflow:
 ```json
 { "name": "deep-research", "input": "How do vitest workspace projects share setup code?" }
 ```
+
+## Claude Orchestrate availability
+
+Claude child delegation remains available independently of the experimental
+Orchestrate overlay. The overlay is gated by
+`ANYCODE_CLAUDE_ORCHESTRATE_ENABLED=1`, read in the desktop main process, and
+by native capability evidence. No native Claude version currently qualifies;
+the flag alone leaves ON unavailable. Engine switching has a separate flag.
+Fixture passes do not qualify a native version or establish OS sandboxing.
+
+Under the Claude overlay, all parent browser tools, shell, file mutation and
+external MCP execution are closed. Browser work goes to a child. Every actual
+ON/OFF transition replaces the Claude CLI transport, retaining the native
+reference and logical session; this incurs startup latency. Reapplying the
+same state is idempotent. OFF restores the captured native base configuration.
+
+Reports arriving during replacement remain pending until the new posture is
+confirmed. An explicit refusal before acceptance may retry after the transition;
+unknown acceptance is shown for recovery rather than automatically retried.
+Reopening with the feature off clears saved ON intent only after a fresh OFF
+spawn contract (OFF arguments and, when a saved base is available, MCP digest)
+is verified and the recovery save succeeds. Native posture readback is checked
+on the first `system/init`, which may follow the first payload; it is checked
+earlier only when host evidence provides a readback channel. A failed proof or
+save keeps admission closed. See [the user guide](user/orchestration.md) for recovery and
+[fixture checks](development/automation-smoke.md#orchestration-fixture-checks)
+for the distinction between GUI, scripted protocol and native evidence.

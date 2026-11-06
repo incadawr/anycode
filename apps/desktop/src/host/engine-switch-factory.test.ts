@@ -1,4 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { materializeMcpForwardFile } from "./engines/claude/mcp-forward-file.js";
+import { ClaudeEngine } from "./engines/claude/claude-engine.js";
+import { orchestrationAvailability } from "./orchestration-policy.js";
+import type { SessionEngine } from "./engines/session-engine.js";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +22,7 @@ const executable = fileURLToPath(new URL("./engine-switch-fixtures/native-double
 const directories: string[] = [];
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-function context() {
+function context(orchestrationFeatureEnabled = false) {
   const dir = mkdtempSync(join(tmpdir(), "engine-switch-"));
   directories.push(dir);
   const broker = new IpcPermissionBroker(() => {});
@@ -38,7 +42,7 @@ function context() {
       selection: { presetId: "read-only", origin: "draft" as const },
     }, cleanup })),
     resolveClaude: vi.fn(async () => ({ options: {
-      ...buildClaudeLaunchOptions({ ...common, projectTrusted: false, mcpConfigPath: null, bootNotices: [], agentCatalogNonEmpty: false }),
+      ...buildClaudeLaunchOptions({ ...common, orchestrationFeatureEnabled, projectTrusted: false, mcpConfigPath: null, bootNotices: [], agentCatalogNonEmpty: false }),
       binaryArgs: [executable, "--double-claude", `--double-log=${join(dir, "claude.log")}`],
       selection: { presetId: "read-only", origin: "draft" as const },
     }, cleanup })),
@@ -255,5 +259,80 @@ describe("host switch engine factory", () => {
   it("does not infer a core connection when the host cannot resolve one", async () => {
     const { ctx } = context();
     await expect(createSwitchEngineFactory(ctx)!("core", "model-chosen")).rejects.toThrow("unavailable for core");
+  });
+});
+
+
+describe("Claude orchestration candidate carrier", () => {
+  it.each([false, true])("gates candidate resolution on engine switch (%s)", enabled => {
+    const { ctx } = context();
+    ctx.engineSwitchEnabled = enabled;
+    expect(typeof createSwitchEngineFactory(ctx)).toBe(enabled ? "function" : "undefined");
+    expect(ctx.resolveClaude).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "0", "1", "unknown"])("carries candidate launch intent: %s (policy readiness placeholder)", async flag => {
+    const { claudeOrchestrationEnabled } = await import("../main/claude-orchestration-feature.js");
+    const launch = { claudeOrchestrateEnabled: claudeOrchestrationEnabled({ ANYCODE_CLAUDE_ORCHESTRATE_ENABLED: flag }) };
+    const { ctx } = context(launch.claudeOrchestrateEnabled === true);
+    const factory = createSwitchEngineFactory(ctx);
+    const runtime = await factory!("claude", "model-chosen");
+    if (!("engine" in runtime)) throw new Error("missing runtime");
+    try {
+      expect(runtime.engine).toBeInstanceOf(ClaudeEngine);
+      expect((runtime.engine as ClaudeEngine).orchestrationFeatureEnabled).toBe(flag === "1");
+      expect(runtime.engine.orchestrationPolicy?.availability().supported ?? false).toBe(false);
+    } finally { await runtime.engine.dispose("session-close"); }
+  });
+});
+
+
+it.each([false, true])("carries Claude boot launch intent %s (policy readiness placeholder)", async enabled => {
+  const { beginEngineBootstrap } = await import("./engines/bootstrap.js");
+  const { getEnginePlugin } = await import("./engines/registry.js");
+  const { buildClaudeRuntime } = await import("./engine-switch-runtime.js");
+  const { ctx } = context(enabled);
+  const resolved = await ctx.resolveClaude({ workspace: ctx.workspace, sessionId: ctx.sessionId, model: "model-chosen" });
+  const bootstrap = await beginEngineBootstrap(getEnginePlugin("claude")!);
+  const runtime = await buildClaudeRuntime({ ...resolved!.options, bootstrap });
+  try {
+    expect(runtime.engine.orchestrationFeatureEnabled).toBe(enabled);
+    expect(orchestrationAvailability((runtime.engine as SessionEngine).orchestrationPolicy).supported).toBe(false);
+  } finally { await runtime.engine.dispose("session-close"); }
+});
+
+it.each([false, true])("owns candidate external MCP across a real switch abort=%s", async abort => {
+  const { ctx, dir, registrations } = context();
+  const resolve = ctx.resolveClaude;
+  let path = "";
+  ctx.resolveClaude = async request => {
+    const resolved = (await resolve(request))!;
+    resolved.options.resolveMcpForward = async () => {
+      const file = materializeMcpForwardFile('{"mcpServers":{"sample":{"command":"node"}}}', { tmpDir: dir, pid: process.pid });
+      path = file.path;
+      return { claudeConfigPath: path, notices: [], cleanupFile: () => rmSync(file.path, { force: true }) };
+    };
+    return resolved;
+  };
+  const factory = createSwitchEngineFactory(ctx)!;
+  const h = createHarness({ steps: [], switchEngineFactory: factory, engineSwitchCoordinator: {
+    generation: 7, prepare: async () => factory,
+    commit: async () => { expect(existsSync(path)).toBe(true); if (abort) throw new Error("commit refused"); },
+    abort: async () => {}, retire: async () => {},
+  } });
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitUntil(() => h.received.some(m => m.type === "host_ready"));
+    h.send({ type: "engine_switch_request", requestId: "file-owner", generation: 7, engine: "claude", model: "model-chosen" });
+    await h.waitUntil(() => h.received.some(m => m.type === (abort ? "engine_switch_failed" : "engine_switched")), 5000);
+    expect(path).not.toBe("");
+    expect(existsSync(path)).toBe(!abort);
+    expect(JSON.stringify(h.received)).not.toContain(path);
+  } finally { await h.session.shutdown(); h.close(); }
+  expect(existsSync(path)).toBe(false);
+  await vi.waitFor(() => {
+    for (const process of registrations.filter(item => !item.exited)) {
+      expect(registrations.some(item => item.exited && item.enginePid === process.enginePid)).toBe(true);
+    }
   });
 });

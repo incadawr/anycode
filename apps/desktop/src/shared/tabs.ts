@@ -167,6 +167,8 @@ export const ENGINES_LIST_CHANNEL = "anycode:engines-list";
  * preload boundary.
  */
 export interface AvailableEngines {
+  /** Main launch flag projection for draft intent; host readiness still decides admission. */
+  claudeOrchestrateEnabled?: boolean;
   // SLICE-CC A1: "claude" added alongside "codex" — main's ENGINES_LIST_CHANNEL
   // handler (main/tab-ipc.ts) still filters this through canSpawn, so its
   // presence here is a type-widening only, not a behavior change (main/tabs.ts

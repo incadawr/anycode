@@ -60,6 +60,9 @@ export class RuntimeSessionHistory {
 
 /** Disabling new switches must never strand an already committed conversation. */
 export function createRuntimeSessionHistory(store: SqlitePersistenceAdapter, sessionId: string, enabled: boolean, child = false): RuntimeSessionHistory | undefined {
-  if (child || (!enabled && (store.loadRuntimeSession(sessionId)?.revision ?? 0) === 0)) return undefined;
+  if (child) return undefined;
+  const saved = store.loadRuntimeSession(sessionId);
+  const active = saved?.segments.find(segment => segment.id === saved.activeSegmentId);
+  if (!enabled && !saved?.revision && !active?.selected.orchestration?.enabled && !active?.applied.orchestration?.enabled) return undefined;
   return new RuntimeSessionHistory(store,sessionId);
 }

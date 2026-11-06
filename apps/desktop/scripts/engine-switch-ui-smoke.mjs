@@ -1,49 +1,18 @@
 /** Isolated engine-switch acceptance: loopback model and executable native doubles. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, statSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { createServer } from "node:http";
+import { createEngineSmokeFixtures, evaluateSmoke, selectSmokeEngine } from "./engine-smoke-fixtures.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
 import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 import { connectIsolatedCdp } from "./isolated-cdp.mjs";
 
 const profile = mkdtempSync(join(tmpdir(), "anycode-engine-switch-"));
-const fixturePath = fileURLToPath(new URL("../src/host/engine-switch-fixtures/native-double.mjs", import.meta.url));
-const binaries = {};
-const consents = [];
-for (const engine of ["codex", "claude"]) {
-  const binary = join(profile, `${engine}-double`);
-  const source = readFileSync(fixturePath, "utf8").replace(/^#![^\n]*\n/, "");
-  const prefix = `#!${realpathSync(process.execPath)}\nprocess.argv.push("--double-orchestration", ${JSON.stringify(`--double-log=${join(profile, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
-  writeFileSync(binary, prefix + source, { mode: 0o700 });
-  const stat = statSync(binary);
-  consents.push({ path: realpathSync(binary), fingerprint: { mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs }, grantedAt: new Date().toISOString() });
-  binaries[engine] = binary;
-}
-let providerCalls = 0;
-const providerInputs = [];
-const fixture = createServer((request, response) => {
-  let body = "";
-  request.on("data", chunk => { body += chunk; });
-  request.on("end", () => {
-    if (request.method === "GET") { response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ data: [{ id: "core-model" }] })); return; }
-    const input = JSON.parse(body);
-    assert(["core-model","core-other"].includes(input.model));
-    providerCalls++;
-    providerInputs.push(input.messages);
-    response.writeHead(200, { "Content-Type": "text/event-stream" });
-    const base = { id: "local-fixture", object: "chat.completion.chunk", created: 0, model: input.model };
-    response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "core fixture answer" }, finish_reason: null }] })}\n\n`);
-    response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 } })}\n\n`);
-    response.end("data: [DONE]\n\n");
-  });
-});
-await new Promise(resolve => fixture.listen(0, "127.0.0.1", resolve));
-const baseUrl = `http://127.0.0.1:${fixture.address().port}/v1`;
+const fixtures = await createEngineSmokeFixtures(profile);
+const { binaries, consents, fixture, baseUrl, providerInputs } = fixtures;
 writeFileSync(join(profile, "settings.json"), JSON.stringify({ version: 2,
   provider: { activeConnectionId: "local", custom: [{ id: "custom:local", name: "Local fixture", baseUrl, kind: "openai-compatible", models: ["core-model","core-other"] }], connections: [{ id: "local", providerId: "custom:local", model: "core-model", models: ["core-model","core-other"], transport: "openai-chat-completions", baseUrl, authOptional: true, modelOverrides:{"core-model":{contextWindowTokens:128000,imageInput:"on",reasoningSupported:true,effortLevels:["low","high"]},"core-other":{contextWindowTokens:64000,imageInput:"off",reasoningSupported:false}} }] },
   roles:{executor:{primary:{connection:"local",model:"core-model"}}},
@@ -62,11 +31,8 @@ async function poll(fn, timeout = 30000) {
   while (Date.now() < end) { const result = await fn(); if (result) return result; await sleep(100); }
   throw new Error("Timed out waiting for isolated engine-switch state");
 }
-async function evaluate(expression) {
-  const result = await cdp.call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
-  if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-  return result.result.value;
-}
+const evaluate = expression => evaluateSmoke(cdp, expression);
+
 try {
   cdp = await connectIsolatedCdp({ profile, env, launcher: app, wait: poll });
   const info = await poll(() => { try { return JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")); } catch { return null; } });
@@ -163,13 +129,7 @@ try {
       }
     }
   }
-  async function switchTo(engine) {
-    await evaluate("document.querySelector('button[aria-label=\"Switch engine\"]').click()");
-    const label = engine === "core" ? "Core ·" : engine === "codex" ? "Codex ·" : "Claude ·";
-    await poll(() => evaluate(`!![...document.querySelectorAll('select[aria-label="Target engine and model"] option')].find(option => option.textContent.startsWith(${JSON.stringify(label)}))`));
-    await evaluate(`(() => {const select = document.querySelector('select[aria-label="Target engine and model"]'); select.value = [...select.options].find(option => option.textContent.startsWith(${JSON.stringify(label)})).value; select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-    await evaluate("[...document.querySelectorAll('[role=dialog] button')].find(button => button.textContent === 'Switch engine').click()");
-  }
+  const switchTo = engine => selectSmokeEngine(evaluate, poll, engine);
   let boundaries = 0;
   // Covers every directed engine pair with fresh host boots around each target turn.
   for (const engine of ["codex", "claude", "core", "claude", "codex", "core"]) {
@@ -208,7 +168,7 @@ try {
     await restartHost(engine,boundaries);
     await verify(engine,boundaries);
   }
-  assert(providerCalls >= 3);
+  assert(fixtures.providerCalls >= 3);
   const messages = engine => readFileSync(join(profile,`${engine}.jsonl`),"utf8").trim().split("\n").map(line => JSON.parse(line));
   const codexMessages = messages("codex");
   const claudeMessages = messages("claude");

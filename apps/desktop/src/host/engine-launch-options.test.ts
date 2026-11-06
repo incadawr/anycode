@@ -74,6 +74,18 @@ describe("shared engine launch options", () => {
     expect(root.sourceEnv.PATH).toBe("/login/bin");
   });
 
+  it("defaults Claude launch intent to false despite an ambient feature flag", () => {
+    const options = buildClaudeLaunchOptions({ ...inputs(), sourceEnv: { ANYCODE_CLAUDE_ORCHESTRATE_ENABLED: "1" }, projectTrusted: false, mcpConfigPath: null, bootNotices: [], agentCatalogNonEmpty: false });
+    expect(options.orchestrationFeatureEnabled).toBe(false);
+  });
+
+  it.each([false, true])("keeps explicit Claude launch intent root-only (%s)", enabled => {
+    const ctx = { ...inputs(), orchestrationFeatureEnabled: enabled, projectTrusted: false, bootNotices: [], agentCatalogNonEmpty: false };
+    expect(buildClaudeLaunchOptions(ctx).orchestrationFeatureEnabled).toBe(enabled);
+    const child = buildClaudeLaunchOptions({ ...ctx, child: { parentSessionId: "parent", spawnToolCallId: "call", initialMode: "plan" } });
+    expect(child.orchestrationFeatureEnabled).toBe(false);
+  });
+
   it("keeps the core loop, mutable config and control hooks shared exactly as at boot", () => {
     const h = createHarness({ steps: [] });
     try {
@@ -85,4 +97,26 @@ describe("shared engine launch options", () => {
       expect(options.onReasoningEffortSet).toBe(hook);
     } finally { h.close(); }
   });
+});
+
+it("passes the per-spawn MCP resolver through shared Claude launch inputs", () => {
+  const resolveMcpForward = async () => ({ claudeConfigPath: null, notices: [], cleanupFile: () => {} });
+  const options = buildClaudeLaunchOptions({ ...inputs(), projectTrusted: true, bootNotices: [], agentCatalogNonEmpty: false, resolveMcpForward });
+  expect(options.resolveMcpForward).toBe(resolveMcpForward);
+  expect(options).not.toHaveProperty("mcpConfigPath");
+});
+
+
+it("carries host-owned orchestration controls only for explicitly enabled roots", () => {
+  const orchestrationRestricted = () => true;
+  const orchestrationSpawn = Object.freeze({ version: "synthetic", permissionMode: "default" as const });
+  const ctx = { ...inputs(), projectTrusted: true, bootNotices: [], agentCatalogNonEmpty: false, orchestrationRestricted, orchestrationSpawn };
+  const root = buildClaudeLaunchOptions({ ...ctx, orchestrationFeatureEnabled: true });
+  expect(root.orchestrationSpawn).toBe(orchestrationSpawn);
+  expect(root.orchestrationRestricted).toBe(orchestrationRestricted);
+  for (const options of [buildClaudeLaunchOptions(ctx), buildClaudeLaunchOptions({ ...ctx, orchestrationFeatureEnabled: true,
+    child: { parentSessionId: "parent", spawnToolCallId: "call", initialMode: "plan" } })]) {
+    expect(options).not.toHaveProperty("orchestrationSpawn");
+    expect(options).not.toHaveProperty("orchestrationRestricted");
+  }
 });

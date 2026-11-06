@@ -5,7 +5,7 @@
  * every decision here is a function of its arguments so node-env vitest can
  * pin it directly.
  *
- * Core and Codex drafts may retain orchestration intent until host readiness.
+ * Drafts may retain orchestration intent until host readiness.
  */
 import type { EngineId } from "../../shared/engines.js";
 
@@ -37,14 +37,15 @@ export interface StartOrchestratePlan {
 /**
  * Resolves one start-composer send. `flag` is the draft's own Orchestrate
  * toggle; a leading `/orchestrate ` token turns orchestrate on for this send
- * regardless of the toggle. Claude drafts never orchestrate.
+ * regardless of the toggle. Claude requires the main launch flag.
  */
 export function resolveStartOrchestrate(
   engine: EngineId,
   flag: boolean | undefined,
   prompt: string,
+  claudeEnabled = false,
 ): StartOrchestratePlan {
-  if (engine !== "core" && engine !== "codex") {
+  if (engine === "claude" && !claudeEnabled) {
     return { orchestrate: false, text: prompt, bareSlash: false };
   }
   const slash = parseOrchestrateSlash(prompt);

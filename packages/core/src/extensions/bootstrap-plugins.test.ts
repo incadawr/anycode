@@ -26,7 +26,7 @@ function makeFs(spec: FakeFsSpec): FileSystemPort {
   return {
     readFile: async (path: string) => {
       if (!(path in files)) {
-        throw new Error(`ENOENT: ${path}`);
+        throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
       }
       return files[path]!;
     },
@@ -36,7 +36,7 @@ function makeFs(spec: FakeFsSpec): FileSystemPort {
     mkdir: async () => {},
     readdir: async (path: string) => {
       if (!(path in dirs)) {
-        throw new Error(`ENOENT: ${path}`);
+        throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
       }
       return [...dirs[path]!];
     },

@@ -28,10 +28,11 @@ describe("orchestration delivery recovery", () => {
     expect(store.getState().promptQueue).toMatchObject([{ id: "ordinary", text: "draft", requiresRestore: true }]);
     expect(store.getState().queuePaused).toBe(true);
   });
-  it("survives renderer reload without automatically resending an unconfirmed task or losing a report", () => {
+  it.each(["core", "codex", "claude"] as const)("retains %s unconfirmed intent through reload without automatic resend", engine => {
     const data = new Map<string, string>();
     vi.stubGlobal("sessionStorage", { setItem: (key: string, value: string) => data.set(key, value), getItem: (key: string) => data.get(key) ?? null });
     const first = createDesktopStore();
+    first.setState({ engine: { id: engine } as never });
     first.getState().applyHostMessage({ ...hello, orchestration: { enabled: false, available: true }, orchestrationProtocol: protocol });
     expect(first.getState().beginOrchestrationSubmit("request")).toBe("connection");
     first.getState().recordSentMessage("task", [], "request", "enable");

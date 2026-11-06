@@ -600,15 +600,15 @@ export async function discoverAgentProfiles(
   const claimed = new Set<string>();
 
   for (const root of roots) {
-    // A missing root directory is normal (no `.anycode/agents`) — silent no-op.
-    if (!(await fs.exists(root.dir))) {
-      continue;
-    }
-
     let entries: string[];
     try {
       entries = await fs.readdir(root.dir);
     } catch (error) {
+      // Missing roots are normal; access failures must remain visible to callers.
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        continue;
+      }
       problems.push(`Could not read agent-profile dir ${root.dir}: ${describeError(error)}`);
       continue;
     }

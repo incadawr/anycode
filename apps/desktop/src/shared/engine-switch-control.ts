@@ -1,14 +1,14 @@
 import { z } from "zod";
-import type { HistoryItem, RuntimeSwitchCommit } from "@anycode/core";
+import { runtimeSettingsSchema, type HistoryItem, type RuntimeSwitchCommit } from "@anycode/core";
 import { engineSwitchTargetSchema, type EngineSwitchTarget } from "./protocol.js";
 
 export const ENGINE_SWITCH_CONTROL = "anycode:engine-switch";
 export const ENGINE_SWITCH_RESPONSE = "anycode:engine-switch-response";
 const correlation = { requestId: z.string().min(1).max(128), generation: z.number().int().positive() };
-const settings = z.object({model:z.string().min(1).max(128),mode:z.string().min(1).max(128),effort:z.string().optional(),fast:z.boolean().optional(),orchestration:z.object({enabled:z.literal(true),baseMode:z.enum(["plan","build","edit","auto","yolo"])}).strict().optional()}).strict();
+const settings = runtimeSettingsSchema;
 export const runtimeSwitchCommitSchema: z.ZodType<RuntimeSwitchCommit> = z.object({
   expectedRevision:z.number().int().nonnegative(),sourceSegmentId:z.string().min(1).max(128),
-  segment:z.object({id:z.string().min(1).max(128),engine:z.enum(["core","codex","claude"]),connectionId:z.string().optional(),profileId:z.string().optional(),accountScope:z.string(),nativeRef:z.string().optional(),nativeState:z.enum(["fresh","materialized"]),selected:settings,applied:settings,startedAt:z.number(),coverage:z.literal("available_history")}).strict(),
+  segment:z.object({id:z.string().min(1).max(128),engine:z.enum(["core","codex","claude"]),connectionId:z.string().optional(),profileId:z.string().optional(),accountScope:z.string(),nativeRef:z.string().optional(),nativeState:z.enum(["fresh","materialized"]),selected:settings,applied:settings,startedAt:z.number(),coverage:z.literal("available_history")}).strict().refine(segment => [segment.selected, segment.applied].every(value => !value.orchestration?.nativeBase || value.orchestration.nativeBase.engine === segment.engine), "Native base engine mismatch"),
   sourceItems:z.array(z.custom<HistoryItem>(value => {
     if (value === null || typeof value !== "object") return false;
     const item = value as Partial<HistoryItem>;
@@ -28,6 +28,7 @@ export type EngineSwitchControl = z.infer<typeof engineSwitchControlSchema>;
 export type EngineSwitchIdentity = Extract<EngineSwitchControl, { phase: "commit" }>["identity"];
 /** Only the authenticated parentPort may carry credentials and resolved paths. */
 export interface EngineSwitchLaunch {
+  claudeOrchestrateEnabled?: boolean;
   target: EngineSwitchTarget;
   env: NodeJS.ProcessEnv;
   codexProfile?: { id?: string; home?: string; authLink?: string };

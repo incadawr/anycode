@@ -35,13 +35,14 @@ function stubBridge(): void {
 }
 
 describe("SessionHeader — orchestrate badge", () => {
-  it("shows Orchestrate only while the tab's orchestrate flag is on", async () => {
+  it.each(["core", "codex", "claude"] as const)("shows %s posture and recovery from host state", async (engine) => {
     stubBridge();
     useTabsStore.setState({
       tabs: [{ tabId: "tab-1", title: "Fix the parser", terminalOpen: false, tasksPanelOpen: false } as never],
       activeTabId: "tab-1",
     });
     const store = createDesktopStore();
+    store.setState({ engine: { id: engine, capabilities: {}, model: {current:"test",available:[]} } as never });
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
@@ -64,6 +65,8 @@ describe("SessionHeader — orchestrate badge", () => {
         store.getState().applyHostMessage({ type: "orchestrate_changed", enabled: false });
       });
       expect(container.querySelector('[data-testid="session-header-orchestrate"]')).toBeNull();
+      await act(async () => store.setState(state => ({ orchestration: { ...state.orchestration, posture: "quarantined" } })));
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Policy unverified");
     } finally {
       await act(async () => root.unmount());
     }

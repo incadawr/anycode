@@ -85,3 +85,11 @@ describe("orchestration dialects", () => {
     expect(orchestrationDeveloperBlock("core")).toBe(ORCHESTRATE_REMINDER);
   });
 });
+
+
+it("uses the exact owned Claude delegation name in the append block", () => {
+  const text = orchestrationDeveloperBlock("claude");
+  expect(text).toContain("mcp__anycode__agent tool using detach true");
+  expect(text).not.toContain('tier "session"');
+  expect(text).not.toContain("anycode_agent");
+});

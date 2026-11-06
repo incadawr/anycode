@@ -300,3 +300,22 @@ describe("ClaudeMcpBridge — image pass-through (C3)", () => {
     expect(result.content).toEqual([{ type: "text", text: "navigated" }]);
   });
 });
+
+it("restricts replacement inventory and rejects unlisted calls before dispatch", async () => {
+  const callTool = vi.fn(async () => ({ text: "ok", isError: false }));
+  const original = new ClaudeMcpBridge({ serverName: "anycode", version: "1", callTool,
+    listTools: () => [AGENT_TOOL, { ...AGENT_TOOL, name: "browser_open" }] });
+  const restricted = original.fork(new Set(["agent", "agent_status"]));
+  try {
+    const listed = responderSpy();
+    await restricted.handleControlRequest(inbound({ server_name: "anycode", message: MCP_TOOLS_LIST }), listed.responder);
+    expect(listed.success.mock.calls[0]![0].mcp_response.result.tools.map((tool: McpToolDecl) => tool.name)).toEqual(["agent"]);
+    const denied = responderSpy();
+    await restricted.handleControlRequest(inbound({ server_name: "anycode", message: { jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: { name: "browser_open", arguments: {} } } }), denied.responder);
+    expect(callTool).not.toHaveBeenCalled();
+    const legacy = responderSpy();
+    await original.handleControlRequest(inbound({ server_name: "anycode", message: MCP_TOOLS_LIST }), legacy.responder);
+    expect(legacy.success.mock.calls[0]![0].mcp_response.result.tools).toHaveLength(2);
+  } finally { await restricted.close(); await original.close(); }
+});

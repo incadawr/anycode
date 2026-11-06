@@ -13,9 +13,10 @@
  * swallowed as "already selected".
  */
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { watchExternalEngines } from "../engine-availability.js";
 import { StartScreen } from "./StartScreen.js";
 import { useTabsStore } from "../tabs-store.js";
 import { useSettingsStore } from "../settings-store.js";
@@ -53,6 +54,8 @@ beforeEach(() => {
   useTabsStore.setState({
     draft: { workspace: "/ws", prompt: "", engine: "codex", model: null, mode: "build" },
     draftActive: true,
+    availableEngines: ["core", "codex", "claude"],
+    claudeOrchestrateEnabled: false,
     codexModels: [],
   });
 });
@@ -237,4 +240,39 @@ it("shows no selected effort for an untouched core draft with a custom vocabular
     expect(page.textContent).toContain("High");
     expect(page.querySelector('[aria-checked="true"]')).toBeNull();
   } finally { await act(async () => root.unmount()); useSettingsStore.setState({snapshot:null}); }
+});
+
+
+it.each([undefined, false, true])("gates Claude draft intent on the main flag %s", async enabled => {
+  useTabsStore.setState({ availableEngines: ["core", "claude"], claudeOrchestrateEnabled: enabled === true });
+  useTabsStore.setState({ draft: { workspace: "/ws", prompt: "task", engine: "claude", model: null, mode: "build" } });
+  const settings = cloneDefaults();
+  settings.roles = {};
+  useSettingsStore.setState({ snapshot: { settings, readOnly: false, secrets: [], envOverrides: [], providerReady: true, catalog: [] } });
+  const { container, root } = await mountStartScreen();
+  try {
+    const toggle = container.querySelector<HTMLButtonElement>(".orchestrate-toggle");
+    expect(toggle !== null).toBe(enabled === true);
+    if (toggle) {
+      await act(async () => toggle.click());
+      expect(useTabsStore.getState().draft?.orchestrate).toBe(true);
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    }
+  } finally { await act(async () => root.unmount()); useSettingsStore.setState({ snapshot: null }); }
+});
+
+it("shows external engine choices and Codex toggle when mounted with the shell watcher", async () => {
+  useTabsStore.setState({ availableEngines: ["core"] });
+  function Shell() {
+    useEffect(() => watchExternalEngines(window.anycode, () => {}), []);
+    return createElement(StartScreen, { onToast: () => {} });
+  }
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => { root.render(createElement(Shell)); });
+    expect([...container.querySelectorAll(".start-engine-choice")].map(b => b.textContent)).toEqual(["AnyCode", "Codex", "Claude"]);
+    expect(container.querySelector('button[aria-label="Orchestrate: request orchestration when the session starts"]')).not.toBeNull();
+  } finally { await act(async () => root.unmount()); }
 });

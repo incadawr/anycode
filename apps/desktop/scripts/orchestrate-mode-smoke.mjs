@@ -1,36 +1,10 @@
-/**
- * Live smoke for part B (Orchestrate mode UI) — drives a REAL
- * Electron dev instance over the automation HTTP channel, no model calls
- * (the turn is never started; only UI state and settings persistence are
- * asserted). Proves what the unit gate structurally cannot, because each
- * step is a statement about the REAL renderer DOM, the REAL wire, and the
- * REAL settings.json:
- *
- *   A. The ModeMenu popover lists the five permission modes PLUS an
- *      "Orchestrate" row (a divider-separated toggle, not mode #6), read off
- *      the rendered nodes.
- *   B. Clicking the REAL Orchestrate row with no roles configured opens the
- *      first-run RolePickerDialog — wait: the row toggles orchestrate
- *      directly; the DIALOG comes from /orchestrate (step D). Here B just
- *      proves the toggle flips the row to checked and the store's ack
- *      (`orchestrate_changed`) landed (aria-checked flips).
- *   C. The RolePickerDialog flow via `/orchestrate`: typing the slash
- *      command shows the row, submitting with no roles opens the dialog,
- *      clicking a preset + Save writes `roles` into the REAL settings.json
- *      and submits the stashed task as a user message.
- *   D. With roles present, `/orchestrate <task>` submits immediately (no
- *      dialog).
- *
- * Reuse: launch/teardown helpers are local adaptations of
- * settings-ui-smoke.mjs (per-run disposable profile; this smoke seeds a
- * THROWAWAY settings file via ANYCODE_SETTINGS_PATH so the roles write lands
- * in a temp file, never the owner's real settings).
- *
- * Usage: node apps/desktop/scripts/orchestrate-mode-smoke.mjs [--keep] [--port <n>]
+/** Isolated engine fixture driver; orchestration assertions are reported separately.
+ * Usage: node apps/desktop/scripts/orchestrate-mode-smoke.mjs --fixture-only [--engines core,codex,claude] [--keep]
  */
-
+import assert from "node:assert/strict";
+import { runProtocolChecks, judgeNativeProof, smokeExitCode } from "./orchestrate-smoke-checks.mjs";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,8 +12,12 @@ import { fileURLToPath } from "node:url";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "evidence", "orchestrate-mode");
-const DISCOVERY_PATH_DEFAULT = join(repoRoot, ".anycode", "automation.json");
+
+import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
+import { smokeProviderProfile } from "./smoke-provider-profile.mjs";
+import { createEngineSmokeFixtures, evaluateSmoke, selectSmokeEngine } from "./engine-smoke-fixtures.mjs";
+import { connectIsolatedCdp } from "./isolated-cdp.mjs";
 
 const LAUNCH_TIMEOUT_MS = 180_000;
 const POLL_MS = 400;
@@ -47,16 +25,18 @@ const POLL_MS = 400;
 // ── CLI flags ──
 
 function parseArgs(argv) {
-  const flags = { keep: false, port: undefined };
+  const flags = { keep: false, fixtureOnly: false, engines: ["core", "codex", "claude"] };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--keep") {
       flags.keep = true;
-    } else if (arg === "--port") {
-      i += 1;
-      flags.port = argv[i];
+    } else if (arg === "--fixture-only") {
+      flags.fixtureOnly = true;
+    } else if (arg === "--engines") {
+      flags.engines = (argv[++i] ?? "").split(",");
+      if (flags.engines.some(engine => !["core", "codex", "claude"].includes(engine))) throw new Error("Unsupported engines");
     } else {
-      console.warn(`[orchestrate-mode-smoke] ignoring unrecognized argument: ${arg}`);
+      throw new Error(`Unsupported argument: ${arg}`);
     }
   }
   return flags;
@@ -66,35 +46,7 @@ const FLAGS = parseArgs(process.argv.slice(2));
 
 // ── process/fs helpers (same as settings-ui-smoke.mjs) ──
 
-function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function readDiscoveryFile(path) {
-  try {
-    const info = JSON.parse(readFileSync(path, "utf8"));
-    if (
-      typeof info?.pid === "number" &&
-      typeof info?.port === "number" &&
-      typeof info?.token === "string" &&
-      typeof info?.startedAt === "number"
-    ) {
-      return info;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function killTree(pid, signal) {
   try {
@@ -124,411 +76,124 @@ function record(name, status, detail) {
   }
 }
 
-function assert(name, cond, detail) {
-  if (!cond) {
-    throw new SmokeFailure(`${name}: ${detail}`);
-  }
-}
-
-// ── HTTP helpers ──
-
-async function api(ctx, method, path, body) {
-  const headers = { Authorization: `Bearer ${ctx.token}` };
-  if (body !== undefined) {
-    headers["content-type"] = "application/json";
-  }
-  const resp = await fetch(`http://127.0.0.1:${ctx.port}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await resp.text();
-  let json = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = { raw: text };
-  }
-  return { status: resp.status, json };
-}
-
-async function apiOk(ctx, step, method, path, body) {
-  const resp = await api(ctx, method, path, body);
-  if (resp.status !== 200) {
-    throw new SmokeFailure(`${step}: HTTP ${resp.status} from ${path}: ${JSON.stringify(resp.json).slice(0, 300)}`);
-  }
-  return resp.json;
-}
-
 // ── the smoke ──
 
 async function main() {
-  // Per-run disposable EVERYTHING, including the settings file and a TEMP
-  // SECRETS VAULT — the roles write must land in a throwaway, never the
-  // owner's real settings.json. Provider readiness (tab creation needs it)
-  // is seeded by MIRRORING the owner's real ACTIVE connection + its vault
-  // apiKey entry into the temp settings/vault (read from the real files,
-  // never printed).
+  if (!FLAGS.fixtureOnly) throw new Error("Explicit --fixture-only is required");
   const profile = mkdtempSync(join(tmpdir(), "anycode-orchestrate-mode-smoke-"));
   const settingsPath = join(profile, "settings.json");
-  const secretsPath = join(profile, "secrets.json");
-  const workspace = join(profile, "workspace");
-  const evidenceSettingsPath = join(profile, "settings-after.json");
-  execFileSync("mkdir", ["-p", workspace]);
-
-  // Mirror the real active connection (id/providerId/model/baseUrl) + its
-  // `provider.connection.<id>.apiKey` vault entry into the temp files. The
-  // DEFAULT user locations are read deliberately — ambient env overrides
-  // (a wrapper session's ANYCODE_* pointing at lab profiles) are ignored so
-  // this smoke always seeds from the owner's real, working provider.
-  const realSettingsPath = join(process.env.HOME ?? "", ".anycode", "settings.json");
-  const realSecretsPath = join(process.env.HOME ?? "", ".anycode", "secrets.json");
-  let activeId = null;
+  const ctx = { child: null };
+  let fixtures, cdp, launchError;
+  const evidence = { engines: FLAGS.engines, launchedAt: new Date().toISOString() };
   try {
-    const real = JSON.parse(readFileSync(realSettingsPath, "utf8"));
-    const conns = real?.provider?.connections ?? [];
-    activeId = real?.provider?.activeConnectionId ?? conns.find((c) => c?.id)?.id ?? null;
-    const active = conns.find((c) => c?.id === activeId) ?? null;
-    if (active === null) {
-      throw new Error(`no provider connection found in ${realSettingsPath}`);
-    }
-    const seedSettings = {
-      version: 2,
-      provider: {
-        activeConnectionId: active.id,
-        connections: [
-          {
-            id: active.id,
-            providerId: active.providerId,
-            model: active.model,
-            ...(active.baseUrl !== undefined ? { baseUrl: active.baseUrl } : {}),
-          },
-        ],
-      },
-      tools: {},
-      permissions: { alwaysAllow: [{ toolName: "Read" }, { toolName: "Glob" }, { toolName: "Grep" }] },
-      ui: { theme: "system" },
-      security: { allowWeakSecretStorage: true },
+    fixtures = await createEngineSmokeFixtures(profile);
+    const provider = smokeProviderProfile("custom:local", "core-model", { credentialFromEnv: true });
+    Object.assign(provider.connections[0], { baseUrl: fixtures.baseUrl, authOptional: true, transport: "openai-chat-completions" });
+    provider.custom = [{ id: "custom:local", name: "Local fixture", baseUrl: fixtures.baseUrl, kind: "openai-compatible", models: ["core-model"] }];
+    writeFileSync(settingsPath, JSON.stringify({ version: 2, provider, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "dark" }, security: { allowWeakSecretStorage: false, trustedBinaries: fixtures.consents } }));
+    writeFileSync(join(profile, "unavailable-engine"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+    const env = { ...buildSmokeEnv(process.env, profile, 0, fixtures.binaries.codex), HOME: profile,
+      ANYCODE_CLAUDE_BIN: fixtures.binaries.claude, ANYCODE_ENGINE_SWITCH_ENABLED: "1",
+      ANYCODE_ISOLATED_NATIVE_FIXTURES: "1", ANYCODE_ISOLATED_ORCHESTRATION_FIXTURES: "1",
+      ANYCODE_ISOLATED_FIXTURE_NODE: realpathSync(process.execPath) };
+    ctx.child = launchSmokeElectron(spawn, { cwd: repoRoot, env });
+    ctx.child.on("error", error => { launchError = error; });
+    const wait = async fn => {
+      const end = Date.now() + LAUNCH_TIMEOUT_MS;
+      while (Date.now() < end) {
+        if (launchError) throw launchError;
+        if (ctx.child.exitCode !== null || ctx.child.signalCode !== null) throw new SmokeFailure("launcher exited early");
+        const result = await fn();
+        if (result) return result;
+        await sleep(POLL_MS);
+      }
+      throw new SmokeFailure("isolated launch timed out");
     };
-    writeFileSync(settingsPath, JSON.stringify(seedSettings, null, 2) + "\n", "utf8");
-    const vault = JSON.parse(readFileSync(realSecretsPath, "utf8"));
-    const key = `provider.connection.${active.id}.apiKey`;
-    const entry = vault?.entries?.[key];
-    if (typeof entry !== "object" || entry === null || typeof entry.value !== "string" || entry.value.length === 0) {
-      throw new Error(`vault entry ${key} missing in ${realSecretsPath}`);
-    }
-    // Copy the entry OBJECT verbatim (cipher:"safeStorage" ciphertext is
-    // machine/app-bound, not vault-file-bound — same Electron app on the
-    // same host decrypts it identically from the temp vault).
-    writeFileSync(
-      secretsPath,
-      JSON.stringify({ version: vault?.version ?? 1, entries: { [key]: entry } }, null, 2) + "\n",
-      "utf8",
-    );
-  } catch (err) {
-    console.error(`[orchestrate-mode-smoke] credential seed failed: ${err?.message ?? err}`);
-    console.error("(tab creation needs a ready provider; this smoke mirrors the owner's active connection into a temp profile)");
-    process.exit(1);
-  }
-
-  const ctx = {
-    child: null,
-    appPid: null,
-    port: undefined,
-    token: undefined,
-  };
-
-  const evidence = { steps: {}, settingsRoles: null, launchedAt: new Date().toISOString() };
-  try {
-    // Step 1: launch the dev app with automation on.
-    const t0 = Date.now();
-    const env = {
-      ...process.env,
-      ANYCODE_AUTOMATION: "1",
-      ANYCODE_USER_DATA_DIR: join(profile, "user-data"),
-      ANYCODE_DB_PATH: join(profile, "db.sqlite"),
-      ANYCODE_AUTOMATION_INFO: join(profile, "automation.json"),
-      ANYCODE_SETTINGS_PATH: settingsPath,
-      ANYCODE_SECRETS_PATH: secretsPath,
-      // An env model override would mask the seeded connection's model
-      // (same discipline as child-session-explicit-provider-smoke).
-      ...(process.env.ANYCODE_MODEL !== undefined ? {} : {}),
-    };
-    delete env.ANYCODE_MODEL;
-    delete env.ANYCODE_REASONING_EFFORT;
-    delete env.ANYCODE_API_KEY;
-    delete env.ANYCODE_BASE_URL;
-    if (FLAGS.port !== undefined) {
-      env.ANYCODE_AUTOMATION_PORT = String(FLAGS.port);
-    }
-    ctx.child = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
-      cwd: repoRoot,
-      env,
-      stdio: ["ignore", "inherit", "inherit"],
-      detached: process.platform !== "win32",
+    cdp = await connectIsolatedCdp({ profile, env, launcher: ctx.child, wait });
+    await wait(async () => {
+      const result = await cdp.call("Runtime.evaluate", { expression: "typeof window.anycode?.createTab === 'function' && !!document.querySelector('main.app')", returnByValue: true });
+      return result.result.value === true;
     });
-
-    const discoveryPath = env.ANYCODE_AUTOMATION_INFO;
-    let info = null;
-    while (Date.now() < t0 + LAUNCH_TIMEOUT_MS) {
-      if (ctx.child.exitCode !== null || ctx.child.signalCode !== null) {
-        throw new SmokeFailure(`1: dev process exited early (code=${ctx.child.exitCode})`);
+    const shot = await cdp.call("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(profile, "launch.png"), Buffer.from(shot.data, "base64"));
+    record("isolated-launch", "PASS", "verified disposable Electron renderer");
+    const evaluate = expression => evaluateSmoke(cdp, expression);
+    const info = await wait(() => { try { return JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")); } catch { return null; } });
+    const api = async (path, method = "GET", body) => {
+      const response = await cdp.automation(info, path, method, body);
+      assert(response.ok, JSON.stringify(response.result));
+      return response.result;
+    };
+    const tab = await evaluate(`window.anycode.createTab({kind:"new",workspace:${JSON.stringify(profile)}})`);
+    assert(tab.ok, JSON.stringify(tab));
+    await wait(() => evaluate(`!!document.querySelector('button[aria-label="Switch engine"]')`));
+    for (const engine of FLAGS.engines) {
+      if (!(await evaluate(`document.querySelector('button[aria-label="Switch engine"]')?.textContent === ${JSON.stringify(`${engine} ▾`)}`))) await selectSmokeEngine(evaluate, wait, engine);
+      await wait(() => evaluate(`document.querySelector('button[aria-label="Switch engine"]')?.textContent === ${JSON.stringify(`${engine} ▾`)}`));
+      const before = await evaluate('document.querySelectorAll(".message-loop-end").length');
+      const text = `isolated ${engine} fixture turn`;
+      const callsBefore = fixtures.providerCalls;
+      await api(`/tabs/${tab.tabId}/prompt`, "POST", { text });
+      await wait(async () => (await evaluate('document.querySelectorAll(".message-loop-end").length')) > before);
+      await wait(async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId].turn.status === "idle");
+      assert(await evaluate(`document.body.innerText.includes(${JSON.stringify(engine === "core" ? "core fixture answer" : "native fixture answer")})`));
+      if (engine === "core") {
+        assert(fixtures.providerCalls > callsBefore);
+        assert(JSON.stringify(fixtures.providerInputs.slice(callsBefore)).includes(text));
       }
-      const candidate = readDiscoveryFile(discoveryPath);
-      if (candidate !== null && candidate.startedAt > t0 && isPidAlive(candidate.pid)) {
-        info = candidate;
-        break;
+      else {
+        const frames = readFileSync(join(profile, `${engine}.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line));
+        assert(frames.some(frame => (engine === "codex" ? frame.method === "turn/start" : frame.type === "user") && JSON.stringify(frame).includes(text)));
       }
-      await sleep(500);
+      record(`${engine}-fixture-turn`, "PASS", "isolated renderer and fixture wire completed");
+      if (engine === "claude") {
+        const state = (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId];
+        assert.equal(state.orchestrateActive, false);
+        const refused = await api(`/tabs/${tab.tabId}/orchestrate`, "POST", { enabled: true });
+        assert.equal(refused.ok, false);
+        assert.equal(refused.reason, "not_ready");
+        record("claude-flag-off", "PASS", "ordinary fixture turn completed with overlay unavailable");
+      }
+      record(`${engine}-orchestrate-ui`, "SKIP", "ON menu/slash/roles dispatch not exercised by this GUI fixture");
     }
-    if (info === null) {
-      throw new SmokeFailure(`1: timed out waiting for ${discoveryPath}`);
+    await cdp.call("Page.reload");
+    await wait(async () => {
+      try { return (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId]?.connection === "ready"; }
+      catch { return false; }
+    });
+    const reloadNonce = `reload-${Date.now()}`;
+    await api(`/tabs/${tab.tabId}/prompt`, "POST", { text: reloadNonce });
+    const lastEngine = FLAGS.engines.at(-1);
+    await wait(() => lastEngine === "core"
+      ? fixtures.providerInputs.some(input => JSON.stringify(input).includes(reloadNonce))
+      : readFileSync(join(profile, `${lastEngine}.jsonl`), "utf8").includes(reloadNonce));
+    await wait(async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId].turn.status === "idle");
+    record("gui-reload", "PASS", "same tab accepted a nonce on the engine wire after renderer reload");
+    for (const result of await runProtocolChecks(repoRoot, profile)) record(result.name, result.status, result.detail);
+    for (const check of ["native-live", "auth-equivalence", "managed-policy"]) {
+      const result = judgeNativeProof({ reason: "credential-free fixtures cannot qualify native capabilities" });
+      record(check, result.status, result.detail);
     }
-    ctx.port = info.port;
-    ctx.token = info.token;
-    ctx.appPid = info.pid;
-    record("1-launch", "PASS", `pid=${info.pid} port=${info.port}`);
-
-    // Step 2: create a tab on the throwaway workspace and wait ready.
-    // Renderer-facade race discipline (child-session-explicit-provider-smoke):
-    // a freshly created tab's renderer mounts asynchronously, so facade calls
-    // 503 with facade_not_installed until then — wait via POST /wait, and
-    // tolerate a transient 503 on select.
-    const created = await apiOk(ctx, "2", "POST", "/tabs", { kind: "new", workspace });
-    const tabId = created?.tabId ?? created?.tab?.tabId;
-    assert("2-tab", typeof tabId === "string" && tabId.length > 0, `create tab returned ${JSON.stringify(created).slice(0, 200)}`);
-    let waited = null;
-    for (let i = 0; i < 60 && waited === null; i += 1) {
-      try {
-        const r = await api(ctx, "POST", "/wait", { tabId, until: { connection: "ready" }, timeoutMs: 60_000 });
-        if (r.status === 200) {
-          waited = r.json;
-        } else if (r.status !== 503) {
-          throw new SmokeFailure(`2: HTTP ${r.status} from /wait: ${JSON.stringify(r.json).slice(0, 200)}`);
-        }
-      } catch (err) {
-        if (err instanceof SmokeFailure) {
-          throw err;
-        }
-        // transport hiccup — retry
-      }
-      if (waited === null) {
-        await sleep(700);
-      }
-    }
-    assert("2-ready", waited?.matched === true, `tab never reached connection=ready: ${JSON.stringify(waited).slice(0, 200)}`);
-    let selected = false;
-    for (let i = 0; i < 30 && !selected; i += 1) {
-      try {
-        const r = await api(ctx, "POST", `/tabs/${encodeURIComponent(tabId)}/select`, {});
-        selected = r.status === 200 && r.json?.ok === true;
-      } catch {
-        // retry
-      }
-      if (!selected) {
-        await sleep(500);
-      }
-    }
-    assert("2-select", selected, "tab select never succeeded (facade_not_installed race?)");
-    record("2-tab", "PASS", `tabId=${tabId}`);
-
-    // Step 3: ModeMenu lists Orchestrate after the five modes.
-    await apiOk(ctx, "3", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu/click-chip`, {});
-    let menu = null;
-    for (let i = 0; i < 20; i += 1) {
-      await sleep(300);
-      menu = await apiOk(ctx, "3", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu`, {});
-      if (menu?.open) {
-        break;
-      }
-    }
-    assert("3-open", menu?.open === true, "mode menu popover did not open");
-    const names = (menu?.rows ?? []).map((r) => r.name);
-    const modes = ["plan", "build", "edit", "auto", "yolo"];
-    for (const mode of modes) {
-      assert("3-modes", names.includes(mode), `mode row ${mode} missing (rows: ${names.join(",")})`);
-    }
-    assert("3-orchestrate-row", names.includes("Orchestrate"), `Orchestrate row missing (rows: ${names.join(",")})`);
-    assert("3-position", names.indexOf("Orchestrate") === 5, `Orchestrate must sit AFTER the five modes (rows: ${names.join(",")})`);
-    const orchestrateRow = (menu?.rows ?? []).find((r) => r.name === "Orchestrate");
-    assert("3-unchecked", orchestrateRow?.checked === false, "Orchestrate row must start unchecked");
-    evidence.steps.modeMenuRows = names;
-    record("3-mode-menu", "PASS", `rows=[${names.join(",")}]`);
-
-    // Step 4: clicking the REAL Orchestrate row flips it to checked (the
-    // wire ack lands in the store; the host is real). The session also moves
-    // to plan — but the chip label read covers that indirectly; assert the
-    // row state itself.
-    const clicked = await apiOk(ctx, "4", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu/click-row`, { name: "Orchestrate" });
-    assert("4-click", clicked?.ok === true, `click-row returned ${JSON.stringify(clicked)}`);
-    let checked = false;
-    let chipLabel = "";
-    for (let i = 0; i < 25 && !checked; i += 1) {
-      await sleep(200);
-      // Re-open the popover (the click committed it closed).
-      await apiOk(ctx, "4", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu/click-chip`, {});
-      const st = await apiOk(ctx, "4", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu`, {});
-      chipLabel = st?.chipLabel ?? "";
-      const row = (st?.rows ?? []).find((r) => r.name === "Orchestrate");
-      checked = row?.checked === true;
-      if (!checked) {
-        await apiOk(ctx, "4", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu/click-chip`, {});
-      }
-    }
-    assert("4-checked", checked, "Orchestrate row never became checked after the real click (orchestrate_changed ack missing?)");
-    assert("4-plan", /plan/i.test(chipLabel), `chip label should read plan while orchestrate (got "${chipLabel}")`);
-    evidence.steps.chipLabelWhileOrchestrate = chipLabel;
-    record("4-toggle-on", "PASS", `chip="${chipLabel}"`);
-
-    // Step 5: /orchestrate command row appears while typing the token.
-    // (The slash menu only opens while the caret sits in the FIRST token —
-    // slashQueryAt returns null once a space follows — so the real user flow
-    // is: type "/orchestrate", Enter (row dispatch), then type the task.)
-    // Turn orchestrate OFF first to reset to the first-run state.
-    await apiOk(ctx, "5", "POST", `/tabs/${encodeURIComponent(tabId)}/orchestrate`, { enabled: false });
-    await sleep(600);
-    await apiOk(ctx, "5", "POST", `/tabs/${encodeURIComponent(tabId)}/slash-menu/type`, { text: "/orchestrate" });
-    let slash = null;
-    for (let i = 0; i < 20; i += 1) {
-      slash = await apiOk(ctx, "5", "GET", `/tabs/${encodeURIComponent(tabId)}/slash-menu`);
-      if (slash?.open && (slash?.items ?? []).some((it) => it.name === "Orchestrate")) {
-        break;
-      }
-      await sleep(150);
-    }
-    assert("5-row", slash?.open === true && (slash?.items ?? []).some((it) => it.name === "Orchestrate"), `/orchestrate command row missing: ${JSON.stringify(slash)?.slice(0, 200)}`);
-    evidence.steps.slashRowSeen = true;
-    record("5-slash-row", "PASS", "Orchestrate command row rendered");
-
-    // Step 6: press Enter -> first-run dialog opens (no roles in settings).
-    await apiOk(ctx, "6", "POST", `/tabs/${encodeURIComponent(tabId)}/slash-menu/key`, { key: "Enter" });
-    let picker = null;
-    for (let i = 0; i < 25; i += 1) {
-      picker = await apiOk(ctx, "6", "POST", `/tabs/${encodeURIComponent(tabId)}/role-picker/state`, {});
-      if (picker?.mounted) {
-        break;
-      }
-      await sleep(200);
-    }
-    assert("6-dialog", picker?.mounted === true, "RolePickerDialog did not open after /orchestrate submit with no roles configured");
-    evidence.steps.dialogMounted = true;
-    record("6-dialog-open", "PASS", `selectedPreset=${picker?.selectedPreset}`);
-
-    // Step 7: click a preset (fall back through the three ids — the
-    // applicable one depends on engine readiness) then Save; settings.json
-    // must gain `roles`, the dialog closes, and the stashed task submits.
-    const presetIds = ["claude-leads-codex-builds", "all-claude", "this-connection"];
-    let picked = null;
-    for (const presetId of presetIds) {
-      const r = await apiOk(ctx, "7", "POST", `/tabs/${encodeURIComponent(tabId)}/role-picker/preset`, { presetId });
-      if (r?.ok === true) {
-        picked = presetId;
-        break;
-      }
-    }
-    assert("7-preset", picked !== null, "no preset chip could be clicked (all disabled/absent?)");
-    await apiOk(ctx, "7", "POST", `/tabs/${encodeURIComponent(tabId)}/role-picker/save`, {});
-    let rolesNow = null;
-    for (let i = 0; i < 25; i += 1) {
-      await sleep(200);
-      try {
-        const doc = JSON.parse(readFileSync(settingsPath, "utf8"));
-        if (doc?.roles !== undefined) {
-          rolesNow = doc.roles;
-          break;
-        }
-      } catch {
-        // keep polling
-      }
-    }
-    assert("7-roles-written", rolesNow !== null, "settings.json never gained a roles section after Save");
-    assert("7-has-role", rolesNow && typeof rolesNow === "object" && Object.keys(rolesNow).length > 0, `roles section empty: ${JSON.stringify(rolesNow)}`);
-    evidence.settingsRoles = rolesNow;
-    evidence.steps.presetPicked = picked;
-    record("7-roles-saved", "PASS", `preset=${picked} rolesKeys=${Object.keys(rolesNow).join(",")}`);
-
-    // Step 8: the dialog closed, orchestrate turned ON by the row dispatch
-    // (asserted via the mode-menu row re-probe), and a typed task then
-    // submits as a normal user message (the /orchestrate flow's user path).
-    let sawTask = false;
-    let closed = false;
-    let rechecked = false;
-    for (let i = 0; i < 25 && !(closed && rechecked); i += 1) {
-      const pk = await apiOk(ctx, "8", "POST", `/tabs/${encodeURIComponent(tabId)}/role-picker/state`, {});
-      closed = pk?.mounted === false;
-      // Open the popover and give React a beat to render before probing.
-      await apiOk(ctx, "8", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu/click-chip`, {});
-      await sleep(400);
-      const st = await apiOk(ctx, "8", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu`, {});
-      const row = (st?.rows ?? []).find((r) => r.name === "Orchestrate");
-      rechecked = row?.checked === true;
-      if (!(closed && rechecked)) {
-        // Close it again so the next iteration's click re-opens (toggle).
-        if (st?.open === true) {
-          await apiOk(ctx, "8", "POST", `/tabs/${encodeURIComponent(tabId)}/mode-menu/click-chip`, {});
-        }
-        await sleep(300);
-      }
-    }
-    assert("8-dialog-closed", closed, "RolePickerDialog stayed mounted after Save");
-    assert("8-orchestrate-on", rechecked, "Orchestrate row not checked after the /orchestrate dispatch + Save");
-    // Type the task and submit through the composer's REAL send path.
-    await apiOk(ctx, "8", "POST", `/tabs/${encodeURIComponent(tabId)}/slash-menu/type`, { text: "fix the readme" });
-    await apiOk(ctx, "8", "POST", `/tabs/${encodeURIComponent(tabId)}/slash-menu/key`, { key: "Enter" });
-    for (let i = 0; i < 30 && !sawTask; i += 1) {
-      const st = await apiOk(ctx, "8", "GET", `/state/${encodeURIComponent(tabId)}`);
-      const tabState = st?.snapshot?.states?.[tabId] ?? st?.states?.[tabId] ?? {};
-      const blocks = tabState?.transcript ?? [];
-      sawTask = blocks.some((b) => b?.kind === "user_text" && typeof b?.text === "string" && b.text.includes("fix the readme"));
-      if (!sawTask) {
-        await sleep(300);
-      }
-    }
-    assert("8-task-submitted", sawTask, "the typed task never appeared in the transcript as a user message");
-    evidence.steps.taskSubmitted = true;
-    record("8-submit", "PASS", "dialog closed + orchestrate on + task submitted");
-
-    record("9-done", "PASS", "all orchestrate-mode UI assertions passed");
   } catch (err) {
     const name = err instanceof SmokeFailure ? err.message.split(":")[0] : "unexpected";
     record(name, "FAIL", err?.message ?? String(err));
   } finally {
-    // Evidence json (discipline).
-    try {
-      if (existsSync(settingsPath)) {
-        writeFileSync(evidenceSettingsPath, readFileSync(settingsPath, "utf8"), "utf8");
-      }
-      execFileSync("mkdir", ["-p", EVIDENCE_DIR]);
-      writeFileSync(
-        join(EVIDENCE_DIR, "orchestrate-mode-result.json"),
-        JSON.stringify({ ...evidence, results }, null, 2) + "\n",
-        "utf8",
-      );
-    } catch (writeErr) {
-      console.warn(`[orchestrate-mode-smoke] evidence write failed: ${writeErr}`);
+    cdp?.ws.close();
+    if (ctx.child?.pid) {
+      const exited = new Promise(resolve => ctx.child.once("exit", resolve));
+      killTree(ctx.child.pid, "SIGTERM");
+      await Promise.race([exited, sleep(1000)]);
+      killTree(ctx.child.pid, "SIGKILL");
     }
-    if (ctx.child !== null && !FLAGS.keep) {
-      if (ctx.appPid !== null) {
-        killTree(ctx.appPid, "SIGTERM");
-      }
-      try {
-        killTree(-ctx.child.pid, "SIGKILL");
-      } catch {
-        // already gone
-      }
-    }
-    if (!FLAGS.keep) {
-      try {
-        rmSync(profile, { recursive: true, force: true });
-      } catch {
-        // best effort
-      }
-    }
+    if (fixtures) await new Promise(resolve => fixtures.fixture.close(resolve));
+    writeFileSync(join(profile, "result.json"), JSON.stringify({ ...evidence, results }, null, 2) + "\n");
+    if (FLAGS.keep) console.log(`Isolated artifacts: ${profile}`);
+    else rmSync(profile, { recursive: true, force: true });
   }
 
   const failed = results.filter((r) => r.status === "FAIL");
-  console.log(`[orchestrate-mode-smoke] ${results.length - failed.length}/${results.length} steps passed`);
-  process.exit(failed.length === 0 ? 0 : 1);
+  console.log(`[orchestrate-mode-smoke] ${results.filter(r => r.status === "PASS").length} PASS, ${failed.length} FAIL, ${results.filter(r => r.status === "SKIP").length} SKIP`);
+  process.exit(smokeExitCode(results));
 }
 
 main().catch((err) => {

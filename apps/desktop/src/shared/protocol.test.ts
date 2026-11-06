@@ -441,6 +441,10 @@ describe("engine_switch_request protocol", () => {
     expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude", model: "test-model" }).success).toBe(true);
   });
 
+  it("rejects a renderer override of the Claude orchestration carrier", () => {
+    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude", model: "test-model", claudeOrchestrateEnabled: true }).success).toBe(false);
+  });
+
   it("rejects an unknown engine id", () => {
     expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt", model: "test-model" }).success).toBe(false);
     expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt", model: "test-model" }).success).toBe(false);

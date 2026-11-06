@@ -133,7 +133,7 @@ export class ClaudeMcpBridge {
    */
   private readonly pendingCalls = new Map<McpRequestId, ControlRequestResponder>();
 
-  constructor(options: ClaudeMcpBridgeOptions) {
+  constructor(private readonly options: ClaudeMcpBridgeOptions) {
     this.serverName = options.serverName;
     this.transport = new ControlChannelTransport();
     const server = createInProcessMcpServer({
@@ -146,6 +146,21 @@ export class ClaudeMcpBridge {
     // synchronously (S2 doc: "nothing to open") — nothing here is worth
     // blocking the constructor for, and a constructor cannot be async.
     void server.connect(this.transport);
+  }
+
+  fork(allowedTools?: ReadonlySet<string>): ClaudeMcpBridge {
+    if (!allowedTools) return new ClaudeMcpBridge(this.options);
+    const allowed = new Set(allowedTools);
+    return new ClaudeMcpBridge({ ...this.options,
+      listTools: () => this.options.listTools().filter(tool => allowed.has(tool.name)),
+      callTool: (name, ...args) => allowed.has(name) ? this.options.callTool(name, ...args)
+        : Promise.resolve({ text: "Tool unavailable in this posture", isError: true }),
+    });
+  }
+
+  async close(): Promise<void> {
+    this.pendingCalls.clear();
+    await this.transport.close();
   }
 
   /**

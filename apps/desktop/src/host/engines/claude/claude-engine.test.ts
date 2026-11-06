@@ -258,7 +258,7 @@ class FakeTransport implements ClaudeTransport {
  */
 function engineWith(
   transport: ClaudeTransport,
-  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts>; slashPassthrough?: boolean } = {},
+  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts>; slashPassthrough?: boolean; restricted?: () => boolean } = {},
 ): ClaudeEngine {
   const catalog = overrides.catalog ?? liveCatalog();
   return new ClaudeEngine(transport, "session-ref-1", undefined, {
@@ -268,7 +268,7 @@ function engineWith(
     effortsByModel: new Map(),
     notices: [],
     slashPassthrough: overrides.slashPassthrough ?? true,
-  }, overrides.timeouts);
+  }, overrides.timeouts, undefined, undefined, false, undefined, undefined, overrides.restricted);
 }
 
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -2751,5 +2751,20 @@ describe("ClaudeEngine.compactNow — review (Stop during the foreign-turn barri
     transport.enqueue(resultFrame157("completed"));
     await collect(engine.runTurn("after", { signal: new AbortController().signal }));
     expect(transport.sent).toEqual(["first", "after"]);
+  });
+});
+
+
+describe("orchestration preset guard", () => {
+  it("refuses preset changes before touching the transport in every restricted posture", async () => {
+    const transport = new FakeTransport();
+    let restricted = true;
+    const engine = engineWith(transport, { restricted: () => restricted });
+    await expect(engine.selectPreset("workspace")).resolves.toMatchObject({ ok: false });
+    expect(transport.controls).toEqual([]);
+    expect(engine.activePresetId).toBe("ask");
+    restricted = false;
+    await expect(engine.selectPreset("workspace")).resolves.toMatchObject({ ok: true });
+    await engine.dispose("session-close");
   });
 });

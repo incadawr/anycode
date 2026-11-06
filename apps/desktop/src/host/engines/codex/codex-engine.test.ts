@@ -1161,8 +1161,11 @@ describe("Codex orchestration restart", () => {
 
   it("restarts ON/OFF with the same thread and reasserts policy on each turn", async () => {
     const r = await setup(); const authority = { preset: "ask" };
+    const policy = r.engine.orchestrationPolicy!;
+    expect(policy.nativeBase!()).toBeUndefined();
     expect(await r.controller.apply(true, authority)).toBe(true);
     expect(r.initial.closeCount).toBe(1);
+    expect(policy.nativeBase!()).toMatchObject({ version: 1, engine: "codex", preset: "ask", configDigest: expect.stringMatching(/^[a-f0-9]{64}$/) });
     expect(r.overrides[0]).toContain('mcp_servers.ambient.enabled=false');
     expect(r.servers[0]!.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({ threadId: "fresh-thread", sandbox: "read-only", approvalPolicy: "never" });
     expect(r.engine.selectPreset("full-access")).toEqual({ ok: false, reason: expect.stringMatching(/Turn Orchestrate off/) });
@@ -1170,6 +1173,7 @@ describe("Codex orchestration restart", () => {
     for (const params of r.servers[0]!.turnStartParams()) expect(params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false }, additionalContext: { orchestration: { kind: "application", value: expect.stringContaining("anycode_agent") } } });
     expect(await r.controller.apply(false, authority)).toBe(true);
     expect(r.overrides[1]).toEqual([]);
+    expect(policy.nativeBase!()).toBeUndefined();
     expect(r.engine.threadId).toBe("fresh-thread");
     await runTurn(r.servers[1]!, r.engine);
     expect(r.servers[1]!.turnStartParams()[0]).toMatchObject({ approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite" } });
@@ -4200,5 +4204,41 @@ describe("Codex service tier", () => {
     await runTurn(server, engine);
     expect(server.turnStartParams().at(-1)?.serviceTier).toBe("fast");
     expect(engine.snapshot().fast).toBe(true);
+  });
+});
+
+describe("Codex explicit OFF recovery", () => {
+  it.each([false, true])("proves read-only fallback before payload, resume=%s", async resume => {
+    const server = new FakeAppServer();
+    const request = server.request.bind(server);
+    server.request = async <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
+      if (method === "config/read") return { config: { mcp_servers: {} }, layers: [] } as T;
+      const result = await request<T>(method, params, opts);
+      return method === "thread/start" || method === "thread/resume" ? { ...result, approvalPolicy: "on-request", sandbox: { type: "readOnly", networkAccess: false } } : result;
+    };
+    const select = { presetId: "full-access", orchestrationRecovery: { nativeBase: { version: 99 } } };
+    const { engine } = resume ? await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, select)
+      : await createNativeCodexSession(server, "/work", undefined, undefined, select);
+    try {
+      await expect(engine.verifyOrchestrationOff()).resolves.toBeUndefined();
+      expect(engine.snapshot().activePresetId).toBe("read-only");
+      expect(server.calls.find(c => c.method === (resume ? "thread/resume" : "thread/start"))?.params).toMatchObject({ sandbox: "read-only" });
+      expect(server.turnStartParams()).toHaveLength(0);
+    } finally { await engine.dispose("session-close"); }
+  });
+  it.each(["posture", "inventory", "digest"])("rejects failed %s proof", async failure => {
+    const { nativeConfigDigest } = await import("../../native-base.js");
+    const server = new FakeAppServer(), request = server.request.bind(server);
+    const config = { mcp_servers: {} };
+    server.request = async <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
+      if (method === "config/read") return { config: failure === "inventory" ? {} : config, layers: [] } as T;
+      const result = await request<T>(method, params, opts);
+      return method === "thread/start" ? { ...result, approvalPolicy: "on-request", sandbox: { type: failure === "posture" ? "workspaceWrite" : "readOnly", networkAccess: false } } : result;
+    };
+    const nativeBase = { version: 1, engine: "codex", model: "gpt-5.6-sol", preset: "read-only",
+      configDigest: failure === "digest" ? "f".repeat(64) : nativeConfigDigest({ config, forwarded: {} }) };
+    await expect(createNativeCodexSession(server, "/work", undefined, undefined, { orchestrationRecovery: { nativeBase } })).rejects.toThrow();
+    expect(server.turnStartParams()).toHaveLength(0);
+    await server.close();
   });
 });

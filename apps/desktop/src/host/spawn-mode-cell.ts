@@ -51,7 +51,8 @@ export function createSpawnModeCell(
       if (!config.orchestrate) {
         return config.mode;
       }
-      const pre = preOrchestrateMode ?? "build";
+      const pre = preOrchestrateMode;
+      if (pre === undefined) return "plan";
       return pre === "plan" ? "build" : pre;
     },
     onOrchestrateChanged(enabled: boolean): void {

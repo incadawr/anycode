@@ -1131,5 +1131,6 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     // (main/tabs.ts), so the Claude button appears exactly when the doctor
     // reports the profile ready, and not before (cut §1.4 DoD).
     engineIds: (["core", "codex", "claude"] as const).filter((engine) => deps.manager.canSpawn(engine)),
+    claudeOrchestrateEnabled: deps.manager.claudeOrchestrationIntentEnabled(),
   }));
 }

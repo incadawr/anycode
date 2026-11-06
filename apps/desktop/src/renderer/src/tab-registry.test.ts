@@ -778,7 +778,7 @@ describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
       expect(registry.getStore("tab-a")!.getState().notice).toMatchObject({ text: expect.stringContaining("Attachments were not saved") });
     } finally { vi.unstubAllGlobals(); }
   });
-  it("keeps ordinary delivery and report acknowledgement alive when storage is full", () => {
+  it("keeps ordinary delivery alive but holds report acknowledgement until recovery commits", () => {
     vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: () => { throw new Error("quota"); }, removeItem: () => {} });
     try {
       const { registry } = createTestRegistry(createTabsStore());
@@ -790,6 +790,10 @@ describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
       port.emit({ type: "child_report", id: "report", text: "result" });
       expect(port.sent).toContainEqual(expect.objectContaining({ type: "user_message", text: "hello" }));
       expect(port.sent).toContainEqual(expect.objectContaining({ type: "user_message", text: "recovered" }));
+      expect(port.sent).not.toContainEqual({ type: "child_report_ack", id: "report" });
+      expect(registry.getStore("tab-a")!.getState().promptQueue).toContainEqual(expect.objectContaining({ originId: "report" }));
+      vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+      port.emit({ type: "child_report", id: "report", text: "result" });
       expect(port.sent).toContainEqual({ type: "child_report_ack", id: "report" });
       expect(registry.getStore("tab-a")?.getState().connection).toBe("ready");
     } finally { vi.unstubAllGlobals(); }

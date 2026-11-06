@@ -313,3 +313,10 @@ export interface PersistencePort {
   deleteSessions(ids: readonly string[]): Promise<SessionDeleteSummary>;
   close(): Promise<void>;
 }
+
+/** Checked atomic replacement; failure must throw and preserve the previous durable pair. */
+export interface RuntimeSettingsPersistence {
+  updateRuntimeSettings(sessionId: string, segmentId: string,
+    selected: import("./runtime-settings.js").RuntimeSettings,
+    applied: import("./runtime-settings.js").RuntimeSettings): void;
+}

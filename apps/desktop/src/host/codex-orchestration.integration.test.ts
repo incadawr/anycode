@@ -38,7 +38,7 @@ function rig() {
     ...(outcome.status === "max_turns" && outcome.declaredDoneAtCeiling !== true ? { turnLimitTurns: outcome.turns } : {}),
   }), { status: outcome.status, durationMs: outcome.durationMs }), report: (id, text, meta) => queue.add(id, text, meta) });
   let preset = "full-access";
-  const composition = createForeignOrchestrationComposition({ settings: () => settings, profiles: async () => [], projectRoot: "/project", preset: () => preset, health, routed });
+  const composition = createForeignOrchestrationComposition({ settings: () => settings, profiles: async () => ({ profiles: [], problems: [] }), projectRoot: "/project", preset: () => preset, health, routed });
   composition.captureBaseAuthority(preset);
   preset = "read-only";
   const port = createChildSessionPort({ parentSessionId: "parent", getPermissionMode: composition.childMode, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); }, send: message => { const spawn = parseChildSpawnRequest(message); if (spawn) sent.push(spawn); }, onDetachedTerminal: routed.onTerminal, stallTimeoutMs: 100,

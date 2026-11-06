@@ -4,9 +4,9 @@ import { useTabsStore } from "./tabs-store.js";
 import type { EngineId } from "../../shared/engines.js";
 
 function deferred() {
-  let resolve!: (value: { engineIds: EngineId[] }) => void;
+  let resolve!: (value: { engineIds: EngineId[]; claudeOrchestrateEnabled?: boolean }) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<{ engineIds: EngineId[] }>((yes, no) => { resolve = yes; reject = no; });
+  const promise = new Promise<{ engineIds: EngineId[]; claudeOrchestrateEnabled?: boolean }>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
 
@@ -23,11 +23,12 @@ describe("first-run engine readiness", () => {
     const apply = vi.fn();
     const stop = watchExternalEngines(bridge, apply);
     changed();
-    login.resolve({ engineIds: ["claude"] });
+    login.resolve({ engineIds: ["claude"], claudeOrchestrateEnabled: true });
     await Promise.resolve();
     startup.resolve({ engineIds: ["core"] });
     await Promise.resolve();
     expect(apply.mock.calls).toEqual([[true, ["claude"]]]);
+    expect(useTabsStore.getState().claudeOrchestrateEnabled).toBe(true);
     stop();
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
@@ -124,4 +125,10 @@ describe("first-run engine readiness", () => {
     await Promise.resolve();
     expect(useTabsStore.getState().availableEngines).toEqual(["core", "codex"]);
   });
+});
+
+it.each([undefined, false, true])("projects main intent independently of engine availability: %s", async enabled => {
+  refreshEngineAvailability({ listAvailableEngines: async () => ({ engineIds: ["claude"], claudeOrchestrateEnabled: enabled }) });
+  await Promise.resolve();
+  expect(useTabsStore.getState().claudeOrchestrateEnabled).toBe(enabled === true);
 });

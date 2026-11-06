@@ -7,7 +7,7 @@
  * behavior. The ∩-drop / lock re-proofs on a live child are in runner.test.ts.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
 
 import { discoverAgentProfiles, parseAgentProfileMd, type AgentProfileRoot } from "./profiles.js";
@@ -22,7 +22,7 @@ import type { FileStat, FileSystemPort } from "../ports/file-system.js";
 // ---------------------------------------------------------------------------
 // In-memory FileSystemPort fake. A spec maps a directory path to its entries;
 // each entry is either file CONTENT (string) or the "dir" marker (a
-// subdirectory). Only readdir/stat/exists/readFile are used by discovery.
+// subdirectory). Only readdir/stat/readFile are used by discovery.
 
 type DirSpec = Record<string, string | "dir">;
 type FsSpec = Record<string, DirSpec>;
@@ -90,7 +90,7 @@ class FakeFs implements FileSystemPort {
     }
     const entries = this.dirEntries.get(path);
     if (!entries) {
-      throw new Error(`ENOTDIR: ${path}`);
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
     }
     return [...entries];
   }
@@ -217,6 +217,25 @@ describe("discoverAgentProfiles — mapping to PersonaDefinition", () => {
 });
 
 describe("discoverAgentProfiles — validation & fail-soft", () => {
+  it.each(["ENOENT", "ENOTDIR", "EACCES", "EPERM", "EIO"])(
+    "classifies root read error %s even when exists reports false",
+    async (code) => {
+      const fs = new FakeFs({});
+      const exists = vi.spyOn(fs, "exists");
+      vi.spyOn(fs, "readdir").mockRejectedValue(Object.assign(new Error(code), { code }));
+
+      const { profiles, problems } = await discoverAgentProfiles(fs, [{ dir: WS, source: "project" }]);
+
+      expect(profiles).toEqual([]);
+      expect(exists).not.toHaveBeenCalled();
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        expect(problems).toEqual([]);
+      } else {
+        expect(problems).toEqual([expect.stringContaining(`${WS}: ${code}`)]);
+      }
+    },
+  );
+
   it("skips a profile whose name fails the regex (+problem)", async () => {
     const fs = new FakeFs({
       [WS]: {

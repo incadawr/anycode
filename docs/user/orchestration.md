@@ -83,3 +83,26 @@ waits for a slot.
 
 For a longer worked example, the source repository has `docs/orchestration.md`.
 It is not shipped inside the app.
+
+## Orchestrate mode and recovery
+
+Ordinary child delegation works independently of Orchestrate mode. Claude
+Orchestrate is disabled by default and currently unavailable: enabling its
+development flag does not qualify a native CLI version. The tab explains an
+unavailable capability and keeps ordinary conversation available.
+
+The Claude overlay closes the parent's browser tools completely, as well as
+shell, writes and external MCP tools. Delegate browser research to a child.
+When the overlay is off, the parent's native configuration is restored.
+Each actual ON/OFF change restarts the Claude CLI, which adds startup latency;
+requesting the already applied state does not restart it. The logical session
+and native reference are retained without an extra model turn.
+
+Detached child reports wait while a mode change is being confirmed. After a
+successful restart they can start a new parent turn. Error and cancelled child
+results retain their status; the parent receiving a report does not turn the
+child result into success. Reports already admitted are not automatically
+resent when acceptance is uncertain. After an interrupted transition, reopen
+the session to restore a verified OFF configuration before continuing. If
+verification or saving recovery state fails, admission remains closed and the
+tab shows that recovery is required.

@@ -1,4 +1,6 @@
 import { mapProgressToEvent } from "@anycode/core";
+import { savedNativeRecovery } from "./native-base.js";
+import { claudeOrchestrationBootEnabled } from "../shared/claude-orchestration-feature.js";
 import { resolveProfileRoles } from "../shared/role-profiles.js";
 import { codexAgentPermissionMode as codexChildAuthority } from "./engines/codex/dynamic-tool-bridge.js";
 import { createChildStatusStore } from "@anycode/core";
@@ -1283,12 +1285,13 @@ async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, 
   const subscriptions: (() => void)[] = [];
   const settingsPath = env[ENV_SETTINGS_PATH] ?? defaultSettingsPath();
   const readSettings = () => { try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8"))); return parsed.status === "ok" ? parsed.settings : undefined; } catch { return undefined; } };
-  const profiles = async () => (await discoverAgentProfiles(new NodeFileSystemAdapter(), buildAgentProfileRoots(workspace, home, []))).profiles;
+  const profiles = () => discoverAgentProfiles(new NodeFileSystemAdapter(), buildAgentProfileRoots(workspace, home, []));
   const routed = createRoutedChildComposition({
     health: roleHealth, describeError, resolve: () => null, prepare: request => request, record: () => {},
     report: (id, text, meta) => childReportQueue.add(id, text, meta), deliver: deliverDetachedChildReport,
   });
   const foreign = createForeignOrchestrationComposition({ settings: readSettings, profiles, projectRoot: workspace, health: roleHealth, routed, env,
+    restrictedCatalog: () => runtime?.engine.id === "claude",
     preset: () => runtime?.engineSettings?.snapshot().activePresetId ?? "read-only",
     permissionMode: preset => runtime?.engine.id === "claude" ? claudeAgentPermissionMode(preset) : codexChildAuthority(preset) });
   const port = createChildSessionPort({
@@ -1321,10 +1324,10 @@ async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, 
         shell: { gitReadOnly: existsSync(join(workspace, ".git")), gitUserMutations: existsSync(join(workspace, ".git")), terminal: true },
         modelSettingsConnectionId: null,
       }; next.backgroundChildren = backgroundChildren;
-      bindRuntimeOrchestration(next.engine,{ownerSessionId:sessionId,port,baseMode:() => next.engine.id === "core" ? next.engine.mode() : foreign.childMode(),capture:foreign.captureMode,clear:foreign.clearBaseAuthority,cleanup:() => subscriptions.splice(0).forEach(stop => stop())});
+      bindRuntimeOrchestration(next.engine,{ownerSessionId:sessionId,port,baseMode:() => next.engine.id === "core" ? next.engine.mode() : foreign.childMode(),capture:foreign.captureMode,clear:foreign.clearBaseAuthority,cleanup:() => { runtime = undefined; subscriptions.splice(0).forEach(stop => stop()); }});
       next.onOrchestrateChanged = enabled => { if (!enabled) foreign.clearBaseAuthority(); };
     },
-    cleanup() { port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); },
+    cleanup() { runtime = undefined; port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); },
   };
 }
 
@@ -1411,16 +1414,16 @@ function hostSwitchFactory(
     resolveClaude: async () => {
       const binaryPath = sourceEnv[ENV_CLAUDE_BIN];
       if (!binaryPath?.trim()) return undefined;
-      const mcp = await forward("claude");
-      const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
+      const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
       let raw: ClaudeEngine | undefined;
-      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, port: routing.port, browser: routing.browser, onEvent: event => raw?.pushBridgeEvent(event) });
+      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser, onEvent: event => raw?.pushBridgeEvent(event) });
       const mcpBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: stamp.listTools, callTool: stamp.callTool });
       return { options: {
         ...buildClaudeLaunchOptions({
           workspace, binaryPath, sourceEnv, broker: engineBroker, projectTrusted,
-          profileDir: resolveClaudeConfigDir(), mcpConfigPath: mcp.claudeConfigPath,
-          bootNotices: mcp.notices, agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
+          orchestrationFeatureEnabled: launch?.claudeOrchestrateEnabled === true,
+          profileDir: resolveClaudeConfigDir(), resolveMcpForward: () => forward("claude"),
+          bootNotices: [], agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
           browserToolNames: new Set(routing.browser.specs.map(spec => `mcp__anycode__${spec.claudeName}`)),
           binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
         }),
@@ -1430,7 +1433,7 @@ function hostSwitchFactory(
         routing.configure(runtime);
         runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
         bindClaudeUsage(raw, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null, runtime.identity!.model);
-      }, cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
+      }, cleanup: () => { routing.cleanup(); } };
     },
   });
 }
@@ -1618,7 +1621,7 @@ async function bootCodexSession(
     });
     const foreignComposition = codexForeignComposition = createForeignOrchestrationComposition({
       settings: readSettings, projectRoot: codexProjectRoot, health: roleHealth, routed,
-      profiles: async () => (await discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots)).profiles,
+      profiles: () => discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots),
       preset: () => codexParentEngine?.snapshot().activePresetId ?? "read-only",
     });
     const resolveCatalog = foreignComposition.catalog;
@@ -1766,6 +1769,7 @@ async function bootCodexSession(
           // row holds a core mode there ("build") — the engine treats an
           // unrecognized id as the default preset, silently.
           selection: {
+            orchestrationRecovery: savedNativeRecovery(active),
             model: existing.model,
             presetId: existing.mode,
             ...(active?.selected.effort !== undefined ? { effort: active.selected.effort } : {}),
@@ -1773,7 +1777,7 @@ async function bootCodexSession(
             origin: "persisted",
           },
         });
-        if (active) resumed.engine.restoreAppliedSettings(active.applied);
+        if (active && !savedNativeRecovery(active)) resumed.engine.restoreAppliedSettings(active.applied);
         if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.threadId);
         // Persist whatever the resume actually settled on (the stored model may
         // have been removed from the catalog and fallen back) — only after the
@@ -2221,8 +2225,7 @@ async function bootClaudeSession(
   // must exist before the CLI's own MCP handshake), but the engine exists
   // only after, so `getPermissionMode` below closes over this cell exactly
   // the way the codex door's `codexParentEngine` does; until the engine
-  // binds, a claude parent defaults to its own default-equivalent posture
-  // (`ask` preset → `build`), never wider.
+  // binds, the composition uses a read-only preset and refuses spawns.
   let claudeParentEngine: import("./engines/claude/claude-engine.js").ClaudeEngine | undefined;
   // late-bound live bridge-event tap. The bridge is built here,
   // but the engine exists only after connect below — `onEvent` closes over
@@ -2239,17 +2242,39 @@ async function bootClaudeSession(
   // boot block below, read by the `options` wiring further down.
   let claudeBrowserToolNames: Set<string> | undefined;
   let agentCatalogNonEmpty = false;
+  const claudeCompositionEnabled = args.child === undefined && claudeOrchestrationBootEnabled(process.argv.slice(2));
+  let claudeForeign: ReturnType<typeof createForeignOrchestrationComposition> | undefined;
+  let claudeRoutingDisposed = false;
+  const claudeRoutingSubscriptions: (() => void)[] = [];
   if (args.child === undefined) {
     const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, hostProfileHome(), []));
     for (const problem of discovered.problems) {
       console.warn(`[host] claude mcp bridge: agent profile: ${problem}`);
     }
-    const catalog: AgentBridgeCatalogEntry[] = catalogFromProfiles(discovered.profiles);
+    const settingsPath = hostSettingsPathOverride() ?? defaultSettingsPath();
+    const readSettings = () => { try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8"))); return parsed.status === "ok" ? parsed.settings : undefined; } catch { return undefined; } };
+    const adaptiveEnv = process.env.ANYCODE_ADAPTIVE_TURN_BUDGET;
+    const adaptive = adaptiveEnv === undefined ? readSettings()?.tools.adaptiveTurnBudget === true : /^(1|true|on)$/i.test(adaptiveEnv);
+    const budget = claudeCompositionEnabled && adaptive ? createSubagentBudgetPort(defaultTurnBudgetHistoryPath()) : undefined;
+    const routed = claudeCompositionEnabled ? createRoutedChildComposition({
+      health: roleHealth, describeError, resolve: () => null,
+      prepare: req => stampLearnedMaxTurns(req, { adaptive, settingsBudgetSet: process.env.ANYCODE_SUBAGENT_MAX_TURNS !== undefined || readSettings()?.tools.subagentMaxTurns !== undefined, port: budget }),
+      record: (outcome, req) => recordAcceptedChildBudget(budget, outcome, req),
+      report: (id, text, meta) => childReportQueue.add(id, text, meta), deliver: deliverDetachedChildReport,
+    }) : undefined;
+    if (routed) claudeForeign = createForeignOrchestrationComposition({
+      settings: readSettings, projectRoot: workspace, health: roleHealth, routed,
+      profiles: () => discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, hostProfileHome(), [])),
+      preset: () => claudeParentEngine?.snapshot().activePresetId ?? "read-only",
+      permissionMode: claudeAgentPermissionMode,
+      restrictedCatalog: () => true,
+    });
+    const catalog: AgentBridgeCatalogEntry[] = claudeForeign ? await claudeForeign.catalog() : catalogFromProfiles(discovered.profiles);
     // per-call re-read, codex-door parity (index.ts resolveCatalog
     // above): edited body/model live from the next spawn; names stay fixed to
     // the boot snapshot the CLI's tools/list handshake already cached.
     const resolveClaudeCatalog = async (): Promise<readonly AgentBridgeCatalogEntry[]> =>
-      bridgeCallableCatalog(catalog, catalogFromProfiles(
+      claudeForeign ? bridgeCallableCatalog(catalog, await claudeForeign.catalog()) : bridgeCallableCatalog(catalog, catalogFromProfiles(
         (await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, hostProfileHome(), []))).profiles,
       ));
     // The switch (plan §5 S4 p.7): an empty `tools/list` is never worth
@@ -2265,6 +2290,7 @@ async function bootClaudeSession(
         onDetachedProgress: (progress, req) => session?.emitDetachedSubagentEvent(mapProgressToEvent(progress, req.spawnToolCallId)),
         statusStore: childStatusStore,
         parentSessionId: rowId,
+        ...(claudeCompositionEnabled ? { canRun: () => !claudeRoutingDisposed && claudeParentEngine !== undefined && session?.ownsRuntime(booted.engine) === true } : {}),
         // cross-review M1: this seam feeds
         // `ChildSpawnRequest.permissionMode` — the value that gates the
         // spawned CORE child's permission engine — so it must be an honest
@@ -2280,17 +2306,18 @@ async function bootClaudeSession(
         // anything unrecognized fails NARROW to `plan` (the codex door's own
         // allowlist shape). Late-bound through `claudeParentEngine` (bound at
         // the `claudeEngine` assignment below) because the port exists
-        // before connect; pre-bind calls read the fail-narrow default
-        // (`ask` preset → `build`), never wider.
+        // before connect; the composition refuses calls until it binds.
         getPermissionMode: () =>
-          claudeAgentPermissionMode(claudeParentEngine?.snapshot().activePresetId ?? "ask"),
+          claudeForeign?.childMode() ?? claudeAgentPermissionMode(claudeParentEngine?.snapshot().activePresetId ?? "ask"),
         send: sendChildSessionMessage,
-        subscribe: subscribeChildRunEvents,
-        onDetachedTerminal: deliverDetachedChildReport,
+        subscribe: claudeCompositionEnabled ? listener => { const stop = subscribeChildRunEvents(listener); claudeRoutingSubscriptions.push(stop); return stop; } : subscribeChildRunEvents,
+        onDetachedTerminal: routed?.onTerminal ?? deliverDetachedChildReport,
+        ...(claudeCompositionEnabled ? { maxDetachedChildren: () => readChildSessionsPerParentMax(settingsPath, workspace) } : {}),
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
         onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
         onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
       });
+      routed?.attach(childPort);
       claudeChildPort = childPort;
     }
     // the door is built ALWAYS for a non-child boot — with an
@@ -2324,6 +2351,7 @@ async function bootClaudeSession(
     const door = createBridgePresentationStamp({
       catalog,
       resolveCallCatalog: resolveClaudeCatalog,
+      ...(claudeForeign ? { callAgent: claudeForeign.call, restricted: claudeForeign.isEnabled } : {}),
       ...(childPort !== undefined ? { port: childPort } : {}),
       browser: engineBrowserBridge,
       onEvent: (event) => pushBridgeEvent?.(event),
@@ -2355,52 +2383,44 @@ async function bootClaudeSession(
     prepareChildPrompt = (prompt) => engineChildPrompt(prompt, claudeChildPort !== undefined);
   }
 
-  // MCP forwarding. After bridge/catalog/database
-  // preparation and immediately before the connect options: sweep dead-pid
-  // leftovers, then load the specs ONCE and materialize the private 0600
-  // --mcp-config document (only when nonempty). The connect interval below
-  // owns the failure contract: any failure after materialization cleans the
-  // file up and rethrows; on success the CLIENT owns the file until close —
-  // boot returns while the session stays alive, so NO unconditional finally
-  // cleanup. Only safe counts/names and controlled notices are ever logged.
-  const mcpForward = await prepareEngineMcpForward({
-    fs,
-    workspace,
-    home: hostProfileHome(),
-    tmpDir: tmpdir(),
-    pid: process.pid,
-    engines: ["claude"],
-    loginPath: hostMcpLoginPath,
-    projectTrusted: hostWorkspaceTrust.projectTrusted,
-    secrets: mcpSecrets,
-  });
-  mcpConfigStatuses = [...mcpProblemStatuses(mcpForward.loaderProblems), ...forwardProblemStatuses(mcpForward.forwardProblems)];
-  if (mcpForward.claudeNames.length > 0) {
-    console.log(`[host] claude mcp forward: ${mcpForward.claudeNames.length} server(s): ${mcpForward.claudeNames.join(", ")}`);
-  }
-  for (const notice of mcpForward.notices) {
-    console.warn(`[host] claude mcp forward: ${notice.type === "engine_notice" ? notice.message : ""}`);
-  }
-  const claudeBootNotices = mcpForward.notices;
-  const claudeMcpConfigPath = mcpForward.claudeConfigPath;
+  // Re-resolve trusted inputs for each spawn. Only diagnostics survive here;
+  // the transport factory hands each private file to one client.
+  let claudeForward: Pick<Awaited<ReturnType<typeof prepareEngineMcpForward>>, "claudeNames" | "specs"> = { claudeNames: [], specs: [] };
+  const resolveMcpForward = async () => {
+    const mcpForward = await prepareEngineMcpForward({
+      fs,
+      workspace,
+      home: hostProfileHome(),
+      tmpDir: tmpdir(),
+      pid: process.pid,
+      engines: ["claude"],
+      loginPath: hostMcpLoginPath,
+      projectTrusted: hostWorkspaceTrust.projectTrusted,
+      secrets: mcpSecrets,
+    });
+    mcpConfigStatuses = [...mcpProblemStatuses(mcpForward.loaderProblems), ...forwardProblemStatuses(mcpForward.forwardProblems)];
+    if (mcpForward.claudeNames.length > 0) {
+      console.log(`[host] claude mcp forward: ${mcpForward.claudeNames.length} server(s): ${mcpForward.claudeNames.join(", ")}`);
+    }
+    for (const notice of mcpForward.notices) {
+      console.warn(`[host] claude mcp forward: ${notice.type === "engine_notice" ? notice.message : ""}`);
+    }
+    claudeForward = { claudeNames: mcpForward.claudeNames, specs: mcpForward.specs };
+    return mcpForward;
+  };
 
   const options = { bootstrap, ...buildClaudeLaunchOptions({
     broker: claudeClassifierBroker, workspace, binaryPath, child: args.child,
+    orchestrationFeatureEnabled: claudeCompositionEnabled,
     projectTrusted: hostWorkspaceTrust.projectTrusted, profileDir: resolveClaudeConfigDir(),
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
     binaryTrust: (path) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
-    processOwnership, mcpConfigPath: claudeMcpConfigPath, bootNotices: claudeBootNotices,
+    processOwnership, resolveMcpForward, bootNotices: [],
     mcpBridge, stamp, agentCatalogNonEmpty, browserToolNames: claudeBrowserToolNames,
   }) };
 
-  // the interval from materialization through boot completion. A
-  // failure in connect releases the file HERE and rethrows; after a
-  // successful connect the CLIENT owns the file (its bootstrap-adopted
-  // close() is idempotent and removes it), and boot()'s own outer catch
-  // disposes the engine bootstrap — and with it the client — on any LATER
-  // boot-step failure, so no failure path can strand the file. NO
-  // unconditional finally runs on success, because boot returns while the
-  // session remains alive.
+  // The factory cleans failures before client adoption; bootstrap disposal
+  // closes the client on any later boot failure.
   let connected: Awaited<ReturnType<typeof startClaudeEngine>> & { sessionMeta: Awaited<ReturnType<typeof persistence.getRootSession>> };
   try {
     connected = await (args.resume
@@ -2428,6 +2448,7 @@ async function bootClaudeSession(
           // no-server-echo-to-trust discipline codex uses, cut §2(k).4): an
           // unrecognized id (era "build" mode row) silently
           // becomes the default preset rather than failing the resume.
+          orchestrationRecovery: savedNativeRecovery(active),
           selection: { model: existing.model, presetId: existing.mode, ...(active?.selected.effort !== undefined ? {effort:active.selected.effort} : {}), origin: "persisted" },
         });
         if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.sessionRef);
@@ -2452,10 +2473,11 @@ async function bootClaudeSession(
         return { ...created, sessionMeta: null };
       })());
   } catch (error) {
-    // the client (if any) closes itself through connect's own
-    // failure path or the bootstrap disposer; this belt cleans the file when
-    // no client was ever constructed. Idempotent with the client's cleanup.
-    mcpForward.cleanupFile();
+    // The transport factory cleans pre-adoption failures; the client owns
+    // the private file once constructed.
+    claudeRoutingDisposed = true;
+    claudeChildPort?.cancelAllBackgroundChildren();
+    claudeRoutingSubscriptions.splice(0).forEach(stop => stop());
     throw error;
   }
 
@@ -2501,7 +2523,7 @@ async function bootClaudeSession(
   // (`getRootSession` looks up `WHERE id = ?`), and a fresh boot's
   // `sessionMeta` is `null` — so `rowId` already equals this expression for
   // both branches.
-  if (engineSwitchEnabled && args.child === undefined && connected.sessionMeta === null) {
+  if ((engineSwitchEnabled || claudeCompositionEnabled) && args.child === undefined && connected.sessionMeta === null) {
     connected.sessionMeta = await persistence!.createSession({id:rowId,...sessionRow,model:connected.model,mode:connected.presetId as PermissionMode});
     const state = persistence!.ensureRuntimeSession(rowId);
     persistence!.setRuntimeNativeReference(rowId,state.activeSegmentId,state.revision,connected.sessionRef);
@@ -2549,16 +2571,16 @@ async function bootClaudeSession(
   claudeEngine.onEverySystemInit((init) => {
     engineMcpStatuses = claudeMcpStatuses(
       init.mcpServerStatuses,
-      missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, false),
-      mcpForward.specs,
+      missingForwardedMcpServerNames(init.mcpServerNames, claudeForward.claudeNames, false),
+      claudeForward.specs,
     );
     publishEngineMcpStatuses();
     const failedNow = [
       ...init.mcpServerStatuses.filter((item) => item.status === "failed").map((item) => item.name),
-      ...missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, false),
+      ...missingForwardedMcpServerNames(init.mcpServerNames, claudeForward.claudeNames, false),
     ];
     for (const name of failedNow) {
-      const spec = mcpForward.specs.find((candidate) => candidate.name === name && candidate.kind === "stdio");
+      const spec = claudeForward.specs.find((candidate) => candidate.name === name && candidate.kind === "stdio");
       if (!spec || spec.kind !== "stdio") continue;
       claudeMcpProbeScheduler.probe(spec, (outcome) => {
         if (outcome.ok || outcome.detail === undefined) return;
@@ -2588,7 +2610,7 @@ async function bootClaudeSession(
     // forwarded PLUS the in-band anycode bridge when one exists (a child
     // boot never expects it). Warnings name missing SERVERS only; no values,
     // no paths. Pure seam tested in mcp-forward-boot.test.ts.
-    for (const name of missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, mcpBridge !== undefined)) {
+    for (const name of missingForwardedMcpServerNames(init.mcpServerNames, claudeForward.claudeNames, mcpBridge !== undefined)) {
       console.warn(`[host] claude mcp forward: server "${name}" did not appear in the session's MCP server list`);
     }
     // a PRESENT server with a bad status is the other half of
@@ -2737,12 +2759,12 @@ async function bootClaudeSession(
   // Older native-child identities can be recovered from the shadow history,
   // but their individual costs remain unknown. Existing markers dedupe in SQLite.
   for (const record of claudeNativeChildrenFromHistory(bootHistory)) claudeUsageAudit.sink.record(record);
-  if (claudeChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:rowId,port:claudeChildPort,baseMode:() => claudeAgentPermissionMode(claudeEngine.snapshot().activePresetId)});
+  if (claudeChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:rowId,port:claudeChildPort,baseMode:() => claudeAgentPermissionMode(claudeEngine.snapshot().activePresetId), capture: mode => claudeForeign?.captureMode(mode), clear: () => claudeForeign?.clearBaseAuthority(), ...(claudeCompositionEnabled ? { cleanup: () => { claudeRoutingDisposed = true; claudeRoutingSubscriptions.splice(0).forEach(stop => stop()); } } : {})});
   bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null, connected.model);
   session = new Session({
     switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(rowId, broker, rules, mcpSecrets),
-    runtimeHistory: createRuntimeSessionHistory(persistence!,rowId,engineSwitchEnabled,args.child !== undefined),
+    runtimeHistory: createRuntimeSessionHistory(persistence!,rowId,engineSwitchEnabled || claudeCompositionEnabled,args.child !== undefined),
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
     saveTurnError: async (record, input) => {

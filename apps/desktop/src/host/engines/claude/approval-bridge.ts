@@ -22,6 +22,7 @@
  * a denial, and nothing is ever auto-approved.
  */
 
+import { claudeOrchestrationDeniesTool } from "./orchestration-policy.js";
 import { classifyBashCommandLine } from "@anycode/core";
 import type { PermissionRequest, ToolMetadata } from "@anycode/core";
 import { NodeFileSystemAdapter, resolveWorkspaceWriteFacts, WORKSPACE_CONFINED_WRITE_TOOLS } from "@anycode/core";
@@ -143,6 +144,8 @@ export interface ClaudeApprovalBridgeOptions {
   broker: EngineBridgeBroker;
   /** The session's active permission preset id; `read-only` refuses ExitPlanMode escalation. */
   activePresetId(): string;
+  /** Live host posture, including transitions and quarantine. */
+  orchestrationRestricted?: () => boolean;
   /**
    * S3: when set, `mcp_message` is routed here instead of the fail-closed default, and the owned `mcp__anycode__agent` tool is auto-allowed (plan §2.6). Absent for engines/tests that never announce the door. */
   bridge?: ClaudeMcpBridge;
@@ -216,6 +219,10 @@ export class ClaudeApprovalBridge {
       responder.error("Malformed can_use_tool request");
       return;
     }
+    if (claudeOrchestrationDeniesTool(this.options.orchestrationRestricted?.() === true, approval.toolName, this.options.bridge !== undefined)) {
+      responder.success(denyResponse(approval, "Orchestration parents may only delegate; this permission request is denied."));
+      return;
+    }
     if (this.options.bridge !== undefined && (approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent` || approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent_status`)) {
       // AnyCode's own MCP door (S3), not a third-party tool: the
       // child session spawned behind it has its own broker for whatever it
@@ -279,9 +286,9 @@ export class ClaudeApprovalBridge {
     };
     request.signal.addEventListener("abort", releaseOnCancel, { once: true });
     try {
-      const decision = await this.options.broker.requestPermission(
-        await this.toPermissionRequest(approval),
-      );
+      const permission = await this.toPermissionRequest(approval);
+      if (request.signal.aborted) return;
+      const decision = await this.options.broker.requestPermission(permission);
       // Both outcomes are a control_response SUCCESS envelope: a denial is a
       // normal answer whose payload says "deny", never a protocol error
       // (hazard (б)). If the CLI already withdrew this request via

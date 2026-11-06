@@ -133,9 +133,13 @@ export async function submitStartDraft(
   }
   // `/orchestrate <task>` (orchestrate-start.ts) turns orchestrate on for this
   // send and sends only the task as the first message.
-  const plan = resolveStartOrchestrate(engine, draft.orchestrate, prompt);
+  const claudeEnabled = deps.tabsStore.getState().claudeOrchestrateEnabled;
+  const plan = resolveStartOrchestrate(engine, draft.orchestrate, prompt, claudeEnabled);
   if (plan.bareSlash || prompt.trim() === "/orchestrate") {
     return { ok: false, message: "Type a task after /orchestrate." };
+  }
+  if (plan.orchestrate && (images?.length ?? 0) > 0) {
+    return { ok: false, message: "Remove attachments before using /orchestrate. Your draft has been kept." };
   }
   if (plan.text.trim() === "") {
     return { ok: false, message: "Type a message to send." };

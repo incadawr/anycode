@@ -761,11 +761,12 @@ describe("submitStartDraft — a deferred first fork (GitHub #6)", () => {
     expect(prompts[0]).toMatchObject({ type: "user_message", text: "hello deferred" });
   });
 
-  it("keeps a Codex orchestration draft recoverable when the host does not offer the mode", async () => {
+  it.each(["codex", "claude"] as const)("keeps a %s orchestration draft recoverable when the host does not offer the mode", async (engine) => {
     const tabsStore = createTabsStore();
     const registry = createTabRegistry(tabsStore);
     tabsStore.getState().openDraft("/ws/a");
-    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.setState({ claudeOrchestrateEnabled: true });
+    tabsStore.getState().setDraftEngine(engine);
     tabsStore.getState().setCodexModels([{id:"gpt-5.6-sol"}]);
     tabsStore.getState().setDraftPrompt("/orchestrate investigate");
     const port = new FakeUiPort();
@@ -821,4 +822,64 @@ it("model selection does not turn a displayed saved effort into a draft choice",
   expect(env.ANYCODE_REASONING_EFFORT).toBe("low");
   expect(createTab).toHaveBeenCalled();
   expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", "model-b", "build", undefined, undefined, undefined, false);
+});
+
+
+describe("Claude start orchestration intent", () => {
+  function setup(enabled = false, prompt = "/orchestrate investigate") {
+    const rig = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    rig.tabsStore.setState({ claudeOrchestrateEnabled: enabled });
+    rig.tabsStore.getState().openDraft("/ws/a");
+    rig.tabsStore.getState().setDraftEngine("claude");
+    rig.tabsStore.getState().setDraftPrompt(prompt);
+    return rig;
+  }
+  it.each(["/orchestrate investigate", "plain task"])("sends ordinary Claude text with disabled intent: %s", async prompt => {
+    const r = setup(false, prompt);
+    r.tabsStore.getState().setDraftOrchestrate(true);
+    expect(await submitStartDraft(r.deps)).toMatchObject({ ok: true });
+    expect(r.createTab).toHaveBeenCalledOnce();
+    expect(r.queueInitialPrompt).toHaveBeenCalledWith("t1", prompt, undefined, undefined, undefined, undefined);
+    expect(r.tabsStore.getState().draft).toBeNull();
+  });
+  it.each(["core", "codex", "claude"] as const)("refuses bare slash for %s with the feature disabled", async engine => {
+    for (const prompt of ["/orchestrate", "  /orchestrate  "]) {
+      const r = setup(false, prompt);
+      r.tabsStore.getState().setDraftEngine(engine);
+      expect(await submitStartDraft(r.deps)).toEqual({ ok: false, message: "Type a task after /orchestrate." });
+      expect(r.createTab).not.toHaveBeenCalled();
+      expect(r.tabsStore.getState().draft?.prompt).toBe(prompt);
+    }
+  });
+  it.each(["/orchestrate investigate", "investigate"])("queues atomic intent with the task: %s", async prompt => {
+    const r = setup(true, prompt);
+    r.tabsStore.getState().setDraftOrchestrate(true);
+    expect(await submitStartDraft(r.deps, { skipRoleGate: true })).toMatchObject({ ok: true });
+    expect(r.queueInitialPrompt).toHaveBeenCalledWith("t1", "investigate", undefined, undefined, undefined, undefined, undefined, true);
+  });
+  it.each(["/orchestrate", "/orchestrate   "])("refuses bare slash: %s", async prompt => {
+    const r = setup(true, prompt);
+    expect(await submitStartDraft(r.deps)).toMatchObject({ ok: false, message: "Type a task after /orchestrate." });
+    expect(r.createTab).not.toHaveBeenCalled();
+    expect(r.tabsStore.getState().draft?.prompt).toBe(prompt);
+  });
+  it("uses the shared role gate", async () => {
+    const r = setup(true);
+    r.deps.rolesConfigured = () => false;
+    expect(await submitStartDraft(r.deps)).toMatchObject({ ok: false, message: "Set up orchestration roles first." });
+    expect(r.createTab).not.toHaveBeenCalled();
+  });
+  it("keeps ordinary Claude chat available with the feature off", async () => {
+    const r = setup(false, "hello");
+    expect(await submitStartDraft(r.deps)).toMatchObject({ ok: true });
+    expect(r.queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, undefined, undefined);
+  });
+  it("retains attachments rather than dropping them during orchestration submit", async () => {
+    const r = setup(true);
+    r.tabsStore.setState(state => ({ draft: { ...state.draft!, images: [{ name: "a.png", sizeBytes: 1, attachment: { mediaType: "image/png", data: "YQ==" } }] } }));
+    const draft = r.tabsStore.getState().draft;
+    expect(await submitStartDraft(r.deps, { skipRoleGate: true })).toMatchObject({ ok: false, message: expect.stringContaining("Remove attachments") });
+    expect(r.createTab).not.toHaveBeenCalled();
+    expect(r.tabsStore.getState().draft).toBe(draft);
+  });
 });

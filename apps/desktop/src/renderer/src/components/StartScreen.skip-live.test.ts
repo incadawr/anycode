@@ -181,9 +181,8 @@ describe("Start screen mode menu's Orchestrate row", () => {
 
 describe("Start screen codex draft's Orchestrate icon toggle", () => {
   async function mountCodexDraft(): Promise<void> {
-    // The screen loads its engine list from the host bridge on mount and
-    // keeps it in local state — the mock must advertise codex up front, a
-    // store patch after mount would be overwritten by that load.
+    // The shell publishes readiness; StartScreen reads that shared verdict.
+    useTabsStore.setState({ availableEngines: ["core", "codex"] });
     Object.defineProperty(window, "anycode", {
       configurable: true,
       value: {

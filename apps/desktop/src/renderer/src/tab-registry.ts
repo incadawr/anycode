@@ -472,7 +472,7 @@ export function createTabRegistry(
     if (!retryStillRejected()) { cancelRetry(); return; }
     if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
     try {
-      if ((item.orchestrate || entry.store.getState().orchestrateActive) && !saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
+      if ((item.origin === "system" || item.orchestrate || entry.store.getState().orchestrateActive) && !saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
       connection.send({
         type: "user_message", requestId, text: item.text,
         ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),
@@ -622,10 +622,18 @@ export function createTabRegistry(
         const sessionId = entry.store.getState().sessionId;
         if (sessionId !== null) entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(sessionId));
       }
+      if (message.type === "host_ready" || message.type === "orchestration_state" || message.type === "orchestrate_changed" || message.type === "orchestrate_result") {
+        const state = entry.store.getState();
+        if (state.orchestration.posture === "on" || state.orchestration.posture === "off") {
+          for (const delivery of state.orchestrationDeliveries) {
+            if (delivery.retryAfterPosture) state.retryRejectedSystemDelivery(delivery.requestId);
+          }
+        }
+      }
       if (message.type === "child_report") {
         // Acknowledge enqueue only after the renderer recovery state is saved.
         // This is not evidence that the model consumed the report.
-        if (liveConnection(entry) === connection && (saveRecovery(tabId, entry.store.getState()) || !entry.store.getState().orchestrateActive)) connection.send({ type: "child_report_ack", id: message.id });
+        if (liveConnection(entry) === connection && saveRecovery(tabId, entry.store.getState())) connection.send({ type: "child_report_ack", id: message.id });
       }
       if (message.type === "host_ready") {
         const recovery = entry.store.getState();

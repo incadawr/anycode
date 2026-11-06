@@ -262,12 +262,12 @@ describe("Composer — mode menu's Orchestrate row", () => {
     } finally { await act(async () => root.unmount()); }
   });
 
-  it("sends a Codex slash task atomically after the role picker and retains unavailable tasks", async () => {
+  it.each(["codex", "claude"] as const)("sends a %s slash task atomically after the role picker and retains unavailable tasks", async engineId => {
     useSettingsStore.setState({ snapshot: { settings: cloneDefaults(), secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [] } });
     const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
     const store = createDesktopStore();
     const ready = coreReady("build") as Extract<HostToUiMessage, {type:"host_ready"}>;
-    ready.engine = { ...ready.engine!, id:"codex", capabilities:{...ready.engine!.capabilities,supportsCorePermissions:false} };
+    ready.engine = { ...ready.engine!, id:engineId, capabilities:{...ready.engine!.capabilities,supportsCorePermissions:false} };
     ready.orchestration = {enabled:false,available:false};
     store.getState().applyHostMessage(ready);
     const container = document.createElement("div"); document.body.append(container);

@@ -94,6 +94,8 @@ export interface SessionEngine {
   readonly capabilities: EngineCapabilities;
   /** Optional engine-owned orchestration overlay; absent means unavailable. */
   readonly orchestrationPolicy?: OrchestrationPolicy;
+  /** Proves an explicit OFF boot or a verified OFF replacement, independently of ON capability. */
+  verifyOrchestrationOff?(): Promise<void>;
   /** Factory attests that the target has its Agent and role routing wired. */
   readonly orchestrationCompositionReady?: boolean;
   readonly orchestrationComposition?: RuntimeOrchestrationComposition;

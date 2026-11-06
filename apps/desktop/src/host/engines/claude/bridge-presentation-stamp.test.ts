@@ -11,7 +11,8 @@
  * resolves the promise by itself).
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { runAgentBridgeCall } from "@anycode/core";
 import type { SessionSubagentPort, SessionSubagentRequest, SubagentCardEvent, SubagentRunOptions } from "@anycode/core";
 import { createBridgePresentationStamp } from "./bridge-presentation-stamp.js";
 
@@ -203,6 +204,26 @@ describe("bridge door — browser tools", () => {
     expect(result.isError).toBe(false);
     expect(stamp.entries().size).toBe(0);
   });
+
+  it("hides and refuses browser tools while restricted, then restores ordinary dispatch", async () => {
+    const { browser, calls } = fakeBrowser();
+    let restricted = false;
+    const stamp = createBridgePresentationStamp({
+      catalog: CATALOG, resolveCallCatalog: async () => CATALOG, port: dummyPort,
+      browser, restricted: () => restricted, onEvent: () => {},
+    });
+    expect(stamp.listTools().map(t => t.name)).toContain("browser_open");
+    restricted = true;
+    expect(stamp.listTools().map(t => t.name)).toEqual(["agent", "agent_status"]);
+    for (const name of ["browser_open", "browser_navigate"]) {
+      expect(await stamp.callTool(name, {}, new AbortController().signal, { toolUseId: name }))
+        .toMatchObject({ isError: true, text: expect.stringContaining("restricted") });
+    }
+    expect(calls).toHaveLength(0);
+    restricted = false;
+    expect((await stamp.callTool("browser_open", {}, new AbortController().signal, { toolUseId: "open" })).isError).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
 });
 
 it("exposes status through the owning Claude bridge", async () => {
@@ -212,4 +233,126 @@ it("exposes status through the owning Claude bridge", async () => {
   expect(stamp.listTools().map((tool) => tool.name)).toContain("agent_status");
   expect(await stamp.callTool("agent_status", {}, new AbortController().signal, {})).toMatchObject({ isError: false, text: expect.stringContaining("owned") });
   expect((await stamp.callTool("agent_status", { id: "foreign" }, new AbortController().signal, {})).isError).toBe(true);
+});
+
+describe("bridge door — host dispatch and live catalog", () => {
+  function rig() {
+    const child = lateSettlingPort({ status: "completed", presentationWorthy: true });
+    const callAgent = vi.fn(runAgentBridgeCall);
+    const resolveCallCatalog = vi.fn(async () => CATALOG);
+    const onEvent = vi.fn();
+    let restricted = false;
+    const stamp = createBridgePresentationStamp({
+      catalog: CATALOG, port: child.port, callAgent, resolveCallCatalog, onEvent,
+      restricted: () => restricted,
+    });
+    const call = (args = AGENT_ARGS, meta: { toolUseId?: string } = { toolUseId: "call" }, signal = new AbortController().signal) =>
+      stamp.callTool("agent", args, signal, meta);
+    return { ...child, stamp, callAgent, resolveCallCatalog, onEvent, call, restrict: () => { restricted = true; } };
+  }
+
+  it("passes fresh profile bodies, model and restrictions to the callback with the owning port and correlation", async () => {
+    const r = rig();
+    const fresh = [{ ...CATALOG[0]!, systemPrompt: "fresh instructions", model: "fresh-model", restrictions: { readOnly: true, tools: ["Read"] } }];
+    r.resolveCallCatalog.mockResolvedValue(fresh);
+    const controller = new AbortController();
+    const pending = r.call(AGENT_ARGS, { toolUseId: "fresh" }, controller.signal);
+    r.settle();
+    expect((await pending).isError).toBe(false);
+    expect(r.callAgent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining(AGENT_ARGS),
+      expect.objectContaining({ catalog: fresh, port: r.port, spawnToolCallId: "fresh", signal: controller.signal }),
+    );
+    expect(r.onEvent).toHaveBeenCalled();
+    expect(r.stamp.takePresentation("fresh")).toBeDefined();
+    expect(r.stamp.takePresentation("fresh")).toBeUndefined();
+  });
+
+  it.each([false, true])("refuses a removed profile before custom dispatch (restricted=%s)", async (restricted) => {
+    const r = rig();
+    if (restricted) r.restrict();
+    r.resolveCallCatalog.mockResolvedValue([]);
+    expect(await r.call()).toMatchObject({ isError: true, text: expect.stringContaining("no longer available") });
+    expect(r.callAgent).not.toHaveBeenCalled();
+    expect(r.stamp.entries().size).toBe(0);
+  });
+
+  it("fails closed on a restricted catalog read failure", async () => {
+    const r = rig();
+    r.restrict();
+    r.resolveCallCatalog.mockRejectedValue(new Error("unreadable"));
+    expect(await r.call()).toMatchObject({ isError: true, text: expect.stringContaining("Could not refresh") });
+    expect(r.callAgent).not.toHaveBeenCalled();
+  });
+
+  it("retains the boot fallback for ordinary catalog read failures", async () => {
+    const r = rig();
+    r.resolveCallCatalog.mockRejectedValue(new Error("disk race"));
+    const pending = r.call();
+    r.settle();
+    expect((await pending).isError).toBe(false);
+    expect(r.callAgent.mock.calls[0]?.[1].catalog).toEqual(CATALOG);
+  });
+
+  it("checks the live restriction when a pending catalog read rejects", async () => {
+    const r = rig();
+    let reject!: (reason: Error) => void;
+    r.resolveCallCatalog.mockReturnValue(new Promise((_, rejectRead) => { reject = rejectRead; }));
+    const pending = r.call();
+    r.restrict();
+    reject(new Error("unreadable"));
+    expect((await pending).isError).toBe(true);
+    expect(r.callAgent).not.toHaveBeenCalled();
+  });
+
+  it("rejects spoofed and newly discovered names before custom dispatch", async () => {
+    const r = rig();
+    r.resolveCallCatalog.mockResolvedValue([...CATALOG, { name: "new-profile", description: "new", systemPrompt: "" }]);
+    for (const name of ["new-profile", "mcp__foreign__agent", "Explore"]) {
+      expect((await r.call({ ...AGENT_ARGS, agent_type: name })).isError).toBe(true);
+    }
+    expect(r.callAgent).not.toHaveBeenCalled();
+    const pending = r.call();
+    r.settle();
+    await pending;
+    expect(r.callAgent.mock.calls[0]?.[1].catalog).toEqual(CATALOG);
+    expect((await r.stamp.callTool("mcp__foreign__agent", AGENT_ARGS, new AbortController().signal, {})).isError).toBe(true);
+    expect(r.callAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires a toolUseId and valid input before invoking the callback", async () => {
+    const r = rig();
+    expect((await r.call(AGENT_ARGS, {})).isError).toBe(true);
+    expect((await r.call({})).isError).toBe(true);
+    expect(r.callAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch if cancellation arrives during catalog resolution", async () => {
+    const r = rig();
+    const controller = new AbortController();
+    const pending = r.call(AGENT_ARGS, { toolUseId: "cancelled" }, controller.signal);
+    controller.abort();
+    expect((await pending).isError).toBe(true);
+    expect(r.callAgent).not.toHaveBeenCalled();
+  });
+
+  it("drops custom callback events and presentation when completion arrives after abort and sweep", async () => {
+    const r = rig();
+    let finish!: () => void;
+    r.callAgent.mockImplementation((_input, deps) => new Promise(resolve => {
+      finish = () => {
+        deps.onEvent?.({ type: "subagent_start", toolCallId: "late", agentType: "explore", description: "d" });
+        resolve({ text: "late", isError: false, presentation: {} });
+      };
+    }));
+    const controller = new AbortController();
+    const pending = r.call(AGENT_ARGS, { toolUseId: "late" }, controller.signal);
+    await vi.waitFor(() => expect(r.callAgent).toHaveBeenCalledTimes(1));
+    controller.abort();
+    r.stamp.dropPresentations(["late"]);
+    finish();
+    await pending;
+    expect(r.onEvent).not.toHaveBeenCalled();
+    expect(r.stamp.entries().size).toBe(0);
+  });
 });

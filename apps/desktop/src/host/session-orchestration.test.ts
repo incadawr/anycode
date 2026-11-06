@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HostToUiMessage, WirePort } from "../shared/protocol.js";
 import { OrchestrationNotReadyError, type OrchestrationPolicy } from "./orchestration-policy.js";
+import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
+import { claudeAgentPermissionMode } from "./engines/child-permission-map.js";
 import { createHarness, finishStep } from "./test-harness.js";
 
 type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
@@ -204,6 +206,34 @@ describe("session orchestration admission", () => {
       expect(apply).not.toHaveBeenCalled();
       expect(run).not.toHaveBeenCalled();
     } finally { release(); h.close(); }
+  });
+
+  it("captures Claude child authority only after settings settle", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let preset = "workspace";
+    const h = createHarness({ steps: [] });
+    Object.defineProperty(h.engine, "id", { value: "claude" });
+    const apply = vi.fn(async (enabled: boolean, baseAuthority: unknown) => ({ enabled, baseAuthority }));
+    Object.defineProperty(h.engine, "orchestrationPolicy", { value: { availability: () => ({ supported: true }), apply } });
+    const capture = vi.fn();
+    const composition = bindRuntimeOrchestration(h.engine, { ownerSessionId: h.session.communicationStatus().sessionId, port: { hasRunningChildren: () => false, cancelAllBackgroundChildren: () => {} }, baseMode: () => claudeAgentPermissionMode(preset), capture });
+    const internal = h.session as unknown as { settingsBarrierActive: boolean; settingsBarrier: Promise<void> };
+    try {
+      const connectionId = await ready(h);
+      internal.settingsBarrierActive = true;
+      internal.settingsBarrier = gate;
+      h.send({ type: "set_orchestrate", requestId: "on", enabled: true, connectionId });
+      await h.flush();
+      expect(apply).not.toHaveBeenCalled();
+      expect(capture).not.toHaveBeenCalled();
+      preset = "read-only";
+      internal.settingsBarrierActive = false;
+      release();
+      expect(await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "on")).toMatchObject({ outcome: "applied" });
+      expect(apply).toHaveBeenCalledWith(true, { mode: "plan" });
+      expect(capture).toHaveBeenCalledWith("plan");
+    } finally { release(); composition.cleanup(); h.close(); }
   });
 
   it("does not admit an old connection after rebind while the overlay is applying", async () => {

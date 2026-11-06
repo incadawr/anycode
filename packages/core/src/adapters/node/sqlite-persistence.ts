@@ -1,3 +1,4 @@
+import { checkedRuntimeSettings } from "../../ports/runtime-settings.js";
 /**
 
  * native dependencies, works in the Electron utilityProcess (preflight: Node
@@ -33,6 +34,7 @@ import type {
   ContinuationClaim,
   CreateSessionFromSourceResult,
   PersistencePort,
+  RuntimeSettingsPersistence,
   SessionDeleteSummary,
   SessionMeta,
   SessionMetaPatch,
@@ -1095,7 +1097,7 @@ function assertCliAdmission(db: DatabaseSync, admission: CliAdmission): void {
   }
 }
 
-export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore, RuntimeSegmentStore {
+export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore, RuntimeSegmentStore, RuntimeSettingsPersistence {
   private db: DatabaseSync | undefined;
   private quarantined = false;
 
@@ -1235,6 +1237,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     this.transaction(db => {
       const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
       if (row?.active_runtime_segment !== segmentId) throw new Error("Stale runtime settings writer");
+      const segment = db.prepare("SELECT engine FROM runtime_segments WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+      if (!segment) throw new Error("Missing runtime segment");
+      selected = checkedRuntimeSettings(selected,String(segment.engine));
+      applied = checkedRuntimeSettings(applied,String(segment.engine));
       db.prepare("UPDATE runtime_segments SET selected_json=?,applied_json=? WHERE session_id=? AND segment_id=?").run(JSON.stringify(selected),JSON.stringify(applied),sessionId,segmentId);
       db.prepare("UPDATE sessions SET model=?,mode=?,codex_fast=?,updated_at=? WHERE id=?").run(selected.model,selected.mode,selected.fast === undefined ? null : selected.fast ? 1 : 0,Date.now(),sessionId);
     },"immediate");
@@ -1390,7 +1396,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     this.transaction(db => {
       const source = db.prepare("SELECT * FROM sessions WHERE id=? AND parent_session_id IS NULL").get(sessionId) as unknown as (SessionRow & {active_runtime_segment:string;runtime_revision:number}) | undefined;
       if (!source || source.active_runtime_segment !== record.sourceSegmentId || source.runtime_revision !== record.expectedRevision || (source.engine_id ?? "core") !== expectedEngine) throw new Error("Source runtime revision changed");
-      const next = record.segment;
+      const next = { ...record.segment, selected: checkedRuntimeSettings(record.segment.selected, record.segment.engine), applied: checkedRuntimeSettings(record.segment.applied, record.segment.engine) };
       if (next.id === record.sourceSegmentId || next.id !== record.boundary.segmentId || next.id !== record.handoff.segmentId || record.handoff.state !== "pending" || next.nativeState !== "fresh") throw new Error("Invalid runtime boundary");
       if (Buffer.byteLength(record.handoff.payload,"utf8") > 65536 || createHash("sha256").update(record.handoff.payload).digest("hex") !== record.handoff.digest) throw new Error("Invalid handoff payload");
       this.mergeRuntimeHistoryInDb(db,sessionId,record.sourceSegmentId,record.sourceItems);

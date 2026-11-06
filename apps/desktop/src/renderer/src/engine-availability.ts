@@ -30,10 +30,11 @@ export function beginEngineAvailabilityRequest(): number {
  * resolution order. Without one (a caller that already knows it is the newest
  * authority) the write always lands. Returns whether it landed.
  */
-export function publishEngineAvailability(engineIds: readonly EngineId[], request?: number): boolean {
+export function publishEngineAvailability(engineIds: readonly EngineId[], request?: number, claudeEnabled = false): boolean {
   if (request !== undefined && request !== latestRequest) {
     return false;
   }
+  useTabsStore.setState({ claudeOrchestrateEnabled: claudeEnabled });
   useTabsStore.getState().setAvailableEngines(engineIds);
   return true;
 }
@@ -45,12 +46,12 @@ export function publishEngineAvailability(engineIds: readonly EngineId[], reques
  * `setAvailableEngines`, so their request joins the same order.
  */
 export function refreshEngineAvailability(bridge: {
-  listAvailableEngines(): Promise<{ engineIds: EngineId[] }>;
+  listAvailableEngines(): Promise<{ engineIds: EngineId[]; claudeOrchestrateEnabled?: boolean }>;
 }): number {
   const request = beginEngineAvailabilityRequest();
   void bridge.listAvailableEngines().then(
-    ({ engineIds }) => {
-      publishEngineAvailability(engineIds, request);
+    ({ engineIds, claudeOrchestrateEnabled }) => {
+      publishEngineAvailability(engineIds, request, claudeOrchestrateEnabled === true);
     },
     () => {
       publishEngineAvailability([], request);
@@ -62,7 +63,7 @@ export function refreshEngineAvailability(bridge: {
 /** Subscribe before reading so a login/install completion cannot be missed. */
 export function watchExternalEngines(
   bridge: {
-    listAvailableEngines(): Promise<{ engineIds: EngineId[] }>;
+    listAvailableEngines(): Promise<{ engineIds: EngineId[]; claudeOrchestrateEnabled?: boolean }>;
     onEnginesChanged?(callback: () => void): () => void;
   },
   apply: (available: boolean, engineIds: EngineId[]) => void,
@@ -75,14 +76,14 @@ export function watchExternalEngines(
     // A superseded verdict is neither published NOR applied: the local epoch
     // covers this watcher's own out-of-order responses, the ticket covers a
     // competing publisher's newer one.
-    const settle = (engineIds: EngineId[], available: boolean): void => {
+    const settle = (engineIds: EngineId[], available: boolean, claudeEnabled = false): void => {
       if (disposed || current !== epoch) return;
-      if (publishEngineAvailability(engineIds, request)) {
+      if (publishEngineAvailability(engineIds, request, claudeEnabled)) {
         apply(available, engineIds);
       }
     };
     void bridge.listAvailableEngines().then(
-      ({ engineIds }) => settle(engineIds, engineIds.some((engine) => engine !== "core")),
+      ({ engineIds, claudeOrchestrateEnabled }) => settle(engineIds, engineIds.some((engine) => engine !== "core"), claudeOrchestrateEnabled === true),
       () => settle([], false),
     );
   };

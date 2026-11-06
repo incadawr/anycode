@@ -1,0 +1,18 @@
+{
+  "origin": "synthetic",
+  "available": false,
+  "version": "2.1.296",
+  "facts": {
+    "version": "2.1.296",
+    "equivalence": { "authSource": "equal", "provider": "equal", "baseUrl": "equal", "model": "equal", "env": "equal", "apiKeyHelper": "equal" },
+    "suppression": { "user": "verified", "project": "verified", "local": "verified", "plugins": "verified" },
+    "managed": { "state": "absent", "hooks": false, "permissions": false },
+    "prePayload": "verified"
+  },
+  "checks": { "flags": true, "off-fresh": true, "on-resume": true, "off-resume": true, "on-fresh": true, "modelRestored": true, "offRestored": true, "noPlanOrMutation": true },
+  "frames": {
+    "init": { "type": "system", "subtype": "init", "session_id": "synthetic-session", "cwd": "<workspace>", "model": "synthetic-model", "claude_code_version": "2.1.296", "permissionMode": "default", "tools": ["Read", "Glob", "Grep", "mcp__anycode__agent", "mcp__anycode__agent_status"], "skills": [], "slash_commands": [], "mcp_servers": [{ "name": "anycode" }] },
+    "deny": { "type": "control_response", "response": { "subtype": "success", "request_id": "synthetic-request", "response": { "behavior": "deny", "message": "Restricted probe posture" } } }
+  },
+  "note": "Synthetic protocol and gate expectations only; no live capability or auth proof."
+}

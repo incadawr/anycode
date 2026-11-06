@@ -1,3 +1,5 @@
+import { runtimeSettingsSchema } from "@anycode/core";
+import { checkedNativeBase, savedNativeRecovery } from "./native-base.js";
 import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
 import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
@@ -1849,6 +1851,10 @@ export class Session {
     this.switchEngineFactory = options.switchEngineFactory;
     this.engineSwitchCoordinator = options.engineSwitchCoordinator;
     this.runtimeHistory = options.runtimeHistory;
+    if (this.runtimeHistory) {
+      const state = this.runtimeHistory.state();
+      if (savedNativeRecovery(state.segments.find(segment => segment.id === state.activeSegmentId))) this.orchestrationPosture = "transitioning";
+    }
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
     this.broker.observeActivity(() => this.publishActivity());
@@ -1964,16 +1970,25 @@ export class Session {
 
   private orchestrationRestore?: Promise<void>;
 
-  private persistRuntimeSettings(): void {
+  private orchestrationWriteActive = false;
+  private persistRuntimeSettings(checked = false): void {
+    if (!checked && (this.orchestrationWriteActive || this.postureBlocked())) return;
     if (!this.runtimeHistory) return;
     const applied = this.engineSettings?.snapshot();
     const selected = this.engineSettings?.persistsOnApply ? applied : this.engineSettings?.pendingSnapshot?.() ?? applied;
     const settings = (value: typeof applied) => value
       ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
       : {model:this.model,mode:this.engine.mode(),effort:this.selectedEffort};
-    const overlay = this.orchestrate ? {orchestration:{enabled:true as const,baseMode:this.preOrchestrateMode ?? "plan"}} : {};
+    const overlay = this.orchestrate ? this.runtimeOrchestrationSettings(this.engine,this.preOrchestrateMode ?? "plan") : {};
     try { this.runtimeHistory.settings({...settings(selected),...overlay},{...settings(applied),...overlay}); }
-    catch (error) { console.error("[host] runtime settings write failed",error); }
+    catch (error) { if (checked) throw error; console.error("[host] runtime settings write failed",error); }
+  }
+
+  private runtimeOrchestrationSettings(engine: SessionEngine, baseMode: PermissionMode) {
+    const base = engine.orchestrationPolicy?.nativeBase?.();
+    if (engine.id !== "core" && this.runtimeHistory && !base) throw new Error("Verified native base is required before saving ON");
+    return { orchestration: { enabled: true as const, baseMode,
+      ...(base && engine.id !== "core" ? { nativeBase: checkedNativeBase(base,engine.id) } : {}) } };
   }
 
   private subscribeEngineSettings(seam: EngineSettingsSeam | undefined, engine = this.engine, generation = this.settingsGeneration): (() => void) | undefined {
@@ -4425,10 +4440,14 @@ export class Session {
         fail("session changed during engine switch");
         return;
       }
+      let targetBase: PermissionMode = "plan";
+      await nextSettings?.waitForSettingsChanges?.();
+      if (invalid()) throw new Error("session changed during engine switch");
       if (this.orchestrate) {
         try {
           if (!this.runtimeCompositionReady(next)) throw new Error("target orchestration composition unavailable");
-          const base = this.preOrchestrateMode ?? "build";
+          // Each engine owns its base; source authority cannot authorize a target.
+          const base = targetBase = next.id === "core" ? next.mode() : next.orchestrationComposition?.baseMode() ?? "plan";
           if (next.id === "core") {
             if (!next.capabilities.supportsCorePermissions || !next.setMode || !next.setCoreOrchestrate) throw new Error("target orchestration policy unavailable");
             next.setMode("plan");
@@ -4478,7 +4497,7 @@ export class Session {
       const selectedSettings = nextSettings?.persistsOnApply ? appliedSettings : nextSettings?.pendingSnapshot?.() ?? appliedSettings;
       const runtimeSettings = (value: typeof appliedSettings) => ({...(value
         ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
-        : {model:message.model,mode:nextMode,...(next.reasoningEffort() !== undefined ? {effort:next.reasoningEffort()} : {})}),...(this.orchestrate ? {orchestration:{enabled:true as const,baseMode:this.preOrchestrateMode ?? "plan"}} : {})});
+        : {model:message.model,mode:nextMode,...(next.reasoningEffort() !== undefined ? {effort:next.reasoningEffort()} : {})}),...(this.orchestrate ? this.runtimeOrchestrationSettings(next,targetBase) : {})});
       const previousMode = previousEngine.mode();
       const boundaryText = plan.items.length > 0
         ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives a text import of this conversation.`
@@ -4508,6 +4527,7 @@ export class Session {
       committed = true;
       candidate = undefined;
       this.engine = next;
+      this.preOrchestrateMode = this.orchestrate ? targetBase : null;
       this.orchestrationRestore = Promise.resolve();
       this.pendingEngineEffort = undefined;
       this.inFlightEngineEffort = undefined;
@@ -6479,8 +6499,8 @@ export class Session {
     if (!this.orchestrate) {
       return this.engine.mode();
     }
-    const pre = this.preOrchestrateMode ?? "build";
-    return pre === "plan" ? "build" : pre;
+    const pre = this.preOrchestrateMode;
+    return pre === null ? "plan" : pre === "plan" ? "build" : pre;
   }
 
   /**
@@ -6528,12 +6548,34 @@ export class Session {
   private restoreRuntimeOrchestration(): Promise<void> {
     if (this.orchestrationRestore) return this.orchestrationRestore;
     const state = this.runtimeHistory!.state();
-    const saved = state.segments.find(segment => segment.id === state.activeSegmentId)?.applied.orchestration;
+    const active = state.segments.find(segment => segment.id === state.activeSegmentId);
+    if (!savedNativeRecovery(active)) return this.orchestrationRestore = Promise.resolve();
+    const parsed = runtimeSettingsSchema.safeParse(active?.applied);
+    const saved = parsed.success ? parsed.data.orchestration : undefined;
+    const baseMode = this.engine.id === "core" ? saved?.baseMode ?? "plan" : this.nativeChildBaseMode();
     const engine = this.engine;
     const composition = engine.orchestrationComposition;
-    let nativeAuthority: {mode:PermissionMode} | undefined;
+    let nativeAuthority: { mode: PermissionMode } | undefined;
+    let saving = false;
+    this.orchestrationPosture = "transitioning";
+    const proveOff = async () => {
+      if (engine.id === "core") {
+        if (!engine.setCoreOrchestrate?.(false) || !engine.setMode) throw new Error("Core OFF rollback unavailable");
+        engine.setMode(baseMode);
+        if (engine.mode() !== baseMode) throw new Error("Core OFF rollback unconfirmed");
+      } else {
+        if (nativeAuthority) {
+          const snapshot = await engine.orchestrationPolicy!.apply(false,nativeAuthority);
+          if (snapshot.enabled || snapshot.baseAuthority !== nativeAuthority) throw new Error("Native OFF rollback unconfirmed");
+        }
+        if (!engine.verifyOrchestrationOff) throw new Error("Native OFF proof unavailable");
+        await engine.verifyOrchestrationOff();
+      }
+      if (!this.ownsRuntime(engine)) throw new Error("Runtime changed during OFF proof");
+    };
     this.orchestrationRestore = (async () => {
-      if (!saved?.enabled) return;
+      if (engine.id !== "core") await proveOff();
+      if (!saved || engine.id !== "core" && (!saved.nativeBase || saved.nativeBase.engine !== engine.id)) throw new Error("Saved native base is unavailable");
       if (!composition || composition.ownerSessionId !== this.sessionId || !composition.ready() || !this.runtimePolicyAvailable(engine)) throw new Error("Saved orchestration requires a verified runtime policy and routing");
       await this.engineSettings?.waitForSettingsChanges?.();
       if (!this.ownsRuntime(engine) || engine.orchestrationComposition !== composition || !composition.ready()) throw new Error("Runtime changed during orchestration restore");
@@ -6541,32 +6583,42 @@ export class Session {
         engine.setMode!("plan");
         if (engine.mode() !== "plan" || !engine.setCoreOrchestrate?.(true)) throw new Error("Core orchestration restore was not confirmed");
       } else {
-        const authority = nativeAuthority = {mode:saved.baseMode};
+        const authority = nativeAuthority = { mode: baseMode };
         const result = await engine.orchestrationPolicy!.apply(true,authority);
         if (!this.ownsRuntime(engine) || !result.enabled || result.baseAuthority !== authority) throw new Error("Orchestration restore was not confirmed");
       }
       if (!this.ownsRuntime(engine) || engine.orchestrationComposition !== composition || !composition.ready()) throw new Error("Runtime changed during orchestration restore");
-      composition.capture(saved.baseMode);
-      this.preOrchestrateMode = saved.baseMode;
+      composition.capture(baseMode);
+      this.preOrchestrateMode = baseMode;
       this.orchestrate = true;
+      saving = true;
+      this.persistRuntimeSettings(true);
+      saving = false;
+      this.orchestrationPosture = "stable";
       this.onOrchestrateChanged?.(true);
     })().catch(async error => {
       if (!this.ownsRuntime(engine)) return;
       console.warn("[host] saved orchestration could not be restored",error);
-      // Restore is optional session setup. A stale overlay must never deny
-      // ordinary conversation admission or prevent the initial handshake.
-      this.orchestrate = false;
-      this.preOrchestrateMode = null;
-      this.orchestrationPosture = "stable";
+      this.orchestrationPosture = "quarantined";
+      let message = "Orchestration recovery requires a verified OFF runtime and a successful settings save. Close and reopen this conversation to retry.";
+      let clearing = false;
       try {
-        if (engine.id === "core") { engine.setCoreOrchestrate?.(false); engine.setMode?.(saved!.baseMode); }
-        else if (nativeAuthority) await engine.orchestrationPolicy?.apply(false,nativeAuthority);
-        engine.orchestrationComposition?.clear();
+        await proveOff();
+        this.orchestrate = false;
+        this.preOrchestrateMode = null;
+        composition?.clear();
+        if (saving) throw new Error("Orchestration settings save failed; recovery required");
+        clearing = true;
+        this.persistRuntimeSettings(true);
+        this.orchestrationPosture = "stable";
         this.onOrchestrateChanged?.(false);
-      } catch (rollbackError) { console.warn("[host] orchestration restore cleanup failed",rollbackError); }
-      try { this.persistRuntimeSettings(); }
-      catch (writeError) { console.error("[host] could not clear saved orchestration",writeError); }
-      this.outbound.emit({type:"agent_event",turnId:ENGINE_SWITCH_TURN_ID,event:{type:"engine_notice",level:"warning",message:"Orchestration could not be restored and was turned off. You can continue this conversation."}});
+        const reason = !saved || engine.id !== "core" && !saved.nativeBase ? "The saved native base is unavailable." : "The runtime policy or routing could not restore the saved overlay.";
+        message = `Orchestration was turned off after verification. ${reason} You can continue this conversation.`;
+      } catch (recoveryError) {
+        if (saving || clearing) message = "Orchestration settings could not be saved. Conversation admission is closed; close and reopen to retry recovery.";
+        console.error("[host] orchestration recovery failed",recoveryError);
+      }
+      this.outbound.emit({ type:"agent_event",turnId:ENGINE_SWITCH_TURN_ID,event:{type:"engine_notice",level:"warning",message} });
     });
     return this.orchestrationRestore;
   }
@@ -6594,17 +6646,22 @@ export class Session {
         const snapshot = await engine.orchestrationPolicy!.apply(enabled, baseAuthority);
         if (this.shuttingDown || this.engine !== engine || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
         if (snapshot.enabled !== enabled || !Object.is(snapshot.baseAuthority, baseAuthority)) throw new Error("Unconfirmed orchestration transition");
+        if (!enabled && this.runtimeHistory) {
+          if (!engine.verifyOrchestrationOff) throw new Error("Native OFF proof unavailable");
+          await engine.verifyOrchestrationOff();
+          if (this.shuttingDown || this.engine !== engine || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during OFF proof");
+        }
         if (enabled) engine.orchestrationComposition?.capture(nativeAuthority.mode); else engine.orchestrationComposition?.clear();
         this.preOrchestrateMode = enabled ? nativeAuthority.mode : null;
         this.orchestrate = enabled;
         this.onOrchestrateChanged?.(enabled);
-        this.persistRuntimeSettings();
+        this.persistRuntimeSettings(true);
         this.outbound.emit({ type: "orchestrate_changed", enabled });
         return snapshot;
       },
     };
     this.orchestrationController = new OrchestrationController(policy);
-    if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id !== "core" ? { mode: this.preOrchestrateMode ?? "plan" } : this.preOrchestrateMode ?? "build" };
+    if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id !== "core" ? { mode: this.preOrchestrateMode ?? "plan" } : this.preOrchestrateMode ?? "plan" };
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
       connectionId: () => this.boundGeneration,
@@ -6681,27 +6738,33 @@ export class Session {
       this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
       return;
     }
-    if (this.engine.id === "core" && this.engine.setCoreOrchestrate && !this.engine.setCoreOrchestrate(enabled)) {
-      throw new Error("Core orchestration transition failed");
-    }
-    if (enabled) {
-      this.preOrchestrateMode = this.engine.mode();
-      this.orchestrate = true;
-      this.onSetMode("plan", true);
-    } else {
-      this.orchestrate = false;
-      const restore = this.preOrchestrateMode ?? "build";
-      this.preOrchestrateMode = null;
-      // A session may have switched engines since enable. Clearing the flag
-      // must remain possible even when the current engine owns its modes.
-      if (this.engine.id === "core" && this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined) this.onSetMode(restore, true);
-    }
-    // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
-    // threads it into every ToolContext — the Agent tool's default-detach).
-    if (this.orchestrate) this.engine.orchestrationComposition?.capture(this.preOrchestrateMode!); else this.engine.orchestrationComposition?.clear();
-    this.onOrchestrateChanged?.(this.orchestrate);
-    this.persistRuntimeSettings();
-    this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
+    this.orchestrationWriteActive = true;
+    try {
+      if (this.engine.id === "core" && this.engine.setCoreOrchestrate && !this.engine.setCoreOrchestrate(enabled)) {
+        throw new Error("Core orchestration transition failed");
+      }
+      if (enabled) {
+        this.preOrchestrateMode = this.engine.mode();
+        this.orchestrate = true;
+        this.onSetMode("plan", true);
+      } else {
+        this.orchestrate = false;
+        const restore = this.preOrchestrateMode ?? "plan";
+        this.preOrchestrateMode = null;
+        // A session may have switched engines since enable. Clearing the flag
+        // must remain possible even when the current engine owns its modes.
+        if (this.engine.id === "core" && this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined) this.onSetMode(restore, true);
+      }
+      // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
+      // threads it into every ToolContext — the Agent tool's default-detach).
+      if (this.orchestrate) this.engine.orchestrationComposition?.capture(this.preOrchestrateMode!); else this.engine.orchestrationComposition?.clear();
+      this.onOrchestrateChanged?.(this.orchestrate);
+      this.persistRuntimeSettings(true);
+      this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
+    } catch (error) {
+      this.orchestrationPosture = "quarantined";
+      throw error;
+    } finally { this.orchestrationWriteActive = false; }
   }
 
   /**

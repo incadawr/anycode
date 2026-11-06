@@ -230,3 +230,7 @@ export { resolveWorkspaceWriteFacts } from "./util/path-containment.js";
 export { scrubApprovalText, scrubFailureText } from "./utils/scrub-approval-text.js";
 
 export type { OrchestrationDialect } from "./prompts/orchestrate.js";
+
+export { runtimeNativeBaseSchema, runtimeSettingsSchema, checkedRuntimeSettings } from "./ports/runtime-settings.js";
+export type { RuntimeNativeBase } from "./ports/runtime-settings.js";
+export type { RuntimeSettingsPersistence } from "./ports/persistence.js";

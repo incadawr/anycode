@@ -3083,3 +3083,11 @@ it("bootstraps the selected live root tab and excludes children and stale select
   tabs.splice(1, 1);
   expect(ipcHandlers.get(TAB_BOOTSTRAP_CHANNEL)!(TRUSTED_EVENT)).toEqual({ tabs: [tabs[0]], activeTabId: null });
 });
+
+
+it.each([false, true])("publishes the manager launch flag for start intent: %s", async enabled => {
+  const manager = { canSpawn: (engine: string) => engine === "claude", claudeOrchestrationIntentEnabled: () => enabled };
+  setIpcGuardMainWindow(() => MAIN_SENDER);
+  registerTabIpc({ manager } as unknown as TabIpcDeps);
+  expect(await ipcHandlers.get("anycode:engines-list")!(TRUSTED_EVENT)).toEqual({ engineIds: ["claude"], claudeOrchestrateEnabled: enabled });
+});
