@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Parent sessions can place new Core session children in separate Git checkouts, with copyable recovery details and conservative cleanup; this separates cwd, not security permissions.
+
 ## [0.0.87] - 2026-11-07
 
 ### Added

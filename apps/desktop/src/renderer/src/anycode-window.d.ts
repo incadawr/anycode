@@ -1,3 +1,4 @@
+import type { ChildWorktreeRequest, ChildWorktreeView } from "../../shared/child-worktree-view.js";
 /**
  * Canonical ambient type for preload's contextBridge surface (design
  * phase-2.md §3.2). Task 2.1.4 (App.tsx) and task 2.1.5 (SessionPicker.tsx)
@@ -419,6 +420,7 @@ export type ChildHistoryResult =
 declare global {
   interface Window {
     anycode: {
+      childWorktrees(request: ChildWorktreeRequest): Promise<ChildWorktreeView>;
       getPathForFile: (file: File) => string;
       homeDirectory(): Promise<string>;
       tabBootstrap(): Promise<import("../../shared/tabs.js").TabBootstrap>;

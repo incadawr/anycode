@@ -4,6 +4,34 @@ A subagent is a child agent that a session starts through the `Agent` tool. Ther
 are two kinds: the two built-in personas, and your own markdown profiles in
 `.anycode/agents/`.
 
+## Session children in worktrees
+
+Open **Child worktrees** in the parent header and enable **New session children
+in worktrees**. The choice applies to future Core session children, defaults OFF
+and resets after app restart. Claude/Codex children are refused while ON; choose
+Core and start a new child. Explicit inline agents still use the current cwd.
+
+Separate Git checkout, not a security sandbox. Absolute paths and shell commands
+can still modify files outside the child worktree. New children start from the
+parent's committed HEAD; uncommitted files are not copied. Shared Git refs,
+settings, network and caches remain shared. Trust and access grants are not inherited.
+
+The details list shows resources for the source project, including closed children:
+path and branch with Copy buttons, base SHA, active/live, retained/kept, removed
+or unknown state, retention reason and the last creation refusal. It refreshes only
+while open. Empty checkouts are removed after verified safe shutdown; branches
+remain. Dirty files, new commits, ignored caches or uncertain writers keep the
+checkout. Closing a split panel does not close the child. After a crash there is
+no automatic cleanup. Managed sessions cannot resume; inspect a retained checkout
+and start a new session there manually.
+
+To recover work, first inspect `git -C '<child-path>' diff HEAD` and inspect
+untracked files separately. Commit in the retained checkout if needed, then in
+the parent review `git diff <base-sha>..<branch>`. Merge/cherry-pick manually
+after review. A branch alone does not transfer uncommitted files. Removed means
+the folder is gone and only the branch remains. None of these commands runs
+automatically.
+
 ## Built-in personas
 
 | Persona | What it does |

@@ -9525,6 +9525,45 @@ describe("Agent managed worktree admission", () => {
     expect(settle).toHaveBeenCalledOnce();
   });
 
+  it("two Core children edit the same relative file independently and durable receipts survive terminal", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "child-integration-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: scratch, encoding: "utf8", env: {
+      ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.test", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.test",
+    } }).trim();
+    try {
+      git("init", "-b", "main"); await writeFile(join(scratch, "file"), "base");
+      git("add", "file"); git("commit", "-m", "Initial");
+      const resources = new ChildWorktreeResources({ userData: join(scratch, "data"), appRunId: "test-run" });
+      const r = rig("core", { childWorktrees: resources });
+      r.tab.workspace = scratch; r.tab.projectRoot = scratch;
+      const children = [];
+      for (const id of ["one", "two"]) {
+        r.host.emit("message", spawnRequest({ requestId: id, spawnToolCallId: id }));
+        await vi.waitFor(() => expect(r.fork).toHaveBeenCalledTimes(children.length + 2));
+        const accepted = childRunEvents(r.host).filter(e => e.kind === "accepted").at(-1)!;
+        if (accepted.kind !== "accepted") throw Error("missing child");
+        const tab = r.manager.getTab(accepted.childTabId)!;
+        const host = tab.proc as unknown as FakeHost;
+        host.postMessage.mockImplementation(() => {});
+        children.push({ tab, host, receipt: tab.childWorktree! });
+        await writeFile(join(tab.workspace, "file"), id);
+      }
+      expect(children[0]!.tab.workspace).not.toBe(children[1]!.tab.workspace);
+      expect(await readFile(join(children[0]!.tab.workspace, "file"), "utf8")).toBe("one");
+      expect(await readFile(join(children[1]!.tab.workspace, "file"), "utf8")).toBe("two");
+      expect(await readFile(join(scratch, "file"), "utf8")).toBe("base");
+      await writeFile(join(children[1]!.tab.workspace, "file"), "base");
+      for (const c of children) { c.host.emit("message", childTerminalMsg()); await flush(); c.host.emit("exit", 0); }
+      await vi.waitFor(() => expect(r.manager.listChildRuns()).toHaveLength(0), { timeout: 5000 });
+      const cold = new ChildWorktreeResources({ userData: join(scratch, "data"), appRunId: "next-run" });
+      expect((await cold.read(children[0]!.receipt.id)).phase).toBe("retained");
+      expect((await cold.read(children[1]!.receipt.id)).phase).toBe("removed");
+      for (const c of children) expect(git("rev-parse", c.receipt.branch)).toBe(c.receipt.baseSha);
+      expect(await readFile(join(scratch, "file"), "utf8")).toBe("base");
+    } finally { await rm(scratch, { recursive: true, force: true }); }
+  });
+
   it.each(["empty", "dirty", "commit"])("real Git terminal/cancel preserves work and refs (%s)", async kind => {
     const dirty = kind !== "empty";
     const scratch = await mkdtemp(join(tmpdir(), "managed-close-"));
