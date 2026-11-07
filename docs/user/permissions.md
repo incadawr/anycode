@@ -129,10 +129,10 @@ unchanged. See [subagents.md](subagents.md#profile-permissions).
 
 ## Trusted binaries
 
-The Codex and Claude CLIs are trusted automatically unless their file could be
-replaced by someone else. In that case the engine pane asks you to trust the
-path, and the consent is listed in **Settings → Permissions → Trusted binaries**.
-Details are in [engines.md](engines.md).
+The Codex and Claude CLIs undergo platform-specific binary trust checks.
+Some refusals offer a consent action; files owned by neither you nor root
+cannot be approved this way. See [the rules and exceptions](engines.md#trust-for-the-engine-binaries).
+Saved consents appear in **Settings → Permissions → Trusted binaries**.
 
 ## The approval prompt
 

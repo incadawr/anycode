@@ -47,17 +47,24 @@ both ready.
 
 ## Trust for the engine binaries
 
-AnyCode runs the `codex` and `claude` binaries you point it at. It trusts a
-binary automatically unless the file sits where someone else could replace it:
-the file is writable by others, or owned by another account. Only that case
-asks for consent. The Codex and Claude panes then show a refusal with
-**Review executable trust…** and **Trust this binary…**.
+AnyCode checks the `codex` and `claude` binaries using these rules:
 
+- A world-writable file is refused.
+- A file owned by neither you nor root is refused.
+- A group-writable file is refused except for `wheel`/`admin` on macOS, or on
+  Linux when you own it and its group matches your effective primary group.
+- The same checks apply to every ancestor directory of the resolved file and,
+  for a symlink, to the directories containing the link.
+- Windows skips these ownership and permission checks.
+- Writability refusals and directory-ownership refusals offer
+  **Review executable trust…** / **Trust this binary…** when the executable is
+  owned by you or root and every ancestor is a directory.
+- A file owned by neither you nor root cannot be trusted through consent.
+  Missing paths, non-files, non-executable files and non-directory ancestors
+  also provide no consent action.
 - A consent is for one path and pins the file's current state (mode, owner,
-  group, size and modification time). If the file changes, the consent no longer
-  matches and the pane asks again.
-- A file owned by another account, and a path that is not a regular executable,
-  cannot be trusted this way.
+  group, size and modification time). If it changes, the consent no longer
+  matches; a new consent action appears only if the refusal remains eligible.
 - Consents are listed under Settings → Permissions → Trusted binaries.
 
 ## When a tab picks each engine

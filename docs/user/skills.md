@@ -120,7 +120,7 @@ the same-name Native builtin. Other Native builtins can be disabled through conf
 In Native tabs, disabled names do not count toward the cap. A session loads at most **64 skills**
 after deduplication; overflow drops from the lowest precedence first. The list of
 skills in the system prompt is capped at about **8,000 characters**. Lines that do
-not fit are dropped, and the prompt says how many.
+not fit are dropped; the count is reported only in the log.
 
 ## Built-in skills
 
