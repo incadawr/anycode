@@ -1,7 +1,7 @@
 import { act, createElement } from "react";
 import { createStore } from "zustand/vanilla";
 import { expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCustomProviderCreate, handleCustomProviderFetchModels } from "../../../main/provider-ipc.js";
@@ -22,6 +22,16 @@ const { ConnectionDrawer, ConnectionDrawerFields } = await import("./ConnectionD
 import type { SettingsStoreApi } from "../settings-store.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+it("keeps Identity controls at their own height when the icon field grows", () => {
+  const css = readFileSync(new URL("../settings.css", import.meta.url), "utf8");
+  const sheet = new JSDOM(`<style>${css}</style>`).window.document.styleSheets[0];
+  const rules = Array.from(sheet.cssRules) as CSSStyleRule[];
+  const identity = rules.find(rule => rule.selectorText === ".connection-drawer-identity");
+  const controls = rules.find(rule => rule.selectorText === ".connection-drawer-identity > .settings-field > :is(.settings-field-input, .settings-field-select)");
+  expect(identity?.style.getPropertyValue("align-items")).toBe("start");
+  expect(controls?.style.flex).toBe("0 0 auto");
+});
 
 it("shows and clears a saved vocabulary without a reasoning support flag", async () => {
   const connection = { id:"c", providerId:"custom:test", model:"a", modelOverrides:{a:{effortLevels:["low", "high"] as ("low" | "high")[]}} };

@@ -9078,10 +9078,11 @@ dialog.role-picker-dialog {
 
 .connection-icon-fields { display: flex; align-items: flex-start; gap: var(--sp-3); }
 .connection-icon-fields > * { flex: 1; min-width: 0; }
+.connection-icon-fields > .connection-icon-field { flex: 0 0 10.5rem; }
 .connection-icon-input-row, .connection-icon-swatches { display: flex; align-items: center; gap: 4px; }
-.connection-icon-input-row input { width: 4rem; text-align: center; }
-.connection-icon-swatches { flex-wrap: wrap; }
-.connection-icon-swatches button { width: 16px; height: 16px; border: 1px solid var(--border-strong); border-radius: 4px; cursor: pointer; }
+.connection-icon-input-row input { flex: 0 0 3rem; width: 3rem; min-width: 0; box-sizing: border-box; text-align: center; }
+.connection-icon-swatches { flex-wrap: nowrap; gap: 3px; }
+.connection-icon-swatches button { flex: 0 0 14px; width: 14px; height: 14px; padding: 0; border: 1px solid var(--border-strong); border-radius: 4px; cursor: pointer; }
 .connection-icon-swatches button[aria-pressed="true"] { outline: 2px solid var(--text-1); outline-offset: 1px; }
-.connection-icon-swatches button:last-child { width: auto; background: transparent; color: var(--text-2); font-size: var(--fs-2xs); }
+.connection-icon-swatches button:last-child { flex: 0 0 auto; width: auto; background: transparent; color: var(--text-2); font-size: var(--fs-2xs); }
 .connection-icon-reset { align-self: flex-start; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }

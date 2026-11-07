@@ -3583,7 +3583,8 @@
 .connection-drawer-band { position: relative; padding: 12px 0 12px 3.4rem; border-top: 1px solid var(--border); min-width: 0; }
 .connection-drawer-band::before { content: attr(data-section); position: absolute; top: 14px; left: 0; width: 3rem; color: var(--text-2); font-size: var(--fs-xs); line-height: 1.4; }
 .connection-drawer-band h3 { margin: 0 0 8px; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
-.connection-drawer-identity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.connection-drawer-identity { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px 12px; }
+.connection-drawer-identity > .settings-field > :is(.settings-field-input, .settings-field-select) { flex: 0 0 auto; }
 .connection-drawer-identity > h3, .connection-drawer-identity > .connection-drawer-custom-fields { grid-column: 1 / -1; }
 .connection-drawer-model-picker { gap: 8px; }
 .connection-drawer-model-heading h3 { margin: 0; }

@@ -2568,7 +2568,7 @@ export function ConnectionDrawerFields({
         {CONNECTION_ICON_COLORS.map(color => <button key={color} type="button" aria-label={`Icon color ${color}`} aria-pressed={iconColor === color} disabled={readOnly} style={{ background: color }} onClick={() => setIconColor(color)} />)}
         <button type="button" aria-label="Automatic icon color" aria-pressed={!iconColor} disabled={readOnly} onClick={() => setIconColor("")}>Auto</button>
       </div>
-      <span className="settings-field-hint">1–2 characters. Leave empty for an automatic monogram from the label or provider name.</span>
+      <span className="settings-field-hint">1–2 characters; empty uses an automatic monogram.</span>
       <button className="connection-icon-reset" type="button" disabled={readOnly} onClick={() => { setIconText(""); setIconColor(""); }}>Reset to default</button>
     </div>
   );

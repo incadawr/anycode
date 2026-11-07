@@ -174,6 +174,14 @@ async function pickKimi(): Promise<void> {
   await click([...container.querySelectorAll<HTMLButtonElement>(".welcome-subscription")].find(tile => tile.textContent?.includes("Kimi (kimi.com)"))!);
 }
 
+it("shows the shared compact icon controls in first-run advanced settings", async () => {
+  await pickKimi();
+  await toggleAdvanced();
+  const fields = container.querySelector(".welcome-setup .connection-icon-fields");
+  expect(fields?.querySelector(".connection-icon-input-row input")).not.toBeNull();
+  expect(fields?.querySelectorAll('.connection-icon-swatches button')).toHaveLength(9);
+});
+
 it.each(["current model", "another model", "fallback", "output field"] as const)("reveals and focuses invalid pricing from closed Advanced: %s", async scope => {
   const create = vi.fn<typeof originalSettingsState.connectionCreate>().mockRejectedValue(new Error("Unexpected create"));
   useSettingsStore.setState({ connectionCreate: create });
