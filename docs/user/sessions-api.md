@@ -151,8 +151,8 @@ that session. Open the tab's environment menu and tick the checkbox under
    only way to add one. Subfolders are not included, and symlinks are resolved.
    With no folder, only the sessions you switch on are shared.
 3. Optional: set a **Port**. Leave it empty for a random free port.
-4. Check the status line. It reads `Listening on 127.0.0.1:PORT` when the
-   endpoint is up.
+4. Check the status line. It reads `Listening · 127.0.0.1:PORT · N shared` when
+   the endpoint is up, where N is the number of shared sessions.
 
 Changes apply immediately. Open client connections are dropped when you change
 the toggle, the port, the folders or the token.
@@ -175,13 +175,16 @@ project** until you switch it on: open the project's **⋯** menu in the sidebar
 and tick **Allow agents to open tasks here**. The switch is saved on this
 computer per project (a symlinked path and its target are one project).
 Settings → Sessions API → Advanced lists the projects that allow it and has an
-**Off** button for each; turning one on is only done in the sidebar.
+**Turn off** button for each; turning one on is only done in the sidebar.
 
 Input: `workspace` (absolute path, required); optional `engine` (`core`,
-`codex`, `claude`), `model`, `effort`, `handle` and `firstMessage`. The new session is
-shared immediately. An accepted `handle` becomes the tab title: it replaces the
-title the first message would have produced and stays fixed through automatic
-titling, closing the tab, restarting AnyCode and resuming the session.
+`codex`, `claude`), `model`, `effort`, `fast`, `account`, `handle` and `firstMessage`.
+`fast` is a boolean for Codex only: `true` enables Fast mode and `false` disables
+it for this session. Fast mode is quicker but consumes usage limits faster.
+The new session is shared immediately. An accepted `handle` becomes the tab
+title: it replaces the title the first message would have produced and stays
+fixed through automatic titling, closing the tab, restarting AnyCode and resuming
+the session.
 
 `create_session` does **not** wait for that title to be stored. It answers as
 soon as the tab exists — the tab's process may still be starting, or may have
@@ -322,7 +325,9 @@ Rules and limits:
   offer; the text lists the candidates), `invalid_effort` (the requested
   effort is not one the selected model advertises; the text lists the allowed
   values), `invalid_account` (the requested Codex account names no configured
-  account, or a label two accounts share; the text lists the candidates).
+  account, or a label two accounts share; the text lists the candidates),
+  `invalid_argument` (an argument is unsupported, for example `fast` with an
+  engine other than Codex).
 - `account` (optional, `engine: "codex"` only) picks the Codex account the new
   session runs on: a profile id or its label from **Settings → Codex**. Omit it
   to start on the account marked **Default** there; an unknown or ambiguous
@@ -376,8 +381,10 @@ needs **Node 22+**.
 - **Regenerate token** writes a new token to the discovery file. A running
   stdio adapter re-reads the discovery file before every call, so a restarted
   app (new port and new token) is reached without reconnecting the client and a
-  regenerated token is used on the first attempt. Network failures are reported
-  without an automatic retry because the request may already have been
+  regenerated token is used on the first attempt. If a connection is refused
+  (`ECONNREFUSED`), the adapter re-reads discovery and retries once. An HTTP
+  `401` also triggers one discovery refresh and retry. Ambiguous network errors
+  are reported without retry because the request may already have been
   processed; a later call picks up the new endpoint.
 
 ## Environment override

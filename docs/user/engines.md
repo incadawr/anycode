@@ -97,8 +97,9 @@ See [proxy.md](proxy.md).
 Codex discovery order is `ANYCODE_CODEX_BIN`, `codex.binaryPath`, `PATH`, common
 install folders, then the managed install. Claude discovery is
 `ANYCODE_CLAUDE_BIN`, `claude.binaryPath`, `PATH`, then common install folders.
-An explicit invalid override or a trust refusal can stop discovery; the pane
-lets you pick a different executable.
+An invalid override falls through to the next discovery source. A trust refusal
+for an explicit environment or settings override stops discovery; the pane lets
+you pick a different executable.
 
 Common POSIX folders include `~/.local/bin`, `~/.npm-global/bin`,
 `/opt/homebrew/bin` and `/usr/local/bin`; Windows also checks the npm install

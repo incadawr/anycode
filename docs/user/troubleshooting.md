@@ -22,7 +22,7 @@ sessions may not change a running tab.
    - **Row absent**: the entry was skipped at load time. Go to step 3.
 3. Read the problem strip in the same pane. The usual causes:
    - Invalid JSON in the file. One bad comma drops every server in that file
-     (`Invalid JSON in MCP config <path>: …`).
+     (`Invalid JSON in MCP config <path>`).
    - An entry with both `command` and `url`, or with neither
      (`must have exactly one of "command" (stdio) or "url" (http)`).
    - An unset `${env:NAME}` variable, which skips the server (`env var 'NAME'

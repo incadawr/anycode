@@ -98,10 +98,14 @@ describe("packaged user guide navigation", () => {
     }
   });
 
-  it("keeps the config boundary and Sessions API connection instructions discoverable", () => {
+  it("keeps the README precedence contract and config boundaries discoverable", () => {
+    expect(readme).toMatch(/project `?\.anycode\/?`? beats the user `?~\/\.anycode\/?`?/i);
     expect(readme).toContain("~/.anycode/settings.json");
     expect(readme).toContain("~/.anycode/secrets.json");
     expect(readme).toContain(".anycode/config.json");
+  });
+
+  it("documents the Sessions API connection path", () => {
     const api = pages.get("sessions-api.md")!;
     for (const text of ["list_sessions", "send_message", "Settings → Sessions API", "Copy MCP config", 'mode: "next_turn"']) {
       expect(api).toContain(text);

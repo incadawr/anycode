@@ -39,9 +39,11 @@ restart the session after a change.
 - `command` and `args` start the process. `cwd` is optional.
 - `env` sets variables for the child. `${env:NAME}` takes its value from the
   environment AnyCode was started with.
-- `inheritEnv: true` passes the whole parent environment, minus every `ANYCODE_*`
-  variable. By default the child gets only `PATH`, `HOME` and `LANG`. Explicit
-  `env` entries apply on top either way.
+- `inheritEnv: true` inherits the parent environment after removing all
+  `ANYCODE_*` variables (including `ANYCODE_*_PROXY_URL` carriers) and sanitizing
+  proxy variables with credentials. Those proxy values are dropped or replaced
+  with a local relay URL when available. By default the child gets only `PATH`,
+  `HOME` and `LANG`. Explicit `env` entries apply on top either way.
 - `"enabled": false` turns the entry off without deleting it.
 
 ## One HTTP server
@@ -113,7 +115,7 @@ rules, your instructions, or permission prompts.
 MCP loading is fail-soft, per file:
 
 - A config file with invalid JSON is skipped entirely. Other files still load.
-  The problem reads `Invalid JSON in MCP config <path>: …`.
+  The problem reads `Invalid JSON in MCP config <path>`.
 - A file that fails the schema is skipped entirely, with `Invalid MCP config <path>: …`.
 - A single entry that fails its checks is skipped alone, with
   `MCP server '<name>' in <path>: …`. Examples are a missing `command` or `url`,

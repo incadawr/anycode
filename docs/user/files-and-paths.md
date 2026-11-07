@@ -27,7 +27,8 @@ when diagnosing a setup.
 
 `ANYCODE_DB_PATH` overrides the database location. Artifact and checkpoint roots
 normally move beside that database. `ANYCODE_TELEMETRY_DIR` can change telemetry
-location; `telemetry.retention` controls its retention. `~/.agents/skills/` is an
+location; `telemetry.retention` in the user file `~/.anycode/config.json` controls
+its retention. Project retention settings are ignored. `~/.agents/skills/` is an
 additional user skill root.
 
 If OS secure storage is unavailable, plaintext secret storage requires consent

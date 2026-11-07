@@ -186,7 +186,8 @@ sections. See [workspace trust](getting-started.md#workspace-trust).
 - **Telemetry**: `telemetry.enabled: true` turns on a local JSONL sink, and
   optional `dir` (an absolute path) changes where it writes. The variable
   `ANYCODE_TELEMETRY=0` turns it off; no environment variable turns it on. Retention defaults to
-  180 days, 20,000 files and 64 MiB; set `telemetry.retention` to change it.
+  180 days, 20,000 files and 64 MiB; set `telemetry.retention` in the user file
+  `~/.anycode/config.json` to change it. Project retention settings are ignored.
 - **Repo map**: `repoMap.enabled` and optional `maxTokens` (clamped to 500–8,000;
   default 2% of context window). The map is frozen at session boot.
 - **Web search**: `webSearch.backend` is `"brave"` (the key comes from the

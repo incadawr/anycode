@@ -132,8 +132,9 @@ Run the build script and report what happened.
 Matching is the same as for always-allow rules in
 [permissions.md](permissions.md): the pattern is a glob, and a shell command
 line is split on separators with the pattern applied to every segment, so one
-entry covers a whole pipeline only when every segment matches it. Bare or relative `Write`/`Edit` rules remain workspace-confined. A valid
-scoped absolute mask can cover a resolved target outside it.
+entry covers a whole pipeline only when every segment matches it. Profile
+`Write`/`Edit`/`MultiEdit` allow rules can resolve a write approval only when the
+target is proven inside the session workspace, even with an absolute pattern.
 
 These lists and the `tools` allowlist apply to Core inline children and Core
 session children. Desktop defaults profiles to background session children;
