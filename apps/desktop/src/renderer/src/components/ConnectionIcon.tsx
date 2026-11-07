@@ -14,6 +14,7 @@ export function connectionIconDefaults(connection: ProviderConnection, providerN
 
 export function ConnectionIcon({ connection, providerName }: { connection: ProviderConnection | undefined; providerName: string }): ReactElement | null {
   if (!connection) return null;
-  const icon = connectionIconDefaults(connection, providerName);
+  const defaults = connectionIconDefaults(connection, providerName);
+  const icon = { text: connection.iconText?.trim() || defaults.text, color: connection.iconColor || defaults.color };
   return <span className="connection-icon" title={connection.label?.trim() || providerName} style={{ "--connection-icon-color": icon.color } as CSSProperties} aria-hidden="true">{icon.text}</span>;
 }

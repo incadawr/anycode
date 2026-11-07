@@ -893,3 +893,35 @@ it("disables reasoning replay until a model is selected", async () => {
   try { expect(replayField(container)?.disabled).toBe(true); }
   finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("edits and resets the connection icon", async () => {
+  const connection = {id:"icon", providerId:"custom:test", label:"Work", model:"a", iconText:"WX", iconColor:"#5B8DEF"};
+  const snapshot = {settings:cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[]};
+  const update = vi.fn().mockResolvedValue({ok:true, snapshot});
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
+    expect(container.querySelector(".connection-icon")?.textContent).toBe("WX");
+    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Icon color #5E9E6E"]')!.click(); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({iconText:"WX", iconColor:"#5E9E6E"}));
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Reset to default")!.click(); });
+    expect(container.querySelector(".connection-icon")?.textContent).toBe("WO");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({iconText:"", iconColor:""}));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("mounts connection icons for model and group rows", async () => {
+  const { ModelDrillMenu } = await import("./model-drill-menu.js");
+  const connection = {id:"icon", providerId:"custom:test", label:"Work", iconText:"WX", iconColor:"#5B8DEF"};
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ModelDrillMenu, {connections:[connection], rows:[{kind:"popular",connectionId:"icon",modelId:"m",name:"Model",groupLabel:"Work",current:true},{kind:"group",connectionId:"icon",label:"Work",subtitle:undefined,count:1}], page:{kind:"root"}, placement:null, backLabel:null, focusIndex:0, emptyText:"Empty", itemRefs:{current:[]}, onKeyDown:()=>{}, onActivateRow:()=>{}, onBack:()=>{}, onAddConnection:()=>{}, isCurrentConnection:()=>true})));
+    expect([...container.querySelectorAll(".connection-icon")].map(el => el.textContent)).toEqual(["WX", "WX"]);
+    expect(container.querySelector('[data-model-id="m"] .start-model-item-sub')).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

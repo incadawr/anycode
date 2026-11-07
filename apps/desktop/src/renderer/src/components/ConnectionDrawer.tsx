@@ -27,6 +27,7 @@ import { goModelMatchesTransport, isAutomaticGo } from "../../../shared/provider
  * consent retries); shared custom-record keys go through customProvider.update
  * and stay in the field on refusal so the user can retry.
  */
+import { ConnectionIcon, CONNECTION_ICON_COLORS } from "./ConnectionIcon.js";
 import { Button, IconButton, Input } from "../ui/index.js";
 import { useEffect, useId, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
@@ -1499,6 +1500,8 @@ export function ConnectionDrawerFields({
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
   const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? (initialCustom ? "custom" : initialProviderId ?? ""));
   const [label, setLabel] = useState(editConnection?.label ?? "");
+  const [iconText, setIconText] = useState(editConnection?.iconText ?? "");
+  const [iconColor, setIconColor] = useState(editConnection?.iconColor ?? "");
   // an existing catalog connection persisted with a blank model
   // (the live trap — readiness fails on it with a key-blaming toast) opens
   // with the curated default prefilled, so the very next Save heals it.
@@ -2034,6 +2037,8 @@ export function ConnectionDrawerFields({
           modelPricing: Object.fromEntries(Object.entries(modelPricing).filter(([, value]) => value !== "")) as Record<string, TokenRates>,
           ...(createModel !== undefined ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
+          ...(iconText.trim() ? { iconText: iconText.trim() } : {}),
+          ...(iconColor ? { iconColor } : {}),
           ...(transport ? { transport } : {}),
           // the proxy control is rendered in this pre-create
           // state too, so its value has to travel on THIS create as well —
@@ -2166,6 +2171,8 @@ export function ConnectionDrawerFields({
           ...(pricing !== "" ? { pricing } : {}),
           ...(createModel !== "" ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
+          ...(iconText.trim() ? { iconText: iconText.trim() } : {}),
+          ...(iconColor ? { iconColor } : {}),
           ...(transport ? { transport } : {}),
           ...(showBaseUrl && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
           ...connectionCreateProxyRefField(proxyRef),
@@ -2348,7 +2355,7 @@ export function ConnectionDrawerFields({
           usage: usageSelection,
           replay: replaySelection,
           replayHidden: !replayTransportShown,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(isCustomRecordConnection && !showBaseUrl ? { baseUrl: undefined } : {}), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), ...(pendingVisibleModels !== null ? { visibleModels: pendingVisibleModels } : {}), ...(commitFetchedModels && fetchedModels !== null && fetchedSource !== null ? { fetchedModels: { ...fetchedSource, models: fetchedModels, incompatibleModels } } : {}), pricing, modelPricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), iconText: iconText.trim(), iconColor, ...(isCustomRecordConnection && !showBaseUrl ? { baseUrl: undefined } : {}), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), ...(pendingVisibleModels !== null ? { visibleModels: pendingVisibleModels } : {}), ...(commitFetchedModels && fetchedModels !== null && fetchedSource !== null ? { fetchedModels: { ...fetchedSource, models: fetchedModels, incompatibleModels } } : {}), pricing, modelPricing },
         selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
           ? selectedModelId
           : null,
@@ -2550,6 +2557,21 @@ export function ConnectionDrawerFields({
 
     </label>
   );
+  const iconField = (
+    <div className="settings-field connection-icon-field">
+      <label className="settings-field-label" htmlFor="connection-icon-text">Icon</label>
+      <div className="connection-icon-input-row">
+        <ConnectionIcon connection={{ id: "preview", providerId, label, iconText, iconColor }} providerName={catalog.find(p => p.id === providerId)?.name ?? "Custom"} />
+        <input id="connection-icon-text" className="settings-field-input" value={iconText} disabled={readOnly} onChange={e => setIconText(Array.from(e.target.value).slice(0, 2).join(""))} />
+      </div>
+      <div className="connection-icon-swatches" role="group" aria-label="Icon color">
+        {CONNECTION_ICON_COLORS.map(color => <button key={color} type="button" aria-label={`Icon color ${color}`} aria-pressed={iconColor === color} disabled={readOnly} style={{ background: color }} onClick={() => setIconColor(color)} />)}
+        <button type="button" aria-label="Automatic icon color" aria-pressed={!iconColor} disabled={readOnly} onClick={() => setIconColor("")}>Auto</button>
+      </div>
+      <span className="settings-field-hint">1–2 characters. Leave empty for an automatic monogram from the label or provider name.</span>
+      <button className="connection-icon-reset" type="button" disabled={readOnly} onClick={() => { setIconText(""); setIconColor(""); }}>Reset to default</button>
+    </div>
+  );
   // On the new-custom-endpoint form the provider Name already identifies the
   // row; a second "Label" field next to it reads as the same question twice.
   const labelFieldVisible = showConnectionLabelField(simplified, isNewCustomEndpoint, createdConnectionId !== null);
@@ -2671,7 +2693,7 @@ export function ConnectionDrawerFields({
           every label sat flush against the control above it. The body carries
           the rhythm now, in both engines. */}
       <div className="connection-drawer-advanced-body">
-      {simplified && labelFieldVisible && labelField}
+      {simplified && <div className="connection-icon-fields">{labelFieldVisible && labelField}{iconField}</div>}
 
       {!automaticGo && <label className="settings-field">
         <span className="settings-field-label">Transport</span>
@@ -3024,7 +3046,7 @@ export function ConnectionDrawerFields({
       )}
 
       {/* Label: top of the dialog; in the first-run flow it stays inside Advanced. */}
-      {!simplified && labelFieldVisible && labelField}
+      {!simplified && <div className="connection-icon-fields">{labelFieldVisible && labelField}{iconField}</div>}
 
       {showBaseUrl && (
         <label className="settings-field">
