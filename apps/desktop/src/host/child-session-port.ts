@@ -113,7 +113,7 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
 import { randomUUID } from "node:crypto";
 import {
   createChildStatusStore,
-  DEFAULT_MAX_TURNS,
+  DEFAULT_SUBAGENT_MAX_TURNS,
   engineRestrictionRefusal,
   SUBAGENT_STALL_TIMEOUT_MS,
   SubagentStallClock,
@@ -129,7 +129,6 @@ import {
 import {
   CHILD_AGENT_TYPE_MAX_CHARS,
   CHILD_DESCRIPTION_MAX_CHARS,
-  CHILD_MAX_TURNS_CEILING,
   CHILD_PROMPT_MAX_CHARS,
   CHILD_PROVIDER_MAX_CHARS,
   CHILD_RUN_CANCEL_TYPE,
@@ -286,10 +285,10 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
     return MALFORMED_RESUME_MESSAGE;
   }
   // mirrors parseChildSpawnRequest's budget check — a defined
-  // maxTurns must be a safe integer within 1..CHILD_MAX_TURNS_CEILING.
+  // maxTurns must be a positive safe integer.
   if (
     req.maxTurns !== undefined &&
-    !(typeof req.maxTurns === "number" && Number.isSafeInteger(req.maxTurns) && req.maxTurns >= 1 && req.maxTurns <= CHILD_MAX_TURNS_CEILING)
+    !(typeof req.maxTurns === "number" && Number.isSafeInteger(req.maxTurns) && req.maxTurns >= 1)
   ) {
     return MALFORMED_MAX_TURNS_MESSAGE;
   }
@@ -724,11 +723,11 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
 
     // review F1: the child's EFFECTIVE turn cap this latch warns
     // against — the request's own budget, else the child host's resolved cap
-    // carried on the `accepted` event, else core's DEFAULT_MAX_TURNS (the
-    // SAME constant the child's own resolveChildMaxTurns/agent-loop fall
+    // carried on the `accepted` event, else core's DEFAULT_SUBAGENT_MAX_TURNS (the
+    // SAME constant the child's own resolveChildMaxTurns falls
     // back to, imported — never a duplicated literal). Updated at accept
     // below; read by the progress branch's latch check.
-    let effectiveMaxTurns: number = req.maxTurns ?? DEFAULT_MAX_TURNS;
+    let effectiveMaxTurns: number = req.maxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS;
 
     // GitHub #17 slice D: this run's settlement MODE. Every
     // event branch below routes on this state, never on the immutable request
@@ -1014,7 +1013,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 //
                 // F1: `effectiveMaxTurns` is the child's EFFECTIVE cap
                 // (request budget > accepted-carried host limit >
-                // DEFAULT_MAX_TURNS), never a bare `req.maxTurns` gate — an
+                // DEFAULT_SUBAGENT_MAX_TURNS), never a bare `req.maxTurns` gate — an
                 // unstamped spawn still stops at the child host's default
                 // cap, and the warning must fire for it too.
                 //

@@ -8,7 +8,6 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkflowDefinition, type WorkflowParseContext } from "./schema.js";
 import {
-  SUBAGENT_MAX_TURNS_CEILING,
   MAX_WORKFLOW_STEPS,
   WORKFLOW_TEMPLATE_MAX_BYTES,
 } from "../types/config.js";
@@ -330,19 +329,19 @@ describe("parseWorkflowDefinition — caps", () => {
     expect(result.definition?.steps).toHaveLength(MAX_WORKFLOW_STEPS);
   });
 
-  it("rejects a maxTurns above SUBAGENT_MAX_TURNS_CEILING", () => {
+  it("accepts a maxTurns above 200", () => {
     const raw = minimalRaw({
       steps: [
         {
           id: "a",
           agentType: "general-purpose",
           promptTemplate: "x",
-          maxTurns: SUBAGENT_MAX_TURNS_CEILING + 1,
+          maxTurns: 501,
         },
       ],
     });
     const result = parseWorkflowDefinition(raw, ctx());
-    expect(result.definition).toBeUndefined();
+    expect(result.definition?.steps[0]?.maxTurns).toBe(501);
   });
 
   it("accepts a trusted step budget of 20 — above the retired 8-turn ceiling (§2.5)", () => {
@@ -354,14 +353,14 @@ describe("parseWorkflowDefinition — caps", () => {
     expect(result.definition?.steps[0]?.maxTurns).toBe(20);
   });
 
-  it("rejects a maxTurns one over the hard ceiling", () => {
+  it("accepts a large maxTurns", () => {
     const raw = minimalRaw({
       steps: [
-        { id: "a", agentType: "general-purpose", promptTemplate: "x", maxTurns: SUBAGENT_MAX_TURNS_CEILING + 1 },
+        { id: "a", agentType: "general-purpose", promptTemplate: "x", maxTurns: 501 },
       ],
     });
     const result = parseWorkflowDefinition(raw, ctx());
-    expect(result.definition).toBeUndefined();
+    expect(result.definition?.steps[0]?.maxTurns).toBe(501);
   });
 
   it("rejects a maxTurns of 0", () => {
@@ -372,14 +371,14 @@ describe("parseWorkflowDefinition — caps", () => {
     expect(result.definition).toBeUndefined();
   });
 
-  it("accepts a maxTurns of exactly SUBAGENT_MAX_TURNS_CEILING", () => {
+  it("accepts a maxTurns of exactly 500", () => {
     const raw = minimalRaw({
       steps: [
         {
           id: "a",
           agentType: "general-purpose",
           promptTemplate: "x",
-          maxTurns: SUBAGENT_MAX_TURNS_CEILING,
+          maxTurns: 500,
         },
       ],
     });

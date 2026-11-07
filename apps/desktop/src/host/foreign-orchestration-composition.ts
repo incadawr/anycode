@@ -38,11 +38,11 @@ export function createForeignOrchestrationComposition(options: {
     const claimed = new Set(profiles.filter(p => !isReservedPersonaName(p.name)).map(p => p.name));
     const env = (options.env ?? process.env).ANYCODE_SUBAGENT_MAX_TURNS;
     const configured = env !== undefined && env.trim() !== "" ? Number(env) : settings?.tools.subagentMaxTurns;
-    if (configured !== undefined && !Number.isInteger(configured)) throw new Error("Invalid ANYCODE_SUBAGENT_MAX_TURNS: not an integer");
+    if (configured !== undefined && (!Number.isSafeInteger(configured) || configured < 1)) throw new Error("Invalid ANYCODE_SUBAGENT_MAX_TURNS: expected a positive safe integer");
     const entries = roleCatalog(profiles, settings ? resolveProfileRoles(settings, options.projectRoot) : undefined).map(entry => {
       const builtin = isRoleRouteName(entry.name) ? PERSONAS[entry.name].turnBudget : undefined;
       const budget = entry.maxTurns ?? configured ?? builtin;
-      return budget === undefined ? entry : { ...entry, maxTurns: Math.max(1, Math.min(budget, 200)) };
+      return budget === undefined ? entry : { ...entry, maxTurns: budget };
     });
     for (const entry of entries) facts.set(entry, { settings, claimed: claimed.has(entry.name) });
     return entries;

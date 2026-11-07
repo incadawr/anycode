@@ -238,9 +238,9 @@ describe("buildToolsPatch", () => {
     expect(buildToolsPatch("4", "30000", "100")).toEqual({ tools: { concurrency: 4, stallTimeoutMs: 30000, maxTurns: 100 } });
   });
 
-  it("clamps subagent turns to at least one", () => {
-    expect(buildToolsPatch("", "", "", "0")).toEqual({ tools: { subagentMaxTurns: 1 } });
-    expect(buildToolsPatch("", "", "", "-5")).toEqual({ tools: { subagentMaxTurns: 1 } });
+  it("passes invalid subagent turns through for settings validation", () => {
+    expect(buildToolsPatch("", "", "", "0")).toEqual({ tools: { subagentMaxTurns: 0 } });
+    expect(buildToolsPatch("", "", "", "-5")).toEqual({ tools: { subagentMaxTurns: -5 } });
   });
 
   it("includes maxRetries / networkRetryBudgetMs when supplied", () => {

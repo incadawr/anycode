@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the turn limit for top-level sessions and the 200-turn ceiling for agents; raised the default agent turn budgets.
+
 ### Fixed
 
 - Fixed child agent model inheritance, turn and context budgets, and excessive delegation within a turn.

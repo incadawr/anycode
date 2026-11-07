@@ -20,7 +20,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import type { FileSystemPort } from "../ports/file-system.js";
 import { discoverPlugins, type PluginTier } from "../plugins/discovery.js";
 import type { McpConsentEntry } from "../plugins/state.js";
-import { MAX_AGENT_PROFILES, SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
+import { MAX_AGENT_PROFILES } from "../types/config.js";
 import {
   AGENT_PROFILE_CONNECTION_RE,
   AGENT_PROFILE_MODEL_RE,
@@ -534,7 +534,7 @@ export async function scanAgentProfilesAdmin(
             }
             claimed.add(err.name);
             problems.push(
-              `Agent profile ${path}: maxTurns "${err.maxTurns}" must be an integer between 1 and ${SUBAGENT_MAX_TURNS_CEILING} — ignored`,
+              `Agent profile ${path}: maxTurns "${err.maxTurns}" must be a positive safe integer — ignored`,
             );
             break;
           case "engine_tools_conflict":

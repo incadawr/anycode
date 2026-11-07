@@ -41,9 +41,7 @@ export interface CeilingConfig {
    */
   maxGrantedTurns?: number;
   /**
-   * Overall turn ceiling INCLUDING grants (children only): the runner passes
-   * SUBAGENT_MAX_TURNS_CEILING so a child's total overrun stays under the same
-   * runaway guard that bounds its explicit budget.
+   * Optional overall turn ceiling INCLUDING grants.
    */
   maxTurnsCeiling?: number;
   /**
@@ -171,8 +169,7 @@ export function adaptiveGrantForRound(round: number, maxTurns: number): number {
  * build site knows: whether adaptive mode is on and whether the loop is a
  * supervised root. The `adaptive` key is ABSENT when off, so the off path
  * stays byte-identical to the pre-4721 objects (`{}` / `{ supervisedRoot }`).
- * Callers spread the child-only clamps (maxTurnsCeiling, outcomeDeadlineAt)
- * on top.
+ * Callers may add an outcome deadline or an explicit overall ceiling.
  */
 export function buildCeilingConfig(parts: {
   adaptive?: boolean;

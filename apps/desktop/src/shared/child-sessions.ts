@@ -110,9 +110,7 @@ export interface ChildSpawnRequest {
   resumeChildSessionId?: string;
   /**
    * Turn budget for the creating spawn: from a profile's turnBudget
-   * frontmatter. Validated as a safe integer within
-   * 1..CHILD_MAX_TURNS_CEILING (mirrors core's SUBAGENT_MAX_TURNS_CEILING,
-   * duplicated here to keep this module value-only). Absent = existing
+   * frontmatter. Validated as a positive safe integer. Absent = existing
    * defaults; follow-up (resume) requests never carry it.
    */
   maxTurns?: number;
@@ -214,27 +212,7 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       childSessionId: string;
       childTabId: string;
       model: string;
-      /**
-       * review F1 (additive): the child host's EFFECTIVE turn
-       * cap for this run — `--child-max-turns` when the spawn stamped one,
-       * else the host env's resolved `ANYCODE_MAX_TURNS`, else absent (the
-       * child falls back to DEFAULT_MAX_TURNS=100 internally). Absent on
-       * legacy payloads. Lets the parent's approaching-budget latch warn
-       * against the cap the child will ACTUALLY stop at, never a duplicated
-       * literal. NEVER outranks the request's own `maxTurns` (parent-side
-       * precedence: request > accepted > DEFAULT_MAX_TURNS).
-       */
-      /**
-       * GitHub #17 slice A: this is the child's EFFECTIVE
-       * session turn cap — distinct from a REQUESTED profile budget
-       * (`ChildSpawnRequest.maxTurns`, bounded 1..CHILD_MAX_TURNS_CEILING).
-       * Main resolves it from the stamped `--child-max-turns` (request
-       * precedence) else the host env's `ANYCODE_MAX_TURNS`
-       * (`settings.tools.maxTurns`, which the schema permits up to 300), and
-       * omits it when neither source produced a valid positive safe integer.
-       * Validated with `isValidEffectiveChildMaxTurns` — any positive safe
-       * integer — never the profile-budget ceiling.
-       */
+      /** Effective child budget for this run, used by the parent budget latch. */
       maxTurns?: number;
     }
   | { kind: "rejected"; reason: ChildRunRejectReason; message: string }
@@ -407,14 +385,6 @@ export const CHILD_SUMMARY_MAX_CHARS = 160;
 export const CHILD_PROMPT_MAX_CHARS = 200_000;
 /** Mirrors `SUBAGENT_OUTPUT_MAX_BYTES` (config.ts) — the SAME cap §2.6.3 already applies at the child-host producer. This is the defense-in-depth copy at the parser: the producer's own discipline is not what this validator exists to prove, so an unbounded `finalText` must never silently pass through it regardless of which producer sent it. */
 export const CHILD_FINAL_TEXT_MAX_CHARS = 100_000;
-/**
- * ceiling for `ChildSpawnRequest.maxTurns` — a local duplicate of
- * core's `SUBAGENT_MAX_TURNS_CEILING` (packages/core/src/types/config.ts),
- * same "verbatim value, duplicated to keep this module free of runtime
- * imports" discipline as `PERMISSION_MODE_VALUES` above.
- */
-export const CHILD_MAX_TURNS_CEILING = 200;
-
 // ── fail-closed shape validators ──
 // Style precedent: main/tabs.ts's registerEngineProcess (manual field-by-field
 // checks, malformed/stale -> silently ignored, never throws).
@@ -521,18 +491,7 @@ function isCounter(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
-/**
- * GitHub #17 slice A: the ACCEPTED event's `maxTurns` is the
- * child's EFFECTIVE session turn cap — a fact main already resolved from
- * `settings.tools.maxTurns`/`ANYCODE_MAX_TURNS`, whose schema permits values
- * ABOVE the requested-profile ceiling (`settings/schema.ts` allows up to 300).
- * That ceiling (`CHILD_MAX_TURNS_CEILING`) remains correct for a REQUESTED
- * profile budget (`ChildSpawnRequest.maxTurns`, argv `--child-max-turns`) but
- * must NOT gate an effective session fact — a valid 201/300 accepted event
- * must parse, or main's acknowledgement is silently dropped and the parent's
- * detached waiter never settles. The two limits are intentionally distinct:
- * request budgets stay 1..200; an effective cap is any positive safe integer.
- */
+/** Valid turn budgets are positive safe integers. */
 export function isValidEffectiveChildMaxTurns(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
 }
@@ -641,12 +600,11 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.resumeChildSessionId !== undefined && !isIdString(msg.resumeChildSessionId, CHILD_ID_MAX_CHARS)) {
     return null;
   }
-  // absent stays valid; a defined budget must be a safe integer
-  // within 1..CHILD_MAX_TURNS_CEILING — anything else rejects the whole
+  // Absent stays valid; a defined budget must be a positive safe integer — anything else rejects the whole
   // message (fail-closed, like every other invalid field above).
   if (
     msg.maxTurns !== undefined &&
-    !(typeof msg.maxTurns === "number" && Number.isSafeInteger(msg.maxTurns) && msg.maxTurns >= 1 && msg.maxTurns <= CHILD_MAX_TURNS_CEILING)
+    !(typeof msg.maxTurns === "number" && Number.isSafeInteger(msg.maxTurns) && msg.maxTurns >= 1)
   ) {
     return null;
   }
@@ -782,7 +740,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       }
       // GitHub #17 slice A: an accepted event's maxTurns is the
       // child's EFFECTIVE session cap — any positive safe integer — NOT the
-      // requested profile budget, whose 1..CHILD_MAX_TURNS_CEILING ceiling
+      // requested profile budget, whose positive-integer requirement
       // remains enforced only on ChildSpawnRequest.maxTurns. See the accepted
       // variant's doc comment above.
       if (msg.maxTurns !== undefined && !isValidEffectiveChildMaxTurns(msg.maxTurns)) {

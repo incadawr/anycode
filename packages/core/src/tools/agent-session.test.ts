@@ -1971,7 +1971,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
     ctx.subagents!.coreProfile = () => null;
     await full.handler({ description: "d", prompt: "p", tier: "session", agent_type: role }, ctx);
     expect(seen()?.prompt).toContain(role === "planner" ? "plan" : "review");
-    expect(seen()?.maxTurns).toBe(role === "planner" ? 30 : 40);
+    expect(seen()?.maxTurns).toBe(role === "planner" ? 100 : 150);
   });
 
   it("uses the resolved session budget for a built-in role and preserves it on continuation", async () => {

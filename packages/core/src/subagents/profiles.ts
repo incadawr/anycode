@@ -30,7 +30,6 @@ import { capUtf8Bytes } from "../util/bytes.js";
 import {
   AGENT_PROFILE_PROMPT_MAX_BYTES,
   MAX_AGENT_PROFILES,
-  SUBAGENT_MAX_TURNS_CEILING,
   type ReasoningEffort,
 } from "../types/config.js";
 import { PERSONAS, isReservedPersonaName, type AgentProfileEffort, type PersonaDefinition } from "./personas.js";
@@ -446,7 +445,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   }
 
   // maxTurns: optional. Blank/absent means "inherit the default turn budget".
-  // A non-empty value must be a plain integer within 1..SUBAGENT_MAX_TURNS_CEILING; a
+  // A non-empty value must be a positive safe integer; a
   // malformed or out-of-range one is FATAL rather than clamped, mirroring
   // `model` above — a profile whose declared budget is silently replaced by
   // another number is exactly the dishonesty the fatal branches exist to stop.
@@ -457,7 +456,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
       return { error: { kind: "bad_max_turns", name, maxTurns: rawMaxTurns } };
     }
     const value = Number(rawMaxTurns);
-    if (value < 1 || value > SUBAGENT_MAX_TURNS_CEILING) {
+    if (!Number.isSafeInteger(value) || value < 1) {
       return { error: { kind: "bad_max_turns", name, maxTurns: rawMaxTurns } };
     }
     turnBudget = value;
@@ -702,7 +701,7 @@ export async function discoverAgentProfiles(
             }
             claimed.add(err.name);
             problems.push(
-              `Agent profile ${path}: maxTurns "${err.maxTurns}" must be an integer between 1 and ${SUBAGENT_MAX_TURNS_CEILING} — ignored`,
+              `Agent profile ${path}: maxTurns "${err.maxTurns}" must be a positive safe integer — ignored`,
             );
             break;
           case "bad_effort":

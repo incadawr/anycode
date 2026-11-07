@@ -1904,7 +1904,7 @@ describe("detached approaching-turn-budget notice", () => {
     emit(terminalEvent(requestId, { childSessionId: "child-bud-3" }));
   });
 
-  it("a detached spawn with NO maxTurns warns near the child host's DEFAULT effective cap (100) — an unstamped budget is still a budget", async () => {
+  it("a detached spawn with NO maxTurns warns near the child host's DEFAULT effective cap (150) — an unstamped budget is still a budget", async () => {
     const { port, sent, emit, notices } = budgetHarness();
     const pending = port.run(
       { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-4", detach: true },
@@ -1920,13 +1920,13 @@ describe("detached approaching-turn-budget notice", () => {
     }
     expect(notices).toHaveLength(0);
 
-    // DEFAULT_MAX_TURNS=100 minus the 10% margin (min 1) = warn from turn 90.
-    emit(progressEvent(requestId, 90));
+    // DEFAULT_SUBAGENT_MAX_TURNS=150 minus the 10% margin (min 1) = warn from turn 135.
+    emit(progressEvent(requestId, 135));
     expect(notices).toHaveLength(1);
-    expect(notices[0]!.info).toEqual({ turns: 90, maxTurns: 100 });
+    expect(notices[0]!.info).toEqual({ turns: 135, maxTurns: 150 });
 
     // Later progress never re-fires — once per run.
-    emit(progressEvent(requestId, 95));
+    emit(progressEvent(requestId, 145));
     expect(notices).toHaveLength(1);
 
     emit(terminalEvent(requestId, { childSessionId: "child-bud-4" }));
@@ -2111,7 +2111,7 @@ describe("createChildSessionPort — maxTurns", () => {
 
   it("an invalid budget fails immediately with an honest error and sends NOTHING", async () => {
     const { port, sent } = harness();
-    for (const maxTurns of [0, -1, 2.5, 201, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+    for (const maxTurns of [0, -1, 2.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
       const outcome = await port.run(
         { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-mt-bad", maxTurns },
         {},

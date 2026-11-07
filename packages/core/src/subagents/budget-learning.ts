@@ -16,13 +16,11 @@
  * a failed run must not be allowed to move the global default.
  *
  * The formula is deliberately small and bounded: p90 of the pool's turns plus
- * 25% headroom, clamped to [LEARNED_BUDGET_MIN, LEARNED_BUDGET_MAX] and to the
- * runaway ceiling. One run therefore cannot move the budget far.
+ * 25% headroom, clamped to [LEARNED_BUDGET_MIN, LEARNED_BUDGET_MAX]. One run therefore cannot move the budget far.
  *
  * Pure: no I/O. The desktop host owns the history store and feeds records in.
  */
 
-import { SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
 
 /** One accepted child run, as stored in the history. */
 export interface BudgetSample {
@@ -46,9 +44,9 @@ export const LEARNING_POOL_SIZE = 30;
 /** Headroom multiplier on the p90 turn count. */
 export const LEARNING_HEADROOM = 1.25;
 /** Lowest value the learner may produce. */
-export const LEARNED_BUDGET_MIN = 20;
-/** Highest value the learner may produce (also capped by the runaway ceiling). */
-export const LEARNED_BUDGET_MAX = 120;
+export const LEARNED_BUDGET_MIN = 60;
+/** Highest value the learner may produce. */
+export const LEARNED_BUDGET_MAX = 400;
 
 /** The training filter: does this finished child count as an accepted task? */
 export function isAcceptedBudgetSample(outcome: BudgetOutcomeLike): boolean {
@@ -91,5 +89,5 @@ export function learnBaseBudget(
     return undefined;
   }
   const raw = Math.ceil(p90(pool.map((record) => record.turns)) * LEARNING_HEADROOM);
-  return Math.min(Math.max(raw, LEARNED_BUDGET_MIN), LEARNED_BUDGET_MAX, SUBAGENT_MAX_TURNS_CEILING);
+  return Math.min(Math.max(raw, LEARNED_BUDGET_MIN), LEARNED_BUDGET_MAX);
 }

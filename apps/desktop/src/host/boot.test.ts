@@ -1194,7 +1194,7 @@ describe("childRetryPolicy", () => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // --child-max-turns — the creating spawn's turn budget on the child
-// host's argv. Both flag forms; only decimal positive safe integers 1..200.
+// host's argv. Both flag forms; only decimal positive safe integers.
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("parseHostArgs — child restrictions", () => {
@@ -1225,17 +1225,17 @@ describe("parseHostArgs — --child-max-turns", () => {
     expect(result.child).toEqual({ parentSessionId: "p", spawnToolCallId: "c", initialMode: "build" });
   });
 
-  it("drops malformed, zero, negative, fraction, prefix and over-ceiling values", () => {
+  it("drops malformed, zero, negative, fraction, prefix and unsafe values", () => {
     const base = { parentSessionId: "p", spawnToolCallId: "c", initialMode: "build" };
-    for (const value of ["abc", "0", "-3", "2.5", "5x", "+8", "201", "1e3", ""]) {
+    for (const value of ["abc", "0", "-3", "2.5", "5x", "+8", "1e3", ""]) {
       expect(parseHostArgs([...LINKAGE, "--child-max-turns", value]).child).toEqual(base);
       expect(parseHostArgs([...LINKAGE, `--child-max-turns=${value}`]).child).toEqual(base);
     }
   });
 
-  it("accepts the boundaries 1 and 200", () => {
+  it("accepts 1 and a value above 200", () => {
     expect(parseHostArgs([...LINKAGE, "--child-max-turns", "1"]).child).toMatchObject({ maxTurns: 1 });
-    expect(parseHostArgs([...LINKAGE, "--child-max-turns", "200"]).child).toMatchObject({ maxTurns: 200 });
+    expect(parseHostArgs([...LINKAGE, "--child-max-turns", "500"]).child).toMatchObject({ maxTurns: 500 });
   });
 
   it("no complete child linkage means no child budget, even if the flag appeared", () => {
@@ -1251,12 +1251,12 @@ describe("resolveChildMaxTurns", () => {
   const child = { parentSessionId: "p", spawnToolCallId: "c", initialMode: "build" as const };
   it("a child budget overrides the env default", () => {
     expect(resolveChildMaxTurns({ ...child, maxTurns: 15 }, 40)).toBe(15);
-    expect(resolveChildMaxTurns({ ...child, maxTurns: 500 }, 40)).toBe(200);
+    expect(resolveChildMaxTurns({ ...child, maxTurns: 500 }, 40)).toBe(500);
   });
   it("an absent budget preserves the env default", () => {
     expect(resolveChildMaxTurns(child, 300, 60)).toBe(60);
-    expect(resolveChildMaxTurns(child, 300)).toBe(40);
-    expect(resolveChildMaxTurns(child, 300, 500)).toBe(200);
+    expect(resolveChildMaxTurns(child, 300)).toBe(150);
+    expect(resolveChildMaxTurns(child, 300, 500)).toBe(500);
   });
   it("a non-child boot (no args.child) preserves the env default", () => {
     expect(resolveChildMaxTurns(undefined, 40)).toBe(40);

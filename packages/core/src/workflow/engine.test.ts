@@ -1912,12 +1912,12 @@ describe("workflow engine role-route (engine-profile steps)", () => {
     const port = new RoutedSubagentPort(["planner"], (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`), PLANNER_PROFILES,
       new Map([["planner", { entries: [{ connection: "api", model: "m" }], skipped: [], turnBudget: 80 }]]));
     const session = okSession();
-    const workflow = def("wf-role", [{ id: "a", agentType: "planner", promptTemplate: "${input}", maxTurns: 12 }]);
+    const workflow = def("wf-role", [{ id: "a", agentType: "planner", promptTemplate: "${input}", maxTurns: 512 }]);
     await createWorkflowRunnerForTest(port, [workflow], { sessionSubagents: session }).run({ name: "wf-role", input: "go" }, {});
-    expect(session.requests[0]?.maxTurns).toBe(12);
+    expect(session.requests[0]?.maxTurns).toBe(512);
   });
 
-  it.each([0, -5])("clamps configured budget %s in routed and engine requests", async budget => {
+  it.each([501, 750])("preserves configured budget %s in routed and engine requests", async budget => {
     for (const routed of [true, false]) {
       const profile = { ...getPersona("executor"), name: routed ? "executor" : "worker", origin: "settings" as const, engine: "claude" as const };
       const port = createSubagentRunner(makeParent({ subagentMaxTurns: budget }), {
@@ -1927,7 +1927,7 @@ describe("workflow engine role-route (engine-profile steps)", () => {
       const session = okSession();
       const workflow = def("wf-budget", [{ id: "a", agentType: profile.name, promptTemplate: "${input}" }]);
       await createWorkflowRunnerForTest(port, [workflow], { sessionSubagents: session }).run({ name: "wf-budget", input: "go" }, {});
-      expect(session.requests[0]?.maxTurns).toBe(1);
+      expect(session.requests[0]?.maxTurns).toBe(budget);
     }
   });
 

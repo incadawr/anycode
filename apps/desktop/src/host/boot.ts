@@ -1,4 +1,3 @@
-import { clampChildMaxTurns } from "../shared/child-budget.js";
 /**
 
  * pieces of the resume-aware bootstrap, split out of index.ts so they are
@@ -111,7 +110,7 @@ export interface HostChildArgs {
   /**
    * the creating spawn's turn budget (`--child-max-turns <n>`),
    * present only when the child was spawned from a profile with one. A
-   * decimal positive safe integer within 1..200 (SUBAGENT_MAX_TURNS_CEILING);
+   * decimal positive safe integer;
    * anything else is dropped, consistently with the child-mode drop rule.
    */
   maxTurns?: number;
@@ -236,8 +235,8 @@ export function parseHostArgs(argv: string[]): HostArgs {
       continue;
     }
     // the creating spawn's turn budget. Only a complete decimal
-    // positive safe integer within 1..200 is accepted — parseInt prefixes
-    // ("5x"), fractions, NaN, Infinity, zero, negatives and over-ceiling
+    // positive safe integer is accepted — parseInt prefixes
+    // ("5x"), fractions, NaN, Infinity, zero, negatives and unsafe
     // values are all DROPPED (never clamped), same fail-closed drop as an
     // unrecognized --child-mode above. Only present when the child linkage
     // triple is complete does it ride args.child.
@@ -277,7 +276,7 @@ function isPermissionMode(value: string): value is PermissionMode {
 
 /** Resolve a child budget independently of the root loop's turn setting. */
 export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined, subagentMaxTurns?: number): number | undefined {
-  return child ? clampChildMaxTurns(child.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS) : envMaxTurns;
+  return child ? (child.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS) : envMaxTurns;
 }
 
 /**
@@ -303,16 +302,15 @@ export function resolveEngineDraftPresetId(
 }
 
 /**
- * a complete decimal positive integer within 1..200 — no sign, no
- * fraction, no exponent, no parseInt-prefix tolerance ("5x" fails). The
- * ceiling mirrors core's SUBAGENT_MAX_TURNS_CEILING.
+ * a complete decimal positive safe integer — no sign, no
+ * fraction, no exponent, no parseInt-prefix tolerance ("5x" fails).
  */
 function isChildMaxTurns(value: string): boolean {
   if (!/^[0-9]+$/.test(value)) {
     return false;
   }
   const n = Number(value);
-  return Number.isSafeInteger(n) && n >= 1 && n <= 200;
+  return Number.isSafeInteger(n) && n >= 1;
 }
 
 /**

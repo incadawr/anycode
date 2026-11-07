@@ -14,7 +14,7 @@ import {
   type AgentProfileRoot,
 } from "./profiles.js";
 import { PERSONAS } from "./personas.js";
-import { AGENT_PROFILE_PROMPT_MAX_BYTES, SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
+import { AGENT_PROFILE_PROMPT_MAX_BYTES } from "../types/config.js";
 import type { FileStat, FileSystemPort } from "../ports/file-system.js";
 
 function md(fields: Record<string, string>, body: string): string {
@@ -94,15 +94,15 @@ describe("parseAgentProfileMd — maxTurns frontmatter (§2.3)", () => {
     expect("ok" in res && res.ok.turnBudget).toBe(12);
   });
 
-  it("accepts the boundaries 1 and SUBAGENT_MAX_TURNS_CEILING", () => {
+  it("accepts the boundaries 1 and 500", () => {
     expect(
       "ok" in parseAgentProfileMd(md({ name: "a", description: "d", maxTurns: "1" }, "b"), "f"),
     ).toBe(true);
     const top = parseAgentProfileMd(
-      md({ name: "a", description: "d", maxTurns: String(SUBAGENT_MAX_TURNS_CEILING) }, "b"),
+      md({ name: "a", description: "d", maxTurns: String(500) }, "b"),
       "f",
     );
-    expect("ok" in top && top.ok.turnBudget).toBe(SUBAGENT_MAX_TURNS_CEILING);
+    expect("ok" in top && top.ok.turnBudget).toBe(500);
   });
 
   it("leaves turnBudget undefined when the line is absent or blank", () => {
@@ -112,8 +112,8 @@ describe("parseAgentProfileMd — maxTurns frontmatter (§2.3)", () => {
     expect("ok" in blank && blank.ok.turnBudget).toBeUndefined();
   });
 
-  it("is FATAL for an over-ceiling, zero, negative, fractional or non-numeric value", () => {
-    for (const bad of [String(SUBAGENT_MAX_TURNS_CEILING + 1), "0", "-1", "1.5", "abc", "0x20", "1e1"]) {
+  it("is FATAL for zero, negative, fractional, unsafe or non-numeric values", () => {
+    for (const bad of ["0", "-1", "1.5", "abc", "0x20", "1e1", "9007199254740992"]) {
       const res = parseAgentProfileMd(
         md({ name: "scout", description: "d", maxTurns: bad }, "b"),
         "f",

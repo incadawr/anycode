@@ -396,8 +396,8 @@ export function buildToolsPatch(
   const concurrency = parseOptionalInt(concurrencyText);
   const stallTimeoutMs = parseOptionalInt(stallTimeoutText);
   const maxTurns = parseOptionalInt(maxTurnsText);
-  const parsedSubagentMaxTurns = parseOptionalInt(subagentMaxTurnsText);
-  const subagentMaxTurns = parsedSubagentMaxTurns === undefined ? undefined : Math.max(1, parsedSubagentMaxTurns);
+  const parsedSubagentMaxTurns = subagentMaxTurnsText.trim() === "" ? undefined : Number(subagentMaxTurnsText);
+  const subagentMaxTurns = parsedSubagentMaxTurns;
   // provider retry knobs, mirrors of
   // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
   const maxRetries = parseOptionalInt(maxRetriesText);
@@ -2077,13 +2077,13 @@ export function SettingsScreen({
                 <label className="settings-field">
                   <span className="settings-field-label">Maximum turns</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={maxTurns}
-                    disabled={readOnly} placeholder="100" onChange={(e) => setMaxTurns(e.target.value)} />
+                    disabled={readOnly} placeholder="Unlimited" onChange={(e) => setMaxTurns(e.target.value)} />
                 </label>
                 <label className="settings-field">
                   <span className="settings-field-label">Maximum turns (subagents)</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
-                    disabled={readOnly} placeholder="40" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
-                  <span className="settings-field-hint">Values below 1 are raised to 1; values above 200 are capped at 200 turns.</span>
+                    disabled={readOnly} placeholder="150" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
+                  <span className="settings-field-hint">Enter a positive whole number.</span>
                 </label>
                 <div className="settings-field">
                   <label className="settings-field-checkbox">

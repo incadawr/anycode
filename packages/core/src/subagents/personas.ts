@@ -31,13 +31,13 @@ export type PersonaName = "general-purpose" | "explore" | "planner" | "executor"
 export type RolePersonaName = "planner" | "executor" | "reviewer";
 
 /**
- * Role turn budgets (§2.9): planner 30, executor 80, reviewer 40.
+ * Role turn budgets (§2.9): planner 100, executor 300, reviewer 150.
  * explore keeps DEFAULT_SUBAGENT_MAX_TURNS (it is not a role persona here).
  */
 export const ROLE_TURN_BUDGETS: Record<RolePersonaName, number> = {
-  planner: 30,
-  executor: 80,
-  reviewer: 40,
+  planner: 100,
+  executor: 300,
+  reviewer: 150,
 };
 
 /**
@@ -77,7 +77,7 @@ export interface PersonaDefinition {
   model?: string;
   /**
    * Turn budget declared by a role (md-profile `maxTurns:` frontmatter).
-   * Clamped to SUBAGENT_MAX_TURNS_CEILING by the runner; absent => the host's
+   * Absent => the host's
    * `tools.subagentMaxTurns` setting, else DEFAULT_SUBAGENT_MAX_TURNS. Built-in role defaults are applied below the owner-visible setting. Turns are
    * what actually decides a run: SUBAGENT_LOOP_DEADLINE_MS is sized to catch a
    * hung child, not to end a working one.

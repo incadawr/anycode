@@ -144,12 +144,12 @@ describe("foreign orchestration composition", () => {
     expect(composition.childMode()).toBe("plan");
   });
 
-  it.each([undefined, 0, -5, 200, 300])("stamps role budgets for setting %s", async budget => {
+  it.each([undefined, 200, 300])("stamps role budgets for setting %s", async budget => {
     const s = setup();
     s.settings.tools.subagentMaxTurns = budget;
-    for (const [role, fallback] of [["planner", 30], ["executor", 80], ["reviewer", 40]] as const) {
+    for (const [role, fallback] of [["planner", 100], ["executor", 300], ["reviewer", 150]] as const) {
       await s.invoke(role);
-      expect(s.run.mock.calls.at(-1)![0].maxTurns).toBe(budget === undefined ? fallback : Math.max(1, Math.min(200, budget)));
+      expect(s.run.mock.calls.at(-1)![0].maxTurns).toBe(budget === undefined ? fallback : budget);
     }
     s.setProfiles([{ ...PERSONAS.executor, turnBudget: 17 }]);
     await s.invoke("executor");

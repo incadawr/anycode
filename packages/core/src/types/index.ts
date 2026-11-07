@@ -81,14 +81,12 @@ export {
   DEFAULT_HOOK_TIMEOUT_MS,
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_MAX_OUTPUT_TOKENS,
-  DEFAULT_MAX_TURNS,
   DEFAULT_OUTPUT_RESERVE_TOKENS,
   // review F5: the desktop engine browser bridge clamps its
   // tool results with the SAME default the dispatcher falls back to (the
   // bridge bypasses the dispatcher). Curated-list precedent: SUBAGENT_ACTIVITY_MAX_EVENTS.
   DEFAULT_TOOL_RESULT_BUDGET,
   DEFAULT_SUBAGENT_MAX_TURNS,
-  SUBAGENT_MAX_TURNS_CEILING,
   DEFAULT_TOOL_CONCURRENCY,
   DEFAULT_TOOL_TIMEOUT_MS,
   DISPATCH_TIMEOUT_GRACE_MS,

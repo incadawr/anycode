@@ -125,9 +125,6 @@ export interface CoreEnvConfig {
   reasoningCompactorModel?: string;
 }
 
-/** Main-loop turn budget when not overridden (subagents get a lower budget in Phase 3). */
-export const DEFAULT_MAX_TURNS = 100;
-
 /**
  * Fallback for non-Claude model ids missing a catalog output limit.
  *
@@ -296,24 +293,15 @@ export const DEFAULT_RETRY_AFTER_CAP_MS = 60_000;
 // Phase 3 slice 3.1 constants (subagents, design §3.5)
 
 /**
- * Default turn budget for a subagent child loop (vs DEFAULT_MAX_TURNS=100 for
- * the parent). This is a DEFAULT, not a ceiling: an explicit request or the
- * `subagentMaxTurns` setting raises it, bounded only by
- * SUBAGENT_MAX_TURNS_CEILING.
+ * Default turn budget for a subagent child loop. An explicit request or
+ * the `subagentMaxTurns` setting may override it.
  *
  * The value was 8 from the alpha baseline through 2026-08-16, and 8 was also
  * hard-clamped in the runner, so recon over a handful of files routinely died
  * at `max_turns` with no reachable way to raise it (the Agent tool declares no
  * maxTurns and the `tools.maxTurns` setting feeds the PARENT loop only).
  */
-export const DEFAULT_SUBAGENT_MAX_TURNS = 40;
-
-/**
- * Hard ceiling on a subagent turn budget — the runaway guard that the default
- * above used to double as. Only bounds an EXPLICIT request (workflow step or
- * settings override); it is never the value a caller gets by omission.
- */
-export const SUBAGENT_MAX_TURNS_CEILING = 200;
+export const DEFAULT_SUBAGENT_MAX_TURNS = 150;
 
 /**
  * The Agent tool's dispatcher wall for one spawn, and the outer bound the two

@@ -1,4 +1,3 @@
-import { clampChildMaxTurns } from "../shared/child-budget.js";
 import { sep } from "node:path";
 import { settleChildWorktree } from "./child-worktree-cleanup.js";
 import type { ChildWorktreeResources, ChildWorktreeReceipt } from "./child-worktree-resource.js";
@@ -3306,11 +3305,11 @@ export class TabHostManager {
       // integer — main never acknowledges a malformed/out-of-range effective
       // cap (a non-conforming value is omitted, never allowed to suppress the
       // accepted acknowledgement itself).
-      return isValidEffectiveChildMaxTurns(stamped) ? clampChildMaxTurns(stamped) : undefined;
+      return isValidEffectiveChildMaxTurns(stamped) ? stamped : undefined;
     }
     const raw = env?.["ANYCODE_SUBAGENT_MAX_TURNS"];
     const parsed = raw === undefined || raw.trim() === "" ? DEFAULT_SUBAGENT_MAX_TURNS : Number(raw);
-    return Number.isSafeInteger(parsed) && parsed >= 1 ? clampChildMaxTurns(parsed) : DEFAULT_SUBAGENT_MAX_TURNS;
+    return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_SUBAGENT_MAX_TURNS;
   }
 
   /** requestId -> its owning parent's cancel of a still-live run (Agent tool abort/timeout, cut §0.5's ctx.abortSignal). */

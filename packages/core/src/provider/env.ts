@@ -180,7 +180,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const baseUrl = rawBaseUrl && rawBaseUrl.trim() !== "" ? rawBaseUrl : DEFAULT_BASE_URL;
 
   const maxTurns = readOptionalInteger(env, ENV_MAX_TURNS);
-  const subagentMaxTurns = readOptionalInteger(env, ENV_SUBAGENT_MAX_TURNS);
+  const subagentMaxTurns = readPositiveInteger(env, ENV_SUBAGENT_MAX_TURNS);
   const subagentStallTimeoutMs = readOptionalInteger(env, ENV_SUBAGENT_STALL_MS);
   const supervisorIdleMs = readPositiveInteger(env, ENV_SUPERVISOR_IDLE_MS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
@@ -387,7 +387,7 @@ function readOptionalInteger(env: NodeJS.ProcessEnv, name: string): number | und
  */
 function readPositiveInteger(env: NodeJS.ProcessEnv, name: string): number | undefined {
   const parsed = readOptionalInteger(env, name);
-  if (parsed !== undefined && parsed <= 0) {
+  if (parsed !== undefined && (!Number.isSafeInteger(parsed) || parsed <= 0)) {
     throw new Error(`Invalid ${name}: "${parsed}" is not a positive integer`);
   }
   return parsed;

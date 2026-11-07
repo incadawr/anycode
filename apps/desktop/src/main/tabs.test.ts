@@ -4234,7 +4234,7 @@ describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup 
     rootHost.emit("message", spawnRequest({ requestId: "r2", spawnToolCallId: "call-dup" }));
 
     expect(childRunEvents(rootHost)).toEqual([
-      { type: CHILD_RUN_EVENT_TYPE, requestId: "r1", kind: "accepted", maxTurns: 40, childSessionId: expect.any(String), childTabId: expect.any(String), model: expect.any(String) },
+      { type: CHILD_RUN_EVENT_TYPE, requestId: "r1", kind: "accepted", maxTurns: 150, childSessionId: expect.any(String), childTabId: expect.any(String), model: expect.any(String) },
       { type: CHILD_RUN_EVENT_TYPE, requestId: "r2", kind: "rejected", reason: "spawn_failed", message: DUPLICATE_SPAWN_MESSAGE },
     ]);
     // No second child process was ever forked for the duplicate.
@@ -6303,11 +6303,12 @@ describe("TabHostManager — child turn budget argv", () => {
     const root = manager.createTab({ workspace: "/ws", sessionId: "root-budget-core", resume: false });
     expect(root.ok).toBe(true);
 
-    hosts[0]!.emit("message", spawnRequest({ requestId: "budget-core", maxTurns: 17 }));
+    hosts[0]!.emit("message", spawnRequest({ requestId: "budget-core", maxTurns: 517 }));
 
     const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
     expect(childArgs).toContain("--child-max-turns");
-    expect(childArgs[childArgs.indexOf("--child-max-turns") + 1]).toBe("17");
+    expect(childArgs[childArgs.indexOf("--child-max-turns") + 1]).toBe("517");
+    expect(childRunEvents(hosts[0]!).find(e => e.requestId === "budget-core" && e.kind === "accepted")).toMatchObject({ maxTurns: 517 });
   });
 
   it("a fresh ENGINE child request with a budget also forks with --child-max-turns <n>", () => {
@@ -6334,7 +6335,7 @@ describe("TabHostManager — child turn budget argv", () => {
     hosts[0]!.emit("message", spawnRequest({ requestId: "budget-none" }));
 
     const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
-    expect(childArgs.slice(childArgs.indexOf("--child-max-turns"), childArgs.indexOf("--child-max-turns") + 2)).toEqual(["--child-max-turns", "40"]);
+    expect(childArgs.slice(childArgs.indexOf("--child-max-turns"), childArgs.indexOf("--child-max-turns") + 2)).toEqual(["--child-max-turns", "150"]);
   });
 
   it("falls back to the connection default only for a rejected inherited model", () => {
@@ -8039,7 +8040,7 @@ describe("TabHostManager — GitHub #17 slice A accepted acknowledgement", () =>
       rootHost.emit("message", spawnRequest({ requestId: "mt-invalid" }));
       const parsed = parseChildRunEvent(rawAccepted(rootHost, "mt-invalid"));
       expect(parsed).toMatchObject({ kind: "accepted" });
-      expect((parsed as { maxTurns?: number } | null)?.maxTurns).toBe(40);
+      expect((parsed as { maxTurns?: number } | null)?.maxTurns).toBe(150);
     }
   });
 

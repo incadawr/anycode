@@ -73,7 +73,7 @@ any nested line makes the whole file invalid, and the profile is not loaded.
 | `engine` | no | `codex` or `claude`: children run as a one-shot invocation of that CLI in the session's workspace. `claude` runs with `acceptEdits`; `codex` runs in a workspace-write sandbox. |
 | `tools` | no | Tool allowlist. In-process children only. |
 | `effort` | no | Reasoning tier: `off`, `low`, `medium`, `high`, `xhigh` or `max`. `model_reasoning_effort` is accepted as an alias. |
-| `maxTurns` | no | Turn budget for each run, 1 to 200. Default 40. |
+| `maxTurns` | no | Positive integer turn budget for each run. Default 150. |
 | `connection` | no | Exact connection id to run on. Ids are in `provider.connections[].id` in `~/.anycode/settings.json`. |
 | `provider` | no | Provider id (for example `z-ai` or `deepseek`) resolved to a configured connection. |
 | `permissions.allow` | no | Rules that run without asking. `Tool` or `Tool(pattern)`, comma-separated. In-process children only. |

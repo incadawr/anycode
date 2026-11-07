@@ -812,7 +812,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       networkRetryBudgetMs: z.number().optional(),
       // mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings).
       networkWaitMaxMs: z.number().optional(),
-      subagentMaxTurns: z.number().optional(),
+      subagentMaxTurns: z.number().int().safe().min(1).optional(),
       // slice 1: subagent stall-detector silence threshold override
       // (ANYCODE_SUBAGENT_STALL_MS). Distinct from `stallTimeoutMs` above.
       subagentStallTimeoutMs: z.number().optional(),
