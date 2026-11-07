@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, symlinkSync, readdirS
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { inside, peerEnv, judgeDelivery, captureLaunchLog } from './session-peers-smoke.mjs';
+import { inside, peerEnv, judgeDelivery, captureLaunchLog, checkAuthoritySteps, parsePeerCommand } from './session-peers-smoke.mjs';
 import { assertProductionPaths, assertSmokeAbsentFromAsar } from './smoke-package-guard.mjs';
 
 function temporary(fn) {
@@ -72,3 +72,51 @@ test('launcher captures both streams, redacts split sensitive lines, and delays 
   for (const value of ['credential-value','private body','private-tail',root,'delivery-nonce']) assert(!output.includes(value));
   assert.equal(save(),output,'Flushing twice must not duplicate trailing output');
 }));
+
+// Exercise the mode sequence and evidence judgement without launching Electron.
+function authorityDouble({stale = false, planResult = '{"status":"refused"}', planWrites = false} = {}) {
+  const requests = [], events = [];
+  let plan = false;
+  return {
+    nonce:'unique', events, native:() => requests,
+    check:(...args) => events.push(args), screenshot:async () => {},
+    orchestrate:async (_,enabled) => events.push(['orchestrate',enabled]),
+    selectMode:async (_,mode) => { plan = mode === 'plan'; events.push(['mode',mode]); },
+    sendPeer:async (_,__,nonce,options) => {
+      events.push(['send',nonce,options]);
+      if ((!plan || planWrites) && !stale) requests.push({params:{input:nonce}});
+      return plan ? planResult : '{"status":"sent"}';
+    },
+    waitNative:async () => {},
+  };
+}
+test('authority steps require separate build/orchestrate deliveries and an unapproved plan refusal',async () => {
+  const driver = authorityDouble();
+  await checkAuthoritySteps(driver,{}, {engine:'codex'});
+  assert.deepEqual(driver.events.filter(e => e[0] === 'send'),[
+    ['send','unique',undefined], ['send','unique-orchestrate',undefined], ['send','unique-plan',{approve:false}],
+  ]);
+  assert.deepEqual(driver.events.filter(e => e[0] === 'orchestrate'),[['orchestrate',true],['orchestrate',false]]);
+  assert(driver.events.some(e => e[0] === 'plan-refused' && e[1] === 'PASS'));
+});
+test('authority steps reject missing native evidence, unexpected plan results and plan writes',async () => {
+  for (const options of [{stale:true},{planResult:'{"status":"sent"}'},{planWrites:true}]) {
+    await assert.rejects(checkAuthoritySteps(authorityDouble(options),{},{engine:'codex'}));
+  }
+});
+test('Core permission denial is reported separately from observed host refusal',async () => {
+  const driver = authorityDouble({planResult:'SessionSend: only read-only tools are permitted in plan mode'});
+  await checkAuthoritySteps(driver,{},{engine:'codex'});
+  assert(driver.events.some(e => e[0] === 'plan-core-permission-denied' && e[1] === 'PASS'));
+  assert(driver.events.some(e => e[0] === 'plan-host-refused-not-reached' && e[1] === 'SKIP'));
+  assert(!driver.events.some(e => e[0] === 'plan-refused'));
+});
+
+test('fixture commands tolerate host plan/orchestrate reminders without bypassing them',() => {
+  const command = {tool:'SessionSend',input:{payload:'line\nvalue'}};
+  for (const tag of ['plan-reminder','orchestrate-reminder']) {
+    assert.deepEqual(parsePeerCommand({role:'user',content:`peer-command:${JSON.stringify(command)}\n<${tag}>host reminder</${tag}>`}),command);
+  }
+  assert.equal(parsePeerCommand({role:'tool',content:'peer-command:{}'}),null);
+  assert.throws(() => parsePeerCommand({role:'user',content:'peer-command:malformed'}));
+});

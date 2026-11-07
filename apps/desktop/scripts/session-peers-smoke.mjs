@@ -57,6 +57,11 @@ export async function wait(probe, timeout = 30000) {
 export function judgeDelivery({ before, requests, nonce }) {
   assert(nonce && requests.slice(before).some(request => JSON.stringify(request).includes(nonce)), 'No new target native request: broker delivery unproven');
 }
+/** Commands occupy one JSON line; real host mode reminders follow on later lines. */
+export function parsePeerCommand(message) {
+  return message?.role === 'user' && typeof message.content === 'string' && message.content.startsWith('peer-command:')
+    ? JSON.parse(message.content.split('\n',1)[0].slice(13)) : null;
+}
 /** Buffer until startup gating completes: the fresh-root gate forbids extra files. */
 export function captureLaunchLog(app, file, privateValues = []) {
   let output = '';
@@ -120,7 +125,7 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
             try {
               const input = JSON.parse(body); fixtures.providerInputs.push(input.messages);
               const last = input.messages.at(-1);
-              const command = last?.role === 'user' && typeof last.content === 'string' && last.content.startsWith('peer-command:') ? JSON.parse(last.content.slice(13)) : null;
+              const command = parsePeerCommand(last);
               const delta = command ? {tool_calls:[{index:0,id:randomUUID(),type:'function',function:{name:command.tool ?? 'SessionSend',arguments:JSON.stringify(command.input)}}]} : {content:'fixture ready'};
               response.writeHead(200,{'Content-Type':'text/event-stream'});
               const frame = {id:randomUUID(),object:'chat.completion.chunk',created:0,model:'core-model'};
@@ -173,20 +178,38 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
       assert(result.ok,'Pair grant mutation failed'); return result;
     },
     openPeer(source,input = {}) { return driver.tool(source,'SessionOpen',input); },
-    async tool(source,tool,input) {
+    async selectMode(source,mode) {
+      await invoke('selectTab',source.tabId);
+      assert((await api(`/tabs/${source.tabId}/mode-menu/click-chip`,{})).ok);
+      await wait(async () => (await api(`/tabs/${source.tabId}/mode-menu`,{})).open);
+      assert((await api(`/tabs/${source.tabId}/mode-menu/click-row`,{name:mode})).ok);
+      await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.mode === mode);
+    },
+    async orchestrate(source,enabled) {
+      assert((await api(`/tabs/${source.tabId}/orchestrate`,{enabled})).ok);
+      await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.orchestrateActive === enabled);
+    },
+    async tool(source,tool,input,{approve = true} = {}) {
       assert.equal(source.engine,'core','Tool-emitting fixture source must be core');
+      const before = native('core').length;
+      const oldTools = new Set(native('core').flat().filter(m => m.role === 'tool').map(m => m.tool_call_id));
       const sent = await api(`/tabs/${source.tabId}/prompt`,{text:`peer-command:${JSON.stringify({tool,input})}`});
       assert(sent.ok,'Fixture tool prompt refused');
-      const permission = await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.permission);
-      assert.equal(permission.toolName,tool,'Unexpected fixture approval request');
-      const approved = await api(`/tabs/${source.tabId}/permission`,{behavior:'allow',requestId:permission.requestId});
-      assert(approved.ok,'Fixture tool approval failed');
+      if (approve) {
+        const permission = await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.permission);
+        assert.equal(permission.toolName,tool,'Unexpected fixture approval request');
+        const approved = await api(`/tabs/${source.tabId}/permission`,{behavior:'allow',requestId:permission.requestId});
+        assert(approved.ok,'Fixture tool approval failed');
+      }
+      const result = await wait(() => native('core').slice(before).flat().filter(message => message.role === 'tool' && !oldTools.has(message.tool_call_id)).at(-1));
+      await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.turn?.status === 'idle');
+      return result.content;
     },
-    async sendPeer(source,target,payload) {
+    async sendPeer(source,target,payload,options) {
       const state = await api(`/state/${target.tabId}`);
       const sessionId = state.tabs.find(t => t.tabId === target.tabId)?.sessionId;
       assert(sessionId,'Target logical session missing');
-      return driver.tool(source,'SessionSend',{sessionId,payload,reply:'explicit'});
+      return driver.tool(source,'SessionSend',{sessionId,payload,reply:'explicit'},options);
     },
     waitNative(engine,after,token) { return wait(() => native(engine).slice(after).find(frame => !token || JSON.stringify(frame).includes(token))); },
     async cards(tab) {
@@ -214,26 +237,52 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
   };
   return driver;
 }
+/** Each write mode must prove a distinct new native request; plan never gets auto-approved. */
+export async function checkAuthoritySteps(driver,source,target) {
+  async function deliver(label,nonce) {
+    const before = driver.native(target.engine).length;
+    try {
+      await driver.sendPeer(source,target,nonce);
+      await driver.waitNative(target.engine,before,nonce);
+      judgeDelivery({before,requests:driver.native(target.engine),nonce});
+      driver.check(label,'PASS');
+    } catch (error) { driver.check(label,'FAIL'); throw error; }
+  }
+  await deliver('broker-to-target-native-request',driver.nonce);
+  await driver.screenshot('peer-delivered.png');
+  await driver.orchestrate(source,true);
+  await deliver('orchestrate-to-target-native-request',`${driver.nonce}-orchestrate`);
+  await driver.screenshot('peer-orchestrate.png');
+  await driver.orchestrate(source,false);
+  await driver.selectMode(source,'plan');
+  const before = driver.native(target.engine).length;
+  const result = await driver.sendPeer(source,target,`${driver.nonce}-plan`,{approve:false});
+  assert.equal(driver.native(target.engine).length,before,'Plan sent a native request');
+  // Core may deny the tool before it reaches the peer host. Do not label that "refused".
+  const text = typeof result === 'string' ? result : JSON.stringify(result);
+  if (/"status"\s*:\s*"refused"/.test(text)) driver.check('plan-refused','PASS');
+  else {
+    assert.match(text,/only read-only tools are permitted in plan mode/,'Unexpected plan result');
+    driver.check('plan-core-permission-denied','PASS');
+    driver.check('plan-host-refused-not-reached','SKIP');
+  }
+  await driver.screenshot('peer-plan.png');
+}
 export async function runSmoke(options) {
   const driver = await createPeerSmoke(options);
   const stop = () => { void driver.close().finally(() => { process.exitCode = 1; }); };
   process.once('SIGINT',stop); process.once('SIGTERM',stop);
-  let deliveryAttempted = false;
   try {
     await driver.start();
     await driver.screenshot('peer-ready.png');
     driver.check('peer-ready-png','PASS');
     const [source,target] = driver.tabs;
-    const before = driver.native(target.engine).length;
-    deliveryAttempted = true;
-    await driver.sendPeer(source,target,driver.nonce);
-    await driver.waitNative(target.engine,before,driver.nonce);
-    judgeDelivery({before,requests:driver.native(target.engine),nonce:driver.nonce});
-    driver.check('broker-to-target-native-request','PASS');
-    await driver.screenshot('peer-delivered.png');
+    await driver.selectMode(source,'build');
+    driver.check('source-build-mode','PASS');
+    await checkAuthoritySteps(driver,source,target);
     driver.check('cards-replies-acceptance','SKIP');
     return 0;
-  } catch (error) { driver.reportFailure(error); if (deliveryAttempted) driver.check('broker-to-target-native-request','FAIL'); driver.check('driver','FAIL'); return 1; }
+  } catch (error) { driver.reportFailure(error); driver.check('driver','FAIL'); return 1; }
   finally { process.off('SIGINT',stop); process.off('SIGTERM',stop); await driver.close(); driver.check('teardown','PASS'); }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
