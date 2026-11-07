@@ -4448,7 +4448,7 @@ export function realSkillsPaneDom(): SkillsPaneDom {
       // valid reading (byte-parity with the snapshot's own `enabled` field)
       // even for a row `hasToggle` reports `false` for.
       enabled: li.getAttribute("data-skill-enabled") === "true",
-      hasToggle: li.querySelector(".settings-switch") !== null,
+      hasToggle: li.querySelector('[role="switch"]') !== null,
     };
   }
   function importDialog(): HTMLElement | null {
