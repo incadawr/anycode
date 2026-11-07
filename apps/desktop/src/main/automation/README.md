@@ -1592,12 +1592,15 @@ their empty defaults, not an error. `servers[].state` is the raw
 "disposed"`), read off the row's own `lsp-state-<state>` CSS class —
 byte-parity with the on-screen badge, not a re-derived guess.
 `groups[].event` is a real `HookEvent` string (`HooksPanel.tsx`'s
-`formatHookEvent` labels are byte-identical to the enum values). Since
-4711 removed the header toggle buttons, the toggle routes drive REAL clicks on
-the Environment menu's Details actions: when a panel is open its own close
-button is clicked; otherwise the `.environment-trigger` dropdown opens and its
-`lsp-details`/`hooks-details` action is clicked — no store poke, no second
-path.
+`formatHookEvent` labels are byte-identical to the enum values). The toggle routes drive real clicks through Extensions: when a panel is open
+its own close button is clicked; otherwise the `.session-extensions-trigger`
+dropdown opens, the `data-extension-category="lsp"` or
+`data-extension-category="hooks"` category is selected, and its
+`data-extension-action="lsp-details"` or `"hooks-details"` button is clicked.
+Menu and category updates commit before querying their controls. Hooks is
+Core-only; Details is absent for an empty hook list without a configuration
+error. Configuration errors remain accessible in the drawer. No store poke
+or second path is used.
 
 | Method / path | Body | Returns |
 |---|---|---|

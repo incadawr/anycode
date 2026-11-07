@@ -1,6 +1,6 @@
 /**
  * cross-review F1: the real LSP/Hooks panel drivers open the
- * panel through the Environment menu. React 19 commits a click-driven state
+ * panels through Extensions → LSP and Environment → Hooks. React 19 commits a click-driven state
  * update in a microtask (after `.click()` returns), so the menu's Details
  * action only exists once React has committed. This test simulates that
  * deferred commit on a fake document and drives the REAL accessors.
@@ -29,55 +29,42 @@ interface FakeButton {
   click: () => void;
 }
 
-/**
- * A minimal document: the `.environment-trigger` click schedules the menu
- * commit for a microtask (as React 19 does for discrete events); the Details
- * actions only exist in the tree after that commit.
- */
-function installFakeEnvironmentMenu(): {
-  lspClicks: () => number;
-  hooksClicks: () => number;
-} {
-  let pendingCommit = false;
-  let menuMounted = false;
-  let lspClicks = 0;
-  let hooksClicks = 0;
-
-  const trigger: FakeButton = {
-    click: () => {
-      pendingCommit = true;
-      queueMicrotask(() => {
-        if (pendingCommit) {
-          pendingCommit = false;
-          menuMounted = true;
-        }
-      });
-    },
-  };
-  const lspDetails: FakeButton = { click: () => void (lspClicks += 1) };
-  const hooksDetails: FakeButton = { click: () => void (hooksClicks += 1) };
-
+/** Each click schedules a separate React commit; removed selectors never resolve. */
+function installFakeMenus(): { clicks: string[] } {
+  let pendingCommit: (() => void) | undefined;
+  let extensionsMounted = false;
+  let lspSelected = false;
+  let hooksSelected = false;
+  const clicks: string[] = [];
+  const button = (name: string, update: () => void): FakeButton => ({ click: () => {
+    clicks.push(name);
+    pendingCommit = update;
+    queueMicrotask(() => commit.run());
+  } });
+  const extensions = button("extensions", () => { extensionsMounted = true; });
+  const lsp = button("lsp", () => { lspSelected = true; });
+  const hooks = button("hooks", () => { hooksSelected = true; });
+  const lspDetails = button("lsp-details", () => {});
+  const hooksDetails = button("hooks-details", () => {});
   commit.run = () => {
-    if (pendingCommit) {
-      pendingCommit = false;
-      menuMounted = true;
-    }
+    const update = pendingCommit;
+    pendingCommit = undefined;
+    update?.();
   };
-
   vi.stubGlobal("document", {
     querySelector: (selector: string): FakeButton | null => {
-      if (selector === ".environment-trigger") return trigger;
-      if (!menuMounted) return null;
-      if (selector === '[data-environment-action="lsp-details"]') return lspDetails;
-      if (selector === '[data-environment-action="hooks-details"]') return hooksDetails;
+      if (selector === ".session-extensions-trigger") return extensions;
+      if (extensionsMounted && selector === '[data-extension-category="lsp"]') return lsp;
+      if (lspSelected && selector === '[data-extension-action="lsp-details"]') return lspDetails;
+      if (extensionsMounted && selector === '[data-extension-category="hooks"]') return hooks;
+      if (hooksSelected && selector === '[data-extension-action="hooks-details"]') return hooksDetails;
       return null;
     },
   });
-
-  return { lspClicks: () => lspClicks, hooksClicks: () => hooksClicks };
+  return { clicks };
 }
 
-describe("Environment-menu panel drivers (cross-review F1)", () => {
+describe("Menu panel drivers (cross-review F1)", () => {
   beforeEach(() => {
     commit.run = (): void => {};
   });
@@ -86,15 +73,28 @@ describe("Environment-menu panel drivers (cross-review F1)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("realLspPanelDom.toggle() reaches the Details action in the same task", () => {
-    const env = installFakeEnvironmentMenu();
+  it("realLspPanelDom.toggle() opens Extensions then LSP then Details in the same task", () => {
+    const env = installFakeMenus();
     realLspPanelDom().toggle();
-    expect(env.lspClicks()).toBe(1);
+    expect(env.clicks).toEqual(["extensions", "lsp", "lsp-details"]);
+  });
+
+  it("realLspPanelDom.toggle() closes an open panel directly", () => {
+    const close = vi.fn();
+    vi.stubGlobal("document", { querySelector: (selector: string) => {
+      expect(selector).toBe("aside.lsp-panel:not(.hooks-panel)");
+      return { querySelector: (child: string) => {
+        expect(child).toBe(".lsp-panel-close");
+        return { click: close };
+      } };
+    } });
+    realLspPanelDom().toggle();
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("realHooksPanelDom.toggle() reaches the Details action in the same task", () => {
-    const env = installFakeEnvironmentMenu();
+    const env = installFakeMenus();
     realHooksPanelDom().toggle();
-    expect(env.hooksClicks()).toBe(1);
+    expect(env.clicks).toEqual(["extensions", "hooks", "hooks-details"]);
   });
 });

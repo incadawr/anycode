@@ -9,20 +9,13 @@ import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
 import { BrowserAccessRow } from "./BrowserAccessRow.js";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
-import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
 import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Copy, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
+import { Copy, Folder, GitBranch } from "./icons.js";
 import { Button, IconButton } from "../ui/index.js";
 import { EnvironmentBranchPicker } from "./EnvironmentBranchPicker.js";
 import { gitAheadBehindLabel, gitPillLabel } from "./GitPill.js";
-import { groupHooksByEvent } from "./HooksPanel.js";
-// "Set up" routes through the same settings-open + pane-select
-// seam SkillsPane uses (slash-menu.ts owns both event names).
-import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
-
 type EnvironmentPlacement = "header" | "composer";
 
 function basename(path: string): string {
@@ -57,25 +50,6 @@ function changesLabel(count: number): string {
   return count === 0 ? "Working tree clean" : `${count} change${count === 1 ? "" : "s"}`;
 }
 
-/** per-server name + ready/✓ vs anything-else/— summary; "Not configured" when empty. */
-export function formatEnvironmentLspDetail(servers: readonly LspServerStatus[]): string {
-  if (servers.length === 0) return "Not configured";
-  return servers.map((s) => `${s.name} ${s.state === "ready" ? "✓" : "—"}`).join(", ");
-}
-
-/** the Restart action shows only when at least one server crashed. */
-export function hasCrashedLspServer(servers: readonly LspServerStatus[]): boolean {
-  return servers.some((s) => s.state === "crashed");
-}
-
-/** "3 hooks (PreToolUse 1, PostToolUse 2)" / "None" — reuses HooksPanel's stable event order. */
-export function formatEnvironmentHooksDetail(hooks: readonly CommandHookDeclaration[]): string {
-  if (hooks.length === 0) return "None";
-  const groups = groupHooksByEvent(hooks);
-  const parts = groups.map((g) => `${g.event} ${g.count}`).join(", ");
-  return `${hooks.length} ${hooks.length === 1 ? "hook" : "hooks"} (${parts})`;
-}
-
 export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement }) {
   const tabStore = useTabStoreApi();
   const send = useTabSend();
@@ -83,11 +57,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const workspace = useTabStore((state) => state.workspace);
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
-  // LSP/hooks status rows (core engines only — `engine === null`
-  // mirrors the old header-button gate and the panels' mount gate in App.tsx).
-  const engine = useTabStore((state) => state.engine);
-  const lspServers = useTabStore((state) => state.lspServers);
-  const hookDeclarations = useTabStore((state) => state.hookDeclarations);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
   // D8 overlay wiring: the preview WebContentsView must hide while this
@@ -193,37 +162,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     close();
   }
 
-  // cross-review F4: a missing TabContext must not look like a
-  // working Details click — the menu still closes, so say so in the console.
-  function openPanel(apply: (id: string) => void): void {
-    if (tabId) apply(tabId);
-    else console.warn("EnvironmentMenu: no tab context, panel not opened");
-    close();
-  }
-
-  function openLspDetails(): void {
-    openPanel((id) => useTabsStore.getState().setLspPanelOpen(id, true));
-  }
-
-  // "Set up" (zero servers) lands on the Language servers
-  // SETTINGS pane now — the same settings.open + select-pane pair SkillsPane
-  // uses — instead of the drawer; "Details" above keeps opening the drawer.
-  function openLspSetup(): void {
-    window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
-    window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "language-servers" }));
-    close();
-  }
-
-  function openHooksDetails(): void {
-    openPanel((id) => useTabsStore.getState().setHooksPanelOpen(id, true));
-  }
-
-  // Menu stays open: the row's status text updates via the next lsp_status.
-  function restartLsp(): void {
-    send({ type: "lsp_restart_request" });
-  }
-
-
   function copyWorkspace(): void {
     const write = navigator.clipboard?.writeText(workspacePath);
     if (!write) {
@@ -324,37 +262,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             )}
             {statusKnown && status === null && <div className="environment-menu-note">Git is not available for this workspace.</div>}
             {!statusKnown && <div className="environment-menu-note">Checking repository…</div>}
-            {engine === null && (
-              <>
-                <div className="environment-menu-row" role="group" aria-label="Language servers">
-                  <ServerStack />
-                  <span className="environment-menu-row-main">
-                    <span>Language servers</span>
-                    <span className="environment-menu-row-detail environment-menu-row-detail-prose">{formatEnvironmentLspDetail(lspServers)}</span>
-                  </span>
-                  <span className="environment-menu-actions">
-                    {hasCrashedLspServer(lspServers) && (
-                      <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="lsp-restart" onClick={restartLsp}>Restart</Button>
-                    )}
-                    {lspServers.length > 0 ? (
-                      <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="lsp-details" onClick={openLspDetails}>Details</Button>
-                    ) : (
-                      <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openLspSetup}>Set up</Button>
-                    )}
-                  </span>
-                </div>
-                <div className="environment-menu-row" role="group" aria-label="Hooks">
-                  <HookIcon />
-                  <span className="environment-menu-row-main">
-                    <span>Hooks</span>
-                    <span className="environment-menu-row-detail environment-menu-row-detail-prose">{formatEnvironmentHooksDetail(hookDeclarations)}</span>
-                  </span>
-                  <span className="environment-menu-actions">
-                    <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="hooks-details" onClick={openHooksDetails}>Details</Button>
-                  </span>
-                </div>
-              </>
-            )}
           </section>
           <section className="environment-menu-section environment-menu-group" aria-label="Session access">
             <div className="environment-menu-title">Session access <span className="environment-menu-scope">this session only</span></div>

@@ -48,6 +48,7 @@ const ContextWindowSettings = lazy(() => import("./ContextWindowSettings.js"));
 import { EngineSwitchPicker } from "./EngineSwitchPicker.js";
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
 import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, engineEffortDisabled, nativeEffortControl } from "./EngineControls.js";
+import { SessionExtensionsMenu } from "./SessionExtensionsMenu.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { BackgroundAgents } from "./BackgroundAgents.js";
 import { PromptQueue } from "./PromptQueue.js";
@@ -1506,6 +1507,7 @@ export function Composer() {
   // a send while running becomes a mid-turn steer instead of a queued prompt.
   const steerSupported = useTabStore((s) => s.steering?.supported === true);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
+  const sessionWorkspace = useTabStore((state) => state.workspace);
   // §3.7 (part B): tab-scoped orchestrate flag (part A keeps it
   // from `orchestrate_changed` acks). Read here for the ModeMenu row and the
   // `/orchestrate` submit path below.
@@ -2466,7 +2468,10 @@ export function Composer() {
           finishRolePicker(picker.id, connection);
         }}
       />
-      {isNewSession && <EnvironmentMenu placement="composer" />}
+      {isNewSession && sessionWorkspace && <div className="composer-environment">
+        <EnvironmentMenu placement="composer" />
+        <SessionExtensionsMenu />
+      </div>}
       {(pills.length > 0 || attachedImages.length > 0) && (
         <div className="composer-pills">
           {pills.map((block) => (
