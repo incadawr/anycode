@@ -16,6 +16,7 @@ import { Copy, Folder, GitBranch } from "./icons.js";
 import { Button, IconButton } from "../ui/index.js";
 import { EnvironmentBranchPicker } from "./EnvironmentBranchPicker.js";
 import { gitAheadBehindLabel, gitPillLabel } from "./GitPill.js";
+
 type EnvironmentPlacement = "header" | "composer";
 
 function basename(path: string): string {

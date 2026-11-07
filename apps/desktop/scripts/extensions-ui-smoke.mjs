@@ -318,7 +318,7 @@ async function main() {
     const second = await create(b);
     phase = "empty header";
     assert.equal(await evaluate(`document.querySelectorAll('.session-header ${trigger}').length`), 0);
-    assert.equal(await evaluate("document.querySelectorAll('.session-header [aria-label=\"Open environment menu\"]').length"), 0);
+    assert.equal(await evaluate("document.querySelectorAll('.session-header .environment-trigger').length"), 0);
     results.checks.push("empty-header");
     phase = "Core startup";
     await turn(second, "Start local extensions fixture", true);
