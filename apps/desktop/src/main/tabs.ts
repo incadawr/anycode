@@ -84,7 +84,7 @@ import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { childSessionLimitMessage, clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
-import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL, ENV_SUBAGENT_MAX_TURNS } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import { sessionToolEnv } from "../shared/session-env.js";
 import { ENV_MCP_SECRETS } from "../shared/mcp-secrets.js";
@@ -3312,7 +3312,7 @@ export class TabHostManager {
       // accepted acknowledgement itself).
       return isValidEffectiveChildMaxTurns(stamped) ? stamped : undefined;
     }
-    const raw = env?.["ANYCODE_SUBAGENT_MAX_TURNS"];
+    const raw = env?.[ENV_SUBAGENT_MAX_TURNS];
     const parsed = raw === undefined || raw.trim() === "" ? DEFAULT_SUBAGENT_MAX_TURNS : Number(raw);
     return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_SUBAGENT_MAX_TURNS;
   }

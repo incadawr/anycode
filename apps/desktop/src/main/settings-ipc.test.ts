@@ -820,6 +820,7 @@ describe("handleSet — merge + read-only", () => {
     expect((await loadSettings(settingsPath)).settings.tools.maxTurns).toBeUndefined();
     for (const maxTurns of [0, -1, 1.5]) {
       expect(await handleSet(makeDeps(), { tools: { maxTurns } })).toEqual({ ok: false, reason: "invalid" });
+      expect(await handleSet(makeDeps(), { tools: { subagentMaxTurns: maxTurns } })).toEqual({ ok: false, reason: "invalid" });
     }
   });
 

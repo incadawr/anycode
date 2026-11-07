@@ -1088,7 +1088,7 @@ export type SettingsParseResult =
  *  - version > CURRENT      -> read_only (salvage what validates, else defaults)
  *  - version in [.., CURRENT] -> run migrations, then schema-validate (fail -> corrupt)
  */
-export function parseSettings(raw: unknown): SettingsParseResult {
+export function parseSettings(raw: unknown, onInvalidTurnLimit?: (field: string) => void): SettingsParseResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { status: "corrupt", settings: cloneDefaults(), readOnly: false };
   }
@@ -1110,7 +1110,7 @@ export function parseSettings(raw: unknown): SettingsParseResult {
     // Newer file than this binary understands: salvage the fields that still
     // validate against the current shape, but surface readOnly so no write ever
     // clobbers the newer file with a downgraded copy.
-    const salvaged = settingsSchema.safeParse({ ...obj, version: CURRENT_SETTINGS_VERSION });
+    const salvaged = settingsSchema.safeParse(sanitizeLoadedTurnLimits({ ...obj, version: CURRENT_SETTINGS_VERSION }, onInvalidTurnLimit));
     return {
       status: "read_only",
       settings: salvaged.success ? salvaged.data : cloneDefaults(),
@@ -1125,11 +1125,25 @@ export function parseSettings(raw: unknown): SettingsParseResult {
     migrated = migrate(migrated);
   }
 
-  const parsed = settingsSchema.safeParse(migrated);
+  const parsed = settingsSchema.safeParse(sanitizeLoadedTurnLimits(migrated, onInvalidTurnLimit));
   if (!parsed.success) {
     return { status: "corrupt", settings: cloneDefaults(), readOnly: false };
   }
   return { status: "ok", settings: parsed.data, readOnly: false };
+}
+
+/** Older versions allowed arbitrary numbers here; repair only the loaded copy. */
+function sanitizeLoadedTurnLimits(raw: Record<string, unknown>, onInvalid?: (field: string) => void): Record<string, unknown> {
+  if (!isPlainObject(raw.tools)) return raw;
+  const tools = { ...raw.tools };
+  for (const field of ["maxTurns", "subagentMaxTurns"] as const) {
+    const value = tools[field];
+    if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1)) {
+      delete tools[field];
+      onInvalid?.(field);
+    }
+  }
+  return { ...raw, tools };
 }
 
 /**
