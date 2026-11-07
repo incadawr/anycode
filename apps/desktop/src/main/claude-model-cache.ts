@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { CLAUDE_EFFORT_LEVELS } from "../shared/claude-effort.js";
+import { claudeModelSuffix } from "../shared/claude-model-label.js";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync, realpathSync, statSync } from "node:fs";
 import type { ClaudeDoctorReport, ClaudeModelCache } from "../shared/claude-doctor.js";
@@ -46,7 +47,7 @@ export function projectClaudeModels(raw: unknown, clean: (value: string) => stri
     if (!entry || typeof entry.value !== "string" || !/^[\w.:[\]-]{1,200}$/.test(entry.value)) return [];
     if (clean(entry.value) !== entry.value) return [];
     const name = typeof entry.displayName === "string" ? entry.displayName : entry.value;
-    const suffix = entry.value.endsWith("[1m]") ? " (1M)" : "";
+    const suffix = claudeModelSuffix(entry.value);
     const label = clean(name).slice(0, 256 - suffix.length) + suffix;
     const levels = entry.supportsEffort === true && Array.isArray(entry.supportedEffortLevels)
       ? entry.supportedEffortLevels : [];

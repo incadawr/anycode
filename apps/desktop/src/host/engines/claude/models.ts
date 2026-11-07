@@ -1,4 +1,5 @@
 import { CLAUDE_EFFORT_LEVELS } from "../../../shared/claude-effort.js";
+import { claudeModelSuffix } from "../../../shared/claude-model-label.js";
 /**
  * Claude model catalog — built from the LIVE `initialize` response's `models[]`
  * (cut §1.4), never a static enum. This is a contract-level fact, not a
@@ -213,7 +214,7 @@ export class ClaudeModelCatalog {
   choices(): EngineModelChoice[] {
     return this.entries.map((entry) => ({
       id: entry.value,
-      label: entry.displayName,
+      label: entry.displayName + claudeModelSuffix(entry.value),
       ...(entry.supportsEffort && entry.supportedEffortLevels.length > 0
         ? { efforts: entry.supportedEffortLevels }
         : {}),

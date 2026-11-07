@@ -70,10 +70,11 @@ function settingsHaveRoles(projectRoot: string): boolean {
 
 /**
  * Keeps the historical Core create payload byte-for-byte additive apart from
- * the cut-1 stage A `connectionId` pick below. For a non-core
- * (Codex) draft, also forwards the draft's own model/preset/profile picks
- * (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers both
- * already existed — this is the missing wire between them). All are opaque
+ * the cut-1 stage A `connectionId` pick below. For a non-core draft (Claude or
+ * Codex), also forwards the draft's own model/preset/profile picks; a Claude
+ * model is first resolved against the live `claudeModels` catalog. (W3 join:
+ * main/tabs.ts's argv forwarding and the StartScreen pickers both already
+ * existed — this is the missing wire between them). All are opaque
  * ids; omitted entirely when never explicitly picked, so the host (or main's
  * registry) applies its own default rather than receiving a stale/invalid id.
  */

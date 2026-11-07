@@ -267,6 +267,30 @@ it("resolves every fallback id through the synthetic initialize catalog", () => 
   expect(CLAUDE_DRAFT_MODELS.map(model => catalog.resolveId(model.id))).toEqual(["default", "fable", "opus", "sonnet", "haiku"]);
 });
 
+it("labels an extended-context entry apart from its ordinary sibling in the in-session picker", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize([
+    { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-5-5", displayName: "Opus" },
+  ]);
+  expect(catalog.choices().map((choice) => choice.label)).toEqual(["Opus", "Opus (1M)"]);
+});
+
+it("resumes a bracketed live id onto the extended alias, and reads it back against the shared plain id", () => {
+  // Resume-safety: a bracketed id names the extended alias, never the ordinary one.
+  const bracketed = ClaudeModelCatalog.fromInitialize([
+    { value: "opus", resolvedModel: "claude-opus-4-8", displayName: "Opus" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-4-8[1m]", displayName: "Opus" },
+  ]);
+  expect(bracketed.resolveId("claude-opus-4-8[1m]")).toBe("opus[1m]");
+  expect(bracketed.resolveId("claude-opus-4-8")).toBe("opus");
+  // Read-back: the plain id the CLI reports for the shared resolved model matches the extended alias.
+  const shared = ClaudeModelCatalog.fromInitialize([
+    { value: "opus", resolvedModel: "claude-opus-4-8" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-4-8" },
+  ]);
+  expect(shared.readBackMatches("opus[1m]", "claude-opus-4-8")).toBe(true);
+});
+
 it("prefers ordinary Opus when the extended alias has the same resolved id", () => {
   const catalog = ClaudeModelCatalog.fromInitialize([
     { value: "default", resolvedModel: "claude-opus-5-5" },

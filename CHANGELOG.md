@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Claude’s pre-session model pickers remember the live catalog for the current account and CLI, with versioned fallback choices including Fable; selecting fallback Opus no longer requests extended context.
+- Claude’s pre-session model pickers remember the live catalog for the current account and CLI, with versioned fallback choices including Fable; model selection prefers ordinary context when the account offers both ordinary and 1M variants.
 
 ## [0.0.87] - 2026-11-07
 
