@@ -1,3 +1,4 @@
+import { z } from "zod";
 
 /** Main-authored boot capability, consumed before host subprocesses start. */
 export const NATIVE_SESSIONS_ENV = "ANYCODE_NATIVE_SESSIONS_ENABLED";
@@ -8,7 +9,6 @@ export function takeNativeSessionsCarrier(env: Record<string, string | undefined
   return enabled;
 }
 
-import { z } from "zod";
 export { parseSessionPeerRequest, parseSessionPeerResponse } from "@anycode/core";
 export type { SessionPeerRequest, SessionPeerCall, SessionPeerResponse } from "@anycode/core";
 
