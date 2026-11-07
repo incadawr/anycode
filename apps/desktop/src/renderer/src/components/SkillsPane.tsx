@@ -68,7 +68,7 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
     <div className="mcp-section-title">Built into AnyCode</div>
     <p className="skills-pane-hint">{notice}</p>
     <p className="skills-pane-hint">Changes affect the next process launch, including resume; running sessions keep their snapshot.
-      This pane does not report process state. Unavailable warnings appear in the session; a prepared snapshot or CLI-reported metadata does not prove model use.
+      This pane does not report process state. Prepared and CLI-reported notices, and unavailable warnings, appear in the session; a prepared snapshot or CLI-reported metadata does not prove model use.
       Workspace settings are ignored by Claude in untrusted workspaces. Same-name files do not replace this app catalog. Codex: not yet delivered.</p>
     <ul className="skills-row-list mcp-row-list">
       {ENGINE_BUILTIN_SKILLS.filter(def => [def.id, def.description, def.claude, def.codex].join(" ").toLowerCase().includes(query.trim().toLowerCase())).map(def => {

@@ -48,6 +48,7 @@ import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
+  EngineVersionError,
   buildFlagSettings,
   permissionModeToFlag,
   type ClaudeResultMessage,
@@ -741,12 +742,12 @@ async function connectClaudeEngine(
     } catch (error) {
       await close();
       forward?.cleanupFile();
-      // Retry only explicit app-plugin load/argument rejection during initialize.
-      // Account, verification and generic transport failures have no such attribution.
-      const pluginFailure = !initializedOk && error instanceof Error &&
-        /claude control request failed:/i.test(error.message) &&
-        /(?:failed to (?:load|initialize) plugin[ :]+anycode-app\b|(?:unknown|unrecognized) (?:option|argument)[ :]+['"]?--plugin-dir\b)/i.test(error.message);
-      if (pluginFailure && !disableBuiltins && client?.hasBuiltinPlugin && !signal?.aborted && current()) {
+      // An unknown boot failure may be the adapter, including an early child exit.
+      // Successful initialize, typed non-plugin failures and cancellation retain their cause.
+      const nonPluginFailure = initializedOk || error instanceof EngineVersionError ||
+        error instanceof OrchestrationNotReadyError || error instanceof ClaudeTransportAbortError ||
+        (error instanceof Error && error.message === CLAUDE_NOT_SIGNED_IN);
+      if (!nonPluginFailure && !disableBuiltins && client?.hasBuiltinPlugin && !signal?.aborted && current()) {
         notices.push(warning("App builtins unavailable: plugin-start-failed. Retrying without the adapter."));
         return openTransport(next, current, signal, true);
       }

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import ts from "typescript";
 import { ENGINE_BUILTIN_SKILLS } from "../../shared/engine-skills.js";
+import { checkBuiltinPolicyWorker } from "../../main/self-check.js";
 import { builtinPolicyWorkerUrl, readBuiltinPolicy } from "./builtin-policy.js";
 
 const harness = vi.hoisted(() => ({ entry: "", stall: false, script: "", terminated: 0, data: [] as unknown[], output: "" }));
@@ -141,4 +142,22 @@ it("ignores a valid-shaped untrusted project while retaining user policy", async
 
 it("resolves a worker from nested chunks", () => {
   expect(String(builtinPolicyWorkerUrl("file:///app/out/main/chunks/sub/shared.js"))).toBe("file:///app/out/main/builtin-policy-worker.js");
+});
+
+it("self-check runs the real worker on synthetic absent config with no real home", async () => {
+  await checkBuiltinPolicyWorker(root);
+  expect(harness.data).toEqual([{ paths: [join(root, "builtin-policy", ".anycode", "config.json")], ids }]);
+});
+it.each(["throw new Error('broken')", "require('node:worker_threads').parentPort.postMessage({disabled:['unexpected']})"])("self-check rejects worker failure or invalid result", async script => {
+  harness.script = script;
+  await expect(checkBuiltinPolicyWorker(root)).rejects.toThrow("builtin-policy-worker");
+});
+it("self-check bounds a stalled worker and terminates it", async () => {
+  harness.stall = true; const terminated = harness.terminated;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const pending = expect(checkBuiltinPolicyWorker(root)).rejects.toThrow("builtin-policy-worker");
+    await vi.advanceTimersByTimeAsync(5001); await pending;
+    expect(harness.terminated).toBeGreaterThan(terminated);
+  } finally { vi.useRealTimers(); }
 });

@@ -29,5 +29,6 @@ try {
   assert.equal(exitCode, 0, JSON.stringify(result));
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.packaged, true, "This check must run against a packaged release artifact");
+  assert(result.checks?.includes("builtin-policy-worker"), "Missing builtin-policy-worker self-check");
   console.log(JSON.stringify(result, null, 2));
 } finally { clearTimeout(timer); clearTimeout(forceTimer); }
