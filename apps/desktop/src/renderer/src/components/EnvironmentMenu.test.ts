@@ -188,6 +188,8 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
       expect(dialog.querySelector('section[aria-label="' + title + '"]')).not.toBeNull();
     }
     expect(dialog.textContent).toContain("this session only");
+    expect(dialog.querySelector('section[aria-label="Workspace"] .environment-menu-row-main > span')?.textContent).toBe("notes");
+    expect(dialog.querySelector('section[aria-label="Diagnostics"]')?.textContent?.match(/Diagnostics/g)).toHaveLength(1);
     expect(dialog.querySelector('section[aria-label="Workspace"]')?.textContent).toContain("Git is not available for this workspace.");
     expect(dialog.querySelector('[aria-label="Native session access"]')).toBeNull();
     const access = '[data-environment-action="sessions-api-access"]';
@@ -303,5 +305,15 @@ it("Escape closes the branch screen through the existing panel handler", async (
   await branchMenu(async (host) => {
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+it("keeps a long branch name available in the row and its tooltip", async () => {
+  await branchMenu(async (host, store) => {
+    const name = "feature/" + "long-branch-segment-".repeat(18);
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {}, branches: [{ name, current: false, sha: "abcdef123" }] } }));
+    const option = host.querySelector('[role="option"][aria-selected="false"]')!;
+    expect(option.textContent).toBe(name);
+    expect(option.querySelector("span")?.getAttribute("title")).toBe(name);
   });
 });

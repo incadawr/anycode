@@ -95,7 +95,7 @@ describe("SessionAccessRow External approvals", () => {
     const html = renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }));
     expect(html).toContain("External approvals on");
     expect(html).toContain("environment-menu-row-detail-prose");
-    expect(html.indexOf("<svg")).toBeLessThan(html.indexOf("environment-menu-row-main"));
+    expect(html).not.toContain("<svg");
     expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
     expect(html.indexOf("environment-menu-actions")).toBeLessThan(html.indexOf('data-environment-action="sessions-api-approvals"'));
   });
@@ -113,6 +113,8 @@ describe("SessionAccessRow layout", () => {
     const html = renderToStaticMarkup(
       createElement(SessionHandleField, { value: "build-bot", error: null, onChange: () => {}, onCommit: () => {} }),
     );
+    expect(html).not.toContain("<svg");
+    expect(html).toContain('placeholder="Agent name"');
     expect(html).toContain(SESSION_HANDLE_LABEL);
     expect(html).toContain(SESSION_HANDLE_DETAIL);
     expect(html).toContain(`title="${SESSION_HANDLE_HINT}"`);

@@ -24,7 +24,7 @@ export function EnvironmentBranchPicker({ back, retry, select }: {
     return <div key={name} id={`${id}-${i}`} role="option" aria-selected={i === 0} data-active={index === i}
       className={`environment-branch-row${i === 0 ? " environment-branch-row-current" : ""}`}
       onMouseMove={() => setActive(i)} onClick={() => choose(i)}>
-      <GitBranch /><span>{name}</span>{i === 0 && <span aria-label="Current branch">✓</span>}
+      <GitBranch /><span title={name}>{name}</span>{i === 0 && <span aria-label="Current branch">✓</span>}
     </div>;
   }
   return <section className="environment-branch-picker" aria-label="Switch branch">

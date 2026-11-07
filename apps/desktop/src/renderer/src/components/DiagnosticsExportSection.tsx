@@ -158,7 +158,6 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
       <div className="environment-menu-row" role="group" aria-label="Diagnostics">
         <span className="environment-menu-spacer" aria-hidden="true" />
         <span className="environment-menu-row-main">
-          <span>Diagnostics</span>
           <span className="environment-menu-row-detail environment-menu-row-detail-prose">{describeDiagnosticsExport(phase)}</span>
         </span>
         <span className="environment-menu-actions">

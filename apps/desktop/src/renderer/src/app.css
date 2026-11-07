@@ -1960,7 +1960,7 @@ button.environment-menu-row:hover,
    Combined selector (0,2,0) so it outranks the base `.environment-menu-row-detail` rule. */
 .environment-menu-row-detail.environment-menu-row-detail-prose {
   overflow: visible;
-  overflow-wrap: normal;
+  overflow-wrap: break-word;
   word-break: normal;
   font-family: var(--font-ui);
   text-overflow: clip;
@@ -2043,7 +2043,13 @@ button.environment-menu-row:hover,
   height: 2rem;
 }
 
+.environment-branch-picker .environment-branch-row {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
 .environment-branch-picker .environment-branch-row span:first-of-type {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

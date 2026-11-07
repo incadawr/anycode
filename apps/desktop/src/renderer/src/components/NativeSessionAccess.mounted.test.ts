@@ -59,13 +59,15 @@ it.each(["invalid", "unavailable", "io_error"] as const)("shows an actionable %s
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(messages[reason]);
   } finally { await act(async () => root.unmount()); }
 });
-it("hides the recommended default while loading and unavailable", async () => {
+it("keeps a disabled loading row until availability is known", async () => {
   let resolve!: (value: SessionPeerViewResult) => void;
   const bridge = { get: () => new Promise<SessionPeerViewResult>(r => { resolve = r; }), set: vi.fn() };
   const host = document.createElement("div"); const root = createRoot(host);
   try {
     await act(async () => root.render(createElement(NativeSessionAccess, { tabId: "a", bridge })));
     expect(host.textContent).not.toContain("Recommended default:");
+    expect(host.textContent).toContain("Loading…");
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Native session access"]')?.disabled).toBe(true);
     await act(async () => resolve({ ok: true, view: { available: false, project: { key: "/alpha", name: "alpha", enabled: true, trusted: true, granted: false }, peers: [] } }));
     expect(host.textContent).not.toContain("Recommended default:");
     expect(host.querySelector('[aria-label="Native session access"]')).toBeNull();

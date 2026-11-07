@@ -243,7 +243,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             <Button variant="ghost" size="sm" type="button" className="environment-menu-row" onClick={copyWorkspace}>
               <Folder />
               <span className="environment-menu-row-main">
-                <span>Workspace</span>
+                <span>{basename(workspacePath)}</span>
                 <span className="environment-menu-row-detail environment-menu-row-detail-wrap">{copied ? "Copied" : workspacePath}</span>
               </span>
             </Button>

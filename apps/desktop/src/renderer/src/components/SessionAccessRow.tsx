@@ -15,7 +15,7 @@ import { handleErrorText, sessionApprovalsLabel, sessionSwitchDetail, sessionSwi
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
 import { Switch } from "../ui/components/Switch.js";
-import { Check, Pencil, Robot } from "./icons.js";
+import { Robot } from "./icons.js";
 
 export interface SessionAccessBridge {
   get(): Promise<CommunicationGetResult>;
@@ -33,7 +33,7 @@ export interface SessionAccessBridge {
 export function SessionApprovalsField({ approvals, onChange }: { approvals: boolean; onChange: (next: boolean) => void }) {
   return (
     <EnvironmentMenuRow
-      icon={<Check />}
+      icon={null}
       title={sessionApprovalsLabel(approvals)}
       detail={SESSION_APPROVALS_NOTE}
       ariaLabel="External approvals"
@@ -63,7 +63,7 @@ export function SessionHandleField({
 }) {
   return (
     <EnvironmentMenuRow
-      icon={<Pencil />}
+      icon={null}
       title={SESSION_HANDLE_LABEL}
       detail={SESSION_HANDLE_DETAIL}
       detailTitle={SESSION_HANDLE_HINT}

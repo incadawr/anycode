@@ -25,11 +25,11 @@ export function NativeSessionAccess({ tabId, bridge = window.anycode.sessionPeer
     catch { setError(text.io_error); }
     finally { setBusy(false); }
   }
-  if (!view?.available && !error) return null;
+  if (view?.available === false) return null;
   return <div className="environment-menu-section">
-    {view?.available && <EnvironmentMenuRow icon={<Robot />} title={text.title} ariaLabel={text.title} detail={`${text.default} ${!view.project.trusted ? text.trust : ""}`}
+    <EnvironmentMenuRow icon={<Robot />} title={text.title} ariaLabel={text.title} detail={view?.available ? `${text.default} ${!view.project.trusted ? text.trust : ""}` : error ? undefined : "Loading…"}
       control={<Switch aria-label={text.title} checked={!!view?.available && view.project.enabled}
-        disabled={busy || !view?.available || (!view.project.trusted && !view.project.enabled)} onCheckedChange={enabled => void save({ enabled })} />} />}
+        disabled={busy || !view?.available || (!view.project.trusted && !view.project.enabled)} onCheckedChange={enabled => void save({ enabled })} />} />
     {view?.available && view.peers.map(peer => <EnvironmentMenuRow key={peer.key} icon={<Robot />}
       title={`${view.project.name} ↔ ${peer.name}`} ariaLabel={`${view.project.key} ↔ ${peer.key}`} detail={`${view.project.key} ↔ ${peer.key}`}
       control={<Button variant="ghost" size="sm" disabled={busy || (!peer.granted && (!peer.trusted || !view.project.trusted || !peer.enabled || !view.project.enabled))}
