@@ -4,7 +4,7 @@ import {
   ENGINE_SKILL_STATUSES,
 } from "../shared/engine-skills.js";
 import { anycodeSetupDocsForHost } from "./anycode-setup-docs.js";
-import { buildEngineBuiltinSkills } from "./engine-builtin-skills.js";
+import { assertInertEngineBuiltinText, buildEngineBuiltinSkills } from "./engine-builtin-skills.js";
 import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
 
 vi.mock("./anycode-setup-docs.js", () => ({ anycodeSetupDocsForHost: vi.fn() }));
@@ -73,9 +73,13 @@ describe("engine app builtins", () => {
     expect(bodies).toContain("always asks");
     expect(bodies).toContain("remote URL always asks");
     expect(bodies).toContain("untrusted data");
-    expect(bodies).toContain("password and file fields");
+    expect(bodies).toContain("File inputs are always refused");
+    expect(bodies).toContain("Password fields are refused unless Full browser access is enabled");
+    expect(bodies).toContain("Do not enter secrets");
     expect(bodies).toContain("latest snapshot");
-    expect(bodies).toContain("image input");
+    expect(bodies).toContain("Try screenshots when useful");
+    expect(bodies).toContain("If the tool reports unavailable image input");
+    expect(bodies).not.toContain("Screenshots require");
   });
 
   it("uses only app-resolved docs and explains source-name disabling and precedence", () => {
@@ -87,6 +91,7 @@ describe("engine app builtins", () => {
     expect(setup.body).toContain("auth files");
     expect(setup.body).toContain("skills.disabled");
     expect(setup.body).toContain("do not replace");
+    expect(setup.body).not.toMatch(/three app builtins|prepared|CLI-reported|next launch/);
     docs.mockReturnValue({ kind: "remote", ref: "v0.0.87" });
     const remote = buildEngineBuiltinSkills({ engine: "claude" })[0]!;
     expect(remote.body).toContain("https://raw.githubusercontent.com/incadawr/anycode/v0.0.87/docs/user/<topic>.md");
@@ -112,5 +117,20 @@ describe("engine app builtins", () => {
     }
     docs.mockReturnValue({ kind: "remote", ref: "master/../../foreign" });
     expect(() => buildEngineBuiltinSkills({ engine: "codex" })).toThrow();
+  });
+});
+
+describe("builtin serializer defense in depth seam", () => {
+  it("accepts inert text", () => {
+    expect(() => assertInertEngineBuiltinText("fixed metadata\n\nSafe body", "Safe body")).not.toThrow();
+  });
+  it.each(["\n---", "\nhooks: run", "\nallowed-tools: shell", "\ncontext: fork",
+    "\nagent: other", "\nmodel: other", "${value}", "$(command)", "$ARGUMENTS", "`command`", "\x00"])
+  ("rejects unsafe template bytes: %s", body => {
+    expect(() => assertInertEngineBuiltinText("fixed metadata\n" + body, body)).toThrow("Unsafe app builtin text");
+  });
+  it("enforces the serialized byte cap", () => {
+    expect(() => assertInertEngineBuiltinText("a".repeat(65536), "safe")).not.toThrow();
+    expect(() => assertInertEngineBuiltinText("a".repeat(65537), "safe")).toThrow();
   });
 });
