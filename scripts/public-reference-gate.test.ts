@@ -91,7 +91,6 @@ const ALLOW: Entry[] = [
   { path: "apps/desktop/src/main/boot-tree.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "apps/desktop/src/main/boot-tree.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "apps/desktop/src/main/boot-tree.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
-  { path: "apps/desktop/src/main/codex-rollout-fixtures/reasoning-nonempty-summary.jsonl", value: " 10", note: "plan numbering inside a captured engine payload, unchanged from the base commit" },
   { path: "apps/desktop/src/main/tab-ipc.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "apps/desktop/src/main/tab-ipc.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
   { path: "apps/desktop/src/main/worktree-janitor.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
@@ -164,7 +163,6 @@ const ALLOW: Entry[] = [
   { path: "apps/desktop/src/host/index.ts", value: " 3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "apps/desktop/src/host/index.ts", value: "-1.7", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "apps/desktop/src/host/terminal.test.ts", value: " 2.4.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
-  { path: "apps/desktop/src/main/codex-rollout-fixtures/reasoning-nonempty-summary.jsonl", value: " 10.7", note: "plan numbering inside a captured engine payload, unchanged from the base commit" },
   { path: "apps/desktop/src/main/tabs.ts", value: " 2.4.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "apps/desktop/src/main/tabs.ts", value: " 2.4.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "apps/desktop/src/renderer/src/App.tsx", value: " 2.1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
@@ -261,7 +259,6 @@ const ALLOW: Entry[] = [
   { path: "packages/core/src/workflow/template.ts", value: " 3.4.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
 
   // fragments of paths, evidence directories and session names from the unpublished working tree
-  { path: "apps/desktop/src/main/codex-rollout-fixtures/agent-message-inter-agent.jsonl", before: "/Users/scrubbed/projects/tools/anycode/.anycode/worktrees/", value: "-5\\", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
   { path: "apps/desktop/src/preload/index.ts", value: " 2.4.4.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
   { path: "apps/desktop/src/shared/credentials.ts", value: " 2.5.1.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
   { path: "apps/desktop/src/shared/protocol.test.ts", value: " 3.2.4.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },

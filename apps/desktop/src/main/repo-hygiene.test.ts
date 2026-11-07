@@ -39,10 +39,10 @@ describe("repo hygiene — owner home path", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("known-scrubbed fixtures keep their placeholder forms", () => {
-    // Cheap canary that the 42f8c0f1 scrub stays in place.
+  it("fixture documentation and path placeholders remain present", () => {
+    // Canary for the synthetic fixture documentation and a separate path placeholder.
     const readme = readFileSync(join(repoRoot, "apps/desktop/src/main/codex-rollout-fixtures/README.md"), "utf-8");
-    expect(readme).toContain("/Users/<name>/");
+    expect(readme).toContain("synthetic and hand-written");
     const mcp = readFileSync(join(repoRoot, "apps/desktop/src/renderer/src/components/McpServersPane.test.ts"), "utf-8");
     expect(mcp).toContain("/Users/<user>");
   });
