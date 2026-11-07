@@ -12,11 +12,14 @@ HTTP Sessions API below, with separate access rules. They are behind the
 experimental native sessions flag, **off by default**: development builds only,
 started with `ANYCODE_NATIVE_SESSIONS_ENABLED=1`. Packaged builds keep them off.
 
-With the flag on, trusted root sessions in the same exact folder have native
-access by default. The tab's environment menu has **Native session access** to
-turn the project off and **Allow communication** / **Revoke communication** for
-an explicit pair of folders. Both folders must be trusted and enabled. Nested
-folders and sibling worktrees need their own pair grant. Cross-folder opening
+A root is a top-level session, rather than a child or inline sub-agent. With the
+flag on, trusted roots in the same exact folder have native access by default,
+subject to per-tab permissions. Claude/Codex roots currently cannot send messages
+or open peers because their native preset authority is not carried to main.
+The tab's environment menu has **Native session access** to turn the project off
+and **Allow communication** / **Revoke communication** for an explicit pair of
+folders. Both folders must be trusted and enabled. Nested folders and sibling
+worktrees need their own pair grant. Cross-folder opening
 also needs **Allow agents to open tasks here** on the destination. File lookup
 stays inside the caller's folder even with a pair grant.
 
@@ -33,22 +36,23 @@ force the new tab to be shared externally; the normal new-session default applie
 | `SessionSend` | A message id and delivery state, without waiting for the answer. Payloads are limited to 32,000 characters. Only `next_turn` works; native `steer` returns `unavailable`. |
 | `SessionOpen` | A new independent root's session/tab ids, optional label and first-message delivery receipt. Workspace and engine default to the caller's. Model/effort still pass creation checks. It does not create a child managed by `Agent`. |
 
-Core roots can send/open in Build, Edit, Auto, Full access (`yolo`) and
-Orchestrate, under Core's permission checks. Build, Edit, Auto and Orchestrate
-ask a human for each operation; ordinary Full access follows its allow policy.
-Plan, unknown authority, children and restricted callers cannot send/open.
-Claude/Codex roots currently fail closed for send/open because their native
-preset authority is not carried to main. A resumed Orchestrate tab stays closed
-for peer mutations until its host re-reports mode/Orchestrate authority.
+Core roots can send/open in Build, Edit, Auto, `yolo` and Orchestrate, under
+Core's permission checks. Build, Edit, Auto and Orchestrate ask a human for each
+operation; ordinary `yolo` follows its allow policy. Plan, unknown authority,
+children and restricted callers cannot send/open. A resumed Orchestrate tab stays
+closed for peer mutations until its host re-reports mode/Orchestrate authority.
 
 For replies, `SessionSend {"replyTo":"<received-message-id>","payload":"…"}`
-derives the recipient from the original message. The default `reply: "explicit"`
-requires the receiver to send a reply. Opt in with `reply: "on_turn_end"` to
-receive one public terminal result for the turn that took the message. Its public
-answer is capped at 4,000 characters; reasoning, tool output and history are
-excluded. An accepted explicit reply suppresses that automatic result. A reply
-starts a new request in the sender's engine when its inbox drains, waiting if
-busy; the original tool call does not wait or poll for it.
+derives the recipient and correlation from the original message; a supplied
+correlation must match. If `replyTo` is omitted, the active receiving turn still
+passes on its causal chain limits. The optional `reply` field has no default:
+`"explicit"` and omission both create no automatic reply subscription and do not
+tell the receiver that a reply is requested. Ask for a reply in the payload if
+needed. Opt in with `reply: "on_turn_end"` to receive one public terminal result
+for the turn that took the message. Its public answer is capped at 4,000
+characters; reasoning, tool output and history are excluded. An accepted explicit
+reply suppresses that automatic result. A reply starts a new request in the
+sender's engine when its inbox drains, waiting if busy; the original tool call does not wait or poll for it.
 
 Limits and uncertainty:
 
@@ -57,11 +61,16 @@ Limits and uncertainty:
   are limited to 20/minute per sender and 60/minute per workspace. Creation shares
   the HTTP budget of 5/minute and 8 live agent-opened tabs.
 - `queued` is inbox admission; `acknowledged` is turn start, not proof the model
-  applied the message. `unknown` means receipt or completion cannot be confirmed.
-  Do not blindly resend. A stable `idempotencyKey` deduplicates identical sends
-  from the same principal; changed input is refused. Opening is not idempotent:
-  inspect existing tabs before retrying. An interrupted open may return `unknown`
-  with known session/tab ids, and first-message delivery may be uncertain separately.
+  applied the message. `rejected` means delivery was refused, for example because
+  the inbox is full or authorization fails before drain. `unknown` can mean
+  receipt/completion is unconfirmed, an open was rolled back before publication
+  (with known session/tab ids), or an internal error was caught. Known ids alone
+  do not prove a tab still exists. First-message delivery can be uncertain
+  separately from opening. Do not blindly retry: check any available delivery
+  state and returned ids, and resolve reported setup/access problems first.
+  Inspecting tabs can help after an interrupted open but cannot explain every
+  `unknown`. A stable `idempotencyKey` deduplicates identical sends from the same
+  principal; changed input is refused. Opening is not idempotent.
 - Restart restores cards, never model payloads or pending reply subscriptions.
   Settled delivery states survive; lost queued delivery and pending subscriptions
   can become unknown. There is no exactly-once execution guarantee across crashes.

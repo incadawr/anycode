@@ -193,13 +193,14 @@ keys. Each operation checks the feature and project switches. Different folders
 need an explicit symmetric pair grant; common Git ancestry grants nothing.
 Cross-folder open also requires the destination's allow-open switch. Pair grants
 do not authorize foreign file lookup, transcripts, approvals, cancellation or
-closing tabs. Corrupt/unreadable policy storage closes access; a failed save
-keeps the previous policy.
+closing tabs. Corrupt/unreadable policy storage at startup closes access until
+the app restarts, even if the file is repaired in the meantime; policy changes
+also fail until restart. A failed save keeps the previous policy.
 
 Mutation authority is per tab. Main accepts Core roots with host-reported Build,
 Edit, Auto or `yolo` authority, or reported Orchestrate ON. Core's dispatcher
 asks a human before each send/open in Build, Edit, Auto and Orchestrate; ordinary
-`yolo` follows Full access policy. A human approval is for that operation and
+`yolo` follows its allow policy. A human approval is for that operation and
 cannot replace scope/trust checks. Plan without Orchestrate, unknown modes,
 children and restricted callers are refused. Claude/Codex roots currently fail
 closed for mutations: their displayed Build mode does not prove native preset
@@ -222,7 +223,10 @@ The automatic result carries terminal reason and bounded public answer, includin
 error/cancel/null outcomes, without reasoning or tool output. An accepted explicit
 reply suppresses the automatic one; auto results do not subscribe to more results.
 
-Main-owned causal context survives omitted `replyTo` or changed correlation input.
+When `replyTo` is omitted, main inherits causal chain limits from the active
+receiving turn, even with changed correlation input. An explicit `replyTo` derives
+target and correlation from the original record; conflicting correlation input
+is refused.
 Chains are bounded to 8 hops, 32 messages and 30 minutes; self-send is refused.
 Sender/workspace send rates include replies; opens share the HTTP creation
 budget. Pending subscriptions become unknown on lost runtime custody; restart

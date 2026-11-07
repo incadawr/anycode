@@ -15,9 +15,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Connection listings limit oversized display text and filter unexpected nested data from tool responses.
 
-### Fixed
-
 - Behind the experimental native sessions flag, Core root sessions can discover peers, exchange messages and open independent tabs under per-tab permissions, with bounded replies and file activity evidence. Claude/Codex peer mutations remain unavailable.
+
+### Fixed
 
 - Sessions API reports the created session and tab ids when first-message delivery is interrupted.
 
