@@ -45,6 +45,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "node:process";
 
+import { assertSmokeAbsentFromAsar } from "./smoke-package-guard.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const DEFAULT_TARGET = join(desktopRoot, "dist", "mac-arm64", "AnyCode.app");
@@ -119,6 +121,9 @@ function main() {
   if (!unpacked) {
     fail(`no app.asar.unpacked directory found under: ${target}`);
   }
+
+  try { assertSmokeAbsentFromAsar(join(dirname(unpacked), "app.asar")); }
+  catch { fail("production archive missing, invalid, or contains development smoke fixtures"); }
 
   const files = [];
   (function walk(dir) {
