@@ -189,6 +189,8 @@ node apps/desktop/scripts/start-screen-smoke.mjs --keep
 Do not run the dev automation smoke against a packaged app or enable
 `ANYCODE_AUTOMATION` in the release workflow.
 
+`ANYCODE_SHOTS_DIR` selects the PNG output directory for `model-picker-smoke.mjs`; by default it uses a per-run system-temp directory.
+
 ## Running model settings smoke
 
 ```bash
