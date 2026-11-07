@@ -805,7 +805,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     tools: z.object({
       concurrency: z.number().optional(),
       stallTimeoutMs: z.number().optional(),
-      maxTurns: z.number().optional(),
+      maxTurns: z.number().int().safe().min(1).optional(),
       // provider retry knobs, mirrors of
       // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
       maxRetries: z.number().optional(),
@@ -1139,7 +1139,9 @@ export function parseSettings(raw: unknown): SettingsParseResult {
  * never mutates `base`.
  */
 export function mergeSettings(base: AnycodeSettings, patch: SettingsPatch): AnycodeSettings {
-  return deepMerge(base, patch) as AnycodeSettings;
+  const merged = deepMerge(base, patch) as AnycodeSettings;
+  if (patch.tools?.maxTurns === "") delete merged.tools.maxTurns;
+  return merged;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

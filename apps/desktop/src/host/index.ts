@@ -4211,7 +4211,7 @@ async function boot(): Promise<void> {
       ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
       ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
-      maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns, envConfig.subagentMaxTurns),
+      maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns, envConfig.subagentMaxTurns, isChildSessionBoot(args, sessionMeta)),
       subagentMaxTurns: envConfig.subagentMaxTurns,
       // learned base-budget port (adaptive only; see above).
       ...(subagentBudget !== undefined ? { subagentBudget } : {}),

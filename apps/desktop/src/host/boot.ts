@@ -275,8 +275,8 @@ function isPermissionMode(value: string): value is PermissionMode {
 }
 
 /** Resolve a child budget independently of the root loop's turn setting. */
-export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined, subagentMaxTurns?: number): number | undefined {
-  return child ? (child.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS) : envMaxTurns;
+export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined, subagentMaxTurns?: number, isChild = child !== undefined): number | undefined {
+  return isChild ? (child?.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS) : envMaxTurns;
 }
 
 /**

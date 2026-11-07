@@ -430,7 +430,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
   // request and the settings default: it is an author's statement about the
   // role, so it outranks the global default — but never an explicit request,
   // and remains below an explicit request.
-  it("takes a role's declared turnBudget over the default, under an explicit request and the ceiling", () => {
+  it("takes a role's declared turnBudget over the default, under an explicit request", () => {
     const parent = makeParent();
     const explore = getPersona("explore");
     expect(explore.turnBudget).toBeUndefined();
@@ -2792,7 +2792,6 @@ describe("subagent budget constants (§2.1)", () => {
     // never skip or always skip.
     expect(SUBAGENT_WRAPUP_MIN_WINDOW_MS).toBeGreaterThan(0);
     expect(SUBAGENT_WRAPUP_MIN_WINDOW_MS).toBeLessThan(SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS);
-    // The default budget must itself be reachable under the ceiling.
   });
 });
 

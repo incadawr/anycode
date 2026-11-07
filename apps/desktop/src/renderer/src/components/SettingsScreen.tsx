@@ -395,9 +395,8 @@ export function buildToolsPatch(
   } = {};
   const concurrency = parseOptionalInt(concurrencyText);
   const stallTimeoutMs = parseOptionalInt(stallTimeoutText);
-  const maxTurns = parseOptionalInt(maxTurnsText);
-  const parsedSubagentMaxTurns = subagentMaxTurnsText.trim() === "" ? undefined : Number(subagentMaxTurnsText);
-  const subagentMaxTurns = parsedSubagentMaxTurns;
+  const maxTurns = maxTurnsText.trim() === "" ? undefined : Number(maxTurnsText);
+  const subagentMaxTurns = subagentMaxTurnsText.trim() === "" ? undefined : Number(subagentMaxTurnsText);
   // provider retry knobs, mirrors of
   // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
   const maxRetries = parseOptionalInt(maxRetriesText);
@@ -1764,7 +1763,12 @@ export function SettingsScreen({
 
   const readOnly = snapshot.readOnly;
 
+  const validTurns = (value: string) => value.trim() === "" || (Number.isSafeInteger(Number(value)) && Number(value) >= 1);
+  const maxTurnsValid = validTurns(maxTurns);
+  const subagentMaxTurnsValid = validTurns(subagentMaxTurns);
+
   async function saveTools(): Promise<void> {
+    if (!maxTurnsValid || !subagentMaxTurnsValid) return;
     // validate the sessionLimits fields FIRST — a bad
     // value refuses the whole save (nothing written) with a field-naming error.
     const limits = buildSessionLimitsPatch(sessionMaxTabs, sessionPerParent, sessionGlobal);
@@ -1774,6 +1778,9 @@ export function SettingsScreen({
     }
     setSessionLimitsError(null);
     const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget, adaptiveTurnBudget, networkWait);
+    if (maxTurns.trim() === "" && snapshot?.settings.tools.maxTurns !== undefined) {
+      toolsPatch.tools = { ...toolsPatch.tools, maxTurns: "" };
+    }
     const hasLimits = limits.patch.sessionLimits !== undefined
       && Object.keys(limits.patch.sessionLimits).length > 0;
     await store.getState().setPatch(
@@ -2077,12 +2084,14 @@ export function SettingsScreen({
                 <label className="settings-field">
                   <span className="settings-field-label">Maximum turns</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={maxTurns}
-                    disabled={readOnly} placeholder="Unlimited" onChange={(e) => setMaxTurns(e.target.value)} />
+                    disabled={readOnly} placeholder="Unlimited" aria-invalid={!maxTurnsValid} onChange={(e) => setMaxTurns(e.target.value)} />
+                  {!maxTurnsValid && <span className="settings-field-error" role="alert">Enter a positive whole number or leave blank.</span>}
                 </label>
                 <label className="settings-field">
                   <span className="settings-field-label">Maximum turns (subagents)</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
-                    disabled={readOnly} placeholder="150" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
+                    disabled={readOnly} placeholder="150" aria-invalid={!subagentMaxTurnsValid} onChange={(e) => setSubagentMaxTurns(e.target.value)} />
+                  {!subagentMaxTurnsValid && <span className="settings-field-error" role="alert">Enter a positive whole number or leave blank.</span>}
                   <span className="settings-field-hint">Enter a positive whole number.</span>
                 </label>
                 <div className="settings-field">

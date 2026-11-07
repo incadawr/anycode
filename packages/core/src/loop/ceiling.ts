@@ -52,8 +52,8 @@ export interface CeilingConfig {
   outcomeDeadlineAt?: number;
   /**
    * Evaluated when the ceiling would trip: `true` = a human is supervising
-   * this root session, so no ceiling applies at all (owner rule
-   * 2026-08-22). Absent for children, which always keep the ladder. A LIVE
+   * this root session, so its turn limit and ladder are bypassed. A wall-clock
+   * deadline still applies. Absent for children. A LIVE
    * predicate rather than a snapshot: the supervision signal (e.g. the
    * desktop's unattended latch) can flip mid-session, so a value
    * captured at construction time would go stale within minutes.

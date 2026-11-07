@@ -1258,6 +1258,13 @@ describe("resolveChildMaxTurns", () => {
     expect(resolveChildMaxTurns(child, 300)).toBe(150);
     expect(resolveChildMaxTurns(child, 300, 500)).toBe(500);
   });
+  it("uses the child budget when only durable parent metadata identifies the child", () => {
+    const args: import("./boot.js").HostArgs = { sessionId: "c", resume: true };
+    const meta = { parentSessionId: "p" } as SessionMeta;
+    const isChild = isChildSessionBoot(args, meta);
+    expect(resolveChildMaxTurns(args.child, undefined, undefined, isChild)).toBe(150);
+    expect(resolveChildMaxTurns(args.child, 300, 500, isChild)).toBe(500);
+  });
   it("a non-child boot (no args.child) preserves the env default", () => {
     expect(resolveChildMaxTurns(undefined, 40)).toBe(40);
   });

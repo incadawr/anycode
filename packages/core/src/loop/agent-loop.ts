@@ -1306,7 +1306,7 @@ export class AgentLoop {
         // successful tool call in the round, no grant budget left, no window,
         // an unreadable verdict — falls through to the same loop_end the cap
         // produced before the slice.
-        if (maxTurns !== undefined && turn > maxTurns + this.ceilingGrantedTurns) {
+        if (maxTurns !== undefined && turn > maxTurns + this.ceilingGrantedTurns && this.config.ceiling?.supervisedRoot?.() !== true) {
           const ceiling = yield* this.tryCeilingGrant(maxTurns, signal, turn - 1);
           if (ceiling !== "granted") {
             yield* this.emitLoopEnd(

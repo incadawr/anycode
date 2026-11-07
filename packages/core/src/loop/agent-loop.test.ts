@@ -2536,7 +2536,7 @@ describe("AgentLoop.runTurn — adaptive budget", () => {
   });
 });
 
-describe("AgentLoop.runTurn — supervised root has no turn ceiling (remainder, owner rule 2026-08-22)", () => {
+describe("AgentLoop.runTurn — supervised and unattended turn budgets", () => {
   /** One successful `Mock` tool-call turn — the loop's normal per-turn step. */
   function toolTurnStep(id: string): ModelStreamEvent[] {
     return [
@@ -2571,12 +2571,37 @@ describe("AgentLoop.runTurn — supervised root has no turn ceiling (remainder, 
   const decisionCalls = (port: MockModelPort) =>
     port.requests.filter((r) => r.tools.length === 1 && r.tools[0]!.name === "ceiling_verdict");
 
-  it("an explicitly configured budget applies to a supervised root", async () => {
-    const modelPort = new MockModelPort([toolTurnStep("c1"), toolTurnStep("c2")]);
-    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { enabled: false, supervisedRoot: () => true } });
+  it.each([true, false])("a supervised root bypasses the configured limit with ladder enabled=%s", async (enabled) => {
+    const modelPort = new MockModelPort([toolTurnStep("c1"), toolTurnStep("c2"), toolTurnStep("c3"), completionStep()]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { enabled, supervisedRoot: () => true } });
     const events = await collect(loop.runTurn("go"));
-    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "max_turns", turns: 2 });
-    expect(modelPort.requests).toHaveLength(2);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
+    expect(grantEvents(events)).toHaveLength(0);
+    expect(decisionCalls(modelPort)).toHaveLength(0);
+  });
+
+  it("an unattended root applies a configured budget and ladder", async () => {
+    const modelPort = new MockModelPort([toolTurnStep("c1"), toolTurnStep("c2"), verdictStep(["finish"]), completionStep()]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry, ceiling: { supervisedRoot: () => false } });
+    const events = await collect(loop.runTurn("go"));
+    expect(decisionCalls(modelPort)).toHaveLength(1);
+    expect(grantEvents(events)).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 3 });
+  });
+
+  it("rechecks supervision when it changes during the run", async () => {
+    let supervised = true;
+    const flip = makeTool({ handler: async () => { supervised = false; return { ok: true, output: "ok" }; } });
+    const port = new MockModelPort([
+      toolTurnStep("c1"), toolTurnStep("c2"),
+      [{ type: "tool_call", toolCall: { id: "flip", name: "Flip", input: { value: "x" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      verdictStep(["finish"]), completionStep(),
+    ]);
+    const loop = makeLoop({ modelPort: port, maxTurns: 2, registry: makeRegistry({ Mock: makeTool(), Flip: flip }), ceiling: { supervisedRoot: () => supervised } });
+    const events = await collect(loop.runTurn("go"));
+    expect(decisionCalls(port)).toHaveLength(1);
+    expect(grantEvents(events)).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 4 });
   });
 
   it("no predicate at all (plain child-style config): ladder applies, unchanged", async () => {
