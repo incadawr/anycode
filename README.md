@@ -28,7 +28,7 @@ drives itself (open a page, read its console, take a screenshot).
 requires explicit consent to weaker storage (obfuscation or plaintext).
 Decrypted keys are kept out of the renderer, and setup exports contain no keys.
 
-![AnyCode: an agent explores the repository, writes an architecture overview, and opens README.md in the preview beside it](docs/assets/anycode-demo.gif)
+![AnyCode: ask for a change, approve the edits, check the preview, review the diff, commit](docs/assets/anycode-demo.gif)
 
 ## First run
 
