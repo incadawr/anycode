@@ -790,6 +790,8 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   }
 
+  const managedRefusal = deps.manager.managedContinuationRefusal?.(req.sessionId);
+  if (managedRefusal) return { ok: false, reason: "worktree_unavailable", ...managedRefusal };
   const meta = await deps.persistence.getRootSession(req.sessionId);
   if (meta === null) {
     return { ok: false, reason: "session_not_found" };

@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as nodeFs from "node:fs/promises";
 import path from "node:path";
@@ -59,13 +60,17 @@ export class ChildWorktreeResources {
     const listed = await git.worktreeList();
     if (!listed.ok) throw new Error("Child worktree registrations could not be read");
     const identities = await Promise.all(listed.value.map(async (item) => ({
-      ...item, canonical: await this.fs.realpath(item.path),
+      ...item, canonical: await this.fs.realpath(item.path).catch(error => {
+        if (error.code === "ENOENT" && !item.isMain) return undefined;
+        throw error;
+      }),
     })));
     const sourceEntry = identities.find((item) => item.canonical === sourceRoot);
     if (!sourceEntry) throw new Error("Child worktree source must be a checkout root, not a workspace subdirectory");
     const main = identities.filter((item) => item.isMain);
-    if (main.length !== 1) throw new Error("Child worktree main checkout could not be identified");
-    return Object.freeze({ sourceRoot, storageRoot: main[0]!.canonical,
+    const storageRoot = main[0]?.canonical;
+    if (main.length !== 1 || !storageRoot) throw new Error("Child worktree main checkout could not be identified");
+    return Object.freeze({ sourceRoot, storageRoot,
       projectRoot: await this.fs.realpath(projectRoot), baseSha: status.value.head.sha });
   }
 
@@ -119,9 +124,22 @@ export class ChildWorktreeResources {
         : "Allocation stopped before checkout creation";
       try { await this.replace(receipt); } catch { /* Durable intent remains authoritative. */ }
       throw new Error(addAttempted
-        ? `Child worktree allocation failed; resource retained at ${receipt.path}`
+        ? `Child worktree allocation failed; inspect possible residue at path ${receipt.path}`
         : "Child worktree allocation failed; checkout creation was not attempted");
     }
+  }
+
+  /** Cold resume is synchronous at the tab-creation gate. Never sweeps receipts. */
+  findForSession(sessionId: string): ChildWorktreeReceipt | undefined {
+    let files: string[];
+    try { files = readdirSync(this.directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+    for (const file of files) {
+      if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
+      const receipt = JSON.parse(readFileSync(path.join(this.directory, file), "utf8")) as ChildWorktreeReceipt;
+      if (receipt.childSessionId === sessionId) return receipt;
+    }
+    return undefined;
   }
 
   /** Read by journal identity, never by a caller-supplied filesystem path. */

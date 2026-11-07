@@ -3091,3 +3091,13 @@ it.each([false, true])("publishes the manager launch flag for start intent: %s",
   registerTabIpc({ manager } as unknown as TabIpcDeps);
   expect(await ipcHandlers.get("anycode:engines-list")!(TRUSTED_EVENT)).toEqual({ engineIds: ["claude"], claudeOrchestrateEnabled: enabled });
 });
+
+it("refuses managed history before reading a legacy row or priming a host", async () => {
+  const { manager, createTab } = makeManager();
+  manager.managedContinuationRefusal = () => ({ detail: "Start a new session", worktreePath: "/retained" });
+  const getRootSession = vi.fn(async () => null), primeMcpSecrets = vi.fn();
+  const { dialog } = makeDialog({ canceled: true, filePaths: [] });
+  expect(await handleCreate({ manager, dialog, primeMcpSecrets, persistence: { ...persistenceStub, getRootSession } },
+    { kind: "resume", sessionId: "managed" })).toMatchObject({ ok: false, reason: "worktree_unavailable", worktreePath: "/retained" });
+  expect(getRootSession).not.toHaveBeenCalled(); expect(createTab).not.toHaveBeenCalled(); expect(primeMcpSecrets).not.toHaveBeenCalled();
+});

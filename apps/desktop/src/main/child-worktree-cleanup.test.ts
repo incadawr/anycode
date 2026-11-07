@@ -69,7 +69,7 @@ it.each(["tracked", "staged", "untracked", "ignored", "assume-unchanged", "skip-
 
 it.each(["exit", "admission", "writers", "run", "session", "claim", "claim-error", "locked", "main",
   "branch", "head", "path", "detached", "prunable", "duplicate", "list-error", "list-throw",
-  "pristine-error", "truncated", "truncated-status", "truncated-index", "missing", "alias", "receipt", "corrupt", "read-error"])(
+  "pristine-error", "truncated", "truncated-status", "truncated-index", "missing", "alias", "receipt", "corrupt", "read-error", "inactive", "receipt-path", "receipt-branch", "receipt-sha", "main-path"])(
   "refuses uncertain ownership/lifecycle: %s", async (kind) => {
     const remove = vi.spyOn(NodeGitAdapter.prototype, "worktreeRemove");
     const proof = permission();
@@ -91,7 +91,12 @@ it.each(["exit", "admission", "writers", "run", "session", "claim", "claim-error
     if (kind === "receipt") receipt = { ...receipt, parentSessionId: "forged" };
     if (kind === "corrupt") await fs.writeFile(path.join(scratch, "data/child-worktrees", `${receipt.id}.json`), "{");
     if (kind === "read-error") vi.spyOn(resources, "read").mockRejectedValue(Error("disk"));
-    if (["main", "path", "prunable", "duplicate", "list-error", "list-throw"].includes(kind)) {
+    if (kind === "inactive") receipt = await resources.update(receipt, "retained", "kept");
+    if (kind.startsWith("receipt-")) {
+      receipt = { ...receipt, ...(kind === "receipt-path" ? { path: root } : kind === "receipt-branch" ? { branch: "other" } : { baseSha: "invalid" }) };
+      await fs.writeFile(path.join(scratch, "data/child-worktrees", `${receipt.id}.json`), JSON.stringify(receipt));
+    }
+    if (["main-path", "main", "path", "prunable", "duplicate", "list-error", "list-throw"].includes(kind)) {
       const list = NodeGitAdapter.prototype.worktreeList;
       vi.spyOn(NodeGitAdapter.prototype, "worktreeList").mockImplementation(async function (this: NodeGitAdapter) {
         if (kind === "list-error") return { ok: false, reason: "failed read" };
@@ -99,6 +104,7 @@ it.each(["exit", "admission", "writers", "run", "session", "claim", "claim-error
         const result = await list.call(this);
         if (result.ok) {
           const entry = result.value.find((e) => e.path === receipt.path)!;
+          if (kind === "main-path") result.value.find(e => e.isMain)!.path += "-other";
           if (kind === "main") entry.isMain = true;
           if (kind === "path") entry.path += "-other";
           if (kind === "prunable") entry.prunable = true;
@@ -117,11 +123,14 @@ it.each(["exit", "admission", "writers", "run", "session", "claim", "claim-error
         return { ...result, stdoutTruncated: args[0].args.includes(command) };
       });
     }
+    const listed = vi.spyOn(NodeGitAdapter.prototype, "worktreeList");
     expect((await settle({ permission: proof, hasOtherClaims: claim })).phase).toBe(kind === "head" ? "retained" : "unknown");
     expect(remove).not.toHaveBeenCalled();
-    expect(git(root, "rev-parse", receipt.branch)).toBe(kind === "head"
-      ? git(receipt.path, "rev-parse", "HEAD") : receipt.baseSha);
-    if (!["missing", "alias"].includes(kind)) expect(await fs.readFile(path.join(receipt.path, "file"), "utf8")).toBe("base");
+    if (kind === "claim") expect(claim).toHaveBeenCalledOnce();
+    if (["claim", "inactive", "receipt-path", "receipt-branch", "receipt-sha"].includes(kind)) expect(listed).not.toHaveBeenCalled();
+    expect(git(root, "rev-parse", kind === "receipt-branch" ? `anycode-wt/child-${receipt.id}` : receipt.branch)).toBe(kind === "head"
+      ? git(receipt.path, "rev-parse", "HEAD") : kind === "receipt-sha" ? git(root, "rev-parse", "HEAD") : receipt.baseSha);
+    if (!["missing", "alias", "receipt-path"].includes(kind)) expect(await fs.readFile(path.join(receipt.path, "file"), "utf8")).toBe("base");
   });
 
 it("retains on non-force remove error and records a sanitized diagnosis", async () => {

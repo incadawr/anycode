@@ -127,7 +127,7 @@ function captureManagedOpen(deps: CreateSessionByAgentDeps, policy: CreatorAdmis
   const parent = summary && tabs?.getTab(summary.tabId);
   if (!parent?.childWorktreePolicy || !tabs) return undefined;
   const { proc, hostGeneration, workspace, projectRoot } = parent;
-  return { parent, workspace, projectRoot, resources: tabs.childWorktreeResources,
+  return { parent, workspace, projectRoot, worktreeRefused: false, resources: tabs.childWorktreeResources,
     current: () => deps.manager() === tabs && tabs.getTab(parent.tabId) === parent &&
       parent.proc === proc && proc !== null && parent.hostGeneration === hostGeneration &&
       parent.workspace === workspace && parent.projectRoot === projectRoot && parent.state === "running" };
@@ -146,10 +146,17 @@ export async function createSessionForAgent(
   policy: CreatorAdmissionPolicy = { kind: "external" },
 ): Promise<CreateSessionOutcome> {
   const managed = captureManagedOpen(deps, policy);
+  const manager = deps.manager();
+  const openerId = policy.kind === "native" ? manager?.sessionOpenInTab(policy.openerSessionId) : undefined;
+  const opener = openerId ? manager?.getTab(openerId) : undefined;
+  const openerProc = opener?.proc;
   let deliver: (() => Promise<{ state: string; messageId?: string }>) | undefined;
   const outcome = await creationAdmissionFor(deps.agentOpenedSessions, deps.listTabs).run(() =>
     createAdmittedSession(request, deps, policy, callback => { deliver = callback; }, managed));
-  if (!outcome.ok && managed) managed.parent.childWorktreeRefusal = outcome.detail ?? outcome.reason;
+  if (outcome.ok && opener && manager?.getTab(opener.tabId) === opener && opener.proc === openerProc)
+    delete opener.childWorktreeRefusal;
+  if (!outcome.ok && managed?.current() && managed.worktreeRefused)
+    managed.parent.childWorktreeRefusal = outcome.detail ?? "Worktree creation failed; start a new session.";
   return outcome.ok && deliver ? { ...outcome, delivery: await deliver() } : outcome;
 }
 
@@ -179,8 +186,14 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
   const engine = request.engine ?? "core";
-  if (managed && (engine !== "core" || key !== managed.workspace || !managed.resources))
-    return { ok: false, reason: "not_ready", detail: "Worktree SessionOpen requires Core, the opener checkout, and an available allocator." };
+  if (managed) {
+    let sameCheckout = false;
+    try { sameCheckout = key === deps.realpathSync(managed.workspace); } catch { /* Refuse unreadable source. */ }
+    if (engine !== "core" || !sameCheckout || !managed.resources) {
+      managed.worktreeRefused = true;
+      return { ok: false, reason: "not_ready", detail: "Worktree SessionOpen requires Core, the opener checkout, and an available allocator." };
+    }
+  }
   if (request.fast !== undefined && engine !== "codex") return { ok: false, reason: "invalid_argument", detail: "fast is only available for Codex" };
   if (request.account !== undefined && engine !== "codex") {
     // `account` names a Codex account; on any other engine there is nothing it
@@ -277,6 +290,7 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
   let retained = false;
   const refuse = async (outcome: CreateSessionOutcome): Promise<CreateSessionOutcome> => {
     if (outcome.ok || !receipt || !managed) return outcome;
+    managed.worktreeRefused = true;
     let phase = "unknown";
     if (!retained) {
       retained = true;
@@ -356,6 +370,7 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
     });
   } catch (error) {
     if (!managed) throw error;
+    managed.worktreeRefused = true;
     return refuse({ ok: false, reason: "not_ready", detail: error instanceof Error ? error.message : "Session creation failed" });
   } finally {
     releasePin();

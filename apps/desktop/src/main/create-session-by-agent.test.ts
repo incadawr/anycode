@@ -1470,6 +1470,31 @@ describe("managed native SessionOpen", () => {
     return { ...r, receipt, resources, parent: root.tab, policy, deps, open: createSessionPeerOpener(deps) };
   }
 
+  it("canonicalizes the opener workspace before comparing a same-checkout request", async () => {
+    const r = fixture(); r.parent.workspace = "/alias";
+    r.deps.realpathSync = p => p === "/alias" ? "/ws" : p;
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(true);
+  });
+
+  it("does not record unrelated trust refusals and clears the previous refusal after success", async () => {
+    const r = fixture(); r.parent.childWorktreeRefusal = "old worktree failure";
+    const trust = r.deps.readTrustStore; r.deps.readTrustStore = async () => ({ version: 1, folders: {} });
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(false);
+    expect(r.parent.childWorktreeRefusal).toBe("old worktree failure");
+    r.deps.readTrustStore = trust; r.parent.childWorktreePolicy = false;
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(true);
+    expect(r.parent.childWorktreeRefusal).toBeUndefined();
+  });
+
+  it("rechecks authorization immediately before publishing, after successful preparation", async () => {
+    const r = fixture();
+    r.policy.authorize.mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValue(false);
+    const publish = vi.spyOn(r.manager, "publishPreparedTab");
+    expect(await r.open({ workspace: "/ws" }, r.policy)).toMatchObject({ ok: false, detail: expect.stringContaining("authorized") });
+    expect(r.resources.allocate).toHaveBeenCalledOnce(); expect(r.forkCwds).toHaveLength(2);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])("failed preparation settles on exit or bounded timeout (timeout=%s)", async timeout => {
     const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: timeout ? "unknown" : "removed", reason: "test disposition" });
     const r = fixture({ stubbornHost: true, holdKillExit: true, managerDeps: { limits: { exitDeadlineMs: 30 } },

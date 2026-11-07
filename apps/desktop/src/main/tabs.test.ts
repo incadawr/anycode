@@ -9311,6 +9311,48 @@ describe("Agent managed worktree admission", () => {
     return { manager, tab: root.tab, host: live.hosts[0]!, fork, resources, receipt };
   }
 
+  it.each([true, false])("refuses managed follow-up after completion with policy=%s", async policy => {
+    vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "removed", reason: "empty" });
+    const r = rig(); r.host.emit("message", spawnRequest()); await flush();
+    const c = child(r); c.host.emit("message", childTerminalMsg()); await flush();
+    r.tab.childWorktreePolicy = policy;
+    r.host.emit("message", spawnRequest({ requestId: "follow", spawnToolCallId: "follow", resumeChildSessionId: c.tab.sessionId }));
+    await flush();
+    expect(r.fork).toHaveBeenCalledTimes(2);
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "rejected", requestId: "follow",
+      message: expect.stringContaining("Start a new session") }));
+    expect(r.tab.childWorktreeRefusal).toContain(r.receipt.path);
+    expect(r.manager.createTab({ workspace: "/ws", sessionId: c.tab.sessionId, resume: true }))
+      .toMatchObject({ ok: false, reason: "worktree_unavailable", worktreePath: r.receipt.path });
+  });
+
+  it("records only worktree admission refusals and clears them on success", async () => {
+    const r = rig(); r.tab.childWorktreeRefusal = "old worktree failure";
+    r.host.emit("message", spawnRequest({ engine: "claude" })); await flush();
+    expect(r.tab.childWorktreeRefusal).toContain("require Core");
+    const previous = r.tab.childWorktreeRefusal;
+    r.tab.state = "closing";
+    r.host.emit("message", spawnRequest({ requestId: "closing" })); await flush();
+    expect(r.tab.childWorktreeRefusal).toBe(previous);
+    r.tab.state = "running";
+    r.host.emit("message", spawnRequest({ requestId: "success" })); await flush();
+    expect(r.tab.childWorktreeRefusal).toBeUndefined();
+  });
+
+  it("refuses managed relocation and engine switch with recovery guidance", async () => {
+    const r = rig("core", { engineSwitchEnabled: () => true });
+    r.host.emit("message", spawnRequest()); await flush(); const c = child(r);
+    c.host.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: c.tab.sessionId,
+      fromWorkspace: c.tab.workspace, toWorkspace: "/ws", projectRoot: "/project" });
+    c.host.emit("message", { type: "anycode:engine-switch", requestId: "switch", generation: c.tab.hostGeneration,
+      phase: "prepare", target: { engine: "core", model: "model", connectionId: "conn" } });
+    await flush();
+    expect(c.tab.workspace).toBe(r.receipt.path); expect(r.fork).toHaveBeenCalledTimes(2);
+    expect(c.tab.childWorktreeRefusal).toContain("Start a new session");
+    expect(c.host.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "anycode:engine-switch-response",
+      ok: false, reason: expect.stringContaining("Start a new session") }));
+  });
+
   function child(r: ReturnType<typeof rig>) {
     const accepted = childRunEvents(r.host).find(e => e.kind === "accepted");
     if (accepted?.kind !== "accepted") throw Error("missing child");
@@ -9453,6 +9495,10 @@ describe("Agent managed worktree admission", () => {
       await vi.waitFor(() => expect(r.manager.listChildRuns()).toHaveLength(0), { timeout: 5000 });
       expect((await resources.read(receipt.id)).phase).toBe(dirty ? "retained" : "removed");
       expect(remove).toHaveBeenCalledTimes(dirty ? 0 : 1);
+      const restarted = rig("core", { childWorktrees: new ChildWorktreeResources({ userData: join(scratch, "data"), appRunId: "next-run" }) });
+      expect(restarted.manager.createTab({ workspace: scratch, sessionId: c.tab.sessionId, resume: true }))
+        .toMatchObject({ ok: false, reason: "worktree_unavailable", worktreePath: receipt.path });
+      expect(restarted.fork).toHaveBeenCalledOnce();
       expect(git("rev-parse", receipt.branch)).toBe(receipt.baseSha);
       if (dirty) expect(await readFile(join(receipt.path, "work"), "utf8")).toBe("preserve me");
     } finally { await rm(scratch, { recursive: true, force: true }); }
@@ -9580,6 +9626,18 @@ describe("Agent managed worktree admission", () => {
     expect(host.postMessage).toHaveBeenCalledWith(expect.objectContaining({ requestId: "switch", ok: false }));
     expect(created.tab.workspace).toBe(r.receipt.path);
     expect(r.fork).toHaveBeenCalledTimes(2);
+  });
+
+  it("queue purge records the worktree refusal even after policy turns OFF", async () => {
+    vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "removed", reason: "empty" });
+    const r = rig("core", { childRunsPerParentMax: () => 1 });
+    r.host.emit("message", spawnRequest()); await flush();
+    const queued = spawnRequest(); r.host.emit("message", queued);
+    r.tab.childWorktreePolicy = false;
+    await r.manager.shutdownAllTabHosts();
+    expect(r.tab.childWorktreeRefusal).toContain("parent is closing");
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ requestId: queued.requestId, kind: "rejected" }));
+    expect(r.resources.allocate).toHaveBeenCalledOnce();
   });
 
   it("queue captures ON; over-cap fallback gets not_ready", async () => {
