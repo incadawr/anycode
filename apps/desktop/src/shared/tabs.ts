@@ -269,6 +269,7 @@ export type CreateTabResult =
         // the missing pin, for the actionable notice.
         | "connection_missing";
       focusTabId?: string; // already_open -> renderer focuses this tab
+      detail?: string; // managed continuation refusal
       worktreePath?: string; // actionable recovery detail for worktree_unavailable
       workspace?: string; // folder_not_found -> the path whose directory is gone
       openTabs?: number;  // max_tabs -> live root-tab count at refusal

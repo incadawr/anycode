@@ -3098,7 +3098,7 @@ it("refuses managed history before reading a legacy row or priming a host", asyn
   const getRootSession = vi.fn(async () => null), primeMcpSecrets = vi.fn();
   const { dialog } = makeDialog({ canceled: true, filePaths: [] });
   expect(await handleCreate({ manager, dialog, primeMcpSecrets, persistence: { ...persistenceStub, getRootSession } },
-    { kind: "resume", sessionId: "managed" })).toMatchObject({ ok: false, reason: "worktree_unavailable", worktreePath: "/retained" });
+    { kind: "resume", sessionId: "managed" })).toMatchObject({ ok: false, reason: "worktree_unavailable", worktreePath: "/retained", detail: "Start a new session" });
   expect(getRootSession).not.toHaveBeenCalled(); expect(createTab).not.toHaveBeenCalled(); expect(primeMcpSecrets).not.toHaveBeenCalled();
 });
 
@@ -3114,4 +3114,16 @@ it("focuses an already open managed session before consulting receipts or histor
   expect(manager.sessionOpenInTab).toHaveBeenCalledWith("managed", true);
   expect(manager.managedContinuationRefusal).not.toHaveBeenCalled();
   expect(getRootSession).not.toHaveBeenCalled(); expect(createTab).not.toHaveBeenCalled();
+});
+
+it("checks persisted workspace when a damaged receipt cannot identify its session", async () => {
+  const { manager, createTab } = makeManager();
+  manager.managedContinuationRefusal = vi.fn((_id: string, workspace?: string) => workspace === "/managed-checkout"
+    ? { detail: "Receipt could not be verified" } : undefined);
+  const getRootSession = vi.fn(async () => ({ sessionId: "tied", workspace: "/managed-checkout" }));
+  const { dialog } = makeDialog({ canceled: true, filePaths: [] });
+  expect(await handleCreate({ manager, dialog, persistence: { ...persistenceStub, getRootSession } } as never,
+    { kind: "resume", sessionId: "tied" })).toMatchObject({ ok: false, reason: "worktree_unavailable", detail: "Receipt could not be verified" });
+  expect(manager.managedContinuationRefusal).toHaveBeenCalledWith("tied", "/managed-checkout");
+  expect(createTab).not.toHaveBeenCalled();
 });

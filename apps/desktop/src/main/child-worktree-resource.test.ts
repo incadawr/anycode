@@ -104,18 +104,19 @@ it.each(["non-repo", "unborn", "subdirectory", "valid"])("checks %s admission be
   expect(add).not.toHaveBeenCalled();
 });
 
-it.each(["open", "write", "sync"])("does not call add when intent %s fails", async (failure) => {
+it.each(["open", "write", "sync", "link"])("does not call add when intent %s fails", async (failure) => {
   const add = vi.spyOn(NodeGitAdapter.prototype, "worktreeAdd");
-  const brokenFs = { ...fs, open: vi.fn(async (...args: Parameters<typeof fs.open>) => {
+  const brokenFs = { ...fs, link: failure === "link" ? async () => { throw Error("disk full"); } : fs.link, open: vi.fn(async (...args: Parameters<typeof fs.open>) => {
     if (failure === "open" && args[1] === "wx") throw new Error("disk unavailable");
     const handle = await fs.open(...args);
-    if (args[1] !== "wx") return handle;
+    if (args[1] !== "wx" || failure === "link") return handle;
     return Object.assign(handle, { [failure === "write" ? "writeFile" : "sync"]:
       async () => { throw new Error("intent persistence failed"); } });
   }) };
   const resources = manager({ fs: brokenFs }); const snapshot = await resources.snapshot(root, root);
   await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/intent/);
   expect(add).not.toHaveBeenCalled();
+  expect((await fs.readdir(path.join(userData, "child-worktrees"))).filter(f => f.endsWith(".json"))).toEqual([]);
 });
 
 it("writes exclusive durable intent before add and retains partial add residue", async () => {
@@ -159,16 +160,16 @@ it("retains checkout when post-add listed identity disagrees", async () => {
 
 it("never overwrites an existing intent or calls add on an exclusive-create collision", async () => {
   const add = vi.spyOn(NodeGitAdapter.prototype, "worktreeAdd");
-  const resources = manager({ fs: { ...fs, open: async (...args: Parameters<typeof fs.open>) => {
-    if (args[1] === "wx") await fs.writeFile(args[0], "existing ownership");
-    return fs.open(...args);
+  const resources = manager({ fs: { ...fs, link: async (from, to) => {
+    await fs.writeFile(to, "existing ownership");
+    return fs.link(from, to);
   } } });
   const snapshot = await resources.snapshot(root, root);
   await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/intent/);
   expect(add).not.toHaveBeenCalled();
   const directory = path.join(userData, "child-worktrees");
-  const [file] = await fs.readdir(directory);
-  expect(await fs.readFile(path.join(directory, file!), "utf8")).toBe("existing ownership");
+  const file = (await fs.readdir(directory)).find(f => f.endsWith(".json"))!;
+  expect(await fs.readFile(path.join(directory, file), "utf8")).toBe("existing ownership");
 });
 
 it("atomically replaces a complete intent with a synced update", async () => {
@@ -279,15 +280,14 @@ it("does not claim retention when add refuses before creating the path", async (
 });
 
 
-it.each([true, false])("isolates identifiable corrupt receipts and names unidentifiable journals (identified=%s)", async identified => {
+it.each(["identified", "truncated", "empty"])("isolates identifiable corrupt receipts and names unidentifiable journals (identified=%s)", async identified => {
   const resources = manager();
   const receipt = await resources.allocate(await resources.snapshot(root, root), sessions);
   const journal = path.join(userData, "child-worktrees", `${receipt.id}.json`);
-  const broken = identified ? '{"childSessionId":"child",' : '{broken';
+  const broken = identified === "identified" ? '{"childSessionId":"child",' : identified === "empty" ? '' : '{broken';
   await fs.writeFile(journal, broken);
   const restarted = manager({ appRunId: "next-run" });
-  if (identified) expect(restarted.findForSession("ordinary")).toBeUndefined();
-  else expect(() => restarted.findForSession("ordinary")).toThrow(journal);
-  expect(() => restarted.findForSession("child")).toThrow(journal);
+  expect(restarted.findForSession("ordinary")).toBeUndefined();
+  expect(() => restarted.findForSession("child", receipt.path)).toThrow(journal);
   expect(await fs.readFile(journal, "utf8")).toBe(broken);
 });

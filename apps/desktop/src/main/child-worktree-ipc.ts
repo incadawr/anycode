@@ -1,4 +1,4 @@
-import { readdir, realpath } from "node:fs/promises";
+import { readdir, realpath, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { guardedIpcHandle } from "./ipc-guard.js";
@@ -30,9 +30,15 @@ export function registerChildWorktreeIpc(deps: {
       if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
       let r;
       try { r = await deps.resources.read(file.slice(0, -5)); }
-      catch (error) {
-        // Association with this project/child cannot be verified; expose no recovery paths.
-        (view.unverified ??= []).push({ id: file.slice(0, -5), reason: error instanceof Error ? error.message : String(error) });
+      catch {
+        // A damaged receipt may still identify another project. Do not display
+        // raw parser errors: they can contain damaged contents or private paths.
+        const raw = await readFile(join(deps.userData, "child-worktrees", file), "utf8").catch(() => "");
+        const roots = [...raw.matchAll(/"projectRoot"\s*:\s*("(?:[^"\\]|\\.)*")/g)];
+        let root: unknown;
+        try { if (roots.length === 1) root = JSON.parse(roots[0]![1]!); } catch { /* Unknown project. */ }
+        if (typeof root === "string" && root && root !== project) continue;
+        (view.unverified ??= []).push({ id: file.slice(0, -5), reason: "Receipt unreadable or invalid" });
         continue;
       }
       if (r.projectRoot !== project || (!canToggle && r.childSessionId !== tab.sessionId)) continue;

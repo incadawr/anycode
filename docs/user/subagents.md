@@ -16,7 +16,7 @@ can still modify files outside the child worktree. New children start from the
 parent's committed HEAD; uncommitted files are not copied. Shared Git refs,
 settings, network and caches remain shared. Trust and access grants are not inherited.
 
-The details list shows resources for the source project, including closed children:
+With a running parent, the details list shows resources for the source project, including closed children:
 path and branch with Copy buttons, base SHA, active/live, retained/kept, removed
 or unknown state, retention reason and the last creation refusal. It refreshes only
 while open. Empty checkouts are removed after verified safe shutdown; branches
@@ -24,7 +24,7 @@ remain. Dirty files, new commits, ignored caches or uncertain writers keep the
 checkout. Closing a split panel does not close the child. After a crash there is
 no automatic cleanup. Managed sessions cannot resume; inspect a retained checkout
 and start a new session there manually. Close and quit can wait for host shutdown
-(normally up to 2 seconds) plus up to 30 seconds of cleanup per managed tab.
+(normally up to 2 seconds) plus cleanup settlements running in parallel, bounded at 30 seconds.
 
 To recover work, first inspect `git -C '<child-path>' diff HEAD` and inspect
 untracked files separately. Commit in the retained checkout if needed, then in

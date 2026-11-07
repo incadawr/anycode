@@ -57,7 +57,7 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
       disabled={!view?.canToggle || busy} onCheckedChange={enabled => void toggle(enabled)} />
     <p>Core session children only. Inline agents use the current cwd. No inherited trust or access grants.</p>
     {error && <p role="alert">{error}</p>}
-    {view?.lastRefusal && <p role="alert">Last creation refused: {view.lastRefusal}{/^Agent: worktree session children require Core[.!]?$/i.test(view.lastRefusal) ? " Choose Core and start a new child." : ""}</p>}
+    {view?.lastRefusal && <p role="alert">Last creation refused: {view.lastRefusal}</p>}
     {view?.unverified?.map(r => <p key={r.id}>Worktree receipt unverified · {r.id}: {r.reason} (project/session association unverified)</p>)}
     <ul>{view?.resources.map(r => <li key={r.id}>
       <strong>Worktree · cwd only</strong> · {r.phase === "active" ? "active (live)" : r.phase === "retained" ? "retained (kept)" : r.phase === "removed" ? "removed" : "unknown"} · {r.childSessionId}

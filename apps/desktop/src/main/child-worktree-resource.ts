@@ -7,7 +7,7 @@ import { NodeExecutionAdapter } from "@anycode/core/node-execution";
 
 type ResourceGit = Pick<NodeGitAdapter,
   "status" | "worktreeList" | "worktreeAdd" | "ensureWorktreeNamespaceIgnored">;
-type ResourceFs = Pick<typeof nodeFs, "mkdir" | "open" | "rename" | "readFile"> & {
+type ResourceFs = Pick<typeof nodeFs, "mkdir" | "open" | "rename" | "readFile" | "link" | "unlink"> & {
   realpath(target: string): Promise<string>;
 };
 
@@ -50,6 +50,8 @@ export class ChildWorktreeResources {
     this.directory = path.join(options.userData, "child-worktrees");
   }
 
+  get appRunId(): string { return this.options.appRunId; }
+
   /** Capture at admission; allocation must never resolve HEAD again for its base. */
   async snapshot(source: string, projectRoot: string): Promise<ChildWorktreeSnapshot> {
     const sourceRoot = await this.fs.realpath(source);
@@ -89,7 +91,11 @@ export class ChildWorktreeResources {
     try {
       await this.fs.mkdir(this.directory, { recursive: true });
       await this.syncDirectory(this.options.userData);
-      await this.writeExclusive(this.receiptPath(id), receipt);
+      const temporary = path.join(this.directory, `${id}.${randomUUID()}.tmp`);
+      await this.writeExclusive(temporary, receipt);
+      // Publish only complete, synced intent; link preserves exclusive ownership.
+      await this.fs.link(temporary, this.receiptPath(id));
+      await this.fs.unlink(temporary);
       await this.syncDirectory();
     } catch {
       throw new Error("Child worktree intent could not be persisted; allocation refused");
@@ -130,7 +136,7 @@ export class ChildWorktreeResources {
   }
 
   /** Cold resume is synchronous at the tab-creation gate. Never sweeps receipts. */
-  findForSession(sessionId: string): ChildWorktreeReceipt | undefined {
+  findForSession(sessionId: string, workspace?: string): ChildWorktreeReceipt | undefined {
     let files: string[];
     try { files = readdirSync(this.directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
@@ -145,12 +151,13 @@ export class ChildWorktreeResources {
         validateReceipt(value, file.slice(0, -5));
         if (value.childSessionId === sessionId) return value;
       } catch {
-        // A truncated journal can still identify its owner. Ambiguous identity
-        // stays fail-closed; never discard evidence or echo damaged contents.
+        // Tie damaged evidence to its owner or persisted workspace; unrelated
+        // sessions remain resumable. Never echo damaged contents.
         const ids = [...raw.matchAll(/"childSessionId"\s*:\s*("(?:[^"\\]|\\.)*")/g)];
         let owner: unknown;
         try { if (ids.length === 1) owner = JSON.parse(ids[0]![1]!); } catch { /* Unknown owner. */ }
-        if (typeof owner !== "string" || !owner || owner === sessionId)
+        const suffix = path.join(".anycode", "worktrees", `child-${file.slice(0, -5)}`);
+        if (owner === sessionId || workspace?.endsWith(path.sep + suffix))
           refusal = new Error(`Worktree receipt could not be verified. Inspect and repair the resource journal file ${journal}; it has been preserved.`);
       }
     }

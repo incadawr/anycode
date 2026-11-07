@@ -1,3 +1,4 @@
+import { sep } from "node:path";
 import { settleChildWorktree } from "./child-worktree-cleanup.js";
 import type { ChildWorktreeResources, ChildWorktreeReceipt } from "./child-worktree-resource.js";
 import { REASONING_REPLAY_REJECTED } from "../shared/reasoning-replay.js";
@@ -750,7 +751,7 @@ export interface TabHostManagerDeps {
    */
   onTabPortDelivered?: (tab: { tabId: string; sessionId: string; workspace: string }) => void;
   /** Main-owned resource journal, absent when allocation is unavailable. */
-  childWorktrees?: Pick<ChildWorktreeResources, "snapshot" | "allocate" | "update" | "read"> & Partial<Pick<ChildWorktreeResources, "findForSession">>;
+  childWorktrees?: Pick<ChildWorktreeResources, "snapshot" | "allocate" | "update" | "read"> & Partial<Pick<ChildWorktreeResources, "findForSession" | "appRunId">>;
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
   /**
@@ -1455,7 +1456,7 @@ export class TabHostManager {
           actualExit: this.observedExits.has(host), admissionStopped: tab.state === "closing",
           writersStopped: this.observedExits.has(host) && !this.uncertainWorktreeWriters.has(tab) && this.engineRegistrations(tab).length === 0 },
         hasOtherClaims: async () => [...this.tabs.values()].some(other => other !== tab &&
-          (other.workspace === receipt.path || other.childWorktree?.id === receipt.id)),
+          (other.workspace === receipt.path || other.workspace.startsWith(receipt.path + sep) || other.childWorktree?.id === receipt.id)),
       });
       try { return await Promise.race([cleanup, deadline]); }
       finally { if (timer !== undefined) clearTimeout(timer); }
@@ -1472,11 +1473,14 @@ export class TabHostManager {
 
   private readonly managedSessions = new Map<string, ChildWorktreeReceipt>();
 
-  managedContinuationRefusal(sessionId: string): { detail: string; worktreePath?: string } | undefined {
+  managedContinuationRefusal(sessionId: string, workspace?: string): { detail: string; worktreePath?: string } | undefined {
     try {
-      const receipt = this.managedSessions.get(sessionId) ?? this.deps.childWorktrees?.findForSession?.(sessionId);
+      const receipt = this.managedSessions.get(sessionId) ?? this.deps.childWorktrees?.findForSession?.(sessionId, workspace);
       if (!receipt) return undefined;
-      const recovery = receipt.phase === "active"
+      const stale = this.deps.childWorktrees?.appRunId !== receipt.appRunId && ["intent", "active"].includes(receipt.phase);
+      const recovery = stale
+        ? `Previous app run; completion unconfirmed. Inspect manually at ${receipt.path} (${receipt.branch}); no automatic cleanup.`
+        : receipt.phase === "active"
         ? `The existing session is not continued; ${this.sessionOpenInTab(sessionId, true) ? "switch to its open tab" : "no open tab is available"}.`
         : receipt.phase === "retained"
           ? `Inspect retained work at ${receipt.path} (${receipt.branch}).`
@@ -1582,7 +1586,7 @@ export class TabHostManager {
    */
   createTab(params: CreateTabParams): CreateTabResult {
     if (params.resume) {
-      const refusal = this.managedContinuationRefusal(params.sessionId);
+      const refusal = this.managedContinuationRefusal(params.sessionId, params.workspace);
       if (refusal) return { ok: false, reason: "worktree_unavailable", ...refusal };
     }
 
@@ -2140,7 +2144,8 @@ export class TabHostManager {
     delete tab.orchestrate;
     tab.proc = child;
     delete tab.hostFailure;
-    // A replacement fork clears the old crash, but not uncertain external writers.
+    // Crash disposition is persisted at settlement; restart presents old active
+    // receipts as unknown. Replacement clears the crash, not uncertain writers.
     this.crashedWorktrees.delete(tab);
     tab.spawnedAt = this.now();
     tab.state = "running";
@@ -4136,7 +4141,8 @@ export class TabHostManager {
       return;
     }
     if (tab.childWorktree && !deliberate) {
-      // Settlement owns the durable disposition; do not write it twice.
+      // Settlement writes the durable crash disposition; until then the receipt
+      // stays active. After restart a previous-run active receipt displays unknown.
       this.crashedWorktrees.set(tab, "Host exited unexpectedly; checkout and branch require inspection");
     }
     tab.proc = null;

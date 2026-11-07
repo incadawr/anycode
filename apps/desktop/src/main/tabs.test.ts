@@ -20,7 +20,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
@@ -9304,7 +9304,7 @@ describe("Agent managed worktree admission", () => {
     const receipt: ChildWorktreeReceipt = { ...snapshot, version: 1, id: "resource", appRunId: "run",
       parentSessionId: "parent", childSessionId: "child", path: "/ws/.anycode/worktrees/child-resource",
       branch: "anycode-wt/child-resource", phase: "active", reason: null };
-    const resources = { findForSession: vi.fn(() => receipt), read: vi.fn(async () => receipt), snapshot: vi.fn(async () => snapshot), allocate: vi.fn(async () => receipt),
+    const resources = { appRunId: "run", findForSession: vi.fn(() => receipt), read: vi.fn(async () => receipt), snapshot: vi.fn(async () => snapshot), allocate: vi.fn(async () => receipt),
       update: vi.fn(async (_r: ChildWorktreeReceipt, phase: ChildWorktreeReceipt["phase"], reason: string) => ({ ...receipt, phase, reason })) };
     const manager = childManager(fork, windowRig().window, { childWorktrees: resources, engineReady: () => true, ...overrides });
     const root = manager.createTab({ workspace: "/ws", projectRoot: "/project", sessionId: "parent", engine, resume: false });
@@ -9315,7 +9315,7 @@ describe("Agent managed worktree admission", () => {
 
   it.each(["active", "retained", "removed", "unknown", "not-created", "intent"] as const)("describes continuation refusal for %s", phase => {
     const receipt = { ...rig().receipt, phase };
-    const r = rig("core", { childWorktrees: { findForSession: () => receipt } as never });
+    const r = rig("core", { childWorktrees: { appRunId: "run", findForSession: () => receipt } as never });
     const detail = r.manager.managedContinuationRefusal("child")!.detail;
     if (phase === "active") {
       expect(detail).toContain("existing session is not continued");
@@ -9325,6 +9325,38 @@ describe("Agent managed worktree admission", () => {
     if (phase === "removed") { expect(detail).toContain("folder was removed"); expect(detail).not.toContain("inspect retained work at"); }
     if (phase === "unknown") expect(detail).toContain("whether");
     if (phase === "not-created" || phase === "intent") expect(detail).not.toContain(receipt.path);
+  });
+
+  it.each(["", "{truncated"])("resumes ordinary sessions despite a damaged journal (%s)", async raw => {
+    const scratch = await mkdtemp(join(tmpdir(), "resume-journal-"));
+    const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    try {
+      await mkdir(join(scratch, "child-worktrees"));
+      await writeFile(join(scratch, "child-worktrees", `${id}.json`), raw);
+      const resources = new ChildWorktreeResources({ userData: scratch, appRunId: "now" });
+      const r = rig("core", { childWorktrees: resources });
+      expect(r.manager.createTab({ workspace: "/ordinary", sessionId: "ordinary", resume: true }).ok).toBe(true);
+      expect(r.manager.createTab({ workspace: join(scratch, ".anycode", "worktrees", `child-${id}`), sessionId: "tied", resume: true }))
+        .toMatchObject({ ok: false, reason: "worktree_unavailable", detail: expect.stringContaining("receipt could not be verified") });
+    } finally { await rm(scratch, { recursive: true, force: true }); }
+  });
+
+  it("describes previous-run active receipts as unconfirmed with their path", () => {
+    const r = rig(); r.resources.appRunId = "next-run";
+    const detail = r.manager.managedContinuationRefusal("child")!.detail;
+    expect(detail).toContain("Previous app run; completion unconfirmed");
+    expect(detail).toContain(r.receipt.path);
+    expect(detail).not.toContain("no open tab is available");
+  });
+
+  it("counts a live subfolder tab as another checkout claim", async () => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "retained", reason: "claimed" });
+    const r = rig();
+    const opened = r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
+    if (!opened.ok) throw Error("missing root");
+    r.manager.createTab({ workspace: r.receipt.path + "/nested", sessionId: "nested", resume: false });
+    await r.manager.closeTab(opened.tab.tabId);
+    expect(await settle.mock.calls[0]![0].hasOtherClaims(r.receipt)).toBe(true);
   });
 
   it("records uncertainty when an opened root gives up respawning", async () => {
@@ -9383,7 +9415,7 @@ describe("Agent managed worktree admission", () => {
     if (!opened.ok) throw Error("missing root");
     await r.manager.closeTab(opened.tab.tabId);
     expect(r.manager.managedContinuationRefusal("opened")?.detail).toContain("folder was removed");
-    expect(findForSession).toHaveBeenCalledWith("opened");
+    expect(findForSession).toHaveBeenCalledWith("opened", undefined);
   });
 
   it.each([true, false])("refuses managed follow-up after completion with policy=%s", async policy => {

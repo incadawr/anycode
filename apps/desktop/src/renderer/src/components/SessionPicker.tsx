@@ -79,7 +79,7 @@ export function describeCreateTabFailure(
       // may refine the copy / route to the Settings screen.
       return "Configure a provider (API key + model) before opening a tab.";
     case "worktree_unavailable":
-      return `This session's worktree is missing or no longer registered${result.worktreePath ? `: ${result.worktreePath}` : ""}. Restore or re-register that path with Git before resuming.`;
+      return result.detail ?? `This session's worktree is missing or no longer registered${result.worktreePath ? `: ${result.worktreePath}` : ""}. Restore or re-register that path with Git before resuming.`;
     case "folder_not_found":
       // GitHub #6: main checked the folder before forking, found it gone, and
       // rolled the half-made tab back. Nothing was created, so the draft the

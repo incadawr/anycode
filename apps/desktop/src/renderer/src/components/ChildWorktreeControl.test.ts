@@ -92,7 +92,7 @@ it("ignores an old parent's pending toggle after changing tabs and displays requ
 });
 
 it.each([
-  ["Agent: worktree session children require Core", true],
+  ["Agent: worktree session children require Core", false],
   ["Agent: worktree session children require Core; choose a Core child.", false],
   ["Worktree SessionOpen requires Core, the opener checkout, and an available allocator.", false],
 ])("adds advice only for an unambiguous engine refusal: %s", async (lastRefusal, advice) => {

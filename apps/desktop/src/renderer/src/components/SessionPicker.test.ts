@@ -265,3 +265,8 @@ it("distinguishes a missing model, credential and unsupported transport", () => 
   expect(describeCreateTabFailure({ ok: false, reason: "not_ready", notReadyReason: "transport_unsupported" }, "core")).toContain("transport");
   expect(describeCreateTabFailure({ ok: false, reason: "not_ready" }, "claude")).toContain("Settings → Claude");
 });
+
+it("shows managed refusal detail and keeps legacy worktree recovery advice", () => {
+  expect(describeCreateTabFailure({ ok: false, reason: "worktree_unavailable", detail: "Start a new session. Inspect retained work at /checkout." })).toBe("Start a new session. Inspect retained work at /checkout.");
+  expect(describeCreateTabFailure({ ok: false, reason: "worktree_unavailable", worktreePath: "/legacy" })).toContain("Restore or re-register that path with Git before resuming.");
+});

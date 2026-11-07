@@ -801,6 +801,8 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   if (meta === null) {
     return { ok: false, reason: "session_not_found" };
   }
+  const tiedRefusal = deps.manager.managedContinuationRefusal?.(req.sessionId, meta.worktree?.path ?? meta.workspace);
+  if (tiedRefusal) return { ok: false, reason: "worktree_unavailable", ...tiedRefusal };
   if (meta.worktree !== undefined) {
     if (meta.workspace !== meta.worktree.path || !existsSync(meta.worktree.path)) {
       return { ok: false, reason: "worktree_unavailable", worktreePath: meta.worktree.path };
