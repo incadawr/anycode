@@ -6,7 +6,7 @@ import { NodeExecutionAdapter } from "@anycode/core/node-execution";
 
 type ResourceGit = Pick<NodeGitAdapter,
   "status" | "worktreeList" | "worktreeAdd" | "ensureWorktreeNamespaceIgnored">;
-type ResourceFs = Pick<typeof nodeFs, "mkdir" | "open" | "rename"> & {
+type ResourceFs = Pick<typeof nodeFs, "mkdir" | "open" | "rename" | "readFile"> & {
   realpath(target: string): Promise<string>;
 };
 
@@ -25,7 +25,7 @@ export interface ChildWorktreeReceipt extends ChildWorktreeSnapshot {
   childSessionId: string;
   path: string;
   branch: string;
-  phase: "intent" | "active" | "unknown";
+  phase: "intent" | "active" | "unknown" | "retained" | "removed";
   reason: string | null;
 }
 
@@ -118,6 +118,32 @@ export class ChildWorktreeResources {
     }
   }
 
+  /** Read by journal identity, never by a caller-supplied filesystem path. */
+  async read(id: string): Promise<ChildWorktreeReceipt> {
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid receipt identity");
+    const value = JSON.parse(await this.fs.readFile(this.receiptPath(id), "utf8"));
+    const strings = ["id", "appRunId", "parentSessionId", "childSessionId", "sourceRoot",
+      "storageRoot", "projectRoot", "baseSha", "path", "branch"];
+    if (!value || value.version !== 1 || value.id !== id ||
+        strings.some((key) => typeof value[key] !== "string" || !value[key]) ||
+        !["intent", "active", "unknown", "retained", "removed"].includes(value.phase) ||
+        !(value.reason === null || typeof value.reason === "string")) {
+      throw new Error("Invalid receipt");
+    }
+    return value;
+  }
+
+  /** Refuse stale ownership; only this app run can update its own journal. */
+  async update(expected: ChildWorktreeReceipt, phase: ChildWorktreeReceipt["phase"],
+    reason: string): Promise<ChildWorktreeReceipt> {
+    const current = await this.read(expected.id);
+    if (current.appRunId !== this.options.appRunId || !receiptsEqual(current, expected))
+      throw new Error("Receipt changed or belongs to another run");
+    const next = { ...current, phase, reason };
+    await this.replace(next);
+    return next;
+  }
+
   private receiptPath(id: string): string {
     return path.join(this.directory, `${id}.json`);
   }
@@ -141,4 +167,9 @@ export class ChildWorktreeResources {
     await this.fs.rename(temporary, this.receiptPath(receipt.id));
     await this.syncDirectory();
   }
+}
+
+export function receiptsEqual(a: ChildWorktreeReceipt, b: ChildWorktreeReceipt): boolean {
+  const keys = Object.keys(a) as (keyof ChildWorktreeReceipt)[];
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
 }
