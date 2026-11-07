@@ -40,7 +40,8 @@ executable by hand.
 
 Settings → Claude finds the `claude` executable and checks its version. The
 **Connect Claude Code** section signs you in. The sign-in opens a Terminal
-window and runs under your shell environment. Read the pane's status line before you
+window on macOS and runs `claude auth login` under your shell environment.
+On other platforms, run that command yourself in a terminal. Read the pane's status line before you
 rely on a Claude tab: it shows whether the binary and the signed-in account are
 both ready.
 
@@ -77,8 +78,8 @@ See [proxy.md](proxy.md).
 
 ## Delegation and skills in engine tabs
 
-- A Codex or Claude tab can delegate to your subagent profiles when at least one
-  profile exists. The Codex tool is `anycode_agent`; the Claude tool is
+- A Codex or Claude tab can delegate to your subagent profiles when a profile or configured role
+  is available. The Codex tool is `anycode_agent`; the Claude tool is
   `mcp__anycode__agent`. Neither appears in a child session.
 - Root Claude and Codex processes can receive three app builtins: `anycode-setup`,
   `using-browser-preview` and `control-browser`. Claude uses the `anycode-app:`
@@ -90,6 +91,63 @@ See [proxy.md](proxy.md).
 - Filesystem skills remain Native-only; same-name files do not replace the app
   catalog in either engine. Windows forwarding is unavailable. See
   [skills.md](skills.md) for policy, aliases and crash retention.
+
+## Binary discovery and versions
+
+Codex discovery order is `ANYCODE_CODEX_BIN`, `codex.binaryPath`, `PATH`, common
+install folders, then the managed install. Claude discovery is
+`ANYCODE_CLAUDE_BIN`, `claude.binaryPath`, `PATH`, then common install folders.
+An explicit invalid override or a trust refusal can stop discovery; the pane
+lets you pick a different executable.
+
+Common POSIX folders include `~/.local/bin`, `~/.npm-global/bin`,
+`/opt/homebrew/bin` and `/usr/local/bin`; Windows also checks the npm install
+folder. Managed Codex versions live in `~/.anycode/codex/bin/<version>/`.
+
+The Codex installer downloads the platform package from the npm registry,
+verifies sha512 integrity before unpacking, and does not run npm lifecycle
+scripts. Managed installs can auto-upgrade to the recommended version; binaries
+you selected yourself are never changed.
+
+In AnyCode 0.0.90, the bundled Codex support range is `>=0.144.0 <0.168.0`,
+recommended 0.167.0. The support manifest refreshes at most every six hours.
+Read the pane for the current verdict and recommendation. Accepting risk for
+an unsupported version applies to that version only. Claude requires at least
+2.1.212; its doctor uses initialization rather than a model turn. AnyCode does
+not install Claude Code.
+
+## Accounts, speed and context
+
+Codex account profiles use separate homes under
+`~/.anycode/codex/profile-<id>/`, with at most eight profiles. The system profile
+uses the normal Codex home and cannot be deleted. Choose the active profile in
+Settings → Codex → Accounts. Browser and device-code sign-in have a five-minute
+timeout. Claude uses its normal CLI account.
+
+**Continue on another account**, enabled unless
+`codexContinueOnAnotherAccount` is `"off"`, lets a Codex session continue using
+another available profile when its account runs out. For supported Codex models,
+the composer offers **Fast** speed. It consumes usage limits faster; changes
+apply on the next turn.
+
+Settings → Claude offers a context-window limit of 100k–1M tokens for new
+sessions, affecting the meter and auto-compaction. Leave it blank for the CLI
+default. The pane caches the live model list for the account and binary.
+
+## What is forwarded
+
+Configured MCP servers are resolved by AnyCode and forwarded when the CLI
+process starts; project entries require folder trust. Restart the session after
+changing them. The AnyCode bridge exposes delegation, child status, connection
+listing and up to ten browser tools, depending on availability and restrictions.
+Codex names them `anycode_*`; Claude uses `mcp__anycode__*`.
+
+Native filesystem skills, hooks, workflows and LSP diagnostics do not become
+CLI-native features. The three app skills have shorter engine-oriented bodies
+and use the aliases above. Ordinary tool approval still belongs to the CLI.
+
+You can switch engines inside a session while retaining conversation history.
+The new engine uses its own runtime, account and approval controls.
 
 ## How to verify it applied
 
