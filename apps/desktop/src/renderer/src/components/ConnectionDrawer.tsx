@@ -2562,17 +2562,17 @@ export function ConnectionDrawerFields({
       <label className="settings-field-label" htmlFor="connection-icon-text">Icon</label>
       <div className="connection-icon-input-row">
         <ConnectionIcon connection={{ id: "preview", providerId, label, iconText, iconColor }} providerName={catalog.find(p => p.id === providerId)?.name ?? "Custom"} />
-        <input id="connection-icon-text" className="settings-field-input" value={iconText} disabled={readOnly} onChange={e => setIconText(Array.from(e.target.value).slice(0, 2).join(""))} />
+        <Input id="connection-icon-text" label="Icon" className="settings-field-input" value={iconText} disabled={readOnly} onChange={e => setIconText(Array.from(e.target.value).slice(0, 2).join(""))} />
       </div>
       <div className="connection-icon-swatches" role="group" aria-label="Icon color">
-        {CONNECTION_ICON_COLORS.map(color => <button key={color} type="button" aria-label={`Icon color ${color}`} aria-pressed={iconColor === color} disabled={readOnly} style={{ background: color }} onClick={() => setIconColor(color)} />)}
+        {CONNECTION_ICON_COLORS.map(color => <Button key={color} variant="ghost" type="button" aria-label={`Icon color ${color}`} aria-pressed={iconColor === color} disabled={readOnly} style={{ background: color }} onClick={() => setIconColor(color)} />)}
         <span className="connection-icon-auto-choice">
-          <button className="connection-icon-auto" type="button" aria-label="Automatic icon color" aria-pressed={!iconColor} disabled={readOnly} onClick={() => setIconColor("")} />
+          <Button variant="ghost" className="connection-icon-auto" type="button" aria-label="Automatic icon color" aria-pressed={!iconColor} disabled={readOnly} onClick={() => setIconColor("")} />
           <span className="connection-icon-auto-label" aria-hidden="true">Auto</span>
         </span>
       </div>
       <span className="settings-field-hint">1–2 characters; empty uses an automatic monogram.</span>
-      <button className="connection-icon-reset" type="button" disabled={readOnly} onClick={() => { setIconText(""); setIconColor(""); }}>Reset to default</button>
+      <Button variant="ghost" className="connection-icon-reset" type="button" disabled={readOnly} onClick={() => { setIconText(""); setIconColor(""); }}>Reset to default</Button>
     </div>
   );
   // On the new-custom-endpoint form the provider Name already identifies the

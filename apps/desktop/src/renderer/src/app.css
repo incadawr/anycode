@@ -9074,6 +9074,8 @@ dialog.role-picker-dialog {
 .environment-diagnostics-link > :first-child { text-decoration: underline; text-underline-offset: 3px; }
 
 .connection-icon {
+  /* Overridden by ConnectionIcon's inline, palette-derived color. */
+  --connection-icon-color: var(--text-2);
   width: 16px; height: 16px; flex: 0 0 16px;
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 5px; font-size: 8.5px; font-weight: 600; line-height: 1;
@@ -9087,10 +9089,12 @@ dialog.role-picker-dialog {
 .connection-icon-fields > .connection-icon-field { flex: 0 1 10.5rem; min-width: 0; }
 .connection-icon-input-row, .connection-icon-swatches { display: flex; align-items: center; gap: 4px; }
 .connection-icon-input-row input { flex: 0 0 3rem; width: 3rem; min-width: 0; box-sizing: border-box; text-align: center; }
+.connection-icon-input-row .ak-field { flex: 0 0 3rem; }
+.connection-icon-input-row .ak-field__label { display: none; }
 .connection-icon-swatches { flex-wrap: wrap; gap: 4px 3px; min-width: 0; }
 .connection-icon-auto-choice { display: inline-flex; align-items: center; gap: 4px; }
 .connection-icon-swatches button { flex: 0 0 14px; width: 14px; height: 14px; padding: 0; border: 1px solid var(--border-strong); border-radius: 4px; cursor: pointer; }
 .connection-icon-swatches button[aria-pressed="true"] { outline: 2px solid var(--text-1); outline-offset: 1px; }
 .connection-icon-swatches button.connection-icon-auto { background: linear-gradient(135deg, transparent 44%, var(--text-3) 44%, var(--text-3) 56%, transparent 56%); border: 1px dashed var(--border-strong); }
 .connection-icon-auto-label { color: var(--text-3); font-size: var(--fs-2xs); }
-.connection-icon-reset { align-self: flex-start; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.connection-icon-reset { align-self: flex-start; height: auto; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
