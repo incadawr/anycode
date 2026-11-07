@@ -81,7 +81,7 @@ export function SessionExtensionsMenu() {
     };
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
-  }, [narrow, selection]);
+  }, [narrow, selection, tabId, core]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -99,7 +99,7 @@ export function SessionExtensionsMenu() {
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [open]);
+  }, [open, narrow]);
 
   useEffect(() => {
     if (!open) return;
@@ -191,7 +191,7 @@ export function SessionExtensionsMenu() {
             useTabsStore.getState().setLspPanelOpen(tabId, true);
           }} />}
         {(selection.index === 1 || selection.index === 2) && engine !== null &&
-          <p>AnyCode catalog. Availability in the current engine is not confirmed.</p>}
+          <p>Saved in AnyCode; this engine may not load these entries.</p>}
         {selection.index === 1 && <p>All projects; background services and account sources may change immediately.</p>}
         {selection.index === 4 && <section aria-label="Hooks summary">
           <p>{formatEnvironmentHooksDetail(hooks)}</p>

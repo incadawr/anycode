@@ -68,7 +68,7 @@ it("opens one portal dialog with scoped configured counts and returns focus on E
   expect(panel.getAttribute("aria-modal")).toBe("false");
   expect(trigger().getAttribute("aria-controls")).toBe(panel.id);
   expect(isOverlayOpen()).toBe(true);
-  const rows = [...panel.querySelectorAll(".session-extensions-category")];
+  const rows = [...panel.querySelectorAll<HTMLButtonElement>(".session-extensions-category")];
   expect(rows.map((row) => row.textContent)).toEqual(["MCP2›", "Plugins1›", "Skills3›", "LSP2›", "HooksNone›"]);
   expect(document.activeElement).toBe(rows[0]);
   expect(panel.querySelector("button button, button input")).toBeNull();
@@ -213,7 +213,7 @@ it("opens read-only lists with click, Enter, Space and Right, and returns with L
   await click(categories[0]!);
   expect(details()!.textContent).toContain("compat-mcp");
   expect(details()!.textContent).toContain("Shadowed");
-  expect(details()!.textContent).toContain("Saved: disabled");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");
   expect(dialog()!.querySelector('input, button button')).toBeNull();
   expect(dialog()!.querySelectorAll('[role="switch"]')).toHaveLength(2);
   expect(details()!.querySelector(".session-extensions-back")).toBeNull();
@@ -306,7 +306,47 @@ it("renders sanitized names as plain text and excludes private DTO fields", asyn
   expect(text.endsWith("…")).toBe(true);
   expect(details()!.querySelector("img")).toBeNull();
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
-  expect(details()!.textContent).toContain("Some entries could not be loaded.");
+  expect(details()!.textContent).toContain("1 configuration issue.");
+});
+
+it("names broken skill files with actionable hints and counts unstructured problems", async () => {
+  vi.mocked(window.anycode.skills.list).mockResolvedValue({ rows: [], problems: [
+    "Skill discovery: invalid frontmatter in /private/project/.anycode/skills/broken/SKILL.md: PRIVATE_CONTENT",
+    'Skill discovery: skipping /private/project/.anycode/skills/missing/SKILL.md — a "description" is required',
+    "PRIVATE_UNKNOWN_ERROR",
+  ] } as never);
+  await render();
+  await click(trigger());
+  await click(categoryButtons()[2]!);
+  expect(details()!.textContent).toContain("3 configuration issues. Open Manage skills for details.");
+  expect(details()!.textContent).toContain("broken/SKILL.md: Fix the frontmatter.");
+  expect(details()!.textContent).toContain("missing/SKILL.md: Add a description to the frontmatter.");
+  expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
+  expect(dialog()!.outerHTML).not.toContain("/private/project");
+});
+
+it("names invalid MCP configuration files without rendering raw parser errors", async () => {
+  vi.mocked(window.anycode.mcpConfig.get).mockResolvedValue({ entries: [], problems: [
+    "Invalid JSON in /private/project/.mcp.json: PRIVATE_CONFIG_CONTENT",
+  ] } as never);
+  await render();
+  await click(trigger());
+  expect(details()!.textContent).toContain(".mcp.json: Fix the JSON.");
+  expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
+});
+
+it("keeps skill controls, name, source and management together without redundant saved labels", async () => {
+  await render();
+  await click(trigger());
+  await click(categoryButtons()[2]!);
+  for (const row of details()!.querySelectorAll("li")) {
+    const item = row.querySelector(".session-extensions-item")!;
+    expect(item.firstElementChild!.getAttribute("role")).toBe("switch");
+    expect(item.querySelector(".session-extensions-name")).not.toBeNull();
+    expect(item.querySelector(".session-extensions-source")!.textContent).toBe("User");
+    expect(item.querySelector(".session-extensions-manage")!.getAttribute("title")).toMatch(/^Manage /);
+    expect(row.textContent).not.toContain("Saved:");
+  }
 });
 
 it("shows loading, unavailable, retry and empty detail states", async () => {
@@ -394,7 +434,8 @@ it("retains live failures and connections beside saved disabled entries and unma
   await click(trigger());
   await click(categoryButtons()[0]!);
   const text = details()!.textContent!;
-  expect(text).toContain("Saved: disabled for new session starts; this session keeps its startup configuration");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");
+  expect(text).toContain("Changes apply on the next session start");
   expect(text).toContain("Connection failed");
   expect(text).toContain("This session / Diagnostics");
   expect(text).toContain("Connected in this session");
@@ -461,12 +502,12 @@ it("refreshes saved config without clearing a current failure, then retains it a
   await render();
   await click(trigger());
   await click(categoryButtons()[0]!);
-  expect(details()!.textContent).toContain("Saved: enabled");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("true");
   expect(details()!.textContent).toContain("Connection failed");
   await key(details()!, "Escape");
   await click(trigger());
   await click(categoryButtons()[0]!);
-  expect(details()!.textContent).toContain("Saved: disabled");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");
   expect(warning()).not.toBeNull();
   await key(details()!, "Escape");
   vi.mocked(window.anycode.mcpConfig.get).mockResolvedValue({ entries: [], problems: [] } as never);
@@ -484,7 +525,7 @@ it("keeps parse problems separate from runtime failures and offers retry without
   await render();
   await click(trigger());
   await click(categoryButtons()[0]!);
-  expect(details()!.textContent).toContain("Some entries could not be loaded");
+  expect(details()!.textContent).toContain("1 configuration issue");
   expect(details()!.textContent).not.toContain("Connection failed");
   expect(warning()).toBeNull();
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_PARSE_ERROR");
@@ -584,15 +625,15 @@ it.each(["codex", "claude"])("keeps configured LSP and catalog counts with hones
   await click(trigger());
   await click(categoryButtons()[3]!);
   expect(categoryButtons()[3]!.textContent).toContain("2");
-  expect(details()!.textContent).toContain("AnyCode LSP is unavailable in this engine");
-  expect(details()!.textContent).toContain("For new Core sessions");
+  expect(details()!.textContent).toContain("This engine does not use AnyCode LSP");
+  expect(details()!.textContent).toContain("saved for Core sessions");
   expect(details()!.querySelectorAll("li")).toHaveLength(2);
   expect(detailButton("Details")).toBeUndefined();
   expect(details()!.textContent).not.toContain("crashed");
   expect(trigger().querySelector(".session-extensions-warning")).toBeNull();
   for (const index of [1, 2]) {
     await click(categoryButtons()[index]!);
-    expect(details()!.textContent).toContain("AnyCode catalog. Availability in the current engine is not confirmed");
+    expect(details()!.textContent).toContain("Saved in AnyCode; this engine may not load these entries");
   }
   expect(send).not.toHaveBeenCalled();
 });
@@ -628,17 +669,17 @@ it("shows plugin tier, saved status and consent hints without exposing diagnosti
   await click(trigger());
   await click(categoryButtons()[1]!);
   const rows = details()!.querySelectorAll("li");
-  expect(rows[0]!.textContent).toContain("local · disabled · Saved: disabled");
+  expect(rows[0]!.textContent).toContain("local · disabled");
   expect(rows[0]!.textContent).toContain("Needs attention in Plugins");
   expect(rows[0]!.textContent).toContain("MCP needs approval in Plugins");
   expect(rows[0]!.textContent).toContain("Services need approval in Plugins");
-  expect(rows[1]!.textContent).toContain("official · active · Saved: enabled");
+  expect(rows[1]!.textContent).toContain("official · active");
   expect(rows[1]!.textContent).not.toContain("needs approval");
   expect(details()!.textContent).toContain("All projects; background services and account sources may change immediately");
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
   expect(switches().every((control) => control.disabled)).toBe(true);
   await click(categoryButtons()[2]!);
-  expect(details()!.textContent).toContain("Plugin · Saved: enabled · Read-only; manage in Plugins");
+  expect(details()!.textContent).toContain("Saved: enabled · Read-only; manage in Plugins");
 });
 
 it("sanitizes names in the shared LSP summary without exposing runtime metadata", async () => {
@@ -806,7 +847,7 @@ it("writes own skills by raw name and tab, serializes writes and leaves contribu
   await openCatalog(2);
   expect(switches()).toHaveLength(2);
   expect(details()!.textContent).toContain("Read-only; manage in Plugins");
-  expect(details()!.textContent).toContain("This session keeps its startup configuration");
+  expect(details()!.textContent).toContain("Changes apply on the next session start");
   const control = switches()[0]!;
   await act(async () => control.focus());
   await click(control);
@@ -914,7 +955,7 @@ it("keeps native catalog guidance beside active switches and never adds an LSP s
   prepareCatalogs();
   store.setState({ connection: "host_exited", engine: { id: "claude", capabilities: { supportsTasks: false } } as never });
   await openCatalog(2);
-  expect(details()!.textContent).toContain("Availability in the current engine is not confirmed");
+  expect(details()!.textContent).toContain("Saved in AnyCode; this engine may not load these entries");
   expect(switches()[0]!.disabled).toBe(false);
   await click(categoryButtons()[1]!);
   expect(details()!.textContent).toContain("background services and account sources may change immediately");
@@ -1101,7 +1142,7 @@ it.each(["codex", "claude"])("locks pending native configuration writes and refu
   expect(details()!.textContent).toContain("Could not write the configuration");
   expect(details()!.textContent).not.toContain("Saved for new session starts");
   await click(categoryButtons()[3]!);
-  expect(details()!.textContent).toContain("LSP is unavailable in this engine");
+  expect(details()!.textContent).toContain("This engine does not use AnyCode LSP");
   expect(details()!.querySelector('[role="switch"]')).toBeNull();
   expect(send).not.toHaveBeenCalled();
 });

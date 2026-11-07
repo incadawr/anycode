@@ -40,7 +40,7 @@ export function assertConsentPending(view) {
   assert.equal(view.switches, 0, "Consent-pending MCP entry has no write control");
 }
 export function assertNativeUnavailable(view) {
-  assert(view.text.includes("AnyCode LSP is unavailable in this engine. For new Core sessions."), "Honest native capability reason");
+  assert(view.text.includes("These language servers are saved for Core sessions. This engine does not use AnyCode LSP."), "Honest native capability reason");
   assert.equal(view.switches, 0, "Unsupported LSP has no write control");
   assert.equal(view.details, false, "Unsupported LSP has no live status action");
   assert.equal(view.restart, false, "Unsupported LSP has no restart action");
@@ -201,6 +201,7 @@ async function main() {
     return evaluate(`Array.from(document.querySelectorAll('.session-extensions-list li')).map(e => ({
       name:e.querySelector('.session-extensions-name').textContent,
       source:e.querySelector('.session-extensions-source').textContent,
+      note:e.querySelector('.session-extensions-note')?.textContent,
       enabled:e.querySelector('[role=switch]')?.getAttribute('aria-checked') === 'true',
       status:e.querySelector('.session-extensions-status')?.textContent
     }))`);
@@ -324,7 +325,7 @@ async function main() {
     const second = await create(b);
     phase = "empty header";
     assert.equal(await evaluate(`document.querySelectorAll('.session-header ${trigger}').length`), 0);
-    assert.equal(await evaluate("document.querySelectorAll('.session-header .environment-trigger').length"), 0);
+    assert.equal(await evaluate("document.querySelectorAll('.session-header .environment-control-header .environment-trigger').length"), 0);
     results.checks.push("empty-header");
     phase = "Core startup";
     await turn(second, "Start local extensions fixture", true);
@@ -333,7 +334,7 @@ async function main() {
     await openMcp();
     await poll(async () => (await rows()).some(row => row.name === "healthy" && row.status === statusConnected));
     const counts = await poll(() => evaluate(`(() => {
-      const c = [...document.querySelectorAll('.session-extensions-category')].map(e => e.querySelector('[aria-live]').textContent);
+      const c = [...document.querySelectorAll('.session-extensions-category')].slice(0, 4).map(e => e.querySelector('[aria-live]').textContent);
       return c.length === 4 && c.every(v => /^\\d+$/.test(v)) ? c.map(Number) : null;
     })()`));
     assertCounts(counts, [4, 1, 1, 1]);
@@ -342,7 +343,7 @@ async function main() {
     assertMcpRow(initial, "healthy", "User", false, "Shadowed by another scope");
     assertMcpRow(initial, "broken", "Project", true, "Connection failed");
     assertMcpRow(initial, "off", "Project", false, statusUnknown);
-    assert(initial.some(row => row.source.startsWith("Plugin") && row.source.includes("Needs approval")));
+    assert(initial.some(row => row.source.startsWith("Plugin") && row.note?.includes("Needs approval")));
     assert(initial.some(row => row.name === "compat-only" && row.source.startsWith("Compatibility")));
     const display = await evaluate(`document.querySelector('${panel}').outerHTML`);
     for (const sentinel of ["env-value-private-sentinel", "missing-command-sentinel", "fixture-server.mjs"])
@@ -420,7 +421,7 @@ async function main() {
       await shot(`${engine}-lsp-unavailable`);
       for (const index of [2, 3]) {
         await click(`.session-extensions-category:nth-child(${index})`);
-        assert(await evaluate("document.querySelector('.session-extensions-details').textContent.includes('Availability in the current engine is not confirmed')"));
+        assert(await evaluate("document.querySelector('.session-extensions-details').textContent.includes('Saved in AnyCode; this engine may not load these entries')"));
       }
       const counts = await evaluate("[...document.querySelectorAll('.session-extensions-category [aria-live]')].map(e=>Number(e.textContent))");
       assertCounts(counts, [4, 1, 1, 1]);

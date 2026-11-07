@@ -1546,8 +1546,20 @@ body {
 .session-extensions-details .ak-btn:focus-visible { outline-offset: 1px; }
 .session-extensions-list { margin: 0; padding: 0; list-style: none; }
 .session-extensions-list li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
-.session-extensions-name, .session-extensions-source { display: block; overflow-wrap: anywhere; }
-.session-extensions-source { color: var(--text-2); }
+.session-extensions-item { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.session-extensions-item .ak-switch { flex: none; }
+.session-extensions-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-extensions-source { flex: none; color: var(--text-2); font-size: 11px; }
+.session-extensions-note, .session-extensions-feedback { display: block; color: var(--text-2); overflow-wrap: anywhere; }
+.session-extensions-details button.session-extensions-manage {
+  flex: none;
+  padding: var(--sp-1) 0;
+  border: 0;
+  background: none;
+  font-size: 11px;
+}
+.session-extensions-manage:hover { text-decoration: underline; }
+.session-extensions-problems p { overflow-wrap: anywhere; }
 .session-extensions-status { display: flex; align-items: center; gap: var(--sp-1); line-height: 1.5; }
 @media (width < 600px) {
   .session-extensions-body { display: block; overflow: auto; }
