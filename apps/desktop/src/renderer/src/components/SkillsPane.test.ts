@@ -395,20 +395,22 @@ describe("app builtin settings", () => {
     const { BuiltinSkillGroup } = await import("./SkillsPane.js");
     const html = renderToStaticMarkup(createElement(BuiltinSkillGroup, {
       settings: [{ id: "anycode-setup", userDisabled: true, projectDisabled: false }],
-      notice: "Settings for the next Claude process",
+      notice: "Settings for the next engine process for Claude and Codex",
       scope: "project", query: "", onToggle: () => {},
     }));
     expect(html).toContain('data-skill-name="builtin:anycode-setup"');
     expect(html).toContain('data-skill-source="builtin"');
     expect(html).toContain('data-skill-enabled="true"');
-    expect(html).toContain("ignored by Claude in untrusted workspaces");
+    expect(html).toContain("ignored by Claude and Codex in untrusted workspaces");
     expect(html).toContain("Built into AnyCode");
     expect(html).toContain("anycode-app:anycode-setup");
     expect(html).toContain("anycode-app-setup");
-    expect(html).toContain("next Claude process");
+    expect(html).toContain("next engine process for Claude and Codex");
+    expect(html).toContain('aria-label="Disable anycode-setup in project settings for Claude and Codex"');
     expect(html).toContain("Disabled in personal settings");
     expect(html).toContain('aria-checked="true"');
-    expect(html).toContain("not yet delivered");
+    expect(html).toContain("Codex: anycode-app-setup");
+    expect(html).not.toMatch(/not yet delivered|Codex \(planned\)|next Claude process/);
     expect(html).not.toMatch(/Reveal|Delete|Import|delivered to Claude/);
   });
 });

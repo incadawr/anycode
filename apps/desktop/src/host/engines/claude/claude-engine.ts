@@ -667,8 +667,10 @@ async function connectClaudeEngine(
   const createClient = (approvals: ClaudeApprovalBridge, next: TransportSpawn, path: string | undefined, current: () => boolean, bridge: ClaudeMcpBridge | undefined, disableBuiltins = false) => new ClaudeClient({
     ...options,
     ...(disableBuiltins ? { pluginDir: undefined, prepareBuiltinSkills: undefined } : {}),
-    onBuiltinSkillNotice: reason => notices.push(warning(`App builtins unavailable: ${reason}.`)),
-    onBuiltinSkillReady: (stage, generation) => notices.push({ type: "engine_notice", level: "info", message: `App builtins ${stage}: ${generation}.` }),
+    onBuiltinSkillNotice: () => notices.push(warning("Built-in AnyCode skills could not be prepared. You can continue chatting.")),
+    onBuiltinSkillReady: stage => notices.push({ type: "engine_notice", level: "info", message: stage === "prepared"
+      ? "Built-in AnyCode skill files are prepared for this session."
+      : "Claude lists the built-in AnyCode skills for this session. This does not confirm they were used." }),
     ...(next.resume !== undefined ? { permissionModeFlag: undefined } : { permissionModeFlag: permissionModeToFlag(preset.mode) }),
     effort: engine === null ? requestedEffort : engine.snapshot().effort,
     ...next,
@@ -751,7 +753,7 @@ async function connectClaudeEngine(
         error instanceof OrchestrationNotReadyError || error instanceof ClaudeTransportAbortError ||
         (error instanceof Error && error.message === CLAUDE_NOT_SIGNED_IN);
       if (!nonPluginFailure && !disableBuiltins && client?.hasBuiltinPlugin && !signal?.aborted && current()) {
-        notices.push(warning("App builtins unavailable: plugin-start-failed. Retrying without the adapter."));
+        notices.push(warning("Claude could not start with built-in AnyCode skills. Retrying without them."));
         // The failed attempt removed its materialized MCP file. Resolve a fresh one.
         return openTransport({ ...next, forward: undefined }, current, signal, true);
       }

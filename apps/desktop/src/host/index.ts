@@ -1472,7 +1472,7 @@ function hostSwitchFactory(
           workspace, binaryPath, sourceEnv, broker: engineBroker, projectTrusted,
           orchestrationFeatureEnabled: launch?.claudeOrchestrateEnabled === true,
           profileDir: resolveClaudeConfigDir(), resolveMcpForward: () => forward("claude"),
-          bootNotices: [{ type: "engine_notice", level: "warning", message: "App builtins unavailable: engine-switch preparation is not supported yet." }], agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
+          bootNotices: [{ type: "engine_notice", level: "warning", message: "Built-in AnyCode skills are unavailable after switching engines. Start a new Claude session to use them." }], agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
           peerToolNames: stamp.peerToolNames,
           browserToolNames: new Set(routing.browser.specs.map(spec => `mcp__anycode__${spec.claudeName}`)),
           binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),

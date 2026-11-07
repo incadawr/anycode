@@ -1611,9 +1611,9 @@ it.each([{ error: "Failed to load plugin anycode-app" }, { error: "plugin anycod
     expect(attempts).toBe(2);
     const turn = connected.engine.runTurn("synthetic", { signal: new AbortController().signal })[Symbol.asyncIterator]();
     let notice;
-    do { notice = await turn.next(); } while (!notice.done && !(notice.value.type === "engine_notice" && notice.value.message.includes("plugin-start-failed")));
+    do { notice = await turn.next(); } while (!notice.done && !(notice.value.type === "engine_notice" && notice.value.message.includes("Retrying without them")));
     await turn.return?.();
-    expect(notice.value).toMatchObject({ type: "engine_notice", message: expect.stringContaining("plugin-start-failed") });
+    expect(notice.value).toMatchObject({ type: "engine_notice", message: "Claude could not start with built-in AnyCode skills. Retrying without them." });
     expect(failing.capturedArgs()).toContain("--plugin-dir");
     expect(ordinary.capturedArgs()).not.toContain("--plugin-dir");
   } finally { await connected.engine.dispose("session-close"); }
@@ -1631,7 +1631,7 @@ it("never retries the fallback boot", async () => {
   await expect(startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" })).rejects.toThrow("unknown boot failure");
   expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(2);
 });
-it("delivers opaque prepared and CLI-reported notices from this session", async () => {
+it("describes skill preparation and recognition without exposing internal identifiers", async () => {
   const fake = fakeSpawn(undefined, MODELS, { commands: [{ name: "anycode-app:anycode-setup" }] });
   const lease = { root: "/sealed/private", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
   const connected = await startClaudeEngine({ ...baseOptions(fake.spawnImpl), prepareBuiltinSkills: async () => lease });
@@ -1646,11 +1646,11 @@ it("delivers opaque prepared and CLI-reported notices from this session", async 
     }
     await turn.return?.();
     expect(fake.userMessages).toEqual([]);
-    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: expect.stringMatching(/App builtins prepared: [a-f0-9-]{36}\./) }));
-    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: expect.stringMatching(/App builtins CLI-reported: [a-f0-9-]{36}\./) }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Built-in AnyCode skill files are prepared for this session." }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Claude lists the built-in AnyCode skills for this session. This does not confirm they were used." }));
     const messages = events.filter(e => e.type === "engine_notice").map(e => e.message).join(" ");
     expect(messages).not.toContain("/sealed");
-    expect(messages.match(/[a-f0-9-]{36}/g)?.[0]).toBe(messages.match(/[a-f0-9-]{36}/g)?.[1]);
+    expect(messages).not.toMatch(/[a-f0-9-]{36}|plugin-start-failed|engine-switch preparation/);
   } finally { await connected.engine.dispose("session-close"); }
 });
 

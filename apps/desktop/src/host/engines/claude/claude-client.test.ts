@@ -1328,7 +1328,8 @@ describe("app builtin launch", () => {
     const lease = { root, bindChild: vi.fn(() => { bound = true; }), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
     const prepare = vi.fn(async () => lease);
     const client = makeClient(["--builtin-test", ...(fail ? ["--hang-init"] : [])], {
-      prepareBuiltinSkills: prepare, initTimeoutMs: 100,
+      // Successful initialize includes real Node startup; only the hang case needs a short deadline.
+      prepareBuiltinSkills: prepare, initTimeoutMs: fail ? 100 : 1000,
     });
     await client.start(); expect(bound).toBe(true);
     expect(lease.bindChild).toHaveBeenCalledWith(expect.anything(), process.platform !== "win32");

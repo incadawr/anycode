@@ -79,6 +79,7 @@ installed CLI skills follow that CLI's rules and are not controlled by this pane
 
 The three app builtins below appear in **Built into AnyCode**. Their switch
 edits the selected personal or workspace config using the original builtin ID.
+Each switch affects both Claude and Codex at their next process launch, including resume.
 Either config can disable a builtin: enabling it in the workspace does not undo
 a personal disable. These IDs are shared with Native: disabling one also disables
 the same-name Native builtin. Other Native builtins can be disabled through config.
@@ -126,8 +127,8 @@ config is ignored; personal disabled settings still apply. Invalid/unreadable po
 unsupported CLI or preparation failure can leave the adapter unavailable while
 ordinary chat continues. Windows forwarding is unavailable in this MVP.
 
-Claude sessions report **prepared** and **CLI-reported** notices with an
-opaque generation ID, and **unavailable** warnings for preparation failures.
+Claude sessions report when skill files are prepared and when Claude lists them,
+and show a warning if preparation fails. These notices contain no internal identifiers.
 The pane does not report a process generation or preparation/catalog success.
 A **prepared** snapshot means only that files were made; **CLI-reported**
 metadata means recognition, not proof that the model read or followed the

@@ -381,7 +381,7 @@ export async function builtinSettings(deps: SkillsIpcDeps, tabId?: string): Prom
     })),
     builtinNotice: process.platform === "win32" ? "Unavailable on Windows; ordinary CLI chat is available." :
       !readable ? "Configuration unreadable, invalid or beyond preview limits; availability cannot be previewed." :
-      "Settings for the next Claude process, including resume. Host policy, workspace trust, CLI support and available tools are checked at launch.",
+      "Settings for the next engine process for Claude and Codex, including resume. Availability is checked at launch.",
   };
 }
 

@@ -53,7 +53,7 @@ async function fixture() {
   resolved.configure(runtime);
   session.engine = runtime.engine; // Session adopts the configured runtime, including its wrapper.
   const call = (name = "sessions_list", args = {}) => resolved.options.stamp.callTool(name, args, new AbortController().signal, { toolUseId: "use" });
-  expect(resolved.options.bootNotices).toContainEqual(expect.objectContaining({ type: "engine_notice", message: expect.stringContaining("App builtins unavailable") }));
+  expect(resolved.options.bootNotices).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Built-in AnyCode skills are unavailable after switching engines. Start a new Claude session to use them." }));
   return { raw, runtime, session, request, broker, authority: () => authority(), call,
     preset: (value: string) => { preset = value; }, close: () => resolved.options.mcpBridge.close() };
 }

@@ -644,7 +644,7 @@ describe("app builtin controls", () => {
     expect(snapshot.rows.find(r => r.name === "anycode-setup")?.path).toContain("SKILL.md");
     expect(snapshot.builtins).toHaveLength(3);
     expect(snapshot.builtins?.[0]).toMatchObject({ id: "anycode-setup", userDisabled: true, projectDisabled: false });
-    expect(snapshot.builtinNotice).toContain("next Claude process");
+    expect(snapshot.builtinNotice).toContain("next engine process for Claude and Codex");
   });
   it("writes only a known builtin in the selected scope without any catalog scan", async () => {
     const ws = await tmp(), home = await tmp();

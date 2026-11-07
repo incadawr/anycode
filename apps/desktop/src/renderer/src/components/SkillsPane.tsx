@@ -67,9 +67,8 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
   return <div className="mcp-section">
     <div className="mcp-section-title">Built into AnyCode</div>
     <p className="skills-pane-hint">{notice}</p>
-    <p className="skills-pane-hint">Changes affect the next process launch, including resume; running sessions keep their snapshot.
-      This pane does not report process state. Prepared and CLI-reported notices, and unavailable warnings, appear in the session; a prepared snapshot or CLI-reported metadata does not prove model use.
-      Workspace settings are ignored by Claude in untrusted workspaces. Same-name files do not replace this app catalog. Codex: not yet delivered.</p>
+    <p className="skills-pane-hint">Switches affect Claude and Codex at the next engine process launch, including resume; running sessions keep their skills.
+      Workspace settings are ignored by Claude and Codex in untrusted workspaces. This pane shows settings, not whether a skill was loaded or used.</p>
     <ul className="skills-row-list mcp-row-list">
       {ENGINE_BUILTIN_SKILLS.filter(def => [def.id, def.description, def.claude, def.codex].join(" ").toLowerCase().includes(query.trim().toLowerCase())).map(def => {
         const setting = settings.find(row => row.id === def.id);
@@ -79,13 +78,13 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
           <div className="mcp-row-lines">
             <div className="mcp-row-line1">{def.id}</div>
             <div className="mcp-row-line2">{def.description}</div>
-            <div className="mcp-row-line2">Claude: {def.claude} · Codex (planned): {def.codex}</div>
+            <div className="mcp-row-line2">Claude: {def.claude} · Codex: {def.codex}</div>
             <div className="mcp-row-line2">{setting.userDisabled ? "Disabled in personal settings. " : ""}
               {setting.projectDisabled ? "Disabled in workspace settings. " : ""}
               {!setting.userDisabled && !setting.projectDisabled ? "Enabled in settings; availability checked at launch." : "Either scope can disable this skill."}</div>
           </div>
           <Switch checked={enabled}
-            aria-label={`${enabled ? "Disable" : "Enable"} ${def.id} in ${scope} settings`}
+            aria-label={`${enabled ? "Disable" : "Enable"} ${def.id} in ${scope} settings for Claude and Codex`}
             onCheckedChange={checked => onToggle(def.id, checked)} />
         </li>;
       })}
@@ -519,7 +518,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
 
   return (
     <section className="settings-section skills-pane">
-      <p className="skills-pane-hint">File skills apply to new Native sessions; app builtins apply to the next Claude process.</p>
+      <p className="skills-pane-hint">File skills apply to new Native sessions; app builtins apply to the next engine process for Claude and Codex.</p>
 
       <div className="skills-pane-toolbar mcp-pane-toolbar">
         <label className="settings-search skills-pane-search mcp-pane-search">
