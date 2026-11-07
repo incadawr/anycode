@@ -30,7 +30,7 @@ import { ChildWorktreeControl } from "./ChildWorktreeControl.js";
  * rootRef click-outside/Escape close.
  */
 import { useContext, useEffect, useRef, useState } from "react";
-import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
+import { TabContext, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { Collapse, Dot, Globe, Orchestrate, TaskList, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
@@ -115,7 +115,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
     throw new Error("SessionHeader must be used within a <TabContext.Provider>");
   }
   const { tabId } = ctx;
-  const send = useTabSend();
 
   const workspace = useTabStore((state) => state.workspace);
   const connection = useTabStore((state) => state.connection);

@@ -43,8 +43,8 @@ export function EnvironmentWorktree({ worktree, known, dirtyCount }: { worktree:
   return <div className="environment-worktree-block">
     <div>Branch <code>{worktree.branch}</code></div>
     <div>Base <code>{worktree.baseRef}</code></div>
-    <div>On exit · {!worktree.ownedByAnyCode ? "Checkout and branch are kept" : !known ? "Checking checkout; changes are kept" : dirtyCount ? "Worktree with changes is kept" : "Empty worktree is removed"}</div>
-    <p>{worktree.ownedByAnyCode ? "Empty worktree is removed on exit; its merged branch may be removed. A worktree with changes is kept as is." : "Checkout and branch are kept on exit."}</p>
+    <div>On exit · {!worktree.ownedByAnyCode ? "Checkout and branch are kept" : !known ? "Checking the checkout…" : dirtyCount ? "Worktree with changes is kept" : "Removed on exit if it has no changes, including ignored files; otherwise kept"}</div>
+    {worktree.ownedByAnyCode && <p>Its merged branch may be removed.</p>}
     <Button size="sm" variant="secondary" disabled={exit.disabled} title={exit.title} aria-label={exit.ariaLabel}
       onClick={() => send({ type: "exit_worktree", cleanup: "auto" })}>Exit</Button>
   </div>;

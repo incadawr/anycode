@@ -62,20 +62,32 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const ownedWorktree = worktree?.ownedByAnyCode === true;
   const [browserAccess, setBrowserAccess] = useBrowserAccessState(tabId, window.anycode.browserAccess);
   const [sessionsEnabled, setSessionsEnabled] = useState(false);
-  const accessCount = Number(browserAccess?.fullAccess === true) + Number(sessionsEnabled);
+  const accessNames: string[] = [];
+  if (browserAccess?.fullAccess === true) accessNames.push("Full browser access");
+  if (sessionsEnabled) accessNames.push("Sessions API");
+  const accessCount = accessNames.length;
+  const accessPhrase = accessNames.join(" and ");
+  // Bumped on every Sessions API change reported by the switch; a fetch started before it is stale.
+  const sessionsEpoch = useRef(0);
+  const onSessionsEnabledChange = useCallback((enabled: boolean) => {
+    sessionsEpoch.current += 1;
+    setSessionsEnabled(enabled);
+  }, []);
   const workspace = useTabStore((state) => state.workspace);
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
+  // One fetch per tab; later changes arrive through SessionAccessRow's onEnabledChange.
   useEffect(() => {
     let cancelled = false;
+    const epoch = sessionsEpoch.current;
     setSessionsEnabled(false);
     void (window.anycode.communication as SessionAccessBridge).get().then(result => {
-      if (!cancelled && result.ok) setSessionsEnabled(result.view.tabs.find(t => t.tabId === tabId)?.enabled ?? false);
+      if (!cancelled && result.ok && epoch === sessionsEpoch.current) setSessionsEnabled(result.view.tabs.find(t => t.tabId === tabId)?.enabled ?? false);
     });
     return () => { cancelled = true; };
-  }, [tabId, open]);
+  }, [tabId]);
   // D8 overlay wiring: the preview WebContentsView must hide while this
   // header dropdown is up.
   useOverlayFlag(open);
@@ -203,7 +215,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         className={`environment-trigger${branch ? " environment-trigger-has-branch" : ""}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`Environment: ${label}${worktree ? ", Worktree" : ""}${accessCount ? `, ${accessCount} accesses enabled` : ""}`}
+        aria-label={`Environment: ${label}${worktree ? ", Worktree" : ""}${accessCount ? `, ${accessPhrase} enabled` : ""}`}
         onClick={toggle}
       >
         <Folder />
@@ -218,12 +230,12 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         )}
         {statusKnown && dirtyCount > 0 && <span className="environment-git-count" aria-label={changesLabel(dirtyCount)}>●{dirtyCount}</span>}
         {statusKnown && status && gitAheadBehindLabel(status.head) && <span className="environment-git-count">{gitAheadBehindLabel(status.head)}</span>}
-        {accessCount > 0 && <span className="environment-risks" aria-label={`${accessCount} accesses enabled`}>
+        {accessCount > 0 && <span className="environment-risks" aria-label={`${accessPhrase} enabled`}>
           <span className="environment-risk-icons">
             {browserAccess?.fullAccess && <span title="Full browser access"><Globe /></span>}
             {sessionsEnabled && <span title="Sessions API enabled"><Robot /></span>}
           </span>
-          <span className="environment-risk-summary" title={`${accessCount} accesses enabled`}><Warning />{accessCount}</span>
+          <span className="environment-risk-summary" title={`${accessPhrase} enabled`}><Warning />{accessCount}</span>
         </span>}
         <span aria-hidden="true">⌄</span>
       </button>
@@ -295,7 +307,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
           <section className="environment-menu-section environment-menu-group" aria-label="Session access">
             <div className="environment-menu-title">Session access <span className="environment-menu-scope">{accessCount ? `${accessCount} on` : "this session only"}</span></div>
             {/* the per-session Sessions API switch (any engine; main owns the state). */}
-            <SessionAccessRow onEnabledChange={setSessionsEnabled} />
+            <SessionAccessRow onEnabledChange={onSessionsEnabledChange} />
             {tabId && <NativeSessionAccess key={tabId} tabId={tabId} />}
             {/* the per-session "Full browser access" switch (asks before turning ON). */}
             <BrowserAccessRow onStateChange={setBrowserAccess} />

@@ -61,7 +61,7 @@ const BASELINE: Record<string, number> = {
   "components/RolesPane.tsx": 7,
   "components/ScopeSwitcher.tsx": 2,
   "components/SessionAccessRow.tsx": 1,
-  "components/SessionHeader.tsx": 7,
+  "components/SessionHeader.tsx": 6,
   "components/SessionsApiPane.tsx": 1,
   "components/SettingsScreen.tsx": 22,
   "components/Sidebar.tsx": 21,

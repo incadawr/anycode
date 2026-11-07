@@ -113,6 +113,8 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
     expect(host.querySelector('.environment-menu-title .environment-menu-scope')?.textContent).toBe("1 on");
     expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("false");
+    expect(host.querySelector(".environment-trigger")?.getAttribute("aria-label")).toContain(", Sessions API enabled");
+    expect(host.querySelector(".environment-trigger")?.getAttribute("aria-label")).not.toContain("accesses");
     await click(access);
     expect(host.querySelector(".environment-risks")).toBeNull();
     expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("this session only");
@@ -669,13 +671,15 @@ it.each([true, false, undefined])("shows worktree context and guards owned branc
     expect(host.querySelector('[title="Full browser access"] svg')).not.toBeNull();
     expect(host.querySelector('[title="Sessions API enabled"] svg')).not.toBeNull();
     expect(host.querySelector('.environment-risk-summary')?.textContent).toBe("2");
+    expect(host.querySelector('.environment-trigger')?.getAttribute('aria-label')).toContain(", Full browser access and Sessions API enabled");
     await act(async () => host.querySelector<HTMLButtonElement>('.environment-trigger')!.click());
     expect(host.querySelector('section[aria-label="Session access"] .environment-menu-title')?.textContent).toContain("2 on");
     const branch = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.startsWith('Branch'))!;
     expect(branch.disabled).toBe(owned === true);
     if (worktree) {
       expect(host.textContent).toContain("Base main");
-      expect(host.textContent).toContain(owned ? "Empty worktree is removed on exit; its merged branch may be removed." : "Checkout and branch are kept on exit.");
+      expect(host.querySelector(".environment-worktree-block")?.textContent).toContain(owned ? "Removed on exit if it has no changes, including ignored files; otherwise kept" : "Checkout and branch are kept");
+      expect(host.textContent?.includes("Its merged branch may be removed.")).toBe(owned);
       await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Copy path"]')!.click());
       expect(copy).toHaveBeenCalledWith(worktree.path);
       await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Exit worktree"]')!.click());
@@ -691,4 +695,73 @@ it.each([true, false, undefined])("shows worktree context and guards owned branc
     await act(async () => root.unmount()); send.mockRestore(); useTabsStore.setState({ tabs: previous });
     if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode");
   }
+});
+
+it("disables the palette branch switch for an AnyCode-owned worktree", async () => {
+  const { tabRegistry } = await import("../tab-registry.js");
+  const store = createDesktopStore();
+  store.setState({ git: { ...store.getState().git, status: { head: { branch: "topic" } } as never } });
+  const previous = useTabsStore.getState();
+  const getStore = vi.spyOn(tabRegistry, "getStore").mockReturnValue(store);
+  try {
+    useTabsStore.setState({ activeTabId: "tab", tabs: [{ tabId: "tab", worktree: { ownedByAnyCode: true } }] as never });
+    expect(branchSwitchAction(null).enabled).toBe(false);
+    useTabsStore.setState({ tabs: [{ tabId: "tab", worktree: { ownedByAnyCode: false } }] as never });
+    expect(branchSwitchAction(null).enabled).toBe(true);
+  } finally { getStore.mockRestore(); useTabsStore.setState({ activeTabId: previous.activeTabId, tabs: previous.tabs }); }
+});
+
+/** Mounts the menu with a controllable Sessions API `get`; the trigger reads its state from that fetch. */
+async function sessionsMenu(get: () => Promise<unknown>) {
+  const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
+  const setSessionAccess = vi.fn(async (_id: string, enabled: boolean) => ({ ok: true, view: { tabs: [{ tabId: "tab", enabled, approvals: false }] } }));
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication: { get, setSessionAccess, setSessionApprovals: vi.fn(), setSessionHandle: vi.fn() },
+    browserAccess: { get: async () => ({ ok: true, tabs: [] }), onChanged: () => () => {}, set: vi.fn() },
+    sessionPeers: { get: async () => ({ ok: false }) },
+  } });
+  const store = createDesktopStore();
+  store.setState({ workspace: "/fixture/notes", git: { ...store.getState().git, status: null, statusKnown: true } });
+  const host = document.createElement("div"), root = createRoot(host);
+  await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+  const restore = async () => {
+    await act(async () => root.unmount());
+    if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode");
+  };
+  return { host, setSessionAccess, restore };
+}
+const sessionsView = (enabled: boolean) => ({ ok: true, envControlled: false, view: { tabs: [{ tabId: "tab", enabled, approvals: false }] } });
+
+it("keeps the Sessions API risk state while the menu reopens (no reset to off while refetching)", async () => {
+  const pendingOpen: Array<(value: unknown) => void> = [];
+  const get = vi.fn()
+    .mockImplementationOnce(async () => sessionsView(true))
+    .mockImplementation(() => new Promise(resolve => pendingOpen.push(resolve)));
+  const { host, restore } = await sessionsMenu(get);
+  try {
+    expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    expect(pendingOpen).toHaveLength(1);
+    expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
+    expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("1 on");
+    await act(async () => pendingOpen[0]!(sessionsView(true)));
+  } finally { await restore(); }
+});
+
+it("ignores a fetch that resolves after a later Sessions API change made in the menu", async () => {
+  let resolveMount!: (value: unknown) => void;
+  const get = vi.fn()
+    .mockImplementationOnce(() => new Promise(resolve => { resolveMount = resolve; }))
+    .mockImplementation(async () => sessionsView(false));
+  const { host, setSessionAccess, restore } = await sessionsMenu(get);
+  try {
+    expect(host.querySelector('[title="Sessions API enabled"]')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-environment-action="sessions-api-access"]')!.click());
+    expect(setSessionAccess).toHaveBeenCalledWith("tab", true);
+    expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
+    await act(async () => resolveMount(sessionsView(false)));
+    expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
+    expect(host.querySelector('[data-environment-action="sessions-api-access"]')?.getAttribute("aria-checked")).toBe("true");
+  } finally { await restore(); }
 });
