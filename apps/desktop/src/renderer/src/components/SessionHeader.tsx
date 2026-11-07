@@ -1,3 +1,4 @@
+import { ChildWorktreeControl } from "./ChildWorktreeControl.js";
 /**
  * Session header (design ui-redesign-direction.md §2.1/§2.4) — replaces
  * `StatusBar`. Mounted as the first child of `ActiveTabBody`, inside the
@@ -317,6 +318,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         </span>
       )}
 
+      <ChildWorktreeControl key={tabId} tabId={tabId} />
       {!isNewSession && <EnvironmentMenu placement="header" />}
       {!isNewSession && workspace && <SessionExtensionsMenu />}
 
