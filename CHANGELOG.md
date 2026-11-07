@@ -7,9 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.87] - 2026-11-07
+
 ### Added
 
-- Experimental native session peers let Core root sessions discover peers, exchange messages, open independent tabs, receive bounded replies and inspect file activity evidence, with per-project access controls and explicit folder grants. The native sessions flag is off by default; Claude/Codex peer mutations remain unavailable.
+- Experimental native session peers let Core root sessions discover peers, exchange messages, open independent tabs, receive bounded replies and inspect file activity evidence, with per-project access controls and explicit folder grants. The native sessions flag is off by default and available only in development builds; Claude/Codex peer mutations remain unavailable.
 
 ### Changed
 
