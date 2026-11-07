@@ -39,6 +39,15 @@ export function assertConsentPending(view) {
   assert.equal(view.reason, true, "Consent-pending entry explains where approval is needed");
   assert.equal(view.switches, 0, "Consent-pending MCP entry has no write control");
 }
+export function assertPluginConsentRows(rows) {
+  const trusted = rows.find(row => row.name === "plugin_b-plugin_api");
+  assert.equal(trusted?.source, "Plugin", "Trusted project plugin is listed");
+  assert.equal(trusted.note, "Read-only; manage in Plugins", "Workspace trust covers the project plugin");
+  assert.equal(trusted.switches, 0, "Project plugin MCP stays read-only");
+  const pending = rows.find(row => row.name === "plugin_pending-user_api");
+  assert.equal(pending?.source, "Plugin", "User plugin without MCP consent is listed");
+  assertConsentPending({ reason: pending.note === "Needs approval in Plugins", switches: pending.switches });
+}
 export function assertNativeUnavailable(view) {
   assert(view.text.includes("These language servers are saved for Core sessions. This engine does not use AnyCode LSP."), "Honest native capability reason");
   assert.equal(view.switches, 0, "Unsupported LSP has no write control");
@@ -202,6 +211,7 @@ async function main() {
       name:e.querySelector('.session-extensions-name').textContent,
       source:e.querySelector('.session-extensions-source').textContent,
       note:e.querySelector('.session-extensions-note')?.textContent,
+      switches:e.querySelectorAll('[role=switch]').length,
       enabled:e.querySelector('[role=switch]')?.getAttribute('aria-checked') === 'true',
       status:e.querySelector('.session-extensions-status')?.textContent
     }))`);
@@ -319,6 +329,10 @@ async function main() {
     json(join(b, ".anycode/plugins/b-plugin/.anycode-plugin/plugin.json"), {
       manifestVersion: 1, name: "b-plugin", version: "0.1.0", mcpServers: { api: inert },
     });
+    // A user plugin has no implicit workspace trust and receives no saved MCP consent.
+    json(join(profile, ".anycode/plugins/pending-user/.anycode-plugin/plugin.json"), {
+      manifestVersion: 1, name: "pending-user", version: "0.1.0", mcpServers: { api: inert },
+    });
     mkdirSync(join(b, ".anycode/skills/b-skill"), { recursive: true });
     writeFileSync(join(b, ".anycode/skills/b-skill/SKILL.md"), "---\nname: b-skill\ndescription: Local fixture skill\n---\nFixture instructions.\n");
     const first = await create(a);
@@ -337,18 +351,22 @@ async function main() {
       const c = [...document.querySelectorAll('.session-extensions-category')].slice(0, 4).map(e => e.querySelector('[aria-live]').textContent);
       return c.length === 4 && c.every(v => /^\\d+$/.test(v)) ? c.map(Number) : null;
     })()`));
-    assertCounts(counts, [4, 1, 1, 1]);
+    assertCounts(counts, [5, 2, 1, 1]);
     const initial = await rows();
     assertMcpRow(initial, "healthy", "Project", true, statusConnected);
     assertMcpRow(initial, "healthy", "User", false, "Shadowed by another scope");
     assertMcpRow(initial, "broken", "Project", true, "Connection failed");
     assertMcpRow(initial, "off", "Project", false, statusUnknown);
-    assert(initial.some(row => row.source.startsWith("Plugin") && row.note?.includes("Needs approval")));
+    assertPluginConsentRows(initial);
     assert(initial.some(row => row.name === "compat-only" && row.source.startsWith("Compatibility")));
     const display = await evaluate(`document.querySelector('${panel}').outerHTML`);
     for (const sentinel of ["env-value-private-sentinel", "missing-command-sentinel", "fixture-server.mjs"])
       assert(!display.includes(sentinel), "Private fixture fields must not enter menu DOM");
     await shot("startup-failure");
+    await click('.session-extensions-category[data-extension-category="skills"]');
+    await poll(() => evaluate("document.querySelector('.session-extensions-details')?.getAttribute('aria-label') === 'Skills' && document.querySelector('.session-extensions-name')?.textContent === 'b-skill'"));
+    await shot("skills-final");
+    await click('.session-extensions-category[data-extension-category="mcp"]');
     results.checks.push("counts-scopes-statuses", "closed-menu-failure", "display-redaction");
     await escape();
     phase = "keyboard navigation"; await keyboard();
@@ -375,7 +393,9 @@ async function main() {
     assert((await rows()).some(row => row.name === "a-only"));
     assert(!(await rows()).some(row => row.name === "broken"));
     await click(".session-extensions-category:nth-child(2)");
-    await poll(() => evaluate("document.querySelector('.session-extensions-details')?.textContent.includes('No configured entries.')"));
+    await poll(() => evaluate("document.querySelector('.session-extensions-details .session-extensions-name')?.textContent === 'pending-user'"));
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.session-extensions-details .session-extensions-name')].map(e => e.textContent)"),
+      ["pending-user"], "Project A sees only the global plugin, not project B's plugin");
     await shot("project-a-isolation");
     await escape();
     await api(`/tabs/${second.tabId}/select`, "POST", {});
@@ -407,11 +427,7 @@ async function main() {
       await openMcp();
       assertMcpRow(await rows(), "healthy", "Project", false, statusUnknown);
       assert.equal(await evaluate(`document.querySelectorAll('${panel} .tone-success').length`), 0);
-      const readonly = await evaluate(`(() => {
-        const row=[...document.querySelectorAll('.session-extensions-list li')].find(e=>e.querySelector('.session-extensions-source')?.textContent.startsWith('Plugin'));
-        return { reason:row?.textContent.includes('Needs approval in Plugins'), switches:row?.querySelectorAll('[role=switch]').length };
-      })()`);
-      assertConsentPending(readonly);
+      assertPluginConsentRows(await rows());
       await shot(`${engine}-consent-pending`);
       await click(".session-extensions-category:nth-child(4)");
       assertNativeUnavailable(await evaluate(`({ text:document.querySelector('.session-extensions-details').textContent,
@@ -424,7 +440,7 @@ async function main() {
         assert(await evaluate("document.querySelector('.session-extensions-details').textContent.includes('Saved in AnyCode; this engine may not load these entries')"));
       }
       const counts = await evaluate("[...document.querySelectorAll('.session-extensions-category [aria-live]')].map(e=>Number(e.textContent))");
-      assertCounts(counts, [4, 1, 1, 1]);
+      assertCounts(counts, [5, 2, 1, 1]);
       assert.equal(readFileSync(configPath, "utf8"), unchanged, "Unsupported and consent-pending navigation cannot write config");
       await escape(); results.checks.push(`${engine}-catalog-unknown-readonly-unsupported`);
     }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertCounts, assertLossless, assertMcpRow, observeToolCatalog, assertLayout, assertNativeUnavailable, assertConsentPending } from "./extensions-ui-smoke.mjs";
+import { assertCounts, assertLossless, assertMcpRow, observeToolCatalog, assertLayout, assertNativeUnavailable, assertConsentPending, assertPluginConsentRows } from "./extensions-ui-smoke.mjs";
 
 const connected = "Connected in this session";
 const failed = "Connection failed";
@@ -108,4 +108,18 @@ test("consent-pending assertion rejects an absent row, missing reason and writab
     {}, { reason: false, switches: 0 }, { reason: true, switches: 1 },
     { reason: true }, { switches: 0 },
   ]) assert.throws(() => assertConsentPending(state));
+});
+
+
+test("plugin consent assertions distinguish workspace trust from missing user MCP consent", () => {
+  const rows = [
+    { name: "plugin_b-plugin_api", source: "Plugin", note: "Read-only; manage in Plugins", switches: 0 },
+    { name: "plugin_pending-user_api", source: "Plugin", note: "Needs approval in Plugins", switches: 0 },
+  ];
+  assertPluginConsentRows(rows);
+  for (const index of [0, 1]) {
+    assert.throws(() => assertPluginConsentRows(rows.filter((_, i) => i !== index)));
+    assert.throws(() => assertPluginConsentRows(rows.map((row, i) => i === index ? { ...row, switches: 1 } : row)));
+    assert.throws(() => assertPluginConsentRows(rows.map((row, i) => ({ ...row, note: rows[1 - i].note }))));
+  }
 });
