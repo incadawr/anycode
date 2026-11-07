@@ -146,6 +146,8 @@ export interface SessionDraft {
 }
 
 export interface TabsState {
+  /** Runtime allocation metadata, including hidden child tabs. No disk persistence. */
+  childWorktrees: Record<string, NonNullable<import("../../shared/envelopes.js").PortEnvelope["childWorktree"]>>;
   tabs: TabInfo[];
   activeTabId: string | null;
   /** At most one parked New Session draft (§4.1) — never a `TabInfo` row, so the automation snapshot stays byte-identical. */
@@ -329,6 +331,7 @@ function persistHiddenWorkspaces(storage: StorageLike | null, hidden: readonly s
 export function createTabsStore(storage: StorageLike | null = defaultStorage()) {
   return create<TabsState>()((set, get) => ({
     tabs: [],
+    childWorktrees: {},
     activeTabId: null,
     selectionRevision: 0,
     draft: null,

@@ -4382,6 +4382,11 @@ export class TabHostManager {
       {
         tabId: tab.tabId,
         workspace: tab.workspace,
+        ...(tab.childWorktree ? { childWorktree: {
+          id: tab.childWorktree.id, path: tab.childWorktree.path, branch: tab.childWorktree.branch,
+          baseRef: tab.childWorktree.baseSha, ownedByAnyCode: false,
+          parentSessionId: tab.childWorktree.parentSessionId,
+        } } : {}),
         ...(tab.missingWorkspace ? { missingWorkspace: true } : {}),
         ...(tab.hostFailure ? { hostFailure: tab.hostFailure } : {}),
         ...(tab.connectionId !== undefined && pin !== undefined

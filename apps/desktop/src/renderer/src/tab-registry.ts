@@ -141,6 +141,7 @@ export interface TabRegistry {
     /** the envelope's `openedByAgent` marker; root tabs only. */
     openedByAgent?: boolean,
     agentTitle?: string,
+    childWorktree?: PortEnvelope["childWorktree"],
   ): boolean;
   /**
    * Flips the tab's own store into `host_exited` and mirrors that onto the
@@ -694,7 +695,7 @@ export function createTabRegistry(
   }
 
   return {
-    registerPort(tabId, workspace, port, pinnedConnection, child, openedByAgent, agentTitle): boolean {
+    registerPort(tabId, workspace, port, pinnedConnection, child, openedByAgent, agentTitle, childWorktree): boolean {
       if (!tabId || closedTabIds.has(tabId)) {
         return false;
       }
@@ -830,6 +831,11 @@ export function createTabRegistry(
           .getState()
           .registerChild(child.parentSessionId, child.spawnToolCallId, tabId, child.childSessionId);
       }
+      tabsStore.setState(s => {
+        const next = { ...s.childWorktrees };
+        if (childWorktree) next[tabId] = childWorktree; else delete next[tabId];
+        return { childWorktrees: next };
+      });
       attach(entry, tabId, port);
       return true;
     },
@@ -893,6 +899,10 @@ export function createTabRegistry(
     },
 
     disposeTab(tabId): void {
+      tabsStore.setState(s => {
+        const next = { ...s.childWorktrees }; delete next[tabId];
+        return { childWorktrees: next };
+      });
       useDockStore.getState().clearActivity(tabId);
       agentTitles.delete(tabId);
       closedTabIds.add(tabId);

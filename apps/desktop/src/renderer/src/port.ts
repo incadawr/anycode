@@ -116,6 +116,7 @@ export interface HostPortMeta {
   /** a Sessions API agent opened this root tab (envelope `openedByAgent === true`). */
   openedByAgent?: true;
   agentTitle?: string;
+  childWorktree?: PortEnvelope["childWorktree"];
 }
 
 /**
@@ -182,6 +183,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         child?: unknown;
         openedByAgent?: unknown;
         agentTitle?: unknown;
+        childWorktree?: unknown;
       };
       const tabId = typeof envelope.tabId === "string" ? envelope.tabId : "";
       const wsFromEnvelope = typeof envelope.workspace === "string" ? envelope.workspace : "";
@@ -195,6 +197,9 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
       // untouched — this module does not decide root vs. child, it only
       // validates shape (see `parseChildEnvelopeField`).
       const child = parseChildEnvelopeField(envelope.child);
+      const raw = envelope.childWorktree as Partial<NonNullable<PortEnvelope["childWorktree"]>> | null | undefined;
+      const childWorktree = raw && [raw.id, raw.path, raw.branch, raw.baseRef, raw.parentSessionId].every(v => typeof v === "string" && v.length > 0) && raw.ownedByAnyCode === false
+        ? raw as NonNullable<PortEnvelope["childWorktree"]> : undefined;
       cb(port, {
         tabId,
         workspace: wsFromEnvelope,
@@ -202,6 +207,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         ...(envelope.hostFailure ? { hostFailure: envelope.hostFailure } : {}),
         ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
         ...(child !== undefined ? { child } : {}),
+        ...(childWorktree ? { childWorktree } : {}),
         ...(typeof envelope.agentTitle === "string" ? { agentTitle: envelope.agentTitle } : {}),
         ...(envelope.openedByAgent === true ? { openedByAgent: true as const } : {}),
       });
@@ -290,6 +296,7 @@ export interface ConnectionRegistry {
     child?: PortEnvelope["child"],
     openedByAgent?: boolean,
     agentTitle?: string,
+    childWorktree?: PortEnvelope["childWorktree"],
   ): boolean;
   /**
    * Flips the given tab's connection/banner state to host-exited; a no-op for
@@ -327,7 +334,7 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
       console.warn("[port] dropping port envelope with no tabId", meta);
       return;
     }
-    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent, meta.agentTitle);
+    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent, meta.agentTitle, meta.childWorktree);
     // GitHub #6: main delivers this tab's port without ever starting a host —
     // its workspace folder is gone. Mark the tab exited with that path so the
     // surface shows an error naming the folder instead of sitting in

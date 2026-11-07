@@ -74,6 +74,8 @@ export interface PortEnvelope {
   openedByAgent?: true;
   /** Accepted create_session handle, pinned against automatic title changes. */
   agentTitle?: string;
+  /** Display-only allocation identity; never persisted by the renderer. */
+  childWorktree?: import("./protocol.js").WorktreeProjection & { parentSessionId: string };
 }
 
 /** Page envelope for the host-exited notification (no ports attached). */

@@ -707,6 +707,7 @@ ipcRenderer.on(
       // relayed untouched (root tabs a Sessions API agent opened).
       openedByAgent?: PortEnvelope["openedByAgent"];
       agentTitle?: string;
+      childWorktree?: PortEnvelope["childWorktree"];
       missingWorkspace?: boolean;
       hostFailure?: PortEnvelope["hostFailure"];
     },
@@ -730,6 +731,7 @@ ipcRenderer.on(
         // every child registered as an ordinary visible tab, the exact
         // facade §5.3/§0.4 forbid.
         ...(payload.child !== undefined ? { child: payload.child } : {}),
+        ...(payload.childWorktree !== undefined ? { childWorktree: payload.childWorktree } : {}),
         ...(payload.agentTitle !== undefined ? { agentTitle: payload.agentTitle } : {}),
         ...(payload.openedByAgent === true ? { openedByAgent: true as const } : {}),
       },

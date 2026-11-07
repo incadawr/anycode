@@ -1521,6 +1521,11 @@ describe("managed native SessionOpen", () => {
     expect(r.forkEnvs[1]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_MANAGED_CHILD_WORKTREE: "1" });
     const child = r.manager.listTabs().find(t => t.sessionId === "sess-1")!;
     expect(r.manager.getTab(child.tabId)).toMatchObject({ projectRoot: "/project", childWorktree: r.receipt });
+    expect(r.manager.getTab(child.tabId)?.childWorktree?.parentSessionId).toBe("opener");
+    expect(r.posted).toContainEqual({ channel: "anycode:port", payload: expect.objectContaining({ childWorktree: {
+      id: r.receipt.id, path: r.receipt.path, branch: r.receipt.branch, baseRef: r.receipt.baseSha,
+      ownedByAnyCode: false, parentSessionId: "opener",
+    } }) });
     expect(r.exposed.get("sess-1")).not.toBe(true);
     expect(r.policy.authorize).toHaveBeenCalledWith("/ws", "/ws", true);
     expect(r.policy.deliverFirstMessage).toHaveBeenCalledOnce();

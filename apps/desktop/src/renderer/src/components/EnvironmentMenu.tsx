@@ -58,8 +58,11 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const tabStore = useTabStoreApi();
   const send = useTabSend();
   const tabId = useContext(TabContext)?.tabId;
-  const worktree = useTabsStore(s => s.tabs.find(t => t.tabId === tabId)?.worktree);
-  const ownedWorktree = worktree?.ownedByAnyCode === true;
+  const allocatedWorktree = useTabsStore(s => tabId ? s.childWorktrees[tabId] : undefined);
+  const worktree = useTabsStore(s => s.tabs.find(t => t.tabId === tabId)?.worktree) ?? allocatedWorktree;
+  const parentTitle = useTabsStore(s => allocatedWorktree ? s.tabs.find(t => t.sessionId === allocatedWorktree.parentSessionId)?.title : undefined);
+  const parentLabel = parentTitle?.trim() ? `worktree of “${parentTitle}”` : undefined;
+  const ownedWorktree = worktree?.ownedByAnyCode === true || !!allocatedWorktree;
   const [browserAccess, setBrowserAccess] = useBrowserAccessState(tabId, window.anycode.browserAccess);
   const [sessionsEnabled, setSessionsEnabled] = useState(false);
   const accessNames: string[] = [];
@@ -213,6 +216,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         ref={triggerRef}
         type="button"
         className={`environment-trigger${branch ? " environment-trigger-has-branch" : ""}`}
+        title={parentLabel}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Environment: ${label}${worktree ? ", Worktree" : ""}${accessCount ? `, ${accessPhrase} enabled` : ""}`}
@@ -270,7 +274,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
               <IconButton label="Copy path" icon={<Copy />} onClick={copyWorkspace} />
             </div>
 
-            {worktree && <EnvironmentWorktree worktree={worktree} known={statusKnown} dirtyCount={dirtyCount} />}
+            {worktree && <EnvironmentWorktree parentLabel={parentLabel} managed={!!allocatedWorktree} worktree={worktree} known={statusKnown} dirtyCount={dirtyCount} />}
             {statusKnown && status && (
               <>
                 <Button

@@ -765,3 +765,39 @@ it("ignores a fetch that resolves after a later Sessions API change made in the 
     expect(host.querySelector('[data-environment-action="sessions-api-access"]')?.getAttribute("aria-checked")).toBe("true");
   } finally { await restore(); }
 });
+
+
+it("resolves a child worktree's parent title live and omits unavailable attribution", async () => {
+  const previous = useTabsStore.getState();
+  const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication: { get: async () => ({ ok: false }) },
+    browserAccess: { get: async () => ({ ok: false }), onChanged: () => () => {} },
+    sessionPeers: { get: async () => ({ ok: false }) },
+  } });
+  const store = createDesktopStore(); store.setState({ workspace: "/fixture/child" });
+  const childWorktrees = { tab: { id: "child", path: "/fixture/child", branch: "topic", baseRef: "main", ownedByAnyCode: false, parentSessionId: "parent-session" } };
+  useTabsStore.setState({ childWorktrees, tabs: [{ tabId: "parent", sessionId: "parent-session", title: "Fix login" }] } as never);
+  const host = document.createElement("div"), root = createRoot(host);
+  const check = (title?: string) => {
+    const label = title ? `worktree of “${title}”` : undefined;
+    expect(host.querySelector(".environment-worktree-parent")?.textContent).toBe(label);
+    const tooltip = host.querySelector(".environment-trigger")?.getAttribute("title") ?? "";
+    if (label) expect(tooltip).toContain(label); else expect(tooltip).not.toContain("worktree of");
+  };
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    check("Fix login");
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
+    expect(host.querySelector(".environment-branch-picker")).toBeNull();
+    expect(host.querySelector('[aria-label="Exit worktree"]')).toBeNull();
+    await act(async () => useTabsStore.getState().setTitle("parent", "Fix redirect")); check("Fix redirect");
+    await act(async () => useTabsStore.getState().removeTab("parent")); check();
+    await act(async () => useTabsStore.setState({ tabs: [{ tabId: "other", sessionId: "unknown", title: "Wrong parent" }] } as never)); check();
+    await act(async () => useTabsStore.setState({ childWorktrees: {}, tabs: [{ tabId: "tab", worktree: childWorktrees.tab }, { tabId: "parent", sessionId: "parent-session", title: "Fix login" }] } as never)); check();
+  } finally {
+    await act(async () => root.unmount()); useTabsStore.setState(previous);
+    if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode");
+  }
+});

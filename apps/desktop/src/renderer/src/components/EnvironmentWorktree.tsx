@@ -35,17 +35,18 @@ export function worktreeExitControlState(
   };
 }
 
-export function EnvironmentWorktree({ worktree, known, dirtyCount }: { worktree: WorktreeProjection; known: boolean; dirtyCount: number }) {
+export function EnvironmentWorktree({ worktree, known, dirtyCount, parentLabel, managed }: { worktree: WorktreeProjection; known: boolean; dirtyCount: number; parentLabel?: string | undefined; managed?: boolean }) {
   const send = useTabSend();
   const turn = useTabStore(s => s.turn.status);
   const connection = useTabStore(s => s.connection);
   const exit = worktreeExitControlState(turn, connection);
   return <div className="environment-worktree-block">
+    {parentLabel && <div className="environment-worktree-parent">{parentLabel}</div>}
     <div>Branch <code>{worktree.branch}</code></div>
     <div>Base <code>{worktree.baseRef}</code></div>
-    <div>On exit · {!worktree.ownedByAnyCode ? "Checkout and branch are kept" : !known ? "Checking the checkout…" : dirtyCount ? "Worktree with changes is kept" : "Removed on exit if it has no changes, including ignored files; otherwise kept"}</div>
+    <div>{managed ? "Lifecycle · Managed by the parent session" : <>On exit · {!worktree.ownedByAnyCode ? "Checkout and branch are kept" : !known ? "Checking the checkout…" : dirtyCount ? "Worktree with changes is kept" : "Removed on exit if it has no changes, including ignored files; otherwise kept"}</>}</div>
     {worktree.ownedByAnyCode && <p>Its merged branch may be removed.</p>}
-    <Button size="sm" variant="secondary" disabled={exit.disabled} title={exit.title} aria-label={exit.ariaLabel}
-      onClick={() => send({ type: "exit_worktree", cleanup: "auto" })}>Exit</Button>
+    {!managed && <Button size="sm" variant="secondary" disabled={exit.disabled} title={exit.title} aria-label={exit.ariaLabel}
+      onClick={() => send({ type: "exit_worktree", cleanup: "auto" })}>Exit</Button>}
   </div>;
 }
