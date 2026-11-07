@@ -10,9 +10,10 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
   const [copied, setCopied] = useState("");
   const revision = useRef(0), mutating = useRef(false);
   const lifetime = useRef<object | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => { const token = {}; lifetime.current = token;
-    mutating.current = false; setBusy(false);
-    return () => { if (lifetime.current === token) lifetime.current = null; };
+    mutating.current = false; setBusy(false); setCopied("");
+    return () => { clearTimeout(copyTimer.current); if (lifetime.current === token) lifetime.current = null; };
   }, [tabId]);
   const api = window.anycode.childWorktrees;
   useEffect(() => {
@@ -43,8 +44,9 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
     const token = lifetime.current;
     void navigator.clipboard?.writeText(text).then(() => {
       if (token !== lifetime.current) return;
+      clearTimeout(copyTimer.current);
       setCopied(text);
-      setTimeout(() => { if (token === lifetime.current) setCopied(""); }, 1500);
+      copyTimer.current = setTimeout(() => { if (token === lifetime.current) setCopied(""); }, 1500);
     }, () => {});
   };
   return <details className="environment-control" onToggle={event => setOpen(event.currentTarget.open)}>
@@ -55,10 +57,11 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
       disabled={!view?.canToggle || busy} onCheckedChange={enabled => void toggle(enabled)} />
     <p>Core session children only. Inline agents use the current cwd. No inherited trust or access grants.</p>
     {error && <p role="alert">{error}</p>}
-    {view?.lastRefusal && <p role="alert">Last creation refused: {view.lastRefusal}{/require Core|Core.*only/i.test(view.lastRefusal) ? " Choose Core and start a new child." : ""}</p>}
+    {view?.lastRefusal && <p role="alert">Last creation refused: {view.lastRefusal}{/^Agent: worktree session children require Core[.!]?$/i.test(view.lastRefusal) ? " Choose Core and start a new child." : ""}</p>}
+    {view?.unverified?.map(r => <p key={r.id}>Worktree receipt unverified · {r.id}: {r.reason} (project/session association unverified)</p>)}
     <ul>{view?.resources.map(r => <li key={r.id}>
       <strong>Worktree · cwd only</strong> · {r.phase === "active" ? "active (live)" : r.phase === "retained" ? "retained (kept)" : r.phase === "removed" ? "removed" : "unknown"} · {r.childSessionId}
-      <p>{r.path} <Button size="sm" variant="ghost" aria-label="Copy path" onClick={() => copy(r.path)}>{copied === r.path ? "Copied" : "Copy path"}</Button></p>
+      {!["intent", "not-created"].includes(r.phase) && <p>{r.path} <Button size="sm" variant="ghost" aria-label="Copy path" onClick={() => copy(r.path)}>{copied === r.path ? "Copied" : "Copy path"}</Button></p>}
       <p>{r.branch} <Button size="sm" variant="ghost" aria-label="Copy branch" onClick={() => copy(r.branch)}>{copied === r.branch ? "Copied" : "Copy branch"}</Button></p>
       <details><summary>Base {r.baseSha.slice(0, 12)}</summary>{r.baseSha}</details>
       <p>{r.reason ?? (r.phase === "active" ? "Child checkout active." : r.phase === "retained"

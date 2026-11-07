@@ -9332,10 +9332,33 @@ describe("Agent managed worktree admission", () => {
     const opened = r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
     if (!opened.ok) throw Error("missing root");
     (opened.tab.proc as unknown as FakeHost).emit("exit", 1); await flush();
-    expect(r.resources.update).toHaveBeenCalledWith(expect.objectContaining({ id: r.receipt.id, phase: "active" }), "unknown", expect.stringContaining("Host exited"));
+    expect(r.resources.update).not.toHaveBeenCalled();
     expect(opened.tab.childWorktree?.phase).toBe("active");
     await r.manager.closeTab(opened.tab.tabId);
     expect(r.receipt.reason).toContain("Host exited");
+    expect(r.receipt.reason).not.toContain("receipt update failed");
+    expect(r.resources.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the published running tab for an active managed session", () => {
+    const r = rig();
+    r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
+    expect(r.manager.managedContinuationRefusal("opened")?.detail).toContain("switch to its open tab");
+  });
+
+  it("clears the old crash after a successful restart but keeps writer uncertainty", async () => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "unknown", reason: "Writers unverified" });
+    const r = rig();
+    const opened = r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
+    if (!opened.ok) throw Error("missing root");
+    const first = opened.tab.proc;
+    (first as unknown as FakeHost).emit("exit", 1); await flush();
+    expect(opened.tab.proc).not.toBe(first);
+    expect(opened.tab.proc).not.toBeNull();
+    await r.manager.closeTab(opened.tab.tabId);
+    expect(settle).toHaveBeenCalledWith(expect.objectContaining({ permission: expect.objectContaining({ actualExit: true, writersStopped: false }) }));
+    expect(r.receipt.reason).toBe("Writers unverified");
+    expect(r.resources.update).not.toHaveBeenCalled();
   });
 
   it("does not cache refused managed creation or focus unpublished/nonrunning tabs", () => {

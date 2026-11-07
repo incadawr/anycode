@@ -2140,6 +2140,8 @@ export class TabHostManager {
     delete tab.orchestrate;
     tab.proc = child;
     delete tab.hostFailure;
+    // A replacement fork clears the old crash, but not uncertain external writers.
+    this.crashedWorktrees.delete(tab);
     tab.spawnedAt = this.now();
     tab.state = "running";
     this.deps.onFileActivityLifecycle?.(tab.tabId);
@@ -4134,12 +4136,8 @@ export class TabHostManager {
       return;
     }
     if (tab.childWorktree && !deliberate) {
-      const receipt = tab.childWorktree;
-      const reason = "Host exited unexpectedly; checkout and branch require inspection";
-      // Record crash disposition without changing the identity cleanup compares.
-      const update = this.deps.childWorktrees?.update({ ...receipt }, "unknown", reason);
-      this.crashedWorktrees.set(tab, reason);
-      void update?.catch(() => {});
+      // Settlement owns the durable disposition; do not write it twice.
+      this.crashedWorktrees.set(tab, "Host exited unexpectedly; checkout and branch require inspection");
     }
     tab.proc = null;
     this.deps.onFileActivityLifecycle?.(tab.tabId);

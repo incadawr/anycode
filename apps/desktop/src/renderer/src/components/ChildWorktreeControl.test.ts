@@ -90,3 +90,38 @@ it("ignores an old parent's pending toggle after changing tabs and displays requ
     expect(node.querySelector('[role="alert"]')?.textContent).toContain("Request failed");
   } finally { await act(async () => root.unmount()); }
 });
+
+it.each([
+  ["Agent: worktree session children require Core", true],
+  ["Agent: worktree session children require Core; choose a Core child.", false],
+  ["Worktree SessionOpen requires Core, the opener checkout, and an available allocator.", false],
+])("adds advice only for an unambiguous engine refusal: %s", async (lastRefusal, advice) => {
+  Object.defineProperty(window, "anycode", { configurable: true, value: { childWorktrees: async () => ({ resources: [], lastRefusal }) } });
+  const node = document.createElement("div"), root = createRoot(node);
+  try {
+    await act(async () => root.render(createElement(ChildWorktreeControl, { tabId: "parent" })));
+    expect(node.textContent?.includes("Choose Core and start a new child.")).toBe(advice);
+  } finally { await act(async () => root.unmount()); }
+});
+it("shows unverified receipts, hides unconfirmed paths and resets the copy timer", async () => {
+  vi.useFakeTimers();
+  const resources = ["intent", "not-created", "removed"].map(phase => ({ id: phase, phase, path: `/${phase}`, branch: phase, baseSha: "abc" }));
+  Object.defineProperty(window, "anycode", { configurable: true, value: { childWorktrees: async () => ({ resources, unverified: [{ id: "bad", reason: "Unreadable journal" }] }) } });
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => {} } });
+  const node = document.createElement("div"), root = createRoot(node);
+  try {
+    await act(async () => root.render(createElement(ChildWorktreeControl, { tabId: "parent" })));
+    expect(node.textContent).toContain("unverified"); expect(node.textContent).toContain("Unreadable journal");
+    const buttons = node.querySelectorAll('button[aria-label="Copy path"]');
+    expect(buttons).toHaveLength(1); expect(buttons[0]?.parentElement?.textContent).toContain("/removed");
+    expect(node.textContent).not.toMatch(/\/intent|\/not-created/);
+    await act(async () => (buttons[0] as HTMLButtonElement).click());
+    await act(async () => vi.advanceTimersByTime(1000));
+    await act(async () => (buttons[0] as HTMLButtonElement).click());
+    await act(async () => vi.advanceTimersByTime(500));
+    expect(buttons[0]?.textContent).toBe("Copied");
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(buttons[0]?.textContent).toBe("Copy path");
+    await act(async () => (buttons[0] as HTMLButtonElement).click());
+  } finally { await act(async () => root.unmount()); expect(vi.getTimerCount()).toBe(0); vi.useRealTimers(); }
+});

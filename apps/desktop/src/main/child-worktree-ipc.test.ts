@@ -42,7 +42,7 @@ it("guards main/top frame, validates payload, persists only on a live parent and
       if (key === bad) throw Error("Broken receipt");
       return { ...await original(), id: key ?? id, projectRoot: key === other ? "/other" : data };
     });
-    expect(await invoke({ tabId: "parent" })).toMatchObject({ resources: [{ id }] });
+    expect(await invoke({ tabId: "parent" })).toMatchObject({ resources: [{ id }], unverified: [{ id: bad, reason: "Broken receipt" }] });
     read.mockImplementation(async (key?: string) => ({ ...await original(), id: key ?? id }));
     expect((await invoke({ tabId: "parent" })).resources.map((r: any) => r.id)).toEqual([other, bad, id]);
     for (const key of [other, bad]) await rm(join(data, "child-worktrees", `${key}.json`));

@@ -30,7 +30,11 @@ export function registerChildWorktreeIpc(deps: {
       if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
       let r;
       try { r = await deps.resources.read(file.slice(0, -5)); }
-      catch { continue; } // Preserve unreadable receipts; other resources remain visible.
+      catch (error) {
+        // Association with this project/child cannot be verified; expose no recovery paths.
+        (view.unverified ??= []).push({ id: file.slice(0, -5), reason: error instanceof Error ? error.message : String(error) });
+        continue;
+      }
       if (r.projectRoot !== project || (!canToggle && r.childSessionId !== tab.sessionId)) continue;
       const stale = r.appRunId !== deps.appRunId && ["intent", "active"].includes(r.phase);
       view.resources.push({ id: r.id, childSessionId: r.childSessionId, path: r.path, branch: r.branch,
