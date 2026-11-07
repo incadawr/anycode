@@ -81,7 +81,8 @@ rules and are not controlled by this pane.
 The three app builtins below appear in **Built into AnyCode**. Their switch
 edits the selected personal or workspace config using the original builtin ID.
 Either config can disable a builtin: enabling it in the workspace does not undo
-a personal disable. Other Native builtins can be disabled through config.
+a personal disable. These IDs are shared with Native: disabling one also disables
+the same-name Native builtin. Other Native builtins can be disabled through config.
 
 Disabled names do not count toward the cap. A session loads at most **64 skills**
 after deduplication; overflow drops from the lowest precedence first. The list of
@@ -121,7 +122,8 @@ exported either. Browser definitions require the corresponding tools.
 
 Settings → Skills previews configuration for the next launch, not the state of
 a running process. A new process reads policy again; toggles do not hot reload
-or revoke a running snapshot. Invalid/unreadable policy, an untrusted workspace,
+or revoke a running snapshot. In an untrusted workspace, Claude ignores the
+workspace config; personal disabled settings still apply. Invalid/unreadable policy,
 unsupported CLI or preparation failure can leave the adapter unavailable while
 ordinary chat continues. Windows forwarding is unavailable in this MVP.
 

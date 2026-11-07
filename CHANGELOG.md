@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Root Claude tabs can load three built-in AnyCode setup and browser skills through a session plugin, with Settings → Skills switches for the next process launch.
+- Root Claude tabs now prepare a session plugin for three built-in AnyCode setup and browser skills, with Settings → Skills switches for the next process launch. Recognition and model use depend on CLI compatibility.
 
 ## [0.0.87] - 2026-11-07
 

@@ -26,6 +26,7 @@
  * surface to defend beyond that lookup.
  */
 
+import { readBuiltinPolicy } from "../host/skills/builtin-policy.js";
 import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
 import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
@@ -217,7 +218,7 @@ const fileEnabledSchema = z.object({
 }).strict();
 const builtinEnabledSchema = z.object({
   tabId: z.string().optional(),
-  builtinId: z.enum(["anycode-setup", "using-browser-preview", "control-browser"]),
+  builtinId: z.enum(ENGINE_BUILTIN_SKILLS.map(({ id }) => id)),
   scope: scopeSchema,
   enabled: z.boolean(),
 }).strict();
@@ -356,31 +357,27 @@ function pluginWorldFor(
 }
 
 /** Configuration preview, never export authority or a claim about a running CLI. */
-async function builtinSettings(deps: SkillsIpcDeps, tabId?: string): Promise<Pick<SkillsSnapshot, "builtins" | "builtinNotice">> {
+export async function builtinSettings(deps: SkillsIpcDeps, tabId?: string): Promise<Pick<SkillsSnapshot, "builtins" | "builtinNotice">> {
   const workspace = resolveWorkspace(deps, tabId);
+  const home = deps.home();
   let readable = true;
+  // Preview configured bits per scope, not launch authority. The same bounded
+  // worker enforces byte/depth/time limits and refuses special/linked files.
   const disabled = async (base?: string): Promise<string[]> => {
     if (!base) return [];
     const path = anycodeConfigPath(base);
-    try {
-      if (!await deps.fs.exists(path)) return [];
-      const raw = JSON.parse(await deps.fs.readFile(path));
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error();
-      const skills = raw.skills;
-      if (skills !== undefined && (!skills || typeof skills !== "object" || Array.isArray(skills))) throw new Error();
-      const values = skills?.disabled === undefined ? [] : skills.disabled;
-      if (!Array.isArray(values) || values.some(v => typeof v !== "string")) throw new Error();
-      return values;
-    } catch { readable = false; return []; }
+    const ids = ENGINE_BUILTIN_SKILLS.map(({ id }) => id);
+    const policy = await readBuiltinPolicy({ userConfigPath: path, projectConfigPath: path, projectTrusted: false, ids });
+    if (ids.some(id => !["enabled", "disabled"].includes(policy[id].reason))) readable = false;
+    return ids.filter(id => policy[id].reason === "disabled");
   };
-  const user = await disabled(deps.home());
-  const project = workspace === deps.home() ? user : await disabled(workspace);
+  const [user, project] = await Promise.all([disabled(home), disabled(workspace)]);
   return {
     builtins: ENGINE_BUILTIN_SKILLS.map(({ id }) => ({
       id, userDisabled: user.includes(id), projectDisabled: project.includes(id),
     })),
-    builtinNotice: !readable ? "Configuration unreadable or invalid; availability cannot be previewed." :
-      process.platform === "win32" ? "Unavailable on Windows; ordinary CLI chat is available." :
+    builtinNotice: process.platform === "win32" ? "Unavailable on Windows; ordinary CLI chat is available." :
+      !readable ? "Configuration unreadable, invalid or beyond preview limits; availability cannot be previewed." :
       "Settings for the next Claude process, including resume. Host policy, workspace trust, CLI support and available tools are checked at launch.",
   };
 }

@@ -398,6 +398,10 @@ describe("app builtin settings", () => {
       notice: "Settings for the next Claude process",
       scope: "project", query: "", onToggle: () => {},
     }));
+    expect(html).toContain('data-skill-name="builtin:anycode-setup"');
+    expect(html).toContain('data-skill-source="builtin"');
+    expect(html).toContain('data-skill-enabled="true"');
+    expect(html).toContain("ignored by Claude in untrusted workspaces");
     expect(html).toContain("Built into AnyCode");
     expect(html).toContain("anycode-app:anycode-setup");
     expect(html).toContain("anycode-app-setup");
@@ -421,4 +425,9 @@ it("never marks an enabled file row as delivered to an external engine", async (
   expect(html).not.toMatch(/Claude|Codex|delivered|CLI-reported/);
   expect(html).toContain("Reveal anycode-setup");
   expect(html).toContain("Delete anycode-setup");
+});
+
+it("describes builtin write failures as configuration errors", () => {
+  expect(skillRefusalMessage("io_error", true)).toContain(".anycode/config.json");
+  expect(skillRefusalMessage("io_error", true)).not.toContain("skill file");
 });

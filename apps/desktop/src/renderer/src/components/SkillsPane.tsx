@@ -69,13 +69,13 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
     <p className="skills-pane-hint">{notice}</p>
     <p className="skills-pane-hint">Changes affect the next process launch, including resume; running sessions keep their snapshot.
       This pane does not report process state. Unavailable warnings appear in the session; a prepared snapshot or CLI-reported metadata does not prove model use.
-      Same-name files do not replace this app catalog. Codex: not yet delivered.</p>
+      Workspace settings are ignored by Claude in untrusted workspaces. Same-name files do not replace this app catalog. Codex: not yet delivered.</p>
     <ul className="skills-row-list mcp-row-list">
       {ENGINE_BUILTIN_SKILLS.filter(def => [def.id, def.description, def.claude, def.codex].join(" ").toLowerCase().includes(query.trim().toLowerCase())).map(def => {
         const setting = settings.find(row => row.id === def.id);
         if (!setting) return null;
         const enabled = !(scope === "project" ? setting.projectDisabled : setting.userDisabled);
-        return <li className="skills-row mcp-row" key={def.id}>
+        return <li className="skills-row mcp-row" key={def.id} data-skill-name={`builtin:${def.id}`} data-skill-source="builtin" data-skill-enabled={enabled}>
           <div className="mcp-row-lines">
             <div className="mcp-row-line1">{def.id}</div>
             <div className="mcp-row-line2">{def.description}</div>
@@ -176,7 +176,7 @@ export function problemsStripLabel(problems: readonly string[]): string {
   return `${problems.length} skill(s) failed to load`;
 }
 
-export function skillRefusalMessage(reason: SkillsRefusalReason): string {
+export function skillRefusalMessage(reason: SkillsRefusalReason, builtin = false): string {
   switch (reason) {
     case "invalid":
       return "That name or description isn't valid — check it and try again.";
@@ -187,7 +187,7 @@ export function skillRefusalMessage(reason: SkillsRefusalReason): string {
     case "not_found":
       return "That skill no longer exists — try refreshing.";
     case "io_error":
-      return "Couldn't save — the skill file couldn't be read or written.";
+      return builtin ? "Couldn't save — .anycode/config.json couldn't be read or written." : "Couldn't save — the skill file couldn't be read or written.";
     default: {
       const exhaustive: never = reason;
       return exhaustive;
@@ -435,7 +435,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
     if (result.ok) {
       setBuiltinError(null);
       setSnapshot(previous => previous ? { ...previous, builtins: result.snapshot.builtins, builtinNotice: result.snapshot.builtinNotice } : previous);
-    } else setBuiltinError(skillRefusalMessage(result.reason));
+    } else setBuiltinError(skillRefusalMessage(result.reason, true));
   }
 
   async function toggleRow(row: SkillRowView): Promise<void> {
@@ -588,8 +588,8 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
             settings={snapshot.builtins} notice={snapshot.builtinNotice} scope={scopeMode}
             query={searchQuery} onToggle={(id, enabled) => void toggleBuiltin(id, enabled)} />}
           {builtinError && <div role="alert">{builtinError}</div>}
-          <p className="skills-pane-hint">File skills below apply to Native tabs. They are not delivered to Claude or Codex.</p>
-          <div className="mcp-section">
+          {sourceFilter !== "builtin" && <p className="skills-pane-hint">File skills below apply to Native tabs. They are not delivered to Claude or Codex.</p>}
+          {sourceFilter !== "builtin" && <div className="mcp-section">
             <div className="mcp-section-title">
               Workspace and personal skills{" "}
               <span className="mcp-section-count">
@@ -614,7 +614,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
                 ))}
               </ul>
             )}
-          </div>
+          </div>}
 
           {plugin.length > 0 && (
             <div className="mcp-section">

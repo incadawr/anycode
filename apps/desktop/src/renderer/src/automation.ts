@@ -1152,7 +1152,7 @@ export interface McpPaneDom {
  */
 export interface SkillsPaneRowState {
   name: string;
-  sourceKind: SkillSourceKind;
+  sourceKind: SkillSourceKind | "builtin";
   enabled: boolean;
   hasToggle: boolean;
 }
@@ -4441,7 +4441,7 @@ export function realSkillsPaneDom(): SkillsPaneDom {
   function parseRow(li: HTMLLIElement): SkillsPaneRowState {
     return {
       name: li.getAttribute("data-skill-name") ?? "",
-      sourceKind: (li.getAttribute("data-skill-source") ?? "") as SkillSourceKind,
+      sourceKind: (li.getAttribute("data-skill-source") ?? "") as SkillsPaneRowState["sourceKind"],
       // Read straight off the row's own `data-skill-enabled` attribute
       // (`SkillRowItem`) rather than the switch's `aria-checked` — a
       // read-only plugin row carries NO switch at all, so this stays a
