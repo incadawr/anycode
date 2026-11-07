@@ -882,6 +882,13 @@ export function createTabRegistry(
         entries.delete(tabId);
         pendingInitialPrompts.delete(tabId);
         agentTitles.delete(tabId);
+        // the managed-allocation record is this tab's only other per-tab
+        // state; disposeTab (the root path) clears it, a hidden child never
+        // reaches disposeTab, so clear it here too.
+        tabsStore.setState(s => {
+          const next = { ...s.childWorktrees }; delete next[tabId];
+          return { childWorktrees: next };
+        });
         closedTabIds.add(tabId);
       } else {
         tabsStore.getState().setHostExited(tabId, true);

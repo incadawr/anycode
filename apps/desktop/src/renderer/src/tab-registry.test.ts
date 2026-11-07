@@ -515,7 +515,9 @@ describe("tab-registry — child-session registration (CUT-S2 §2.5, slice S2c C
       const id = child ? "hidden" : "allocated";
       registry.registerPort(id, worktree.path, asPort(new FakeMessagePort()), undefined, child, undefined, undefined, worktree);
       expect(tabsStore.getState().childWorktrees[id]).toEqual(worktree);
-      registry.disposeTab(id);
+      // a hidden child's only disposal point is markHostExited (its tabId never
+      // reaches disposeTab in production); the visible tab goes through disposeTab.
+      if (child) registry.markHostExited(id); else registry.disposeTab(id);
       expect(tabsStore.getState().childWorktrees[id]).toBeUndefined();
     }
   });
