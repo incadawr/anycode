@@ -1,10 +1,11 @@
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, symlinkSync, readdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { inside, peerEnv, judgeDelivery } from './session-peers-smoke.mjs';
+import { inside, peerEnv, judgeDelivery, captureLaunchLog } from './session-peers-smoke.mjs';
 import { assertProductionPaths, assertSmokeAbsentFromAsar } from './smoke-package-guard.mjs';
 
 function temporary(fn) {
@@ -53,4 +54,21 @@ test('package allowlist excludes driver and doubles; archive guard rejects leake
   }
   const source = readFileSync(new URL('./assert-package.mjs',import.meta.url),'utf8');
   assert.match(source,/assertSmokeAbsentFromAsar\(join\(dirname\(unpacked\), "app.asar"\)\)/);
+}));
+
+test('launcher captures both streams, redacts split sensitive lines, and delays file creation',() => temporary(root => {
+  const file = join(root,'launcher.log');
+  const app = {stdout:new EventEmitter(),stderr:new EventEmitter()};
+  const save = captureLaunchLog(app,file,[root,'delivery-nonce']);
+  app.stdout.emit('data',Buffer.from('vite ready\nAuthorization: Bea'));
+  app.stdout.emit('data',Buffer.from('rer credential-value\n{"messages":["private body"]}\n'));
+  app.stderr.emit('data',Buffer.from(`Error: Electron uninstall\n${root}/error delivery-nonce\n`));
+  app.stderr.emit('data',Buffer.from('payload=private-tail'));
+  assert.deepEqual(readdirSync(root),[],'Log must not trip the fresh-profile startup gate');
+  const output = save();
+  assert.equal(readFileSync(file,'utf8'),output);
+  assert.match(output,/\[stdout\] vite ready/);
+  assert.match(output,/\[stderr\] Error: Electron uninstall/);
+  for (const value of ['credential-value','private body','private-tail',root,'delivery-nonce']) assert(!output.includes(value));
+  assert.equal(save(),output,'Flushing twice must not duplicate trailing output');
 }));

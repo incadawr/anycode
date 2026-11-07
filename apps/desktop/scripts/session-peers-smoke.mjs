@@ -57,9 +57,32 @@ export async function wait(probe, timeout = 30000) {
 export function judgeDelivery({ before, requests, nonce }) {
   assert(nonce && requests.slice(before).some(request => JSON.stringify(request).includes(nonce)), 'No new target native request: broker delivery unproven');
 }
+/** Buffer until startup gating completes: the fresh-root gate forbids extra files. */
+export function captureLaunchLog(app, file, privateValues = []) {
+  let output = '';
+  const pending = { stdout: '', stderr: '' };
+  const redact = line => {
+    line = line.replace(/\x1b\[[0-9;]*m/g, '');
+    if (/[{[]\s*["']|authorization|bearer|api.?key|secret|token|password|payload|prompt|peer-command|messages|\binput\b/i.test(line)) return '[redacted sensitive output]';
+    for (const value of privateValues.filter(Boolean).sort((a,b) => b.length-a.length)) line = line.replaceAll(value, '<private>');
+    return line.replace(/\/(?:Users|home)\/[^\s:)]+/g, '<private-path>');
+  };
+  const append = (name, line) => { output = (output + `[${name}] ${redact(line)}\n`).slice(-1048576); };
+  for (const name of Object.keys(pending)) app[name].on('data', chunk => {
+    const lines = (pending[name] + String(chunk)).split(/\r?\n/);
+    pending[name] = lines.pop();
+    for (const line of lines) append(name,line);
+  });
+  return note => {
+    if (note) append('driver',note);
+    for (const name of Object.keys(pending)) if (pending[name]) { append(name,pending[name]); pending[name] = ''; }
+    writeFileSync(file,output,{mode:0o600});
+    return output;
+  };
+}
 export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${randomUUID()}`) } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(),'anycode-peers-')));
-  let fixtures, app, cdp, info, closed = false, launchIssue;
+  let fixtures, app, cdp, info, closed = false, launchIssue, saveLog;
   const nonce = randomUUID();
   const check = (name,status) => console.log(`[${nonce}] ${status} ${name}`);
   const path = leaf => inside(root,join(root,leaf));
@@ -79,10 +102,12 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
       try { process.kill(-app.pid,'SIGKILL'); } catch { /* already exited */ }
     }
     if (fixtures) { fixtures.fixture.closeAllConnections(); await new Promise(r => fixtures.fixture.close(r)); }
+    saveLog?.();
     rmSync(root,{recursive:true,force:true});
   }
   const driver = {
     root, nonce, check, native, evaluate, invoke, api, close,
+    reportFailure(error) { if (!closed) console.error(`Launcher log (temporary root/launcher.log; removed at teardown):\n${saveLog?.(error.message) ?? ''}`); },
     async start() {
       try {
         fixtures = await createEngineSmokeFixtures(root);
@@ -107,17 +132,16 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
         const provider = smokeProviderProfile('custom:local','core-model',{credentialFromEnv:true});
         provider.custom = [{id:'custom:local',name:'Fixture',baseUrl:fixtures.baseUrl,kind:'openai-compatible',models:['core-model']}];
         Object.assign(provider.connections[0],{baseUrl:fixtures.baseUrl,transport:'openai-chat-completions',authOptional:true});
-        writeFileSync(path('settings.json'),JSON.stringify({version:2,provider,tools:{},permissions:{alwaysAllow:[]},security:{trustedBinaries:fixtures.consents},ui:{theme:'dark'}}));
+        writeFileSync(path('settings.json'),JSON.stringify({version:2,provider,tools:{},permissions:{alwaysAllow:[]},security:{allowWeakSecretStorage:false,trustedBinaries:fixtures.consents},ui:{theme:'dark'}}));
         writeFileSync(path('unavailable-engine'),'#!/bin/sh\nexit 1\n',{mode:0o700});
         const env = peerEnv(process.env,root,fixtures.binaries);
         check('isolation','PASS');
         app = launchSmokeElectron(spawn,{cwd:resolve(desktop,'../..'),env,stdio:['ignore','pipe','pipe']});
         app.on('error',() => { launchIssue = 'launcher-error'; });
-        // Keep payload-bearing app output private, never print it as evidence.
-        app.stdout.on('data',() => {}); app.stderr.on('data',chunk => { if (/\bcac\b/.test(String(chunk))) launchIssue = 'launcher-cac-resolution'; });
+        saveLog = captureLaunchLog(app,path('launcher.log'),[root,desktop,nonce]);
         cdp = await connectIsolatedCdp({profile:root,env,launcher:app,wait: probe => wait(() => { if (launchIssue || app.exitCode !== null) throw new Error(launchIssue ?? 'launcher-exited'); return probe(); })});
         info = await wait(() => existsSync(path('automation.json')) && JSON.parse(readFileSync(path('automation.json'),'utf8')));
-        await wait(() => evaluate("typeof window.anycode?.createTab === 'function'"));
+        await wait(() => evaluate("typeof window.anycode?.createTab === 'function' && !!window.__anycodeAutomation"));
         check('launch','PASS');
         driver.tabs = [];
         for (const [name,engine] of [['A','core'],['B','codex']]) {
@@ -125,6 +149,7 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
           const tab = await invoke('createTab',{kind:'new',workspace:path(name),engine});
           assert(tab.ok,'Could not create fixture tab');
           driver.tabs.push({...tab,workspace:path(name),engine});
+          await wait(async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId]?.connection === 'ready');
           await api(`/tabs/${tab.tabId}/prompt`,{text:'fixture ready'});
           await wait(async () => {
             await invoke('workspaceTrust.decide',{tabId:tab.tabId,decision:'once'});
@@ -136,7 +161,7 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
         await driver.grant(a,b,true);
         check('two-workspaces','PASS');
         return driver;
-      } catch (error) { check(launchIssue ?? (error.message === 'launcher-exited' ? 'launcher-exited' : 'start-incomplete'),'FAIL'); await close(); throw error; }
+      } catch (error) { driver.reportFailure(error); check(launchIssue ?? (error.message === 'launcher-exited' ? 'launcher-exited' : 'start-incomplete'),'FAIL'); await close(); throw error; }
     },
     async openPeers(tab) {
       await invoke('selectTab',tab.tabId);
@@ -150,7 +175,12 @@ export async function createPeerSmoke({ pngDir = join(tmpdir(), `peer-png-${rand
     openPeer(source,input = {}) { return driver.tool(source,'SessionOpen',input); },
     async tool(source,tool,input) {
       assert.equal(source.engine,'core','Tool-emitting fixture source must be core');
-      await api(`/tabs/${source.tabId}/prompt`,{text:`peer-command:${JSON.stringify({tool,input})}`});
+      const sent = await api(`/tabs/${source.tabId}/prompt`,{text:`peer-command:${JSON.stringify({tool,input})}`});
+      assert(sent.ok,'Fixture tool prompt refused');
+      const permission = await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.permission);
+      assert.equal(permission.toolName,tool,'Unexpected fixture approval request');
+      const approved = await api(`/tabs/${source.tabId}/permission`,{behavior:'allow',requestId:permission.requestId});
+      assert(approved.ok,'Fixture tool approval failed');
     },
     async sendPeer(source,target,payload) {
       const state = await api(`/state/${target.tabId}`);
@@ -188,10 +218,14 @@ export async function runSmoke(options) {
   const driver = await createPeerSmoke(options);
   const stop = () => { void driver.close().finally(() => { process.exitCode = 1; }); };
   process.once('SIGINT',stop); process.once('SIGTERM',stop);
+  let deliveryAttempted = false;
   try {
     await driver.start();
+    await driver.screenshot('peer-ready.png');
+    driver.check('peer-ready-png','PASS');
     const [source,target] = driver.tabs;
     const before = driver.native(target.engine).length;
+    deliveryAttempted = true;
     await driver.sendPeer(source,target,driver.nonce);
     await driver.waitNative(target.engine,before,driver.nonce);
     judgeDelivery({before,requests:driver.native(target.engine),nonce:driver.nonce});
@@ -199,7 +233,7 @@ export async function runSmoke(options) {
     await driver.screenshot('peer-delivered.png');
     driver.check('cards-replies-acceptance','SKIP');
     return 0;
-  } catch { driver.check('driver','FAIL'); return 1; }
+  } catch (error) { driver.reportFailure(error); if (deliveryAttempted) driver.check('broker-to-target-native-request','FAIL'); driver.check('driver','FAIL'); return 1; }
   finally { process.off('SIGINT',stop); process.off('SIGTERM',stop); await driver.close(); driver.check('teardown','PASS'); }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
