@@ -123,15 +123,21 @@ it("a hook runs once, after initialized and before account/read", async () => {
   await c.start(); await initializeAndVerifyAccount(c, 1000); await c.afterInitializeBuiltinSkills(1000);
   expect(await c.request("test/calls")).toEqual(["initialize", "initialized", "skills/extraRoots/set", "skills/list", "account/read", "test/calls"]);
 });
-it("an expired callback cannot send late RPCs on a still-live child", async () => {
+it("an expired callback cannot send late RPCs after child replacement", async () => {
   const roots: string[] = []; let release!: () => void; const gate = new Promise<void>(r => { release = r; }); let late!: Promise<void>;
   const c = client({ prepareBuiltinSkills: async () => { const p = preparation(roots); return { ...p, afterInitialize: port => {
     late = gate.then(() => p.afterInitialize(port)); return late;
   } }; } });
   await c.start(); await c.request("initialize", {}, { timeoutMs: 1000 }); c.notify("initialized");
-  await c.afterInitializeBuiltinSkills(30);
-  const failed = late.then(() => false, () => true); release(); expect(await failed).toBe(true);
+  const originalPid = c.pid!;
+  // This budget also covers the replacement child's initialize handshake.
+  await c.afterInitializeBuiltinSkills(1000);
+  expect(c.pid).not.toBe(originalPid);
+  expect(() => process.kill(originalPid, 0)).toThrow();
+  const failed = expect(late).rejects.toThrow("Codex builtin callback invalidated"); release(); await failed;
   expect(await c.request("test/calls")).not.toContain("skills/extraRoots/set");
+  // Both children append here; a late RPC must reach neither generation.
+  expect(fs.readFileSync(join(home, "requests"), "utf8")).not.toContain("skills/extraRoots/set");
 });
 it("a real spawn error with no PID releases its unbound snapshot", async () => {
   const roots: string[] = [], c = client({ prepareBuiltinSkills: async () => preparation(roots), spawnImpl: (cmd, args, opts) => spawn(args.includes("app-server") ? join(home, "missing") : cmd, args, opts) });

@@ -57,7 +57,7 @@ import type {
 } from "../../../shared/skills-config.js";
 import { Chevron, Download, FileIcon, Folder, Plus, Search, Spinner, Trash, X } from "./icons.js";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
-import { Button, Field, IconButton, Input, Textarea } from "../ui/index.js";
+import { Button, Field, IconButton, Input, Switch, Textarea } from "../ui/index.js";
 
 /** App settings have no file identity or filesystem controls. */
 export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: {
@@ -84,10 +84,9 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
               {setting.projectDisabled ? "Disabled in workspace settings. " : ""}
               {!setting.userDisabled && !setting.projectDisabled ? "Enabled in settings; availability checked at launch." : "Either scope can disable this skill."}</div>
           </div>
-          <button type="button" role="switch" aria-checked={enabled}
+          <Switch checked={enabled}
             aria-label={`${enabled ? "Disable" : "Enable"} ${def.id} in ${scope} settings`}
-            className={`settings-switch${enabled ? " settings-switch-on" : ""}`}
-            onClick={() => onToggle(def.id, !enabled)}><span className="settings-switch-thumb" /></button>
+            onCheckedChange={checked => onToggle(def.id, checked)} />
         </li>;
       })}
     </ul>
