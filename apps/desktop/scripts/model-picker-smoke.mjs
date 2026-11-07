@@ -14,12 +14,13 @@
  * `start-screen-smoke.mjs` (per-run disposable profile discipline); the
  * Settings-drawer connection-creation sequence is lifted from
  * `provider-connections-ui-smoke.mjs`'s phase 1 (steps 3/4 for the FIRST
- * connection via the embedded WelcomeScreen drawer, step 7 for the SECOND via
+ * connection via the Settings drawer, step 7 for the SECOND via
  * the Settings dialog's Add tile) — both proven live sequences, not
  * reinvented here.
  *
  * Usage:   node apps/desktop/scripts/model-picker-smoke.mjs [--keep] [--port <n>]
  *
+ *   ANYCODE_SHOTS_DIR  Directory for PNG evidence (default: per-run system temp).
  *   --keep       Do not delete the temp workspace/profile on exit (debugging).
  *   --port <n>   Forwarded as ANYCODE_AUTOMATION_PORT to the spawned dev process.
  *
@@ -30,8 +31,7 @@
  * picker is).
  *
  * Each step prints `[step N] PASS/FAIL <detail>`; the first FAIL tears down
- * and exits 1. PNG evidence is written to a per-run directory under the
- * system temp folder.
+ * and exits 1.
  */
 
 import { execFileSync, spawn } from "node:child_process";
@@ -308,24 +308,34 @@ function readJsonDisk(step, path, label) {
   }
 }
 
-/** Best-effort PNG evidence via `GET /screenshot` — never fails the step it's called from. */
+/** Wait for consecutive identical rendered frames before writing PNG evidence. */
 async function saveScreenshot(ctx, name) {
-  await sleep(400);
-  try {
+  let previous = null;
+  let stable = 0;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     const resp = await api(ctx, "GET", "/screenshot");
     if (resp.status !== 200 || typeof resp.body?.png !== "string") {
-      console.warn(`[model-picker-smoke] screenshot "${name}" unavailable (HTTP ${resp.status})`);
-      return null;
+      throw new Error(`screenshot "${name}" unavailable (HTTP ${resp.status})`);
     }
-    mkdirSync(ctx.screenshotDir, { recursive: true });
-    const filePath = join(ctx.screenshotDir, `${name}.png`);
-    writeFileSync(filePath, Buffer.from(resp.body.png, "base64"));
-    console.log(`           screenshot: ${filePath}`);
-    return filePath;
-  } catch (err) {
-    console.warn(`[model-picker-smoke] screenshot "${name}" failed: ${err?.message ?? err}`);
-    return null;
+    const frame = Buffer.from(resp.body.png, "base64");
+    stable = previous?.equals(frame) ? stable + 1 : 0;
+    if (stable >= 2) {
+      mkdirSync(ctx.screenshotDir, { recursive: true });
+      const filePath = join(ctx.screenshotDir, `${name}.png`);
+      writeFileSync(filePath, frame);
+      console.log(`           screenshot: ${filePath}`);
+      return filePath;
+    }
+    previous = frame;
+    await sleep(150);
   }
+  throw new Error(`screenshot "${name}" did not stabilize`);
+}
+
+/** The save driver observes the first snapshot change, not completion of the unified save. */
+async function waitForDrawerSave(ctx, step) {
+  await pollProviderState(ctx, step, (s) => s.drawer.open && !s.drawer.apiKeyEntered && s.drawer.saveKeyEnabled);
 }
 
 // ── step 1: bootstrap disposable profile + launch dev, NO connections at boot ──
@@ -402,13 +412,16 @@ async function step1LaunchApp(ctx) {
   pass(1, `app launched (pid=${info.pid}), facade ready after ${Date.now() - t0}ms on port ${info.port}, profile=${profile}`);
 }
 
-// ── step 2: create connection "Main" via WelcomeScreen's embedded drawer ──
+// ── step 2: create connection "Main" via Settings ──
 
 async function step2CreateMainConnection(ctx) {
   const step = 2;
-  const state = await pollProviderState(ctx, step, (s) => s.drawer.open === true && s.drawer.embedded === true);
-  assert(step, state.mounted === false, `expected the Settings-dialog grid NOT mounted on a Welcome boot, got mounted=${state.mounted}`);
+  await apiOk(ctx, step, "POST", "/settings/open", {});
+  await apiOk(ctx, step, "POST", "/settings/pane", { paneId: "provider" });
+  await apiOk(ctx, step, "POST", "/settings/provider/add", {});
+  const state = await pollProviderState(ctx, step, (s) => s.drawer.open === true);
   assert(step, state.drawer.stage === "template", `expected stage="template" before any connection exists, got ${state.drawer.stage}`);
+  await saveScreenshot(ctx, "0-connection-drawer-identity");
 
   const setResult = await apiOk(ctx, step, "POST", "/settings/provider/drawer/set", {
     providerId: PROVIDER_ID,
@@ -428,12 +441,10 @@ async function step2CreateMainConnection(ctx) {
   assert(step, setKey.ok === true, `drawer/set (apiKey + model) rejected: ${JSON.stringify(setKey)}`);
   const saveKey = await apiOk(ctx, step, "POST", "/settings/provider/drawer/save-key", {});
   assert(step, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
+  await waitForDrawerSave(ctx, step);
 
-  const unmounted = await pollUntil(20_000, 300, async () => {
-    const s = await api(ctx, "GET", "/settings/provider");
-    return s.status === 200 && s.body?.drawer?.open === false ? s.body : undefined;
-  });
-  assert(step, unmounted !== null, "WelcomeScreen's embedded drawer never closed within 20s of saving Main's key");
+  await apiOk(ctx, step, "POST", "/settings/provider/drawer/close", {});
+  await apiOk(ctx, step, "POST", "/settings/close", {});
 
   const settingsDisk = readJsonDisk(step, ctx.settingsPath, "settings.json");
   const connections = settingsDisk?.provider?.connections ?? [];
@@ -471,6 +482,7 @@ async function step3CreateSecondConnection(ctx) {
   assert(step, setKey.ok === true, `drawer/set (apiKey + model) rejected: ${JSON.stringify(setKey)}`);
   const saveKey = await apiOk(ctx, step, "POST", "/settings/provider/drawer/save-key", {});
   assert(step, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
+  await waitForDrawerSave(ctx, step);
   const closeResult = await apiOk(ctx, step, "POST", "/settings/provider/drawer/close", {});
   assert(step, closeResult.ok === true, `drawer/close rejected: ${JSON.stringify(closeResult)}`);
 
@@ -507,8 +519,12 @@ async function step5OpenDraftAndModelMenu(ctx) {
   writeFileSync(join(ctx.workspace, "seed.txt"), "hello from model-picker smoke\n");
 
   await apiAction(ctx, step, "/start-screen/open", { workspace: ctx.workspace });
+  // A discovered subscription engine may have preselected itself on Welcome.
+  // This smoke exercises Core's connection-scoped model picker.
+  await apiAction(ctx, step, "/start-screen/engine", { engineId: "core" });
   const draft = await getStartScreenState(ctx, step);
   assert(step, draft.active === true, `expected active:true after open, got ${JSON.stringify(draft)}`);
+  assert(step, draft.engine === "core", `expected Core draft, got ${JSON.stringify(draft.engine)}`);
 
   const openResult = await apiOk(ctx, step, "POST", "/start-screen/model-menu", { open: true });
   assert(step, openResult.ok === true, `open model-menu rejected: ${JSON.stringify(openResult)}`);
@@ -561,11 +577,17 @@ async function step6SelectFromSecondGroup(ctx) {
   ctx.pickedModelId = candidateModels[0];
   ctx.pickedModelName = ctx.pickedModelId;
 
-  const selectResult = await apiOk(ctx, step, "POST", "/start-screen/model-menu/select", {
-    connectionId: ctx.secondConnId,
-    modelId: ctx.pickedModelId,
+  // The first click can open the group before React renders its model rows.
+  // Retry only that transient miss; the next call clicks the rendered row.
+  let selectResult;
+  const selected = await pollUntil(5_000, 100, async () => {
+    selectResult = await apiOk(ctx, step, "POST", "/start-screen/model-menu/select", {
+      connectionId: ctx.secondConnId,
+      modelId: ctx.pickedModelId,
+    });
+    return selectResult.ok || selectResult.reason !== "not_present" ? selectResult : undefined;
   });
-  assert(step, selectResult.ok === true, `model-menu/select rejected: ${JSON.stringify(selectResult)}`);
+  assert(step, selected?.ok === true, `model-menu/select rejected: ${JSON.stringify(selectResult)}`);
 
   const draft = await getStartScreenState(ctx, step);
   assert(step, draft.model === ctx.pickedModelId, `expected draft.model===${ctx.pickedModelId} after select, got ${JSON.stringify(draft.model)}`);
@@ -727,7 +749,7 @@ async function run() {
     pickedModelName: null,
     secondGroup: null,
     teardownPromise: null,
-    screenshotDir: mkdtempSync(join(tmpdir(), "anycode-model-picker-evidence-")),
+    screenshotDir: process.env.ANYCODE_SHOTS_DIR ? resolve(process.env.ANYCODE_SHOTS_DIR) : mkdtempSync(join(tmpdir(), "anycode-model-picker-evidence-")),
   };
   installSignalTeardown(ctx);
 

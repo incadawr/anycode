@@ -95,6 +95,21 @@ describe("settingsSchema (v2)", () => {
     }
   });
 
+  it("accepts legacy connections and drops invalid icon overrides independently", () => {
+    const settings = { ...cloneDefaults(), provider: providerV2({ id: "z-ai", model: "glm-5.2" }) };
+    const legacy = settingsSchema.parse(settings).provider.connections[0]!;
+    expect(legacy.iconText).toBeUndefined();
+    expect(legacy.iconColor).toBeUndefined();
+    const connection = settings.provider.connections[0]!;
+    Object.assign(connection, { iconText: "ABC", iconColor: "#123456" });
+    const invalid = settingsSchema.parse(settings).provider.connections[0]!;
+    expect(invalid).toMatchObject({ id: connection.id, model: "glm-5.2" });
+    expect(invalid.iconText).toBeUndefined();
+    expect(invalid.iconColor).toBeUndefined();
+    Object.assign(connection, { iconText: "AB", iconColor: "#5B8DEF" });
+    expect(settingsSchema.parse(settings).provider.connections[0]).toMatchObject({ iconText: "AB", iconColor: "#5B8DEF" });
+  });
+
   it("preserves unknown top-level keys (passthrough for forward-compat)", () => {
     const withFuture = { ...cloneDefaults(), futureField: { nested: 1 } };
     const parsed = settingsSchema.safeParse(withFuture);

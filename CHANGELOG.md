@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Connection icons in the model picker and the composer model chip, with an editable monogram and color for each connection.
+
 ### Changed
 
 - Removed the turn limit for top-level sessions and the 200-turn ceiling for agents; raised the default agent turn budgets.
@@ -14,6 +18,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Fixed child agent model inheritance, turn and context budgets, and excessive delegation within a turn.
+- Keep open settings and connection edits when a newly available engine moves the app past the welcome screen.
 
 ## [0.0.90] - 2026-11-07
 

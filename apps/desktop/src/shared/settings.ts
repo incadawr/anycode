@@ -290,6 +290,8 @@ export interface ProviderConnection {
   id: string;
   providerId: string;
   label?: string;
+  iconText?: string;
+  iconColor?: string;
   model?: string;
   transport?: ProviderTransportId;
   baseUrl?: string;
@@ -1343,6 +1345,8 @@ export interface ConnectionCreateRequest {
   pricing?: ConnectionPricing;
   providerId: string;
   label?: string;
+  iconText?: string;
+  iconColor?: string;
   model?: string;
   transport?: ProviderTransportId;
   baseUrl?: string;
@@ -1400,6 +1404,8 @@ export interface ConnectionUpdateRequest {
   pricing?: ConnectionPricing | "";
   id: string;
   label?: string;
+  iconText?: string;
+  iconColor?: string;
   model?: string;
   /**
    * `""` is a sentinel (W12-FIX §3, same convention as `baseUrl`/

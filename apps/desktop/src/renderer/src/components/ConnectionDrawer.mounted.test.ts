@@ -1,7 +1,7 @@
 import { act, createElement } from "react";
 import { createStore } from "zustand/vanilla";
 import { expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCustomProviderCreate, handleCustomProviderFetchModels } from "../../../main/provider-ipc.js";
@@ -22,6 +22,20 @@ const { ConnectionDrawer, ConnectionDrawerFields } = await import("./ConnectionD
 import type { SettingsStoreApi } from "../settings-store.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+it("keeps Identity controls at their own height when the icon field grows", () => {
+  const css = readFileSync(new URL("../settings.css", import.meta.url), "utf8");
+  const sheet = new JSDOM(`<style>${css}</style>`).window.document.styleSheets[0];
+  const rules = Array.from(sheet.cssRules) as CSSStyleRule[];
+  const identity = rules.find(rule => rule.selectorText === ".connection-drawer-identity");
+  const controls = rules.find(rule => rule.selectorText === ".connection-drawer-identity > .settings-field > :is(.settings-field-input, .settings-field-select)");
+  expect(identity?.style.getPropertyValue("align-items")).toBe("start");
+  expect(controls?.style.flex).toBe("0 0 auto");
+  const appCss = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+  const appRules = Array.from(new JSDOM(`<style>${appCss}</style>`).window.document.styleSheets[0].cssRules) as CSSStyleRule[];
+  const palette = appRules.find(rule => rule.selectorText === ".connection-icon-swatches");
+  expect(palette?.style.getPropertyValue("flex-wrap")).toBe("wrap");
+});
 
 it("shows and clears a saved vocabulary without a reasoning support flag", async () => {
   const connection = { id:"c", providerId:"custom:test", model:"a", modelOverrides:{a:{effortLevels:["low", "high"] as ("low" | "high")[]}} };
@@ -461,7 +475,7 @@ it("uses a secondary Cancel and protects unsaved changes for Cancel, Escape, and
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
     expect([...container.querySelectorAll("button")].filter(b => b.classList.contains("ak-btn--primary")).map(b => b.textContent?.trim())).toEqual(["Save"]);
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "changed");
     const cancel = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Cancel")!;
     await act(async () => { cancel.focus(); cancel.click(); });
     expect(onClose).not.toHaveBeenCalled();
@@ -469,7 +483,7 @@ it("uses a secondary Cancel and protects unsaved changes for Cancel, Escape, and
     expect(document.activeElement?.textContent).toBe("Keep editing");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Keep editing")!.click(); });
     expect(document.activeElement).toBe(cancel);
-    expect((container.querySelector('input[placeholder="e.g. Work, Personal"]') as HTMLInputElement).value).toBe("changed");
+    expect((container.querySelector('input[placeholder="e.g. Work"]') as HTMLInputElement).value).toBe("changed");
     await act(async () => { container.querySelector("dialog")!.dispatchEvent(new Event("cancel", {bubbles:false, cancelable:true})); });
     expect(container.textContent).toContain("Discard unsaved changes?");
     await act(async () => { container.querySelector("dialog")!.dispatchEvent(new Event("cancel", {bubbles:false, cancelable:true})); });
@@ -488,7 +502,7 @@ it("clears the unsaved warning after Save succeeds but not after a failed Save",
   rig.update.mockResolvedValueOnce({ok:false, reason:"io_error"});
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "changed");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
     expect(container.textContent).toContain("Discard unsaved changes?");
@@ -517,7 +531,7 @@ it("keeps newer edits dirty if they are made while Save is in flight", async () 
   rig.update.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
-    const label = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Work, Personal"]')!;
+    const label = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Work"]')!;
     await typeInto(label, "first");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.disabled).toBe(true);
@@ -553,7 +567,7 @@ it("does not allow saving behind a pending discard confirmation", async () => {
   const rig = catalogRig(connection), onClose = vi.fn();
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "changed");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Cancel")!.click(); });
     expect(container.querySelector("[inert]")).not.toBeNull();
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
@@ -666,7 +680,7 @@ it("removes a resolved consent notice but keeps later form edits dirty", async (
   try {
     await typeInto(container.querySelector('input[type="password"]')!, "fixture-key");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "later edit");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "later edit");
     await act(async () => { rig.store.setState({secretConsentResolution:{key:"provider.connection.c1.apiKey", ok:true}} as never); });
     expect(container.textContent).not.toContain("awaiting storage consent");
     expect(container.querySelector(".connection-drawer-saved")).toBeNull();
@@ -892,4 +906,52 @@ it("disables reasoning replay until a model is selected", async () => {
   const { container, root } = await mountEdit(connection, catalogRig(connection));
   try { expect(replayField(container)?.disabled).toBe(true); }
   finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("edits and resets the connection icon", async () => {
+  const connection = {id:"icon", providerId:"custom:test", label:"Work", model:"a", iconText:"WX", iconColor:"#5B8DEF"};
+  const snapshot = {settings:cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[]};
+  const update = vi.fn().mockResolvedValue({ok:true, snapshot});
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionUpdate:update, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
+    expect(container.querySelector(".connection-icon")?.textContent).toBe("WX");
+    await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Icon color #5E9E6E"]')!.click(); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({iconText:"WX", iconColor:"#5E9E6E"}));
+    const automatic = container.querySelector<HTMLButtonElement>('button[aria-label="Automatic icon color"]')!;
+    expect(automatic.nextElementSibling?.textContent).toBe("Auto");
+    expect(automatic.parentElement?.className).toBe("connection-icon-auto-choice");
+    expect(automatic.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => automatic.click());
+    expect(automatic.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({iconText:"WX", iconColor:""}));
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Reset to default")!.click(); });
+    expect(container.querySelector(".connection-icon")?.textContent).toBe("WO");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({iconText:"", iconColor:""}));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("mounts connection icons for model and group rows", async () => {
+  const { ModelDrillMenu } = await import("./model-drill-menu.js");
+  const connection = {id:"icon", providerId:"custom:test", label:"Work", iconText:"WX", iconColor:"#5B8DEF"};
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ModelDrillMenu, {connections:[connection], rows:[{kind:"popular",connectionId:"icon",modelId:"m",name:"Model",groupLabel:"Work",current:true},{kind:"group",connectionId:"icon",label:"Work",subtitle:undefined,count:1}], page:{kind:"root"}, placement:null, backLabel:null, focusIndex:0, emptyText:"Empty", itemRefs:{current:[]}, onKeyDown:()=>{}, onActivateRow:()=>{}, onBack:()=>{}, onAddConnection:()=>{}, isCurrentConnection:()=>true})));
+    expect([...container.querySelectorAll(".connection-icon")].map(el => el.textContent)).toEqual(["WX", "WX"]);
+    expect(container.querySelector('[data-model-id="m"] .start-model-item-sub')).toBeNull();
+    const props = {connections:[connection], rows:[{kind:"popular" as const,connectionId:"icon",modelId:"m",name:"Model",groupLabel:"Work",current:false}], page:{kind:"root" as const}, placement:null, backLabel:null, focusIndex:0, emptyText:"Empty", itemRefs:{current:[]}, onKeyDown:()=>{}, onActivateRow:()=>{}, onBack:()=>{}, onAddConnection:()=>{}, isCurrentConnection:()=>false};
+    await act(async () => root.render(createElement(ModelDrillMenu, props)));
+    expect(container.querySelector('[data-model-id="m"] .start-model-item-sub')?.textContent).toBe("Work");
+    await act(async () => root.render(createElement(ModelDrillMenu, {...props, page:{kind:"group",connectionId:"icon"}, rows:[{kind:"model",connectionId:"icon",modelId:"m",name:"Model",current:false}]})));
+    expect(container.querySelector('.start-model-back .connection-icon')?.textContent).toBe("WX");
+    expect(container.querySelector('[data-model-id="m"] .connection-icon')?.textContent).toBe("WX");
+    const { connectionIconDefaults } = await import("./ConnectionIcon.js");
+    expect(connectionIconDefaults({id:"x",providerId:"z-ai"}, "Zed AI").text).toBe("ZA");
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });

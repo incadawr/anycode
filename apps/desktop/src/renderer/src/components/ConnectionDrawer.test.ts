@@ -2305,10 +2305,12 @@ describe("ConnectionDrawer layout wiring", () => {
   });
 
   it("Label is at the top in the dialog (not simplified), and inside Advanced only for the first-run flow", () => {
-    const top = source.indexOf("{!simplified && labelFieldVisible && labelField}");
+    const top = source.indexOf('{!simplified && <div className="connection-icon-fields">{labelFieldVisible && labelField}{iconField}</div>}');
     expect(top).toBeGreaterThan(source.indexOf("<span className=\"settings-field-label\">Provider</span>"));
     expect(top).toBeLessThan(source.indexOf("{showBaseUrl && ("));
-    expect(source.indexOf("{simplified && labelFieldVisible && labelField}")).toBeGreaterThan(source.indexOf("const advancedBlock = ("));
+    const advanced = source.indexOf('{simplified && <div className="connection-icon-fields">{labelFieldVisible && labelField}{iconField}</div>}');
+    expect(advanced).toBeGreaterThan(source.indexOf("const advancedBlock = ("));
+    expect(advanced).toBeLessThan(source.indexOf("</details>\n  );", source.indexOf("const advancedBlock = (")));
   });
 
   it("the standalone catalog hint lines are gone and the inputs carry the catalog number as placeholder", () => {
@@ -2369,14 +2371,14 @@ describe("custom endpoint cache creation", () => {
       createConnectionAndPersistModel: async (_bridge: unknown, _reload: unknown, request: unknown) => {
         calls.push(request); return { createdConnectionId: "connection" };
       },
-      modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
+      modelPersistenceBridge: () => ({}), label: "", iconText: imageInput === "auto" ? "" : " XY ", iconColor: imageInput === "auto" ? "" : "#5B8DEF", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
       usageSelection: "auto", usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue, replayTransportShown: true,
       setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
-    expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE, ...(imageInput === "auto" ? {} : { imageInputOverride: imageInput }) }]);
+    expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", ...(imageInput === "auto" ? {} : { iconText: "XY", iconColor: "#5B8DEF" }), transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE, ...(imageInput === "auto" ? {} : { imageInputOverride: imageInput }) }]);
   });
 
   it("creates an account-source endpoint without a model", async () => {
@@ -2397,7 +2399,7 @@ describe("custom endpoint cache creation", () => {
       createConnectionAndPersistModel: async (_bridge: unknown, _reload: unknown, request: unknown) => {
         calls.push(request); return { createdConnectionId: "connection" };
       },
-      modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
+      modelPersistenceBridge: () => ({}), label: "", iconText: " XY ", iconColor: "#5B8DEF", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
       usageSelection: "auto", usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue, replayTransportShown: true,
       setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
@@ -2405,7 +2407,7 @@ describe("custom endpoint cache creation", () => {
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ providerId: "custom:fixture" });
+    expect(calls[0]).toMatchObject({ providerId: "custom:fixture", iconText: "XY", iconColor: "#5B8DEF" });
     expect(calls[0]).not.toHaveProperty("model");
   });
 
@@ -2430,14 +2432,14 @@ describe("custom endpoint cache creation", () => {
         createConnectionAndPersistModel: async (_bridge: unknown, _reload: unknown, request: unknown) => {
           calls.push(request); return { createdConnectionId: "connection" };
         },
-        modelPersistenceBridge: () => ({}), label: "", transport: "openai-chat-completions", proxyRef: "",
+        modelPersistenceBridge: () => ({}), label: "", iconText: " XY ", iconColor: "#5B8DEF", transport: "openai-chat-completions", proxyRef: "",
         connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
         usageSelection, usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue, replayTransportShown: true,
         setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
       };
       const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
       await run();
-      expect(calls).toEqual([{ providerId: "custom:fixture", modelPricing: {}, model: "fixture-model", transport: "openai-chat-completions", includeUsage: expected }]);
+      expect(calls).toEqual([{ providerId: "custom:fixture", modelPricing: {}, model: "fixture-model", iconText: "XY", iconColor: "#5B8DEF", transport: "openai-chat-completions", includeUsage: expected }]);
     },
   );
 
@@ -2465,7 +2467,7 @@ describe("custom endpoint cache creation", () => {
         createConnectionAndPersistModel: async (_bridge: unknown, _reload: unknown, request: unknown) => {
           calls.push(request); return { createdConnectionId: "connection" };
         },
-        modelPersistenceBridge: () => ({}), label: "", transport, proxyRef: "",
+        modelPersistenceBridge: () => ({}), label: "", iconText: " XY ", iconColor: "#5B8DEF", transport, proxyRef: "",
         connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
         usageSelection: "auto", usageSelectionCreateValue, replaySelection, reasoningReplayCreateValue,
         replayTransportShown: reasoningReplayTransportVisible(transport, "openai-chat-completions"),
@@ -2473,7 +2475,7 @@ describe("custom endpoint cache creation", () => {
       };
       const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
       await run();
-      expect(calls).toEqual([{ providerId: "custom:fixture", modelPricing: {}, model: "fixture-model", transport, ...(expected === undefined ? {} : { preserveReasoning: expected }) }]);
+      expect(calls).toEqual([{ providerId: "custom:fixture", modelPricing: {}, model: "fixture-model", iconText: "XY", iconColor: "#5B8DEF", transport, ...(expected === undefined ? {} : { preserveReasoning: expected }) }]);
     },
   );
 });

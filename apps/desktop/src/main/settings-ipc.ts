@@ -1,3 +1,4 @@
+import { CONNECTION_ICON_COLORS } from "../shared/connection-icon.js";
 import { automaticGoBootRoute } from "./go-route.js";
 import { homedir } from "node:os";
 import { resolveWriteMask } from "@anycode/core/permissions/write-mask-node";
@@ -436,6 +437,8 @@ const connectionCreateSchema = z
     modelPricing: modelPricingSchema(tokenRatesSchema).optional(),
     pricing: connectionPricingSchema.optional(),
     label: z.string().optional(),
+    iconText: z.string().max(8).refine(value => Array.from(value.trim()).length <= 2).optional(),
+    iconColor: z.enum(CONNECTION_ICON_COLORS).optional(),
     model: z.string().optional(),
     transport: transportEnum.optional(),
     baseUrl: z.string().optional(),
@@ -487,6 +490,8 @@ const connectionUpdateSchema = z
     pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
     id: z.string().min(1),
     label: z.string().optional(),
+    iconText: z.string().max(8).refine(value => Array.from(value.trim()).length <= 2).optional(),
+    iconColor: z.union([z.enum(CONNECTION_ICON_COLORS), z.literal("")]).optional(),
     model: z.string().optional(),
     // `""` sentinel (§3): clears an explicit transport back to catalog
     // default. `connectionCreateSchema` deliberately does NOT get this union
@@ -1903,6 +1908,8 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.pricing !== undefined ? { pricing: req.pricing } : {}),
       providerId: req.providerId,
       ...(req.label !== undefined ? { label: req.label } : {}),
+      ...(req.iconText ? { iconText: req.iconText } : {}),
+      ...(req.iconColor ? { iconColor: req.iconColor } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.transport !== undefined ? { transport: req.transport } : {}),
       ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
@@ -2072,6 +2079,14 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
+    if (req.iconText !== undefined) {
+      if (req.iconText.trim()) updatedConnection.iconText = req.iconText.trim();
+      else delete updatedConnection.iconText;
+    }
+    if (req.iconColor !== undefined) {
+      if (req.iconColor) updatedConnection.iconColor = req.iconColor;
+      else delete updatedConnection.iconColor;
+    }
     if (req.visibleModels !== undefined) {
       if (req.visibleModels === "") delete updatedConnection.visibleModels;
       else updatedConnection.visibleModels = [...new Set(req.visibleModels)];

@@ -17,7 +17,7 @@ it("saves the checked effort only after an unchanged acknowledgement, to the ori
   (window as unknown as {anycode: unknown}).anycode = {listSessions: () => Promise.resolve([])};
   useSettingsStore.setState({
     connectionUpdate: update,
-    snapshot: {settings: {provider: {activeConnectionId:"c", connections:[{id:"c", providerId:"z-ai"}], custom:[]}}, catalog:[{id:"z-ai", name:"Z.AI", authKind:"api_key", models:[{id:"glm-5.2", reasoning:true, effortLevels:["off","high","max"]}]}]} as never,
+    snapshot: {settings: {provider: {activeConnectionId:"c", connections:[{id:"c", providerId:"z-ai", iconText:"ZX"}], custom:[]}}, catalog:[{id:"z-ai", name:"Z.AI", authKind:"api_key", models:[{id:"glm-5.2", reasoning:true, effortLevels:["off","high","max"]}]}]} as never,
   });
   const store = createDesktopStore();
   store.setState({connection:"ready", model:"glm-5.2", reasoningEffort:"off", availableEffortLevels:["off","high","max"], pinnedConnection:{connectionId:"c", providerId:"z-ai"}});
@@ -26,6 +26,7 @@ it("saves the checked effort only after an unchanged acknowledgement, to the ori
   const root = createRoot(container);
   try {
     await act(async () => { root.render(createElement(TabContext.Provider, {value:{tabId:"tab", store}}, createElement(ModelPill))); });
+    expect(container.querySelector(".model-pill-chip .connection-icon")?.textContent).toBe("ZX");
     await act(async () => { container.querySelector<HTMLButtonElement>('.model-pill-chip')!.click(); });
     await act(async () => { container.querySelector<HTMLButtonElement>('.start-model-effort-row')!.click(); });
     const off = container.querySelector<HTMLButtonElement>('[role="menuitemradio"][data-effort="off"]')!;

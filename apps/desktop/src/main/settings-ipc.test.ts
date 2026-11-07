@@ -5528,3 +5528,17 @@ it("user On clears a recorded rejection and beats a concurrent observation", asy
   expect(override?.preserveReasoning).toBe(true);
   expect(override?.reasoningReplayRejection).toBeUndefined();
 });
+
+it("persists and clears connection icon overrides", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  expect((await handleConnectionCreate(deps, {providerId:"z-ai", iconText:"AB", iconColor:"#5E9E6E"})).ok).toBe(true);
+  expect((await loadSettings(settingsPath)).settings.provider.connections[0]).toMatchObject({iconText:"AB", iconColor:"#5E9E6E"});
+  expect((await handleConnectionUpdate(deps, {id:"conn-1", iconText:"", iconColor:""})).ok).toBe(true);
+  const cleared = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+  expect(cleared.iconText).toBeUndefined();
+  expect(cleared.iconColor).toBeUndefined();
+  expect((await handleConnectionUpdate(deps, {id:"conn-1", iconText:"ABC"})).ok).toBe(false);
+  expect((await handleConnectionUpdate(deps, {id:"conn-1", iconColor:"#123456"})).ok).toBe(false);
+  expect((await handleConnectionCreate(deps, {providerId:"z-ai", iconText:"ABC"})).ok).toBe(false);
+  expect((await handleConnectionCreate(deps, {providerId:"z-ai", iconColor:"#123456"})).ok).toBe(false);
+});
