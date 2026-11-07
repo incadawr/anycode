@@ -313,6 +313,7 @@ describe("NodeGitAdapter (mock exec)", () => {
     expect(exec.calls[1]?.args).toEqual([
       "for-each-ref",
       "refs/heads",
+      "--sort=-committerdate",
       "--format=%(HEAD)%00%(refname:short)%00%(objectname)",
     ]);
     expect(exec.calls[2]?.args).toEqual(["log", "-n", "20", "--pretty=format:%H%x00%an%x00%at%x00%s%x1e"]);

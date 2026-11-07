@@ -16,6 +16,7 @@ import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
 import { Button } from "../ui/components/Button.js";
+import { EnvironmentBranchPicker } from "./EnvironmentBranchPicker.js";
 import { gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";
 // "Set up" routes through the same settings-open + pane-select
@@ -82,7 +83,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const workspace = useTabStore((state) => state.workspace);
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
-  const branches = useTabStore((state) => state.git.branches);
   // LSP/hooks status rows (core engines only — `engine === null`
   // mirrors the old header-button gate and the panels' mount gate in App.tsx).
   const engine = useTabStore((state) => state.engine);
@@ -235,6 +235,9 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
 
       {open && (
         <div className="environment-menu" role="dialog" aria-modal="false" aria-label="Environment">
+          {branchesOpen ? <EnvironmentBranchPicker back={() => setBranchesOpen(false)}
+            retry={() => dispatch({ op: "branches" }, { kind: "branches", label: "branches" })}
+            select={switchBranch} /> : <>
           <section className="environment-menu-section" aria-label="Workspace">
             <div className="environment-menu-title">Workspace</div>
             <Button variant="ghost" size="sm" type="button" className="environment-menu-row" onClick={copyWorkspace}>
@@ -251,32 +254,16 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   variant="ghost" size="sm"
                   type="button"
                   className="environment-menu-row"
-                  aria-expanded={branchesOpen}
-                  onClick={() => setBranchesOpen((current) => !current)}
+                  aria-haspopup="listbox"
+                  onClick={() => setBranchesOpen(true)}
                 >
                   <GitBranch />
                   <span className="environment-menu-row-main">
                     <span>Branch</span>
                     <span className="environment-menu-row-detail">{branch}</span>
                   </span>
-                  <span className={`environment-menu-chevron${branchesOpen ? " environment-menu-chevron-open" : ""}`}>⌄</span>
+                  <span aria-hidden="true">›</span>
                 </Button>
-                {branchesOpen && branches && (
-                  <div className="environment-branches" role="group" aria-label="Branches">
-                    {branches.map((item) => (
-                      <Button variant="ghost" size="sm"
-                        key={item.name}
-                        type="button"
-                        className={`environment-branch-row${item.current ? " environment-branch-row-current" : ""}`}
-                        onClick={() => switchBranch(item.name)}
-                      >
-                        <GitBranch />
-                        <span>{item.name}</span>
-                        {item.current && <span aria-label="Current branch">✓</span>}
-                      </Button>
-                    ))}
-                  </div>
-                )}
                 <Button variant="ghost" size="sm" type="button" className="environment-menu-row" onClick={openInspector}>
                   <span className="environment-menu-spacer" aria-hidden="true" />
                   <span className="environment-menu-row-main">
@@ -335,6 +322,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                 anonymised bundle, with a preview before saving. */}
             <DiagnosticsExportSection />
           </section>
+          </>}
         </div>
       )}
     </div>

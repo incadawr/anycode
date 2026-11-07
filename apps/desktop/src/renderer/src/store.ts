@@ -916,6 +916,7 @@ export interface GitSlice {
   panelOpen: boolean;
   view: GitPanelView;
   branches: GitBranchInfo[] | null;
+  branchesError: string | null;
   log: GitCommitInfo[] | null;
   diff: GitDiffState | null;
   /** Destructive intent awaiting confirmation; null = no dialog open. */
@@ -933,6 +934,7 @@ function initialGitSlice(): GitSlice {
     panelOpen: false,
     view: "changes",
     branches: null,
+    branchesError: null,
     log: null,
     diff: null,
     confirm: null,
@@ -2973,6 +2975,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         const next: GitSlice = { ...git, pending: nextPending };
 
         if (!outcome.ok) {
+          if (pending.kind === "branches") next.branchesError = outcome.reason;
           next.lastError = { label: pending.label, reason: outcome.reason };
           return { git: next };
         }
@@ -2980,6 +2983,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         switch (outcome.kind) {
           case "branches":
             next.branches = outcome.branches;
+            next.branchesError = null;
             break;
           case "log":
             next.log = outcome.commits;
@@ -6737,7 +6741,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             request.kind === "diff" && request.diff
               ? { path: request.diff.path, target: request.diff.target, text: "", truncated: false }
               : state.git.diff;
-          return { git: { ...state.git, pending, diff } };
+          return { git: { ...state.git, pending, diff, branchesError: request.kind === "branches" ? null : state.git.branchesError } };
         });
       },
 

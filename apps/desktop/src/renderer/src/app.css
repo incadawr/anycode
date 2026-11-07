@@ -2008,9 +2008,8 @@ button.environment-menu-row:hover,
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  margin: 0 0 var(--sp-1) calc(1rem + var(--sp-2));
-  padding: var(--sp-1);
-  border-left: 1px solid var(--border);
+  max-height: 15rem;
+  overflow-y: auto;
 }
 
 .environment-branch-row {
@@ -2027,6 +2026,38 @@ button.environment-menu-row:hover,
 .environment-branch-row-current span:last-child {
   margin-left: auto;
   color: var(--success);
+}
+
+.environment-branch-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.environment-branch-picker .environment-menu-actions {
+  margin-left: 0;
+}
+
+.environment-branch-picker .environment-menu-text-input {
+  flex: none;
+  height: 2rem;
+}
+
+.environment-branch-picker .environment-branch-row span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.environment-branch-picker [data-active="true"] {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+  background: var(--bg-hover);
+}
+
+.environment-branch-picker [aria-selected="true"] {
+  background: var(--bg-hover);
 }
 
 .environment-menu-note {

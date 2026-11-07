@@ -591,7 +591,7 @@ export class NodeGitAdapter implements GitPort {
     if (!this.hasRunBinary) {
       return unavailable();
     }
-    const args = ["for-each-ref", "refs/heads", "--format=%(HEAD)%00%(refname:short)%00%(objectname)"];
+    const args = ["for-each-ref", "refs/heads", "--sort=-committerdate", "--format=%(HEAD)%00%(refname:short)%00%(objectname)"];
     const res = await this.runGit(args);
     if (NodeGitAdapter.failed(res)) {
       return this.fail(args, res);
