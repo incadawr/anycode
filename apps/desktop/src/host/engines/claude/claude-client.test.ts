@@ -141,7 +141,7 @@ describe("ClaudeClient", () => {
       await client.start();
       await client.initialize();
       await client.getContextUsage();
-      await expect(client.controlRequest("set_model", { model: "claude-fable-5[1m]" })).resolves.toBeUndefined();
+      await expect(client.controlRequest("set_model", { model: "fable" })).resolves.toBeUndefined();
       await client.getContextUsage();
       await expect(client.controlRequest("set_model", { model: "no-such-model-xyz" })).rejects.toThrow(ClaudeClientError);
     } finally {

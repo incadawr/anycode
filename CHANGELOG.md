@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Claude’s pre-session model picker includes Fable and current model versions, and selecting Opus no longer requests extended context.
+
 ## [0.0.87] - 2026-11-07
 
 ### Added

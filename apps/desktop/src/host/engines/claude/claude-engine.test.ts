@@ -1,6 +1,6 @@
 /**
  * SessionEngine behaviour for the native Claude session (cut §1.4 DoD), driven
- * by REAL W0 fixture frames through the narrow `ClaudeTransport` seam — the seam
+ * by historical and synthetic W0 fixture frames through the narrow `ClaudeTransport` seam — the seam
  * exists precisely so a lifecycle test needs no child process.
  *
  * The load-bearing assertion in this file is the CONTEXT METER one. Codex's
@@ -58,8 +58,8 @@ function streamFrames(file: string): ClaudeStreamMessage[] {
     .map((raw) => raw as ClaudeStreamMessage);
 }
 
-/** The live `initialize` models[] catalog, read out of the fixture that captured it. */
-function liveCatalog(): ClaudeModelCatalog {
+/** The synthetic `initialize` models[] catalog from the control-frame fixture. */
+function fixtureCatalog(): ClaudeModelCatalog {
   const line = readFileSync(join(FIXTURES_DIR, "w0-16-setmodel.jsonl"), "utf8")
     .split("\n")
     .filter((raw) => raw.trim() !== "")
@@ -264,7 +264,7 @@ function engineWith(
   transport: ClaudeTransport,
   overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts>; slashPassthrough?: boolean; restricted?: () => boolean } = {},
 ): ClaudeEngine {
-  const catalog = overrides.catalog ?? liveCatalog();
+  const catalog = overrides.catalog ?? fixtureCatalog();
   return new ClaudeEngine(transport, "session-ref-1", undefined, {
     catalog,
     model: overrides.model ?? "default",
@@ -481,7 +481,7 @@ describe("ClaudeEngine — срез S4: takePresentation reaches the turn's tran
       transport,
       "session-ref-1",
       undefined,
-      { catalog: liveCatalog(), model: "default", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] },
+      { catalog: fixtureCatalog(), model: "default", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] },
       undefined,
       (id) => (id === "toolu_bridge" ? snapshot : undefined),
     );
@@ -678,7 +678,7 @@ describe("ClaudeEngine — bridge events surface mid-turn", () => {
       transport,
       "session-ref-1",
       undefined,
-      { catalog: liveCatalog(), model: "default", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] },
+      { catalog: fixtureCatalog(), model: "default", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [] },
       undefined,
       (id) => presentations.get(id),
       (ids) => dropped.push([...ids]),
@@ -862,22 +862,22 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
   });
 
   it("the read-back is compared through the catalog's resolvedModel, never by string equality with the sent id", async () => {
-    // The trap: `claude-fable-5[1m]` is SENT, `claude-fable-5` is REPORTED.
+    // The trap: `fable` is SENT, `claude-fable-5-1` is REPORTED.
     // Asserting the reported id equals the requested one fires a spurious
-    // mismatch on every switch to a `[1m]` variant.
-    const catalog = liveCatalog();
+    // mismatch on every switch using an alias.
+    const catalog = fixtureCatalog();
     const transport = new FakeTransport({
       frames: streamFrames("w0-02-control-writeprobe.jsonl"),
-      contextUsage: { totalTokens: 10, maxTokens: 100, model: "claude-fable-5" },
+      contextUsage: { totalTokens: 10, maxTokens: 100, model: "claude-fable-5-1" },
     });
     const engine = engineWith(transport, { catalog });
-    await expect(engine.selectModel("claude-fable-5[1m]")).resolves.toEqual({ ok: true, model: "claude-fable-5[1m]" });
+    await expect(engine.selectModel("fable")).resolves.toEqual({ ok: true, model: "fable" });
     await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
 
     const reported = engine.resolvedModel();
-    expect(reported).toBe("claude-fable-5");
-    expect(reported).not.toBe("claude-fable-5[1m]"); // the naive comparison this guards against
-    expect(catalog.readBackMatches("claude-fable-5[1m]", reported!)).toBe(true);
+    expect(reported).toBe("claude-fable-5-1");
+    expect(reported).not.toBe("fable"); // the naive comparison this guards against
+    expect(catalog.readBackMatches("fable", reported!)).toBe(true);
   });
 
   it("selectEffort is gated on the model's own supportedEffortLevels", async () => {
@@ -887,7 +887,7 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
     expect(rejected.ok).toBe(false);
     expect(transport.controls).toEqual([]);
 
-    const opus = engineWith(transport, { model: "opus[1m]" });
+    const opus = engineWith(transport, { model: "opus" });
     await expect(opus.selectEffort("high")).resolves.toEqual({ ok: true, effort: "high" });
     expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { settings: { effortLevel: "high" } } }]);
     expect(opus.snapshot().effort).toBe("high");
@@ -905,19 +905,19 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
   it("does not publish an effort whose restore ACK failed, and retains the choice for retry", async () => {
     const refuse: Record<string,string> = {};
     const transport = new FakeTransport({refuse});
-    const engine = engineWith(transport,{model:"opus[1m]"});
+    const engine = engineWith(transport,{model:"opus"});
     await engine.selectEffort("high"); await engine.selectModel("sonnet");
     refuse.apply_flag_settings = "fixture refusal";
-    expect(await engine.selectModel("opus[1m]")).toMatchObject({ok:true});
+    expect(await engine.selectModel("opus")).toMatchObject({ok:true});
     expect(engine.snapshot().effort).toBeUndefined();
     delete refuse.apply_flag_settings;
-    await engine.selectModel("sonnet"); await engine.selectModel("opus[1m]");
+    await engine.selectModel("sonnet"); await engine.selectModel("opus");
     expect(engine.snapshot().effort).toBe("high");
   });
 
   it("re-resolves the effort for the switched-to model and restores the remembered value when switching back (shape)", async () => {
     const transport = new FakeTransport();
-    const engine = engineWith(transport, { model: "opus[1m]" });
+    const engine = engineWith(transport, { model: "opus" });
     await expect(engine.selectEffort("high")).resolves.toEqual({ ok: true, effort: "high" });
 
     // sonnet has no remembered effort yet, so the switch clears the local
@@ -925,7 +925,7 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
     await expect(engine.selectModel("sonnet")).resolves.toEqual({ ok: true, model: "sonnet" });
     expect(engine.snapshot().effort).toBeUndefined();
 
-    await expect(engine.selectModel("opus[1m]")).resolves.toEqual({ ok: true, model: "opus[1m]" });
+    await expect(engine.selectModel("opus")).resolves.toEqual({ ok: true, model: "opus" });
     expect(engine.snapshot().effort).toBe("high");
     // Restoring re-asserts it live too, not just in the local record.
     expect(transport.controls.at(-1)).toEqual({ subtype: "apply_flag_settings", request: { settings: { effortLevel: "high" } } });
@@ -1564,7 +1564,7 @@ describe("ClaudeEngine — presentation surface", () => {
       contextUsage: { totalTokens: 1, maxTokens: 2 },
     });
     const engine = engineWith(transport);
-    expect(engine.models().map((choice) => choice.id)).toEqual(["default", "opus[1m]", "claude-fable-5[1m]", "sonnet", "haiku"]);
+    expect(engine.models().map((choice) => choice.id)).toEqual(["default", "opus", "fable", "sonnet", "haiku"]);
     expect(engine.presets().map((preset) => preset.id)).toEqual(["read-only", "ask", "workspace"]);
 
     const logged = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -2053,33 +2053,33 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
   it("adopts the native posture: a RESOLVED model id becomes the catalog `value`, and the wire mode becomes the preset", async () => {
     // The row said `haiku`/`ask`. The native session actually survived on
     // opus with acceptEdits — and reports opus by its RESOLVED id.
-    const catalog = liveCatalog();
-    const opus = catalog.get("opus[1m]")!;
+    const catalog = fixtureCatalog();
+    const opus = catalog.get("opus")!;
     expect(opus.resolvedModel).not.toBe(opus.value); // the split this test exists for
     const transport = new FakeTransport({ frames: [initFrame(opus.resolvedModel, "acceptEdits"), RESULT] });
     const engine = engineWith(transport, { model: "haiku", presetId: "ask", catalog });
 
     await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
 
-    // The SELECTABLE id, never the resolved one: persisting `claude-opus-4-8`
+    // The SELECTABLE id, never the resolved one: persisting `claude-opus-5-5`
     // would fail `catalog.has()` on the next resume and silently fall back to
     // the default model.
-    expect(engine.snapshot().model).toBe("opus[1m]");
+    expect(engine.snapshot().model).toBe("opus");
     expect(catalog.has(engine.snapshot().model)).toBe(true);
     expect(engine.snapshot().activePresetId).toBe("workspace");
   });
 
   it("keeps an alias selection that ALREADY resolves to the reported id (no spurious flip between aliases)", async () => {
-    const catalog = liveCatalog();
-    const opus = catalog.get("opus[1m]")!;
+    const catalog = fixtureCatalog();
+    const opus = catalog.get("opus")!;
     const transport = new FakeTransport({ frames: [initFrame(opus.resolvedModel, "default"), RESULT] });
-    const engine = engineWith(transport, { model: "opus[1m]", presetId: "ask", catalog });
+    const engine = engineWith(transport, { model: "opus", presetId: "ask", catalog });
 
     await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
 
-    // A naive `findByResolved` adoption would replace the user's `opus[1m]`
+    // A naive `findByResolved` adoption would replace the user's `opus`
     // with whichever catalog entry shares that resolved id and is listed first.
-    expect(engine.snapshot().model).toBe("opus[1m]");
+    expect(engine.snapshot().model).toBe("opus");
     expect(engine.snapshot().activePresetId).toBe("ask");
   });
 

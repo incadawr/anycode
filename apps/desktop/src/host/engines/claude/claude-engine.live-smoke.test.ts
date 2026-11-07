@@ -16,7 +16,7 @@
  * turn's `resolvedModel()` (read from `system/init`, cut §0.3-5) is compared
  * against the catalog's `resolvedModel` for the requested id — NEVER the
  * requested alias itself (`w0-16-setmodel.jsonl`: a requested id and its
- * resolved id can differ, e.g. `claude-fable-5[1m]` vs `claude-fable-5`).
+ * resolved id can differ, e.g. `fable` vs `claude-fable-5-1`).
  */
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";

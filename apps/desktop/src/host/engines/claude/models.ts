@@ -5,14 +5,14 @@
  * subscription and changes between releases), and the research-phase assumption
  * that a fixed enum would do was disproven by the live payload.
  *
- * Live shape per entry (`w0-16-setmodel.jsonl` / `initialize` response):
+ * Initialize shape per entry (also exercised by the synthetic w0-16 fixture):
  *   { value, resolvedModel, displayName, description?, supportsEffort?,
  *     supportedEffortLevels?[], ... }
  *
  * TWO ids per model, and conflating them is the trap this module exists to
- * prevent: `value` is what you SEND (`opus[1m]`, `claude-fable-5[1m]`), while
- * `resolvedModel` is what the CLI reports back (`claude-opus-4-8[1m]`,
- * `claude-fable-5`). A read-back from `get_context_usage.model` therefore has
+ * prevent: `value` is what you SEND (e.g. synthetic aliases `opus`, `fable`), while
+ * `resolvedModel` is what the CLI reports back (`claude-opus-5-5`,
+ * `claude-fable-5-1`). A read-back from `get_context_usage.model` therefore has
  * to be compared against `resolvedModel`, never round-trip-asserted against the
  * requested `value` (which would fire a false mismatch on every switch).
  */
@@ -138,8 +138,8 @@ export class ClaudeModelCatalog {
    * must be translated here — refusing it (or worse, silently dropping it)
    * would make an honest request look like a wrong one.
    *
-   * An exact `value` always wins over a `resolvedModel` of ANOTHER entry (the
-   * live catalog lists `default` and `opus[1m]` with the same resolved id, so
+   * An exact `value` always wins over a `resolvedModel` of ANOTHER entry (a
+   * catalog can list `default` and `opus` with the same resolved id, so
    * a resolved-id match is resolved through `selectableForResolved`, which
    * prefers a concrete alias over the moving `default` one). `undefined`
    * means the account offers nothing with that id — never a guess.
@@ -156,8 +156,8 @@ export class ClaudeModelCatalog {
    * hazard (б)).
    *
    * `findByResolved` is not enough on its own, because the mapping is genuinely
-   * AMBIGUOUS: the live catalog lists both `default` and `opus[1m]` with the
-   * same `resolvedModel` (`claude-opus-4-8[1m]`), and `default` is listed
+   * AMBIGUOUS: a catalog can list both `default` and `opus` with the
+   * same `resolvedModel` (`claude-opus-5-5`), and `default` is listed
    * first. Adopting `default` for a session that is really pinned to opus would
    * re-point that session the day the account's default model changes —
    * `default` is a MOVING alias, and a concrete alias is not. So a concrete
@@ -173,8 +173,8 @@ export class ClaudeModelCatalog {
 
   /**
    * Does a CLI-reported model id correspond to the entry we selected? This is
-   * the read-back check for `get_context_usage.model` — `claude-fable-5[1m]`
-   * was REQUESTED but `claude-fable-5` is REPORTED, and comparing the two
+   * the read-back check for `get_context_usage.model` — `fable`
+   * was REQUESTED but `claude-fable-5-1` is REPORTED, and comparing the two
    * strings directly would report a spurious divergence.
    */
   readBackMatches(selectedValue: string, reportedModel: string): boolean {

@@ -135,7 +135,7 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
     const translator = new ClaudeTurnTranslator({ turn: 1 });
     const events = translator.onMessage({
       type: "assistant",
-      message: { id: "msg_nostream", model: "claude-opus-4-8", content: [{ type: "text", text: "hello" }] },
+      message: { id: "msg_nostream", model: "claude-opus-5-5", content: [{ type: "text", text: "hello" }] },
     } as unknown as ClaudeStreamMessage);
     expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta", "text_end"]);
   });
@@ -160,7 +160,7 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
       type: "system",
       subtype: "init",
       session_id: "s-1",
-      model: "claude-opus-4-8",
+      model: "claude-opus-5-5",
       permissionMode: "default",
       capabilities: ["interrupt_receipt_v1"],
     } as unknown as ClaudeStreamMessage;

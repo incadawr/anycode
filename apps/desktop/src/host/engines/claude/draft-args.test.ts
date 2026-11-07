@@ -37,8 +37,8 @@ describe("parseClaudeEngineArgs", () => {
     expect(parseClaudeEngineArgs(["--engine-model"])).toEqual({});
   });
 
-  it("accepts the bracketed model ids the live catalog actually ships (`opus[1m]`) — they carry no whitespace", () => {
-    expect(parseClaudeEngineArgs(["--engine-model=claude-fable-5[1m]"])).toEqual({ model: "claude-fable-5[1m]" });
+  it("accepts explicit bracketed model ids — they carry no whitespace", () => {
+    expect(parseClaudeEngineArgs(["--engine-model=claude-fable-5-1[1m]"])).toEqual({ model: "claude-fable-5-1[1m]" });
   });
 
   it("never accepts a policy/config payload — only the two id flags exist", () => {

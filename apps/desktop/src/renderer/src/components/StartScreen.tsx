@@ -1126,8 +1126,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const needsProject = !submitting && draft.workspace === null && hasSendableDraft(draft.prompt, draftImages.length);
   const codexDraft = draft.engine === "codex";
   // SLICE-CC C5 (cut §1.4): the Claude draft's own branch of the composer
-  // footer. Both values are plain derived reads (no fetch — see
-  // CLAUDE_DRAFT_MODELS' doc comment for why there is nothing to fetch).
+  // footer. Drafts currently use the shared static fallback; sessions get
+  // their account-specific model catalog from initialize.
   const claudeDraft = draft.engine === "claude";
   const claudeDraftPreset = draft.enginePreset ?? DEFAULT_CLAUDE_DRAFT_PRESET;
   const claudeDraftModel = resolveClaudeDraftModel(draft.model, CLAUDE_DRAFT_MODELS);
