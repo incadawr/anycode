@@ -251,43 +251,29 @@ describe("anycode-setup builtin skill", () => {
       "NEVER print, quote or summarize API keys, tokens, passwords or other secret",
     );
     expect(ANYCODE_SETUP_SKILL.body).toContain("Refer to a secret by its env-var name or vault slot only.");
-    expect(ANYCODE_SETUP_SKILL.body).toContain("Edit config only through Write/Edit after the user approves the change.");
-    expect(ANYCODE_SETUP_SKILL.body).toContain("NEVER read `~/.anycode/secrets.json`.");
-    expect(ANYCODE_SETUP_SKILL.body).toContain("Expand `~` to the absolute home directory before any Read, Write or Edit.");
+    expect(ANYCODE_SETUP_SKILL.body).toContain("Propose the minimal edit and obtain the user's approval before changing config.");
+    expect(ANYCODE_SETUP_SKILL.body).toContain("NEVER read ~/.anycode/secrets.json or auth files.");
+    expect(ANYCODE_SETUP_SKILL.body).toContain("Expand ~ to the absolute home directory before file operations.");
     // Defensive, cheap: no key-shaped literal ever rides in the body.
     expect(ANYCODE_SETUP_SKILL.body).not.toMatch(/sk-[A-Za-z0-9]{8,}/);
   });
 
   it("embeds the resolved docs location: a local dir reads from disk, a remote ref fetches the pinned tag with master as fallback", () => {
-    expect(ANYCODE_SETUP_SKILL.body).toContain("/repo/docs/user/<topic>.md");
+    expect(ANYCODE_SETUP_SKILL.body).toContain("/repo/docs/user/README.md");
     const remote = anycodeSetupSkill({ kind: "remote", ref: "v0.0.35" }).body;
-    expect(remote).toContain("raw.githubusercontent.com/incadawr/anycode/v0.0.35/docs/user/<topic>.md");
-    expect(remote).toContain("with `master` in place of `v0.0.35`");
+    expect(remote).toContain("raw.githubusercontent.com/incadawr/anycode/v0.0.35/docs/user/README.md");
+    expect(remote).toContain("try the same page under master");
     expect(remote).not.toContain("/repo/docs/user");
   });
 
-  it("names exactly the docs/user topic files in its topic table", () => {
-    const topics = [
-      ...ANYCODE_SETUP_SKILL.body.matchAll(/\|\s*docs\/user\/([A-Za-z0-9._-]+\.md)\s*\|/g),
-    ].map((match) => match[1]);
-    expect(topics.sort()).toEqual(
-      [
-        "browser.md",
-        "configuration.md",
-        "engines.md",
-        "lsp.md",
-        "mcp.md",
-        "orchestration.md",
-        "permissions.md",
-        "plugins.md",
-        "proxy.md",
-        "sessions-api.md",
-        "skills.md",
-        "subagents.md",
-        "remote-control.md",
-        "troubleshooting.md",
-      ].sort(),
-    );
+  it("starts at the guide index rather than duplicating its topic list", () => {
+    expect(ANYCODE_SETUP_SKILL.body).toContain("Read README.md first");
+    expect(ANYCODE_SETUP_SKILL.body).not.toContain("Topic table");
+    expect(ANYCODE_SETUP_SKILL.body).not.toContain("load only in AnyCode's own Native tabs");
+    for (const key of ["roles", "roleProfiles", "codex", "claude", "communication",
+      "browser", "sessionLimits", "hooks", "lspServers", ".anycode/workflows"]) {
+      expect(ANYCODE_SETUP_SKILL.body).toContain(key);
+    }
   });
 
   it("lets a filesystem skill shadow the same-name builtin", async () => {
