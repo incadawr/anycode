@@ -5,7 +5,6 @@ import type { SessionEngine } from "./engines/session-engine.js";
 import type { AgentEnvelope } from "../shared/communication.js";
 import type { UiToHostMessage } from "../shared/protocol.js";
 import { createDesktopStore } from "../renderer/src/store.js";
-import { createTabRegistry } from "../renderer/src/tab-registry.js";
 import { createTabsStore } from "../renderer/src/tabs-store.js";
 import { createHarness, nodeWirePort } from "./test-harness.js";
 
@@ -37,6 +36,9 @@ async function rig(id: "core" | "codex" | "claude", registered = false) {
     request: async messageId => ({ type: "session_peer_drain_permit", messageId, nonce: "permit", recipientSessionId: h.session.communicationStatus().sessionId, generation: 1 }),
     consume: () => true, discard: () => true,
   });
+  // The registry imports a TSX component; load it at runtime so the host-only
+  // TypeScript project does not compile the renderer JSX graph.
+  const { createTabRegistry } = await import("../renderer/src/" + "tab-registry.js");
   const registry = createTabRegistry(createTabsStore(), () => createDesktopStore({ schedule: fn => fn() }));
   const channel = new MessageChannel();
   const frames: Extract<UiToHostMessage, { type: "user_message" }>[] = [];
@@ -52,7 +54,7 @@ async function rig(id: "core" | "codex" | "claude", registered = false) {
     cb(message);
   }) });
   registry.registerPort("queue", "/work", channel.port1 as never);
-  const store = registry.getStore("queue")!;
+  const store: ReturnType<typeof createDesktopStore> = registry.getStore("queue")!;
   await vi.waitFor(() => expect(store.getState().connection).toBe("ready"));
   const sendAgent = (messageId: string) => h.session.receiveAgentMessage({
     messageId, sender: "supervisor", recipientSessionId: h.session.communicationStatus().sessionId,
