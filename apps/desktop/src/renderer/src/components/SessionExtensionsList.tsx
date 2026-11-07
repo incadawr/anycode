@@ -1,7 +1,7 @@
 import type { SettingsPaneSelection } from "./settings-extensions-navigation.js";
 import { Button, Switch } from "../ui/index.js";
 import type { LspServerStatus } from "@anycode/core";
-import { hasCrashedLspServer } from "./EnvironmentMenu.js";
+import { hasCrashedLspServer } from "../lsp-status.js";
 import { extensionDisplayName, type McpExtensionRow } from "./extensions-model.js";
 import type { ExtensionToggleControls, ExtensionCategory, useSessionExtensions } from "./useSessionExtensions.js";
 
@@ -109,8 +109,9 @@ export function SessionExtensionsLspSummary({ servers, core, ready, onDetails, o
         server.state === "crashed" ? "danger" : server.state === "initializing" ? "warning" : "neutral"}`} aria-hidden="true" />
       <span>{extensionDisplayName(server.name)} {server.state === "not_started" ? "not started" : server.state}</span>
     </div>)}
-    {hasCrashedLspServer(servers) && <Button type="button" disabled={!ready} onClick={onRestart}>Restart</Button>}
+    {hasCrashedLspServer(servers) && <Button type="button" data-extension-action="lsp-restart"
+      aria-label="Restart crashed language servers" disabled={!ready} onClick={onRestart}>Restart</Button>}
     {ready && hasCrashedLspServer(servers) && <p role="status">A language server crashed.</p>}
-    {servers.length > 0 && <Button type="button" disabled={!ready} onClick={onDetails}>Details</Button>}
+    {servers.length > 0 && <Button type="button" data-extension-action="lsp-details" disabled={!ready} onClick={onDetails}>Details</Button>}
   </section>;
 }

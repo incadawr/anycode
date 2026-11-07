@@ -40,7 +40,7 @@ import {
   validateCustomForm,
   type CustomLspFormFields,
 } from "./language-servers-model.js";
-import { hasCrashedLspServer } from "./EnvironmentMenu.js";
+import { hasCrashedLspServer } from "../lsp-status.js";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import type { DesktopStoreApi } from "../tab-registry.js";
 import type {

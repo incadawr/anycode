@@ -1109,6 +1109,10 @@ it.each([
   expect(!!detailButton("Restart")).toBe(state === "crashed");
   expect(send).not.toHaveBeenCalled();
   if (state === "crashed") {
+    expect(detailButton("Restart")!.getAttribute("aria-label")).toBe("Restart crashed language servers");
+    expect(detailButton("Restart")!.dataset.extensionAction).toBe("lsp-restart");
+    expect(detailButton("Details")!.dataset.extensionAction).toBe("lsp-details");
+    expect(categoryButtons()[3]!.dataset.extensionCategory).toBe("lsp");
     await click(detailButton("Restart")!);
     expect(send).toHaveBeenCalledExactlyOnceWith("b", { type: "lsp_restart_request" });
     expect(dialog()).not.toBeNull();
@@ -1141,7 +1145,7 @@ it("keeps Hooks in Environment and removes its duplicate LSP row and actions", a
   expect(send).not.toHaveBeenCalled();
 });
 
-it("offers Extensions and LSP setup in the new-session composer without host requests", async () => {
+it("offers language server management in the new-session composer without host requests", async () => {
   window.anycode.listSessions = vi.fn(async () => []);
   const { Composer } = await import("./Composer.js");
   store.setState({ transcript: [], connection: "ready" });

@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent } from "react";
 import { flushSync } from "react-dom";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
-import { hasCrashedLspServer } from "./EnvironmentMenu.js";
+import { hasCrashedLspServer } from "../lsp-status.js";
 import { SessionExtensionsFooter } from "./SessionExtensionsFooter.js";
 import type { SettingsPaneSelection } from "./settings-extensions-navigation.js";
 import { createPortal } from "react-dom";
@@ -157,6 +157,7 @@ export function SessionExtensionsMenu() {
       <div ref={categoryList} className="session-extensions-categories" hidden={narrow && selection !== null}>
       {categories.map(([label, count], index) => <Button key={label} type="button"
         ref={(element) => { rows.current[index] = element; }} className="session-extensions-category"
+        data-extension-category={categoryKeys[index]}
         aria-expanded={selection?.index === index} aria-controls={selection?.index === index ? `${id}-details` : undefined}
         tabIndex={roving.tabIndexFor(index)} onFocus={() => roving.setActiveIndex(index)}
         onClick={() => select(index)}

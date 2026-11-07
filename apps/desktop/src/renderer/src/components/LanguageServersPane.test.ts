@@ -26,7 +26,7 @@ import {
   projectEnableDisabledReason,
 } from "./language-servers-model.js";
 import type { LspConfigStatus } from "../../../shared/lsp-config.js";
-import { formatEnvironmentLspDetail, hasCrashedLspServer } from "./EnvironmentMenu.js";
+import { hasCrashedLspServer } from "../lsp-status.js";
 
 function minimalStatus(overrides: Partial<LspConfigStatus> = {}): LspConfigStatus {
   return {
@@ -127,11 +127,7 @@ describe("Plain-text rendering surfaces", () => {
   });
 });
 
-describe("Live status section reuses EnvironmentMenu/LspPanel helpers", () => {
-  it("empty servers list renders the not-running hint (formatEnvironmentLspDetail 'Not configured')", () => {
-    expect(formatEnvironmentLspDetail([])).toBe("Not configured");
-  });
-
+describe("Live status section uses shared LSP status", () => {
   it("the Restart action appears only when a server crashed (crashed-only semantics preserved)", () => {
     expect(hasCrashedLspServer([{ name: "x", state: "ready", extensions: [".x"], stderrTail: "" }])).toBe(false);
     expect(hasCrashedLspServer([{ name: "x", state: "crashed", extensions: [".x"], stderrTail: "" }])).toBe(true);

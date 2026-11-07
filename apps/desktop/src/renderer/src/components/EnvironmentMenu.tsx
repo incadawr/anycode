@@ -9,7 +9,7 @@ import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
 import { BrowserAccessRow } from "./BrowserAccessRow.js";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
-import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
+import type { CommandHookDeclaration } from "@anycode/core";
 import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -50,17 +50,6 @@ export function workspaceLabel(path: string, maxChars = 44): string {
 
 function changesLabel(count: number): string {
   return count === 0 ? "Working tree clean" : `${count} change${count === 1 ? "" : "s"}`;
-}
-
-/** per-server name + ready/✓ vs anything-else/— summary; "Not configured" when empty. */
-export function formatEnvironmentLspDetail(servers: readonly LspServerStatus[]): string {
-  if (servers.length === 0) return "Not configured";
-  return servers.map((s) => `${s.name} ${s.state === "ready" ? "✓" : "—"}`).join(", ");
-}
-
-/** the Restart action shows only when at least one server crashed. */
-export function hasCrashedLspServer(servers: readonly LspServerStatus[]): boolean {
-  return servers.some((s) => s.state === "crashed");
 }
 
 /** "3 hooks (PreToolUse 1, PostToolUse 2)" / "None" — reuses HooksPanel's stable event order. */

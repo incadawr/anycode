@@ -1536,6 +1536,7 @@ body {
 .session-extensions-list li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
 .session-extensions-name, .session-extensions-source { display: block; overflow-wrap: anywhere; }
 .session-extensions-source { color: var(--text-2); }
+.session-extensions-status { display: flex; align-items: center; gap: var(--sp-1); line-height: 1.5; }
 @media (width < 600px) {
   .has-details .session-extensions-body { display: block; overflow: auto; }
   .session-extensions-details { border-left: 0; }
