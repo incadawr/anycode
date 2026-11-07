@@ -277,12 +277,13 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
   let retained = false;
   const refuse = async (outcome: CreateSessionOutcome): Promise<CreateSessionOutcome> => {
     if (outcome.ok || !receipt || !managed) return outcome;
+    let phase = "unknown";
     if (!retained) {
       retained = true;
-      try { await managed.resources!.update(receipt, "retained", "Session creation did not complete; worktree retained"); }
+      try { phase = (await tabs.settleManagedWorktree(receipt)).phase; }
       catch { /* The durable allocation receipt remains available. */ }
     }
-    return { ...outcome, detail: `${outcome.detail ?? outcome.reason}. Worktree retained: ${receipt.path} (${receipt.branch}).` };
+    return { ...outcome, detail: `${outcome.detail ?? outcome.reason}. Worktree ${phase}: ${receipt.path} (${receipt.branch}).` };
   };
   /**
    * Registers everything the FIRST port envelope (and the sidebar) attributes

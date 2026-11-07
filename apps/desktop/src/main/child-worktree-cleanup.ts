@@ -6,7 +6,8 @@ import { ChildWorktreeResources, receiptsEqual, type ChildWorktreeReceipt } from
 
 type Disposition = { phase: "removed" | "retained" | "unknown"; reason: string };
 interface SettleOptions {
-  resources: ChildWorktreeResources;
+  resources: Pick<ChildWorktreeResources, "read" | "update">;
+  signal?: AbortSignal;
   receipt: ChildWorktreeReceipt;
   // Main must prove actual host exit, stopped admission and no uncertain writers.
   // A teardown timeout or a request to kill is not this permission.
@@ -25,6 +26,7 @@ export async function settleChildWorktree(options: SettleOptions): Promise<Dispo
       return { phase: "unknown", reason: "Receipt does not match" };
   } catch { return { phase: "unknown", reason: "Receipt could not be verified" }; }
   const record = async (phase: Disposition["phase"], reason: string): Promise<Disposition> => {
+    if (options.signal?.aborted) return { phase: "unknown", reason: "Settlement deadline expired; inspect checkout manually" };
     try { receipt = await resources.update(receipt, phase, reason); return { phase, reason }; }
     catch { return { phase: "unknown", reason: "Receipt update failed; manual inspection required" }; }
   };
@@ -62,6 +64,7 @@ export async function settleChildWorktree(options: SettleOptions): Promise<Dispo
     const pending = await record("unknown", "Empty checkout removal pending");
     if (pending.reason !== "Empty checkout removal pending") return pending;
     if (await hasOtherClaims(receipt)) return record("unknown", "Another binding or claim exists");
+    if (options.signal?.aborted) return { phase: "unknown", reason: "Settlement deadline expired; inspect checkout manually" };
     const removed = await git.worktreeRemove({ path: receipt.path });
     return removed.ok ? record("removed", "Empty checkout removed; branch retained")
       : record("unknown", "Non-force removal failed");

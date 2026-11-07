@@ -853,6 +853,25 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       };
     }
 
+    it.each([false, true])("relays the host recovery prefix unchanged (detached=%s)", async detach => {
+      const { port, sent, emit, detachedTerminals } = detachHarness();
+      const controller = new AbortController();
+      const pending = port.run({ agentType: "general-purpose", description: "work", prompt: "work",
+        spawnToolCallId: "recovery", detach }, { signal: controller.signal });
+      const requestId = spawns(sent)[0]!.requestId;
+      emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "accepted", childSessionId: "child", childTabId: "tab", model: "m" });
+      if (detach) { await pending; controller.abort(); }
+      const finalText = "Worktree retained: /checkout\nBranch: child-work\nWork retained\n\n";
+      emit(terminalEvent(requestId, { childSessionId: "child", finalText }));
+      const outcome = detach ? detachedTerminals[0]!.outcome : await pending;
+      expect(outcome.finalText).toBe(finalText);
+      if (detach) {
+        expect(sent.some(message => message.type === CHILD_RUN_CANCEL_TYPE)).toBe(false);
+        expect(formatChildTaskNotification({ taskId: "recovery", toolUseId: "recovery", agentId: "child",
+          subagentType: "general-purpose", status: "completed", summary: outcome.finalText })).toContain(finalText);
+      }
+    });
+
     it("resolves the run() promise on 'accepted' (admit) — does NOT wait for 'terminal'", async () => {
       const { port, sent, emit } = detachHarness();
       let settled = false;

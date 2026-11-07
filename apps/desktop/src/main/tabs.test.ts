@@ -1,4 +1,7 @@
-import type { ChildWorktreeReceipt, ChildWorktreeSnapshot } from "./child-worktree-resource.js";
+import { createChildLayoutStore } from "../renderer/src/child-layout.js";
+import { NodeGitAdapter } from "@anycode/core/node-git";
+import * as childCleanup from "./child-worktree-cleanup.js";
+import { ChildWorktreeResources, type ChildWorktreeReceipt, type ChildWorktreeSnapshot } from "./child-worktree-resource.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
 /**
@@ -13,7 +16,7 @@ import { createSessionPeerAccess } from "./session-peer-access.js";
  */
 
 import { EventEmitter } from "node:events";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -9291,6 +9294,7 @@ describe("peer host permission authority", () => {
 
 
 describe("Agent managed worktree admission", () => {
+  afterEach(() => vi.restoreAllMocks());
   function rig(engine: EngineId = "core", overrides: Partial<TabHostManagerDeps> = {}) {
     const live = shutdownableForkRig();
     const fork = vi.fn(live.fork);
@@ -9298,7 +9302,7 @@ describe("Agent managed worktree admission", () => {
     const receipt: ChildWorktreeReceipt = { ...snapshot, version: 1, id: "resource", appRunId: "run",
       parentSessionId: "parent", childSessionId: "child", path: "/ws/.anycode/worktrees/child-resource",
       branch: "anycode-wt/child-resource", phase: "active", reason: null };
-    const resources = { snapshot: vi.fn(async () => snapshot), allocate: vi.fn(async () => receipt),
+    const resources = { read: vi.fn(async () => receipt), snapshot: vi.fn(async () => snapshot), allocate: vi.fn(async () => receipt),
       update: vi.fn(async (_r: ChildWorktreeReceipt, phase: ChildWorktreeReceipt["phase"], reason: string) => ({ ...receipt, phase, reason })) };
     const manager = childManager(fork, windowRig().window, { childWorktrees: resources, engineReady: () => true, ...overrides });
     const root = manager.createTab({ workspace: "/ws", projectRoot: "/project", sessionId: "parent", engine, resume: false });
@@ -9306,6 +9310,153 @@ describe("Agent managed worktree admission", () => {
     root.tab.childWorktreePolicy = true;
     return { manager, tab: root.tab, host: live.hosts[0]!, fork, resources, receipt };
   }
+
+  function child(r: ReturnType<typeof rig>) {
+    const accepted = childRunEvents(r.host).find(e => e.kind === "accepted");
+    if (accepted?.kind !== "accepted") throw Error("missing child");
+    const tab = r.manager.getTab(accepted.childTabId)!;
+    return { tab, host: tab.proc as unknown as FakeHost, accepted };
+  }
+
+  it.each([0, 32000])("waits for exit and preserves the recovery prefix within the result bound (%s chars)", async size => {
+    const answer = "x".repeat(size);
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "removed", reason: "Empty checkout removed; branch retained" });
+    const r = rig();
+    r.host.emit("message", spawnRequest()); await flush();
+    const c = child(r); c.host.postMessage.mockImplementation(() => {});
+    c.host.emit("message", childTerminalMsg({ finalText: answer }));
+    c.host.emit("message", childTerminalMsg({ finalText: "duplicate" }));
+    expect(settle).not.toHaveBeenCalled();
+    expect(r.manager.listChildRuns()).toHaveLength(1);
+    expect(childRunEvents(r.host).filter(e => e.kind === "terminal")).toHaveLength(0);
+    c.host.emit("exit", 0); await flush();
+    expect(settle).toHaveBeenCalledOnce();
+    expect(settle.mock.calls[0]![0].permission).toMatchObject({ actualExit: true, writersStopped: true });
+    const terminals = childRunEvents(r.host).filter(e => e.kind === "terminal");
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ finalText: expect.stringContaining(r.receipt.path) });
+    if (terminals[0]?.kind !== "terminal") throw Error("missing terminal");
+    expect(terminals[0].finalText).toContain(r.receipt.branch);
+    expect(terminals[0].finalText).toContain("removed");
+    expect(terminals[0].finalText.length).toBeLessThanOrEqual(24000);
+    expect(terminals[0].truncated).toBe(answer.length > 24000);
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+  });
+
+  it("timeout publishes uncertainty once and a late exit cannot retry removal", async () => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "unknown", reason: "Host exit not confirmed" });
+    const r = rig("core", { limits: { exitDeadlineMs: 5 } });
+    r.host.emit("message", spawnRequest()); await flush();
+    const c = child(r); c.host.postMessage.mockImplementation(() => {});
+    c.host.emit("message", childTerminalMsg());
+    await new Promise(resolve => setTimeout(resolve, 20)); await flush();
+    expect(settle.mock.calls[0]![0].permission.actualExit).toBe(false);
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "terminal", finalText: expect.stringContaining("unknown") }));
+    c.host.emit("exit", 0); await flush();
+    expect(settle).toHaveBeenCalledOnce();
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+  });
+
+  it("bounds a stalled settlement and never publishes a second result", async () => {
+    let finish!: (value: { phase: "removed"; reason: string }) => void;
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const r = rig("core", { limits: { exitDeadlineMs: 5 } });
+    r.host.emit("message", spawnRequest()); await flush();
+    child(r).host.emit("message", childTerminalMsg());
+    await new Promise(resolve => setTimeout(resolve, 20)); await flush();
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "terminal", finalText: expect.stringContaining("unknown") }));
+    expect(settle.mock.calls[0]![0].signal?.aborted).toBe(true);
+    finish({ phase: "removed", reason: "late" }); await flush();
+    expect(childRunEvents(r.host).filter(e => e.kind === "terminal")).toHaveLength(1);
+  });
+
+  it.each(["cancel", "parent", "quit"])("%s drains a writing child once through settlement", async action => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "retained", reason: "Checkout is not pristine; work retained" });
+    const r = rig();
+    r.host.emit("message", spawnRequest()); await flush();
+    const c = child(r);
+    if (action === "cancel") { r.host.emit("message", runCancel(c.accepted.requestId)); await flush(); }
+    if (action === "parent") {
+      r.manager.createTab({ workspace: "/other", sessionId: "other", resume: false });
+      await r.manager.closeTab(r.tab.tabId);
+    }
+    if (action === "quit") await r.manager.shutdownAllTabHosts();
+    await flush();
+    expect(settle).toHaveBeenCalledOnce();
+    expect(settle.mock.calls[0]![0].permission.actualExit).toBe(true);
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+  });
+
+  it("closing a detached child's split panel leaves its host and checkout live", async () => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree");
+    const r = rig(); r.host.emit("message", spawnRequest({ detach: true })); await flush();
+    const c = child(r), layout = createChildLayoutStore();
+    layout.getState().open(r.tab.tabId, c.accepted.requestId);
+    layout.getState().enterSplit(r.tab.tabId);
+    layout.getState().exitSplit(r.tab.tabId);
+    layout.getState().close(r.tab.tabId);
+    expect(await r.manager.closeTab(c.tab.tabId)).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(c.tab.proc).not.toBeNull();
+    expect(r.manager.listChildRuns()).toHaveLength(1);
+    expect(settle).not.toHaveBeenCalled();
+  });
+
+  it("quit settles an opened root, while a crash cannot authorize cleanup", async () => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "unknown", reason: "crash" });
+    const r = rig();
+    const opened = r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
+    if (!opened.ok) throw Error("missing opened root");
+    const host = opened.tab.proc as unknown as FakeHost;
+    host.postMessage.mockImplementation(() => {});
+    const quitting = r.manager.shutdownAllTabHosts();
+    host.emit("exit", 1);
+    await quitting;
+    expect(settle).toHaveBeenCalledOnce();
+    expect(settle.mock.calls[0]![0].permission).toMatchObject({ actualExit: true, writersStopped: false });
+  });
+
+  it("opened root survives parent close and settles only on its own close", async () => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "removed", reason: "empty" });
+    const r = rig();
+    const opened = r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
+    if (!opened.ok) throw Error("missing opened root");
+    r.manager.createTab({ workspace: "/other", sessionId: "other", resume: false });
+    await r.manager.closeTab(r.tab.tabId);
+    expect(settle).not.toHaveBeenCalled();
+    expect(opened.tab.proc).not.toBeNull();
+    await r.manager.closeTab(opened.tab.tabId);
+    expect(settle).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])("real Git terminal/cancel preserves work and refs (dirty=%s)", async dirty => {
+    const scratch = await mkdtemp(join(tmpdir(), "managed-close-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: scratch, encoding: "utf8", env: {
+      ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.test", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.test",
+    } }).trim();
+    try {
+      git("init", "-b", "main"); git("commit", "--allow-empty", "-m", "Initial");
+      const resources = new ChildWorktreeResources({ userData: join(scratch, "data"), appRunId: "test-run" });
+      const r = rig("core", { childWorktrees: resources });
+      r.tab.workspace = scratch; r.tab.projectRoot = scratch;
+      r.host.emit("message", spawnRequest());
+      await vi.waitFor(() => expect(r.fork).toHaveBeenCalledTimes(2));
+      const c = child(r), receipt = c.tab.childWorktree!;
+      c.host.postMessage.mockImplementation(() => {});
+      const remove = vi.spyOn(NodeGitAdapter.prototype, "worktreeRemove");
+      if (dirty) await writeFile(join(receipt.path, "work"), "preserve me");
+      if (dirty) r.host.emit("message", runCancel(c.accepted.requestId));
+      else c.host.emit("message", childTerminalMsg({ finalText: "" }));
+      await flush(); expect(remove).not.toHaveBeenCalled();
+      c.host.emit("exit", 0);
+      await vi.waitFor(() => expect(r.manager.listChildRuns()).toHaveLength(0), { timeout: 5000 });
+      expect((await resources.read(receipt.id)).phase).toBe(dirty ? "retained" : "removed");
+      expect(remove).toHaveBeenCalledTimes(dirty ? 0 : 1);
+      expect(git("rev-parse", receipt.branch)).toBe(receipt.baseSha);
+      if (dirty) expect(await readFile(join(receipt.path, "work"), "utf8")).toBe("preserve me");
+    } finally { await rm(scratch, { recursive: true, force: true }); }
+  });
 
   it.each(["core", "claude", "codex"] as const)("%s parent forks Core in allocated cwd, preserving projectRoot and stamping marker", async engine => {
     const r = rig(engine);

@@ -188,3 +188,16 @@ it("refuses a registration without a readable HEAD", async () => {
   expect(await settle()).toEqual({ phase: "unknown", reason: "Registered HEAD could not be read" });
   expect(remove).not.toHaveBeenCalled();
 });
+
+it("does not remove after the settlement deadline expires during claim verification", async () => {
+  const controller = new AbortController();
+  let checks = 0;
+  const remove = vi.spyOn(NodeGitAdapter.prototype, "worktreeRemove");
+  const result = await settle({ signal: controller.signal, hasOtherClaims: async () => {
+    if (++checks === 2) controller.abort();
+    return false;
+  } });
+  expect(result.phase).toBe("unknown");
+  expect(remove).not.toHaveBeenCalled();
+  expect(await fs.readFile(path.join(receipt.path, "file"), "utf8")).toBe("base");
+});

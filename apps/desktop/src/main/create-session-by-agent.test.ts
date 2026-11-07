@@ -1,3 +1,4 @@
+import * as childCleanup from "./child-worktree-cleanup.js";
 import { createSessionPeerOpener } from "./session-peer-open.js";
 import type { ChildWorktreeReceipt } from "./child-worktree-resource.js";
 import type { TabHostManagerDeps } from "./tabs.js";
@@ -25,7 +26,7 @@ import { createAgentProjectsStore } from "./communication-agent-projects.js";
 import { handleSetSessionHandle, type CommunicationIpcDeps } from "./communication-ipc.js";
 import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister } from "./agent-session-title.js";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { Client, StreamableHTTPClientTransport } from "@anycode/core/communication-mcp";
 import { startCommunicationServer } from "./communication-server.js";
@@ -1452,11 +1453,12 @@ it("peer handler uses main's admitted creator adapter and primes the selected co
 
 
 describe("managed native SessionOpen", () => {
+  afterEach(() => vi.restoreAllMocks());
   function fixture(options: Parameters<typeof rig>[0] = {}) {
     const receipt: ChildWorktreeReceipt = { version: 1, id: "resource", appRunId: "run", parentSessionId: "opener",
       childSessionId: "sess-1", sourceRoot: "/ws", storageRoot: "/ws", projectRoot: "/project", baseSha: "a".repeat(40),
       path: "/ws/.anycode/worktrees/child-resource", branch: "anycode-wt/child-resource", phase: "active", reason: null };
-    const resources = { snapshot: vi.fn(async () => receipt), allocate: vi.fn(async () => receipt),
+    const resources = { read: vi.fn(async () => receipt), snapshot: vi.fn(async () => receipt), allocate: vi.fn(async () => receipt),
       update: vi.fn(async (_r: ChildWorktreeReceipt, phase: ChildWorktreeReceipt["phase"], reason: string) => ({ ...receipt, phase, reason })) };
     const r = rig({ ...options, managerDeps: { childWorktrees: resources, ...options.managerDeps } });
     const root = r.manager.createTab({ workspace: "/ws", projectRoot: "/project", sessionId: "opener", resume: false });
@@ -1467,6 +1469,24 @@ describe("managed native SessionOpen", () => {
     const deps = r.deps();
     return { ...r, receipt, resources, parent: root.tab, policy, deps, open: createSessionPeerOpener(deps) };
   }
+
+  it.each([false, true])("failed preparation settles on exit or bounded timeout (timeout=%s)", async timeout => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: timeout ? "unknown" : "removed", reason: "test disposition" });
+    const r = fixture({ stubbornHost: true, holdKillExit: true, managerDeps: { limits: { exitDeadlineMs: 30 } },
+      respond: op => ({ result: op === "get_session_status" ? {} : { ok: false, reason: "invalid_effort" } }) });
+    const opening = r.open({ workspace: "/ws", effort: "high" }, r.policy);
+    await vi.waitFor(() => expect(r.hosts[1]?.postMessage).toHaveBeenCalledWith({ type: "shutdown" }), { interval: 1 });
+    expect(settle).not.toHaveBeenCalled();
+    if (!timeout) r.hosts[1]!.emit("exit", 0);
+    const result = await opening;
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining(`Worktree ${timeout ? "unknown" : "removed"}:`) });
+    expect(settle).toHaveBeenCalledOnce();
+    expect(settle.mock.calls[0]![0].permission.actualExit).toBe(!timeout);
+    if (timeout) r.hosts[1]!.emit("exit", 0);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(settle).toHaveBeenCalledOnce();
+    expect(r.manager.listTabs().map(t => t.sessionId)).toEqual(["opener"]);
+  });
 
   it("forks a new cwd, preserves projectRoot, keeps the pin, and reports rejected firstMessage without HTTP sharing", async () => {
     const r = fixture({ window: true });
@@ -1565,7 +1585,7 @@ describe("managed native SessionOpen", () => {
     const result = await r.open({ workspace: "/ws", ...(failure === "effort" ? { effort: "high" } : {}) }, r.policy);
     expect(result.ok).toBe(false);
     expect(r.manager.listTabs().map(t => t.sessionId)).toEqual(["opener"]);
-    expect(r.resources.update).toHaveBeenCalledWith(r.receipt, "retained", expect.any(String));
+    expect(r.resources.update).toHaveBeenCalledWith(r.receipt, failure === "fork" ? "retained" : "unknown", expect.any(String));
     expect(result).toMatchObject({ detail: expect.stringContaining(r.receipt.path) });
   });
 

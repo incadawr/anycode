@@ -1,3 +1,4 @@
+import { settleChildWorktree } from "./child-worktree-cleanup.js";
 import type { ChildWorktreeResources, ChildWorktreeReceipt } from "./child-worktree-resource.js";
 import { REASONING_REPLAY_REJECTED } from "../shared/reasoning-replay.js";
 import { createSessionPeerTurns } from "./session-peer-turns.js";
@@ -744,7 +745,7 @@ export interface TabHostManagerDeps {
    */
   onTabPortDelivered?: (tab: { tabId: string; sessionId: string; workspace: string }) => void;
   /** Main-owned resource journal, absent when allocation is unavailable. */
-  childWorktrees?: Pick<ChildWorktreeResources, "snapshot" | "allocate" | "update">;
+  childWorktrees?: Pick<ChildWorktreeResources, "snapshot" | "allocate" | "update" | "read">;
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
   /**
@@ -1406,6 +1407,52 @@ export class TabHostManager {
     }));
   }
 
+  private readonly observedExits = new WeakSet<UtilityProcess>();
+  private readonly uncertainWorktreeWriters = new WeakSet<TabHost>();
+  private readonly worktreeHosts = new WeakMap<TabHost, UtilityProcess>();
+  private readonly hostShutdowns = new WeakMap<UtilityProcess, Promise<void>>();
+  private readonly worktreeSettlements = new WeakMap<ChildWorktreeReceipt, Promise<{ phase: string; reason: string }>>();
+  private readonly settlingChildRuns = new Map<string, Promise<void>>();
+
+  /** Shared by terminal, close, quit and failed creation; never retried on late exit. */
+  settleManagedWorktree(receipt: ChildWorktreeReceipt, tab?: TabHost): Promise<{ phase: string; reason: string }> {
+    const existing = this.worktreeSettlements.get(receipt);
+    if (existing) return existing;
+    const settle = async () => {
+      const resources = this.deps.childWorktrees;
+      if (!resources) return { phase: "unknown", reason: "Resource journal unavailable" };
+      const host = tab && this.worktreeHosts.get(tab);
+      if (!tab || !host) {
+        await resources.update(receipt, "retained", "Creation did not start a host; checkout and branch retained");
+        return { phase: "retained", reason: "Creation did not start a host; checkout and branch retained" };
+      }
+      if (this.engineRegistrations(tab).length > 0) this.uncertainWorktreeWriters.add(tab);
+      if (!this.observedExits.has(host)) await this.shutdownTabHost(tab);
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<{ phase: string; reason: string }>(resolve => {
+        timer = setTimeout(() => {
+          controller.abort();
+          const reason = "Settlement deadline expired; inspect checkout and branch manually";
+          void resources.update(receipt, "unknown", reason).catch(() => {});
+          resolve({ phase: "unknown", reason });
+        }, this.limits.exitDeadlineMs);
+      });
+      const cleanup = settleChildWorktree({ resources, receipt, signal: controller.signal,
+        permission: { appRunId: receipt.appRunId, childSessionId: tab.sessionId,
+          actualExit: this.observedExits.has(host), admissionStopped: tab.state === "closing",
+          writersStopped: this.observedExits.has(host) && !this.uncertainWorktreeWriters.has(tab) && this.engineRegistrations(tab).length === 0 },
+        hasOtherClaims: async () => [...this.tabs.values()].some(other => other !== tab &&
+          (other.workspace === receipt.path || other.childWorktree?.id === receipt.id)),
+      });
+      try { return await Promise.race([cleanup, deadline]); }
+      finally { if (timer !== undefined) clearTimeout(timer); }
+    };
+    const pending = settle().catch(() => ({ phase: "unknown", reason: "Settlement failed; inspect the receipt and checkout manually" }));
+    this.worktreeSettlements.set(receipt, pending);
+    return pending;
+  }
+
   get childWorktreeResources() { return this.deps.childWorktrees; }
 
   atCapacity(): boolean {
@@ -1718,6 +1765,7 @@ export class TabHostManager {
           this.logger.warn(
             `[main] prepared tab ${tabId} host still had not exited ${this.limits.exitDeadlineMs}ms after the force kill; keeping it tracked until the real exit`,
           );
+          if (tab.childWorktree) await this.settleManagedWorktree(tab.childWorktree, tab);
           void exit.then(release);
           return false;
         }
@@ -1729,6 +1777,7 @@ export class TabHostManager {
         return false;
       }
     }
+    if (tab.childWorktree) await this.settleManagedWorktree(tab.childWorktree, tab);
     await release();
     return true;
   }
@@ -2055,7 +2104,10 @@ export class TabHostManager {
     child.on("spawn", () => {
       this.logger.log(`[main] tab ${tab.tabId} host spawned (pid ${child.pid ?? "?"})`);
     });
+    this.worktreeHosts.set(tab, child);
     child.once("exit", (code: number) => {
+      this.observedExits.add(child);
+      if (tab.childWorktree && (code !== 0 || tab.state !== "closing" || this.engineRegistrations(tab).length > 0)) this.uncertainWorktreeWriters.add(tab);
       this.handleExit(tab, child, code, startupStderr);
     });
     // Credential channel (design §3.3): an oauth-mode host asks main for a fresh
@@ -2724,13 +2776,14 @@ export class TabHostManager {
       this.childrenByParentTab.set(parentTab.tabId, siblings);
     }
     siblings.add(childTabId);
+    let admissionTab: TabHost | undefined;
     let residueRecorded = false;
     const retainResource = (): void => {
       if (!receipt || residueRecorded) return;
       residueRecorded = true;
       // Allocation already durably journaled the resource. Keep that receipt
       // even if recording the failed admission's disposition fails.
-      void this.deps.childWorktrees!.update(receipt, "retained", "Child admission did not complete; worktree retained")
+      void this.settleManagedWorktree(receipt, admissionTab)
         .catch(() => {});
     };
     const rollback = (): void => {
@@ -2928,6 +2981,8 @@ export class TabHostManager {
         ...(stampedMaxTurns !== undefined ? { maxTurns: stampedMaxTurns } : {}),
       },
     };
+
+    admissionTab = childTab;
 
     // ── Fork and registration ──
     // the prepared connection's pin is held through `tabs.set`;
@@ -3349,7 +3404,16 @@ export class TabHostManager {
       // per revisit, so the loop can only ever spin bounded by real ticks.
       return new Promise<void>((resolve) => setImmediate(resolve));
     }
-    return this.shutdownTabHost(childTab);
+    return this.shutdownTabHost(childTab).then(async () => {
+      if (childTab.childWorktree) {
+        const id = childTab.childOf?.requestId;
+        if (id) {
+          this.finalizeChildRun(id, { status: "cancelled", finalText: CHILD_CANCELLED_MESSAGE,
+            truncated: false, turns: 0, toolCalls: 0, durationMs: Math.max(0, this.now() - childTab.spawnedAt) });
+          await this.settlingChildRuns.get(id);
+        }
+      }
+    });
   }
 
   /**
@@ -3429,6 +3493,7 @@ export class TabHostManager {
         this.logger.error(
           `[main] drainChildren for tab ${parentTab.tabId}: reap deadline (${this.limits.exitDeadlineMs * DRAIN_CHILDREN_DEADLINE_MULTIPLIER}ms) expired; ${unreaped} child(ren) administratively finalized (cancelled)`,
         );
+        await Promise.allSettled([...this.settlingChildRuns.values()]);
         return;
       }
       const snapshot = [...childIds];
@@ -3502,9 +3567,22 @@ export class TabHostManager {
       /** Additive; the child's dedicated-port provider claim, relayed verbatim when present. */
       responseModel?: string;
     },
+    settled = false,
   ): void {
     const entry = this.childRuns.get(requestId);
-    if (entry === undefined) {
+    if (entry === undefined) return;
+    const managedTab = this.tabs.get(entry.childTabId);
+    if (managedTab?.childWorktree && !settled) {
+      if (this.settlingChildRuns.has(requestId)) return;
+      if (entry.startDeadline !== undefined) clearTimeout(entry.startDeadline);
+      const receipt = managedTab.childWorktree;
+      const pending = this.settleManagedWorktree(receipt, managedTab).then(disposition => {
+        const prefix = `Worktree ${disposition.phase}: ${receipt.path}\nBranch: ${receipt.branch}\n${disposition.reason}\n\n`;
+        const finalText = (prefix + terminal.finalText).slice(0, 24000);
+        this.finalizeChildRun(requestId, { ...terminal, finalText,
+          truncated: terminal.truncated || prefix.length + terminal.finalText.length > 24000 }, true);
+      }).finally(() => { this.settlingChildRuns.delete(requestId); });
+      this.settlingChildRuns.set(requestId, pending);
       return;
     }
     this.childRuns.delete(requestId);
@@ -3543,7 +3621,7 @@ export class TabHostManager {
     if (childTab !== undefined) {
       this.tabs.delete(entry.childTabId);
       const reaped = childTab.proc !== null ? this.shutdownTabHost(childTab) : Promise.resolve();
-      if (childTab.engine === "core") {
+      if (childTab.engine === "core" && !childTab.childWorktree) {
         this.rememberResumableChild(entry, childTab, reaped);
       }
     }
@@ -4301,7 +4379,17 @@ export class TabHostManager {
    * (starting core's SIGTERM->SIGKILL child kill-chain at t=0), so a force-kill
    * at the deadline cannot orphan Bash children.
    */
-  async shutdownTabHost(tab: TabHost): Promise<void> {
+  shutdownTabHost(tab: TabHost): Promise<void> {
+    const host = tab.proc;
+    if (!tab.childWorktree || !host) return this.shutdownTabHostOnce(tab);
+    const existing = this.hostShutdowns.get(host);
+    if (existing) return existing;
+    const pending = this.shutdownTabHostOnce(tab);
+    this.hostShutdowns.set(host, pending);
+    return pending;
+  }
+
+  private async shutdownTabHostOnce(tab: TabHost): Promise<void> {
     const child = tab.proc;
     tab.state = "closing";
     this.deps.onFileActivityLifecycle?.(tab.tabId);
@@ -4347,6 +4435,7 @@ export class TabHostManager {
         // carried AT THIS EXACT MOMENT (before any later respawn could reset
         // `tab.engineProcess` out from under it), so `reapEngineProcess` can
         // still reap it off that late exit instead of leaking it forever.
+        if (tab.childWorktree) this.uncertainWorktreeWriters.add(tab);
         this.forceKilledExits.set(child, this.engineRegistrations(tab));
         tab.switchCoordinator?.close(false);
         child.kill();
@@ -4404,6 +4493,7 @@ export class TabHostManager {
     this.settleDeferredInitialSpawn(tabId, { ok: false, reason: "not_ready" });
     await this.drainChildren(tab);
     await this.shutdownTabHost(tab);
+    if (tab.childWorktree) await this.settleManagedWorktree(tab.childWorktree, tab);
     this.tabs.delete(tabId);
     this.deferredRegistrationRollbacks.delete(tabId);
     this.closingTabs.delete(tabId);
@@ -4429,7 +4519,16 @@ export class TabHostManager {
   async shutdownAllTabHosts(): Promise<void> {
     this.quitting = true;
     this.purgeChildSpawnWaiters();
-    await Promise.allSettled([...this.tabs.values()].map((tab) => this.shutdownTabHost(tab)));
+    await Promise.allSettled([...this.tabs.values()].map(async tab => {
+      const run = tab.childOf && this.childRuns.get(tab.childOf.requestId);
+      if (tab.childWorktree && run) run.state = "cancelling";
+      await this.shutdownTabHost(tab);
+      if (tab.childWorktree) await this.settleManagedWorktree(tab.childWorktree, tab);
+      const id = tab.childOf?.requestId;
+      if (id) this.finalizeChildRun(id, { status: "cancelled", finalText: CHILD_CANCELLED_MESSAGE,
+        truncated: false, turns: 0, toolCalls: 0, durationMs: 0 });
+    }));
+    await Promise.allSettled([...this.settlingChildRuns.values()]);
   }
 
   /**
