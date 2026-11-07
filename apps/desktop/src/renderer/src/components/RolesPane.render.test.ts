@@ -93,8 +93,9 @@ it.each(["claude", "codex"] as const)("renders %s engine options without a secon
   expect(row).not.toContain('>Default (recommended)</option>');
   expect(row).not.toContain('custom model');
   if (engine === "claude") {
-    expect(row).toContain('>Sonnet</option>');
-    expect(row).toContain('>Opus</option>');
+    expect(row).toContain('>Fable 5.1</option>');
+    expect(row).toContain('>Opus 5.5</option>');
+    expect(row).toContain('>Sonnet 5.5</option>');
   } else {
     const modelSelect = row.split('aria-label="Primary model"')[1]!;
     expect(modelSelect.match(/<option/g)).toHaveLength(2);
