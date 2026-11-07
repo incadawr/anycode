@@ -67,8 +67,8 @@ not a single wholesale replacement of user config. See
 | `diagnostics/` | Diagnostic records used for export |
 
 Use **Export diagnostics** in the session Environment menu for a previewable
-bundle. Review paths and prompts before sharing. Telemetry is included only
-when enabled. See [troubleshooting](troubleshooting.md#logs-and-crash-dumps).
+bundle. Review paths and prompts before sharing. It can include retained
+telemetry records even when new telemetry collection is off. See [troubleshooting](troubleshooting.md#logs-and-crash-dumps).
 
 ## Packaged documentation and tool environment
 

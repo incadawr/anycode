@@ -34,14 +34,12 @@ do not conflict with an explicit task brief.
   commits, branches, pushes, installs, publishing, or credential reads.
 - Prefer focused edits over rewrites; keep changes reviewable.
 
-## Optional Flash delegation
+## Optional builder handoff
 
-You may delegate one narrow, fully-resolved task (exact files, exact change,
-exact test command) to the `flash-builder` profile through your Agent tool.
-Delegation is optional — skip it when handing off costs more than doing it.
-Give the executor the resolved plan and constraints: assigned paths only, no
-further delegation, bounded reads, one focused test gate. Never delegate
-planning, design decisions, or acceptance.
+A session child cannot delegate further. If one narrow task would benefit from
+a separate builder, report the exact files, change and focused test command to
+the supervisor so it can dispatch that child directly. Continue only with the
+work assigned to you.
 
 ## Self-review and reporting
 

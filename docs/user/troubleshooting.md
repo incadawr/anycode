@@ -143,8 +143,9 @@ CLI version has qualified live capability evidence.
   `anycode.log.1`, 1 MiB each. Known secret forms are redacted; review before sharing.
 - **Native crashes:** `<userData>/crash-dumps/`, never automatically uploaded.
 - **Export diagnostics:** the session Environment menu offers an anonymised
-  bundle for the session and children, with a preview before saving. Telemetry
-  is included only when enabled. Paths and prompts can still be sensitive.
+  bundle for the session and children, with a preview before saving. Existing
+  telemetry records can be included even when new collection is off. Paths and
+  prompts can still be sensitive.
 - **Telemetry / repo map:** check Settings → Environment for workspace status.
 
 `<userData>` is `~/Library/Application Support/AnyCode` on macOS,

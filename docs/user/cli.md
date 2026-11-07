@@ -12,7 +12,7 @@ anycode [options]
 | Option | Meaning |
 |---|---|
 | `--mode <plan\|build\|edit\|auto\|yolo>` | Permission mode (default `build`) |
-| `--yolo` | Same as `--mode yolo` |
+| `--yolo` | Pin the non-prompting approval broker for this run; mode denials still apply |
 | `--model <id>` | Model id |
 | `--resume [id]`, `--continue` / `-c` | Resume a session / the last one |
 | `--print [prompt]` / `-p [prompt]` | One-shot, non-interactive. Reads stdin when no prompt is given; place `-p` last |
@@ -35,7 +35,7 @@ skills, hooks and workflows as the desktop app. Folder trust is stored in
 
 ## Slash commands
 
- `/compact`, `/context`, `/allow [Tool [glob]]`,
+`/compact`, `/context`, `/allow [Tool [glob]]`,
 `/mode`, `/model`, `/effort`, `/reasoning`, `/mcp`, `/skills`, `/workflows`,
 `/hooks`, `/lsp`, `/sessions [all]`, `/rewind [#|id [files|conversation]]`,
 `/status`, `/diff [path]`, `/commit <msg>`, `/tasks [kill <id>]`,
@@ -43,6 +43,9 @@ skills, hooks and workflows as the desktop app. Folder trust is stored in
 The CLI has no `/orchestrate` and no `/roles`. `/reasoning` without an argument
 toggles display; `/effort` without an argument shows effort. With an argument,
 both accept `off`, `low`, `medium`, `high`, `xhigh`, `max`.
+With `--yolo`, runtime mode switching is refused; restart without the flag to
+use `/mode`. A resumed session saved in yolo starts in build unless explicitly
+overridden.
 
 `/commit` stages every change and asks for confirmation. Review `/status` and
 `/diff` first. In non-interactive runs, requests needing approval are denied;

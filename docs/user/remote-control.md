@@ -15,7 +15,6 @@ Short version of what you will see in Settings → Plugins:
 | --- | --- |
 | `starting` | The bridge is starting; wait for the next state. |
 | `offline` | Telegram cannot be reached; the bridge retries with backoff. |
-| `stopped` | The service has shut down. |
 | Running, `online` | The bridge polls Telegram and reaches your sessions. |
 | `conflict` | Another process uses the same bot token. Use one bot per computer. |
 | `token_invalid` | Telegram rejected the token. Fix it in Settings → MCP → Secrets and press Restart. |
@@ -26,6 +25,9 @@ Short version of what you will see in Settings → Plugins:
 Only your own private chat reaches a session. `/stop` stops the selected session's
 running turn. Approvals reach Telegram as Allow and Deny buttons, but only for a
 session whose **External approvals** switch you turned on in AnyCode.
+
+The plugin service row can also show **Stopped** when the process is not
+running; it is separate from the bridge's reported network status.
 
 ## Commands
 

@@ -17,7 +17,7 @@ tuning are under **Advanced**.
 **Custom endpoint**, enter the key, pick a model, and save.
 `provider.activeConnectionId` is the default for new Native sessions.
 
-- Every built-in provider authenticates with an **API key**. Subscription plans
+- Catalog API providers use an **API key**; local vLLM can run without one. Subscription plans
   (GLM Coding Plan, MiniMax M Plan, Kimi for Coding, Xiaomi MiMo Token Plan,
   OpenCode Go) are also API keys, issued by the plan's console. Account sign-in
   (ChatGPT, Claude.ai) exists only for the Codex and Claude engines.
@@ -46,21 +46,20 @@ tuning are under **Advanced**.
 | `custom` | Any endpoint you enter | Anthropic Messages, Chat Completions or Responses |
 
 Open Settings → Provider and open a connection to see its current model choices.
-The model list of each
-provider is a hint. You can always type a model id, and providers that publish
+Each provider's model list is a hint. You can always type a model id, and providers that publish
 a model list (for example DeepSeek, OpenCode Go) fetch it live.
 
 **Custom endpoints.** The base URL must be `https://`, or `http://` on
-`localhost`, `127.0.0.1` or `[::1]`, and it must not contain a user name or password. Choose the protocol (transport)
-the endpoint speaks.
+`localhost`, `127.0.0.1` or `[::1]`, and it must not contain a user name or password.
+Choose the protocol (transport) the endpoint speaks.
 
 ## Models and effort
 
 - **Pick the model** per connection in the drawer, or per tab from the model
   pill in the composer.
 - **Reasoning effort** values: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`,
-  `max`. Each model accepts only some of them. The catalog and connection metadata declare the list per model. The composer shows only the levels the
-  current model accepts.
+  `max`. Each model accepts only some of them. The catalog and
+  connection metadata declare its levels; the composer shows the accepted list.
 - A reasoning model without a declared list gets `off`, `low`, `medium`, `high`.
   A child requesting `xhigh` uses `max` when `xhigh` is absent and `max` is supported.
 - **Custom endpoints:** in the connection's advanced model settings, set
@@ -75,7 +74,7 @@ the endpoint speaks.
 - **Codex tabs** take their effort levels from the Codex CLI's model list.
   **Claude tabs** use `low`, `medium`, `high`, `xhigh`, `max`.
 
-## Per-model settings in the connection drawer
+## Connection drawer settings
 
 | Setting | Values | Effect |
 |---|---|---|
@@ -85,7 +84,8 @@ the endpoint speaks.
 | Context window | tokens (1,024–1,000,000) | Overrides the window AnyCode budgets compaction against. |
 | Max output tokens | tokens | Caps the response length. |
 | Cost estimate | subscription / catalog / custom rates | Controls the cost shown in the session. |
-| Proxy | application / none / profile | See [proxy.md](proxy.md). |
+| Prompt caching | Off / Implicit · 30 minutes, when offered | Opt-in request caching policy for the connection. |
+| Proxy | application / none / profile | Connection-wide; see [proxy.md](proxy.md). |
 
 Some catalog entries have a usable context budget below the advertised window.
 The context meter and compaction use that budget.
@@ -119,8 +119,13 @@ Settings → Profile shows usage statistics from local telemetry.
 Settings → Provider → **Export setup** saves connections and role profiles as JSON,
 without keys or tokens. **Import setup** previews the file and lets you update, copy
 or skip each collision. After import, enter keys through each connection's
-credential button. Proxy profiles, project assignments, app settings and
-secrets are not exported.
+credential button. Proxy profiles, project assignments, active selections,
+app settings and secrets are not exported. Named proxy references need a matching
+profile on the destination. Legacy proxy URLs cannot be exported. A connection
+with a different destination must be imported as a copy.
+
+Keep secrets out of labels and URLs: the export filter is best-effort. URL query
+strings and fragments are rejected; connection names must be unique.
 
 ## Environment overrides for providers
 

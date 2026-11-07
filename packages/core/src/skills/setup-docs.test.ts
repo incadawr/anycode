@@ -1,136 +1,108 @@
-/**
- * "docs in bundle sync with repo" as a SOURCE test. A true
- * asar-level test needs a package build (CI-only), so drift is caught here
- * instead: the anycode-setup skill's topic table and the docs/user/ index are
- * asserted against the real tree in every checkout, the same tree that
- * electron-builder's `extraResources` copies into the packaged app. Since docs and
- * skill are always committed together, any real drift (a renamed/removed
- * topic file, an orphan page, a stale table row, a broken link) fails this
- * file first.
- *
- * The docs dir is resolved module-relative (skills → src → core → packages →
- * repo root). The packaged app does NOT use this path: it reads
- * process.resourcesPath/docs/user (host/anycode-setup-docs.ts).
- */
-
-import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { anycodeSetupSkill } from "./builtin.js";
 
-/** Module-relative docs/user root (BUNDLED_WORKFLOWS_DIR resolution recipe). */
-const DOCS_USER_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../../../docs/user",
-);
+// This is the same tree copied into packaged builds by extraResources.
+const docsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../docs/user");
+const pages = new Map(readdirSync(docsDir).filter(name => name.endsWith(".md"))
+  .map(name => [name, readFileSync(resolve(docsDir, name), "utf8")]));
+const readme = pages.get("README.md")!;
 
-const ANYCODE_SETUP_SKILL = anycodeSetupSkill({ kind: "local", dir: DOCS_USER_DIR });
-
-function readTopic(name: string): string {
-  const path = resolve(DOCS_USER_DIR, name);
-  expect(existsSync(path), `${name} must exist under docs/user/`).toBe(true);
-  const stat = statSync(path);
-  expect(stat.isFile(), `${name} must be a file`).toBe(true);
-  expect(stat.size, `${name} must be non-empty`).toBeGreaterThan(0);
-  return readFileSync(path, "utf8");
+function prose(markdown: string): string {
+  return markdown.replace(/^```[^\n]*\n[\s\S]*?^```\s*$/gm, "");
 }
 
-/** Every `docs/user/<topic>.md` row of the skill's topic table. */
-function topicTableRows(): string[] {
-  const rows: string[] = [];
-  const tableRe = /\|\s*docs\/user\/([A-Za-z0-9._-]+\.md)\s*\|/g;
-  for (const match of ANYCODE_SETUP_SKILL.body.matchAll(tableRe)) {
-    if (match[1] !== undefined) {
-      rows.push(match[1]);
-    }
+function links(markdown: string): string[] {
+  return [...prose(markdown).matchAll(/\]\(([^\s)]+)(?:\s+"[^"]*")?\)/g)]
+    .map(match => match[1]!);
+}
+
+/** GitHub heading ids, including repeated heading suffixes. */
+function anchors(markdown: string): Set<string> {
+  const used = new Set<string>();
+  for (const match of prose(markdown).matchAll(/^#{1,6}\s+(.+?)(?:\s+#+)?\s*$/gm)) {
+    const base = match[1]!.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .toLowerCase().replace(/[^\p{L}\p{N}\p{M}_\-\s]/gu, "").replace(/\s/g, "-");
+    let id = base;
+    for (let suffix = 1; used.has(id); suffix++) id = `${base}-${suffix}`;
+    used.add(id);
   }
-  expect(rows.length, "the skill body must carry its topic table").toBeGreaterThan(0);
-  return rows;
+  for (const match of markdown.matchAll(/<(?:a|[a-z]+)\b[^>]*\bid=["']([^"']+)["']/g)) {
+    used.add(match[1]!);
+  }
+  return used;
 }
 
-describe("anycode-setup docs sync", () => {
-  it("every topic named in the skill's topic table exists under docs/user/ and is non-empty", () => {
-    for (const topic of topicTableRows()) {
-      readTopic(topic);
+function localLink(link: string): { page: string; anchor?: string } | undefined {
+  if (/^[a-z][a-z\d+.-]*:/i.test(link)) return undefined;
+  const [path = "", fragment] = decodeURIComponent(link).split("#");
+  const target = resolve(docsDir, path || "README.md");
+  const fromRoot = relative(docsDir, target);
+  if (link.startsWith("/") || isAbsolute(fromRoot) || fromRoot.startsWith("..")) {
+    throw new Error(`Link escapes packaged docs: ${link}`);
+  }
+  return { page: fromRoot, ...(fragment ? { anchor: fragment } : {}) };
+}
+
+describe("packaged user guide navigation", () => {
+  it("links every page from the README without a hardcoded topic list", () => {
+    const indexed = new Set(links(readme).map(link => localLink(link)?.page));
+    for (const [name, content] of pages) {
+      expect(content.trim(), `${name} must be non-empty`).not.toBe("");
+      if (name !== "README.md") expect(indexed.has(name), `README must link ${name}`).toBe(true);
     }
   });
 
-  it("the topic table names exactly the docs/user/*.md files (README is the index, not a topic)", () => {
-    const listed = new Set(topicTableRows());
-    const expected = [
-      "browser.md",
-      "configuration.md",
-      "engines.md",
-      "lsp.md",
-      "mcp.md",
-      "orchestration.md",
-      "permissions.md",
-      "plugins.md",
-      "proxy.md",
-      "sessions-api.md",
-      "skills.md",
-      "subagents.md",
-      "remote-control.md",
-      "troubleshooting.md",
-    ];
-    expect([...listed].sort()).toEqual([...expected].sort());
-    // The expected set must equal the directory itself — no missing, no extra.
-    const onDisk = readdirSafe(DOCS_USER_DIR)
-      .filter((name) => name.endsWith(".md") && name !== "README.md")
-      .sort();
-    expect(onDisk).toEqual([...expected].sort());
-  });
-
-  it("every relative markdown link in docs/user/README.md resolves to an existing file", () => {
-    const readme = readTopic("README.md");
-    const linkRe = /\]\(([^)#\s]+\.md)\)/g;
-    const links = [...readme.matchAll(linkRe)].map((m) => m[1]).filter((l): l is string => Boolean(l));
-    expect(links.length).toBeGreaterThan(0);
-    for (const link of links) {
-      const target = resolve(DOCS_USER_DIR, link);
-      expect(existsSync(target), `README link ${link} must resolve`).toBe(true);
-    }
-  });
-
-  it("every docs/user/*.md file is reachable from the README index (no orphans)", () => {
-    const readme = readTopic("README.md");
-    const files = readdirSafe(DOCS_USER_DIR).filter((name) => name.endsWith(".md"));
-    expect(files.length).toBeGreaterThan(1);
-    for (const name of files) {
-      if (name === "README.md") {
-        continue;
+  it("keeps all local links inside the packaged tree and resolves files and anchors", () => {
+    for (const [source, body] of pages) {
+      for (const link of links(body)) {
+        // A fragment-only link refers to the current page.
+        const target = localLink(link.startsWith("#") ? source + link : link);
+        if (!target) continue;
+        const content = pages.get(target.page);
+        expect(content, `${source}: missing target ${link}`).toBeDefined();
+        if (target.anchor && content) {
+          expect(anchors(content).has(target.anchor), `${source}: missing anchor ${link}`).toBe(true);
+        }
       }
-      expect(
-        readme.includes(`(${name})`),
-        `${name} must be linked from docs/user/README.md`,
-      ).toBe(true);
     }
   });
 
-  it("the Sessions API topic is in the skill table and documents the connect path", () => {
-    expect(topicTableRows()).toContain("sessions-api.md");
-    const page = readTopic("sessions-api.md");
-    expect(page).toContain("list_sessions");
-    expect(page).toContain("send_message");
-    expect(page).toContain("Settings → Sessions API");
-    expect(page).toContain("Copy MCP config");
-    expect(page).toMatch(/mode: "next_turn"/);
+  it("provides 30–40 task and symptom rows with valid anchors", () => {
+    const map = readme.split("## I want to… / Symptom")[1]!.split("\n## ")[0]!;
+    const entries = links(map);
+    expect(entries.length).toBeGreaterThanOrEqual(30);
+    expect(entries.length).toBeLessThanOrEqual(40);
+    expect(entries.some(link => link.includes("#"))).toBe(true);
   });
 
-  it("docs/user/README.md states the precedence contract and both config file paths", () => {
-    const readme = readTopic("README.md");
-    expect(readme).toMatch(/project `?\.anycode\/?`? beats the user `?~\/\.anycode\/?`?/i);
+  it("rejects traversal, including encoded traversal, and handles heading punctuation", () => {
+    for (const link of ["../development/README.md", "../../examples/x.md", "%2e%2e/x.md", "/tmp/x.md"]) {
+      expect(() => localLink(link)).toThrow("escapes packaged docs");
+    }
+    expect(anchors("## Shared config: `.anycode/config.json`\n## Repeat\n## Repeat\n"))
+      .toEqual(new Set(["shared-config-anycodeconfigjson", "repeat", "repeat-1"]));
+  });
+
+  it("the setup body starts at the index and names only existing documentation pages", () => {
+    for (const docs of [{ kind: "local", dir: docsDir }, { kind: "remote", ref: "v0.0.90" }] as const) {
+      const body = anycodeSetupSkill(docs).body;
+      expect(body).toContain("Read README.md first");
+      const mentioned = [...body.matchAll(/\b([A-Za-z0-9][A-Za-z0-9._-]*\.md)\b/g)].map(match => match[1]!);
+      expect(mentioned).toContain("README.md");
+      for (const name of mentioned) expect(pages.has(name), `Skill names missing page ${name}`).toBe(true);
+    }
+  });
+
+  it("keeps the config boundary and Sessions API connection instructions discoverable", () => {
     expect(readme).toContain("~/.anycode/settings.json");
     expect(readme).toContain("~/.anycode/secrets.json");
     expect(readme).toContain(".anycode/config.json");
+    const api = pages.get("sessions-api.md")!;
+    for (const text of ["list_sessions", "send_message", "Settings → Sessions API", "Copy MCP config", 'mode: "next_turn"']) {
+      expect(api).toContain(text);
+    }
   });
 });
-
-/** readdir guarded so a missing docs/user/ reports as the assertion above, not a throw. */
-function readdirSafe(dir: string): string[] {
-  if (!existsSync(dir)) {
-    return [];
-  }
-  return readdirSync(dir);
-}

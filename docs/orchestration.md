@@ -1,8 +1,8 @@
 # Orchestration: GLM lead, optional Flash, GPT/Codex supervisor
 
 Portable example setup for running a multi-model workflow inside AnyCode:
-**GLM-5.3 plans, implements and self-reviews**; an **optional inline GLM-5.3
-Flash** handles narrow, fully-resolved execution; a **GPT (Codex CLI)
+**GLM-5.3 plans, implements and self-reviews**; an **optional GLM-5.3
+Flash child** handles narrow, fully-resolved execution dispatched by the supervisor; a **GPT (Codex CLI)
 supervisor** independently verifies, returns defects, and accepts.
 
 This page describes the manual supervisor pattern with your own profiles. For
@@ -15,7 +15,7 @@ the built-in Orchestrate mode and Settings → Roles, start with
 |---|---|---|---|
 | Supervisor | Codex CLI (GPT), a normal AnyCode session | top-level session you drive | dispatches, awaits, verifies, accepts |
 | `glm-lead` | Native engine, `glm-5.3` | session-tier child via `anycode_agent` | plans, implements, self-reviews |
-| `flash-builder` (optional) | Native engine, `glm-5.3-flash` | inline child spawned by `glm-lead` | one bounded, fully-resolved task |
+| `flash-builder` (optional) | Native engine, `glm-5.3-flash` | session-tier child dispatched by the supervisor | one bounded, fully-resolved task |
 
 A second layout splits the lead in two (`examples/orchestration/supervisor-plan-execute.md`):
 `glm-planner` (`glm-5.3`, `effort: high`, read-only) returns one executable
@@ -25,9 +25,10 @@ context. Both are session children the supervisor dispatches in turn.
 
 Inline vs session is a real difference, not a naming one:
 
-- An **inline** child (`flash-builder`) runs inside `glm-lead`'s process as a
-  nested agent loop, shares the parent's workspace ports, is bounded by a
-  turn budget, and cannot be opened or steered separately.
+- An **inline** child runs inside a root Native session's process, shares
+  workspace ports and a bounded turn budget, and cannot be opened separately.
+  Session children cannot delegate again: their host removes Agent and Workflow.
+  The supervisor must dispatch an optional builder directly.
 - A **session** child (`glm-lead`, spawned by the supervisor's session) boots
   its own host and appears as a real child session the user can open, watch
   and steer; it is the only tier the Codex bridge can reach.
@@ -59,8 +60,8 @@ A profile may select the connection its child runs on, so one supervisor
 session can drive, say, `glm-planner` on a GLM connection and `ds-executor` on
 a DeepSeek one:
 
-- `connection: <connection-id>` — an **exact** connection id as shown in
-  Settings → Provider. Use this to pin a specific account.
+- `connection: <connection-id>` — an **exact** connection id from
+  `provider.connections[].id` in `~/.anycode/settings.json`. Use this to pin a specific account.
 - `provider: <catalog-provider-id>` — a provider id such as `z-ai` or
   `deepseek`. The host picks a configured connection for that provider: the
   active connection if its provider matches, otherwise the first matching
@@ -114,7 +115,7 @@ use 300k instead of 1M (`ANYCODE_CONTEXT_WINDOW` still overrides it).
 
 Reasoning effort (`low`/`high`/`max`) is a connection setting chosen in the
 model/effort picker, not a separate model id. A profile can pin its own tier
-with `effort:` frontmatter (`off`, `low`, `medium`, `high` or `max`) — for
+with `effort:` frontmatter (`off`, `low`, `medium`, `high`, `xhigh` or `max`) — for
 example a planner on `high` and an executor on `low`. The tier is resolved
 against the child model's own levels; a continued child keeps the tier it was
 started on. Any other unknown frontmatter key is reported as a profile
@@ -152,7 +153,8 @@ during a session become callable at the next turn.
 ### 4. How the supervisor reaches GLM
 
 Inside a Codex session, AnyCode injects an `anycode_agent` tool whose
-arguments are `agent_type`, `description`, `prompt`, an optional `model`
+arguments are `agent_type`, `description`, `prompt`, an optional `provider`
+selector for an unpinned Core child, an optional `model`
 override, an optional `detach` and an optional `continue_session`. The tool declares exactly the profiles found in the project's
 `.anycode/agents/`; an unknown `agent_type` is refused with the available
 list. Calling it with `agent_type: "glm-lead"` boots a child session running
@@ -238,8 +240,8 @@ both run on the Native engine).
 
 - Live validation confirmed a Codex supervisor calling `glm-lead` from these
   profiles, independently checking its result, and accepting the tiny example.
-  A separate run confirmed GLM delegation to inline Flash and successful return
-  to Codex. Direct GLM cancellation, restart, restored cancellation status and
+  A historical inline Flash run does not establish nested delegation from
+  a session child; that path is unavailable in the current host. Direct GLM cancellation, restart, restored cancellation status and
   opening the saved child target were checked on a fresh app.
 - A live loop run (`ANYCODE_ORCH_LIVE_SMOKE=1 node
   apps/desktop/scripts/orchestration-loop-live-smoke.mjs`) confirmed a Codex

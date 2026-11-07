@@ -73,7 +73,8 @@ the most recent ten messages are kept, with the boundary adjusted to a user turn
 
 From 60%, microcompaction can trim older tool outputs while preserving the five
 most recent results. After three consecutive compaction failures, automatic
-compaction is disabled for the session. Reduce context or start a new session.
+compaction is disabled for the session. While context remains over the
+threshold, the turn stops with an error. Reduce context or start a new session.
 Use **Compact** in the desktop composer or `/compact` in the CLI for a manual
 request, and `/context` in the CLI to inspect usage. CLI engines manage their own
 context; the desktop Compact entry is unavailable in Codex tabs.
