@@ -125,10 +125,11 @@ or revoke a running snapshot. Invalid/unreadable policy, an untrusted workspace,
 unsupported CLI or preparation failure can leave the adapter unavailable while
 ordinary chat continues. Windows forwarding is unavailable in this MVP.
 
-Preparation failures produce an **unavailable** warning in the concrete session.
+The concrete session reports **prepared** and **CLI-reported** notices with an
+opaque generation ID, and **unavailable** warnings for preparation failures.
 The pane does not report a process generation or preparation/catalog success.
 A **prepared** snapshot means only that files were made; **CLI-reported**
-metadata would mean recognition, not proof that the model read or followed the
+metadata means recognition, not proof that the model read or followed the
 body. Model-use acceptance is a separate check in a fresh profile.
 
 Snapshots are sealed and isolated per process. Normal cleanup waits for proof

@@ -13,6 +13,7 @@ The synthetic sealed plugin checks session-local directory loading and reports
 whether this child's control catalog mentions the app namespace. The preview
 browser is not involved. Catalog visibility does not prove SKILL.md body use,
 full namespace/layout compatibility, or that the CLI never attempts writes.
+Disabled omission and native synthetic clash have not been run.
 No writable fallback is permitted. Runtime help gates the flag; preparation or
 plugin boot failure disables the adapter and ordinary chat remains available.
 

@@ -168,8 +168,9 @@ export interface ClaudeSpawnArgsOptions {
  * `CLAUDE_AGENT_BRIDGE_PROMPT` below and rides the argv only when the door is
  * actually announced (`agentBridgePrompt`).
  */
+const CLAUDE_APP_PLUGIN_PROMPT = "The anycode-app plugin separately supplies app builtins; same-name filesystem skills do not replace those app definitions.";
 export const CLAUDE_GUI_SURFACE_PROMPT =
-  "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the native skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles. The anycode-app plugin separately supplies app builtins; same-name filesystem skills do not replace those app definitions. The Task tool's own registry is not AnyCode's.";
+  "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the native skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles. The Task tool's own registry is not AnyCode's.";
 
 /**
  * cross-review M2: the catalog-conditional half of the append —
@@ -235,9 +236,10 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
     "--strict-mcp-config",
     "--append-system-prompt",
-    options.agentBridgePrompt !== undefined
-      ? `${CLAUDE_GUI_SURFACE_PROMPT}\n\n${options.agentBridgePrompt}`
-      : CLAUDE_GUI_SURFACE_PROMPT,
+    [CLAUDE_GUI_SURFACE_PROMPT,
+      ...(options.pluginDir !== undefined && overlay === undefined ? [CLAUDE_APP_PLUGIN_PROMPT] : []),
+      ...(options.agentBridgePrompt !== undefined ? [options.agentBridgePrompt] : []),
+    ].join("\n\n"),
   ];
   if (!overlay && options.pluginDir !== undefined) args.push("--plugin-dir", options.pluginDir);
   if (options.permissionModeFlag !== undefined) args.push("--permission-mode", options.permissionModeFlag);
@@ -479,6 +481,7 @@ export interface ClaudeClientOptions {
   /** Root-only; evaluated once per new process, including resume. */
   prepareBuiltinSkills?: () => Promise<BuiltinSnapshotLease | undefined>;
   onBuiltinSkillNotice?: (reason: string) => void;
+  onBuiltinSkillReady?: (stage: "prepared" | "CLI-reported", generation: string) => void;
   orchestrationSpawn?: ClaudeSpawnArgsOptions["orchestrationSpawn"];
   onTerminal?: () => void;
   binaryPath: string;
@@ -667,6 +670,7 @@ export class ClaudeClient {
 
   get hasBuiltinPlugin(): boolean { return this.builtinPlugin; }
   private builtinPlugin = false;
+  private builtinGeneration: string | undefined;
 
   /** Preflight + spawn only. Caller sends `initialize` after the bootstrap owns disposal. */
   async start(): Promise<void> {
@@ -723,15 +727,20 @@ export class ClaudeClient {
         ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
       });
       this.builtinPlugin = pluginDir !== undefined;
-      const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
+      const spawnOptions = this.spawnOptions(true);
+      const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], spawnOptions);
       this.child = child;
       if (child.pid === undefined) lease?.abortNeverSpawned();
-      else lease?.bindChild(child, process.platform !== "win32");
+      else lease?.bindChild(child, spawnOptions.detached === true);
       this.reportOwnedProcess(child);
       child.once("close", () => this.reportOwnedProcess(child, true));
       this.options.bootstrap?.adopt(() => this.close());
       this.bindChild(child);
       await this.awaitSpawn(child);
+      if (this.builtinPlugin) {
+        this.builtinGeneration = randomUUID();
+        this.options.onBuiltinSkillReady?.("prepared", this.builtinGeneration);
+      }
     } catch (error) {
       lease?.abortNeverSpawned();
       // a failed start still owned the file — release it (and any
@@ -778,6 +787,10 @@ export class ClaudeClient {
   async initialize(extra?: Record<string, unknown>): Promise<ClaudeInitializeResult> {
     const raw = await this.controlRequest<Record<string, unknown>>("initialize", { ...extra }, { timeoutMs: this.initTimeoutMs });
     const account = (raw.account ?? {}) as Record<string, unknown>;
+    if (this.builtinGeneration && Array.isArray(raw.commands) && raw.commands.some(command => {
+      const name = typeof command === "string" ? command : (command as { name?: unknown } | null)?.name;
+      return typeof name === "string" && name.startsWith("anycode-app:");
+    })) this.options.onBuiltinSkillReady?.("CLI-reported", this.builtinGeneration);
     return {
       commands: Array.isArray(raw.commands) ? raw.commands : [],
       models: Array.isArray(raw.models) ? raw.models : [],

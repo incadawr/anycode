@@ -555,7 +555,9 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
     // registry/skills/slash-commands support no conclusions about AnyCode.
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/Task tool/);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not AnyCode features/);
-    expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/anycode-app plugin separately supplies app builtins/);
+    expect(CLAUDE_GUI_SURFACE_PROMPT).not.toContain("anycode-app plugin");
+    expect(buildClaudeSpawnArgs({ pluginDir: "/sealed" }).join(" ")).toContain("anycode-app plugin");
+    expect(buildClaudeSpawnArgs({}).join(" ")).not.toContain("anycode-app plugin");
   });
 
   /**
@@ -1311,6 +1313,9 @@ describe("app builtin launch", () => {
     expect(index).toBeGreaterThan(-1);
     expect(args.filter(a => a === "--plugin-dir")).toHaveLength(1);
     expect(args.splice(index, 2)).toEqual(["--plugin-dir", "/sealed"]);
+    const promptIndex = args.indexOf("--append-system-prompt") + 1;
+    expect(args[promptIndex]).toContain("anycode-app plugin");
+    args[promptIndex] = args[promptIndex]!.split("\n\n")[0]!;
     expect(args).toEqual(old);
     expect(buildClaudeSpawnArgs({})).not.toContain("--plugin-dir");
     expect(buildClaudeSpawnArgs({ pluginDir: "/sealed" })).toContain("--disable-slash-commands");
@@ -1326,6 +1331,7 @@ describe("app builtin launch", () => {
       prepareBuiltinSkills: prepare, initTimeoutMs: 100,
     });
     await client.start(); expect(bound).toBe(true);
+    expect(lease.bindChild).toHaveBeenCalledWith(expect.anything(), process.platform !== "win32");
     if (fail) await expect(client.initialize()).rejects.toThrow();
     else expect((await client.initialize()).commands).toContain("sealed builtin");
     expect(prepare).toHaveBeenCalledTimes(1);
@@ -1389,5 +1395,38 @@ it("disables the adapter when the executable lacks the plugin flag", async () =>
   try {
     await client.start(); expect((await client.initialize()).commands).toEqual(["no plugin"]);
     expect(prepare).not.toHaveBeenCalled(); expect(notice).toHaveBeenCalledWith("unsupported-plugin-dir");
+  } finally { await client.close(); }
+});
+
+it.each(["close", "trust"])("aborts the lease when %s changes during preparation", async fault => {
+  const lease = { root: "/sealed", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
+  let trusted = true;
+  const spawnImpl = vi.fn((command: string, args: readonly string[], options: import("node:child_process").SpawnOptions) => {
+    if (!args.includes("--help") && !args.includes("--version")) throw new Error("unexpected main spawn");
+    return spawnChild(command, [...args], options);
+  });
+  const client = makeClient(["--builtin-test"], { spawnImpl,
+    binaryTrust: () => trusted ? null : "revoked",
+    prepareBuiltinSkills: async () => {
+      if (fault === "close") await client.close(); else trusted = false;
+      return lease;
+    },
+  });
+  await expect(client.start()).rejects.toThrow(fault === "close" ? "closed" : "revoked");
+  expect(spawnImpl.mock.calls.every(([, args]) => args?.includes("--help") || args?.includes("--version"))).toBe(true);
+  expect(lease.abortNeverSpawned).toHaveBeenCalledOnce();
+  expect(lease.bindChild).not.toHaveBeenCalled();
+  await client.close();
+});
+
+it.each([false, true])("binds the lease with actual detached=%s", async detached => {
+  const lease = { root: "/sealed", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
+  const client = makeClient(["--builtin-test"], { prepareBuiltinSkills: async () => lease });
+  const seams = client as unknown as { spawnOptions(group: boolean): import("node:child_process").SpawnOptions };
+  const original = seams.spawnOptions.bind(client);
+  vi.spyOn(seams, "spawnOptions").mockImplementation(group => ({ ...original(group), detached }));
+  try {
+    await client.start();
+    expect(lease.bindChild).toHaveBeenCalledExactlyOnceWith(expect.anything(), detached);
   } finally { await client.close(); }
 });

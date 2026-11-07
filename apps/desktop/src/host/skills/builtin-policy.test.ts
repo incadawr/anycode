@@ -138,3 +138,7 @@ it("ignores a valid-shaped untrusted project while retaining user policy", async
   expect(enabled(await read(false))).toEqual([true, true, true]);
   expect(JSON.stringify(harness.data)).not.toContain(project);
 });
+
+it("resolves a worker from nested chunks", () => {
+  expect(String(builtinPolicyWorkerUrl("file:///app/out/main/chunks/sub/shared.js"))).toBe("file:///app/out/main/builtin-policy-worker.js");
+});

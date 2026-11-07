@@ -12,12 +12,19 @@ function isolated(root) {
   for (const [key, value] of Object.entries(env)) if (key !== 'PATH' && key !== 'LANG') fs.mkdirSync(value, { recursive: true, mode: 0o700 });
   return env;
 }
-function guarded(args, payload) {
+function guarded(args, payload, root) {
   assert(!args.some(arg => /auth|login|continue|resume/i.test(arg)));
+  for (const arg of args) {
+    assert(!arg.includes(os.homedir()) && !arg.includes('~'), 'Ambient home argument refused');
+    for (const value of arg.split('=')) if (path.isAbsolute(value)) {
+      const relative = path.relative(root, value);
+      assert(relative !== '..' && !relative.startsWith('../') && !path.isAbsolute(relative), 'Argument outside disposable root');
+    }
+  }
   assert(payload === undefined || JSON.stringify(payload) === JSON.stringify(frame));
 }
 async function run(binary, args, root, env, payload) {
-  guarded(args, payload);
+  guarded(args, payload, root);
   return new Promise(resolve => {
     const child = spawn(binary, args, { cwd: root, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', bytes = 0, settled = false;
@@ -46,9 +53,11 @@ try {
   if (process.argv[2] === '--self-test') {
     assert.deepEqual(Object.keys(env).sort(), ['HOME','CLAUDE_CONFIG_DIR','XDG_CONFIG_HOME','XDG_CACHE_HOME','TMPDIR','PATH','LANG'].sort());
     for (const key of ['HOME','CLAUDE_CONFIG_DIR','XDG_CONFIG_HOME','XDG_CACHE_HOME','TMPDIR']) assert(env[key].startsWith(root + '/'));
-    for (const bad of [{ type: 'user', message: 'hello' }, { type: 'assistant' }, { ...frame, extra: true }]) assert.throws(() => guarded([], bad));
-    for (const flag of ['--resume', 'login', 'auth']) assert.throws(() => guarded([flag]));
-    guarded(['--help']); guarded([], frame); console.log('Isolation self-test PASS');
+    for (const bad of [{ type: 'user', message: 'hello' }, { type: 'assistant' }, { ...frame, extra: true }]) assert.throws(() => guarded([], bad, root));
+    for (const flag of ['--resume', 'login', 'auth']) assert.throws(() => guarded([flag], undefined, root));
+    for (const arg of [os.homedir(), path.join(os.homedir(), '.claude'), '--plugin-dir=' + path.join(os.homedir(), '.claude'), '/outside/plugin']) assert.throws(() => guarded([arg], undefined, root));
+    guarded(['--plugin-dir', path.join(root, 'plugin')], undefined, root);
+    guarded(['--help'], undefined, root); guarded([], frame, root); console.log('Isolation self-test PASS');
   } else {
     assert.equal(process.argv[2], 'claude');
     const binary = process.argv[3]; assert(binary && path.isAbsolute(binary), 'Supply an absolute installed CLI executable');

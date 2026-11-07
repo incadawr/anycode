@@ -20,8 +20,9 @@ function denied(reason: BuiltinPolicyReason): BuiltinPolicy {
 
 /** Both entries and shared chunks resolve the standalone worker beside host.js. */
 export function builtinPolicyWorkerUrl(moduleUrl = import.meta.url): URL {
-  return new URL(new URL(".", moduleUrl).pathname.endsWith("/chunks/")
-    ? "../builtin-policy-worker.js" : "./builtin-policy-worker.js", moduleUrl);
+  const directory = new URL(".", moduleUrl);
+  directory.pathname = directory.pathname.replace(/\/chunks\/.*$/, "/");
+  return new URL("builtin-policy-worker.js", directory);
 }
 
 /** Fresh launch decision only. No discovery, config bytes or raw errors leave the worker.

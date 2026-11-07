@@ -69,7 +69,7 @@ const MODELS = [{ value: "model-a", resolvedModel: "model-a", displayName: "A" }
 function fakeSpawn(
   account: Record<string, unknown> = { tokenSource: "oauth" },
   models: unknown = MODELS,
-  initialization?: { hold: boolean },
+  initialization?: { hold?: boolean; error?: string; commands?: unknown[] },
   shutdown?: { wait: Promise<void>; started: () => void },
 ): {
   spawnImpl: (command: string, args: readonly string[]) => unknown;
@@ -114,9 +114,9 @@ function fakeSpawn(
       queueMicrotask(() => child.emit("close", 0, null));
       return true;
     };
-    if (args.includes("--version")) {
+    if (args.includes("--version") || args.includes("--help")) {
       queueMicrotask(() => {
-        child.stdout.emit("data", Buffer.from("2.1.212 (Claude Code)\n"));
+        child.stdout.emit("data", Buffer.from(args.includes("--help") ? "--plugin-dir" : "2.1.212 (Claude Code)\n"));
         child.emit("close", 0, null);
       });
       return child;
@@ -166,7 +166,7 @@ function fakeSpawn(
             Buffer.from(
               `${JSON.stringify({
                 type: "control_response",
-                response: { subtype: "success", request_id: message.request_id, response: { commands: [], models, account } },
+                response: initialization?.error ? { subtype: "error", request_id: message.request_id, error: initialization.error } : { subtype: "success", request_id: message.request_id, response: { commands: initialization?.commands ?? [], models, account } },
               })}\n`,
             ),
           );
@@ -1327,7 +1327,7 @@ describe("explicit OFF recovery boot", () => {
 });
 
 // Protocol fixtures exercise lifecycle contracts without qualifying a native version.
-async function overlayContractRig() {
+async function overlayContractRig(withBuiltins = false) {
   const fixture = JSON.parse(readFileSync(new URL("../../../../scripts/claude-orchestrate-fixture.json", import.meta.url), "utf8"));
   const fake = fakeSpawn();
   let failSpawn = false, holdAck = false;
@@ -1370,7 +1370,7 @@ async function overlayContractRig() {
     return postureHook ? postureHook(init, read) : init;
   };
   try {
-    ({ engine } = await startClaudeEngine({ ...baseOptions(spawnImpl), orchestrationFeatureEnabled: true,
+    ({ engine } = await startClaudeEngine({ ...baseOptions(spawnImpl), ...(withBuiltins ? { pluginDir: "/sealed" } : {}), orchestrationFeatureEnabled: true,
       resolveMcpForward: async () => ({ claudeConfigPath: null, claudeJson: '{"mcpServers":{}}', claudeNames: [], loaderProblems: [], forwardProblems: [], notices: [], cleanupFile: () => {} }),
       mcpBridge: new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: () => ["agent", "agent_status"].map(name => ({ name, description: name, inputSchema: { type: "object" as const, properties: {} } })), callTool: async () => ({ text: "ok", isError: false }) }),
       orchestrationEvidence: { version: fixture.version, facts: fixture.facts, readPosture } }));
@@ -1507,7 +1507,7 @@ it.each([true, false])("keeps host user/report admission closed until restart co
 });
 
 it.each(["permissionMode", "tools", "mcp_servers"])("does not declare OFF after restored %s drift", async key => {
-  const r = await overlayContractRig();
+  const r = await overlayContractRig(true);
   try {
     await r.policy.apply(true, {});
     r.hook(async init => ({ ...init, [key]: key === "permissionMode" ? "default" : [] }));
@@ -1597,7 +1597,7 @@ it.each([false, true])("passes pluginDir through engine fresh/resume=%s", async 
   } finally { await connected.engine.dispose("session-close"); }
 });
 it("retries a failed plugin boot once without a writable fallback", async () => {
-  const failing = fakeSpawn({}); const ordinary = fakeSpawn();
+  const failing = fakeSpawn(undefined, MODELS, { error: "Failed to load plugin anycode-app" }); const ordinary = fakeSpawn();
   let attempts = 0;
   const spawnImpl = (command: string, args: readonly string[]) => {
     if (!args.includes("--version")) attempts++;
@@ -1608,5 +1608,40 @@ it("retries a failed plugin boot once without a writable fallback", async () => 
     expect(attempts).toBe(2);
     expect(failing.capturedArgs()).toContain("--plugin-dir");
     expect(ordinary.capturedArgs()).not.toContain("--plugin-dir");
+  } finally { await connected.engine.dispose("session-close"); }
+});
+
+it("does not retry an unsigned account with a plugin", async () => {
+  const fake = fakeSpawn({ tokenSource: "none" });
+  const spawnImpl = vi.fn(fake.spawnImpl);
+  await expect(startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" })).rejects.toThrow(CLAUDE_NOT_SIGNED_IN);
+  expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(1);
+});
+it.each(["unrelated initialization failure", "Failed to load plugin other-app"])("does not blame app builtins for %s", async error => {
+  const fake = fakeSpawn(undefined, MODELS, { error });
+  const spawnImpl = vi.fn(fake.spawnImpl);
+  await expect(startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" })).rejects.toThrow(error);
+  expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(1);
+});
+it("delivers opaque prepared and CLI-reported notices from this session", async () => {
+  const fake = fakeSpawn(undefined, MODELS, { commands: [{ name: "anycode-app:anycode-setup" }] });
+  const lease = { root: "/sealed/private", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
+  const connected = await startClaudeEngine({ ...baseOptions(fake.spawnImpl), prepareBuiltinSkills: async () => lease });
+  try {
+    const events = [];
+    const turn = connected.engine.runTurn("synthetic", { signal: new AbortController().signal })[Symbol.asyncIterator]();
+    // Read only the boot notices, before the fake receives any user frame.
+    while (events.filter(event => event.type === "engine_notice").length < 2) {
+      const event = await turn.next();
+      if (event.done) break;
+      events.push(event.value);
+    }
+    await turn.return?.();
+    expect(fake.userMessages).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: expect.stringMatching(/App builtins prepared: [a-f0-9-]{36}\./) }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: expect.stringMatching(/App builtins CLI-reported: [a-f0-9-]{36}\./) }));
+    const messages = events.filter(e => e.type === "engine_notice").map(e => e.message).join(" ");
+    expect(messages).not.toContain("/sealed");
+    expect(messages.match(/[a-f0-9-]{36}/g)?.[0]).toBe(messages.match(/[a-f0-9-]{36}/g)?.[1]);
   } finally { await connected.engine.dispose("session-close"); }
 });

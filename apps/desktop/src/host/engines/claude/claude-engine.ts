@@ -667,6 +667,7 @@ async function connectClaudeEngine(
     ...options,
     ...(disableBuiltins ? { pluginDir: undefined, prepareBuiltinSkills: undefined } : {}),
     onBuiltinSkillNotice: reason => notices.push(warning(`App builtins unavailable: ${reason}.`)),
+    onBuiltinSkillReady: (stage, generation) => notices.push({ type: "engine_notice", level: "info", message: `App builtins ${stage}: ${generation}.` }),
     ...(next.resume !== undefined ? { permissionModeFlag: undefined } : { permissionModeFlag: permissionModeToFlag(preset.mode) }),
     effort: engine === null ? requestedEffort : engine.snapshot().effort,
     ...next,
@@ -717,6 +718,7 @@ async function connectClaudeEngine(
     let bridge: ClaudeMcpBridge | undefined;
     let client: ClaudeClient | undefined;
     let live = true;
+    let initializedOk = false;
     const close = async () => {
       live = false;
       try { await bridge?.close(); } finally { await client?.close(); }
@@ -731,6 +733,7 @@ async function connectClaudeEngine(
       signal?.addEventListener("abort", onAbort, { once: true });
       await client.start();
       const initialized = await client.initialize(bridge?.announceOn());
+      initializedOk = true;
       if (!isClaudeSignedIn(initialized.account)) throw new Error(CLAUDE_NOT_SIGNED_IN);
       await next.verify?.(client);
       if (forward !== undefined) notices.push(...forward.notices);
@@ -738,7 +741,12 @@ async function connectClaudeEngine(
     } catch (error) {
       await close();
       forward?.cleanupFile();
-      if (!disableBuiltins && client?.hasBuiltinPlugin && !signal?.aborted && current()) {
+      // Retry only explicit app-plugin load/argument rejection during initialize.
+      // Account, verification and generic transport failures have no such attribution.
+      const pluginFailure = !initializedOk && error instanceof Error &&
+        /claude control request failed:/i.test(error.message) &&
+        /(?:failed to (?:load|initialize) plugin[ :]+anycode-app\b|(?:unknown|unrecognized) (?:option|argument)[ :]+['"]?--plugin-dir\b)/i.test(error.message);
+      if (pluginFailure && !disableBuiltins && client?.hasBuiltinPlugin && !signal?.aborted && current()) {
         notices.push(warning("App builtins unavailable: plugin-start-failed. Retrying without the adapter."));
         return openTransport(next, current, signal, true);
       }
