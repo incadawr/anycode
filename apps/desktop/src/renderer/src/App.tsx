@@ -126,6 +126,20 @@ export function branchSwitchAction(hint: string | null): PaletteAction {
   };
 }
 
+/** Session-scoped diagnostics entry shared with the environment menu. */
+export function diagnosticsExportAction(): PaletteAction {
+  const current = () => {
+    const { activeTabId, tabs } = useTabsStore.getState();
+    const tab = tabs.find(tab => tab.tabId === activeTabId);
+    return { tabId: activeTabId, enabled: !!tab?.sessionId && !!window.anycode?.diagnostics };
+  };
+  return {
+    id: "diagnostics.export", label: "Export diagnostics…", hint: null,
+    get enabled() { return current().enabled; },
+    run: () => { const { tabId, enabled } = current(); if (enabled) window.dispatchEvent(new CustomEvent("anycode:export-diagnostics", { detail: tabId })); },
+  };
+}
+
 export function runBranchSwitchAction(action: ActionId): boolean {
   if (action !== "branch.switch") return false;
   branchSwitchAction(null).run();
@@ -1826,6 +1840,7 @@ export function App() {
       run: () => handleToggleSidebarCollapsed(),
     },
     branchSwitchAction(hintFor("branch.switch")),
+    diagnosticsExportAction(),
     {
       id: "mode.focus",
       label: "Change permission mode…",

@@ -187,6 +187,7 @@ describe("ACTION_CATALOG (§1.4)", () => {
       "terminal.toggle",
       "settings.open",
       "branch.switch",
+      "diagnostics.export",
       "sidebar.toggle",
       "sidebar.search",
       "tab.activate",
@@ -197,9 +198,9 @@ describe("ACTION_CATALOG (§1.4)", () => {
     expect(new Set(catalogActions).size).toBe(catalogActions.length); // no dupes
   });
 
-  it("marks only tab.activate and turn.interrupt non-editable", () => {
+  it("marks palette-only export and reserved actions non-editable", () => {
     const nonEditable = ACTION_CATALOG.filter((m) => !m.editable).map((m) => m.action);
-    expect(nonEditable).toEqual(["tab.activate", "turn.interrupt"]);
+    expect(nonEditable).toEqual(["diagnostics.export", "tab.activate", "turn.interrupt"]);
     expect(ACTION_CATALOG.filter((m) => m.editable)).toHaveLength(10);
   });
 

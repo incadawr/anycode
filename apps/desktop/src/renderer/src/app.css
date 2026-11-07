@@ -9080,3 +9080,10 @@ dialog.role-picker-dialog {
 .session-extensions-dot.tone-danger { background: var(--danger); }
 .session-extensions-warning { position: absolute; top: 0; right: 0; margin: 0; }
 .session-extensions-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.environment-diagnostics-link {
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  justify-content: space-between;
+}
+.environment-diagnostics-link > :first-child { text-decoration: underline; text-underline-offset: 3px; }

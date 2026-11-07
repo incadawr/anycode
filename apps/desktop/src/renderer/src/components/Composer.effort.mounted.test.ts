@@ -252,3 +252,25 @@ describe("Composer — native effort handoff", () => {
     }
   });
 });
+
+it("keeps Extensions and LSP setup reachable before the first message", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(window, "anycode");
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    listSessions: async () => [],
+    lspConfig: { status: async () => ({ entries: { project: [], user: [] }, catalog: [] }) },
+  } });
+  const store = nativeStore();
+  store.setState({ workspace: "/fixture/repo", transcript: [], engine: null });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "empty-tab", store } }, createElement(Composer))));
+    const trigger = container.querySelector<HTMLButtonElement>('.composer-environment [aria-label="Extensions"]');
+    expect(trigger).not.toBeNull();
+    await act(async () => trigger!.click());
+    const lsp = document.querySelector<HTMLButtonElement>('[data-extension-category="lsp"]');
+    expect(lsp).not.toBeNull();
+    await act(async () => lsp!.click());
+    expect(document.querySelector('[role="region"][aria-label="LSP"]')?.textContent).toContain("Manage");
+  } finally { await act(async () => root.unmount()); if (descriptor) Object.defineProperty(window, "anycode", descriptor); else Reflect.deleteProperty(window, "anycode"); }
+});

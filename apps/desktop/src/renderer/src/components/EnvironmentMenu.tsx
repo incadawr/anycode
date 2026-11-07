@@ -3,6 +3,7 @@
  * it keeps the current workspace/branch quiet in the chrome and funnels the
  * rare, detailed work into the existing Git inspector drawer.
  */
+import { useTabsStore } from "../tabs-store.js";
 import { NativeSessionAccess } from "./NativeSessionAccess.js";
 import { SessionAccessRow } from "./SessionAccessRow.js";
 import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
@@ -55,6 +56,8 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const tabStore = useTabStoreApi();
   const send = useTabSend();
   const tabId = useContext(TabContext)?.tabId;
+  const title = useTabsStore(state => state.tabs.find(tab => tab.tabId === tabId)?.title);
+  const [diagnosticsRequest, setDiagnosticsRequest] = useState(0);
   const workspace = useTabStore((state) => state.workspace);
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
@@ -78,6 +81,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   }, []);
   const close = useCallback(() => {
     setOpen(false);
+    setDiagnosticsRequest(0);
     triggerRef.current?.focus();
   }, []);
   useEffect(() => {
@@ -134,6 +138,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   useEffect(() => {
     function openBranches(event: Event) {
       if ((event as CustomEvent<string>).detail !== tabId || !workspace || !gitAvailable) return;
+      setDiagnosticsRequest(0);
       setBranchesOpen(true);
       setOpen(true);
       rootRef.current?.querySelector<HTMLInputElement>(".environment-branch-picker input")?.focus();
@@ -142,11 +147,23 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     return () => window.removeEventListener("anycode:switch-branch", openBranches);
   }, [tabId, workspace, gitAvailable]);
 
+  useEffect(() => {
+    const exportDiagnostics = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== tabId || !workspace || switchPending) return;
+      setBranchesOpen(false);
+      setOpen(true);
+      setDiagnosticsRequest(request => request + 1);
+    };
+    window.addEventListener("anycode:export-diagnostics", exportDiagnostics);
+    return () => window.removeEventListener("anycode:export-diagnostics", exportDiagnostics);
+  }, [tabId, workspace, switchPending]);
+
   if (!workspace) {
     return null;
   }
 
   const workspacePath: string = workspace;
+  const showWorkspace = placement === "composer" || basename(workspacePath) !== (title ?? basename(workspacePath));
   const branch = status ? gitPillLabel(status) : null;
   const dirtyCount = status?.dirtyCount ?? 0;
   const label = branch ? `${basename(workspacePath)} · ${branch}` : basename(workspacePath);
@@ -191,10 +208,10 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         onClick={toggle}
       >
         <Folder />
-        <span className="environment-workspace" title={workspacePath}>{workspaceLabel(workspacePath)}</span>
+        {showWorkspace && <span className="environment-workspace" title={workspacePath}>{workspaceLabel(workspacePath)}</span>}
         {branch && (
           <>
-            <span className="environment-separator" aria-hidden="true">/</span>
+            {showWorkspace && <span className="environment-separator" aria-hidden="true">/</span>}
             <GitBranch />
             <span className="environment-branch">{branch}</span>
           </>
@@ -207,7 +224,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
       {open && (
         <div ref={panelRef} className="environment-menu" role="dialog" aria-modal="false" aria-label="Environment"
           onBlur={event => {
-            if (!branchesOpen && !switchPending && event.relatedTarget && !rootRef.current?.contains(event.relatedTarget as Node)) setOpen(false);
+            if (!branchesOpen && !switchPending && event.relatedTarget && !rootRef.current?.contains(event.relatedTarget as Node)) { setOpen(false); setDiagnosticsRequest(0); }
           }}
           onKeyDown={event => {
             if (event.key !== "Tab" || !branchesOpen) return;
@@ -242,7 +259,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   className="environment-menu-row"
                   ref={branchRef}
                   aria-haspopup="listbox"
-                  onClick={() => setBranchesOpen(true)}
+                  onClick={() => { setDiagnosticsRequest(0); setBranchesOpen(true); }}
                 >
                   <GitBranch />
                   <span className="environment-menu-row-main">
@@ -272,12 +289,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             {/* the per-session "Full browser access" switch (asks before turning ON). */}
             <BrowserAccessRow />
           </section>
-          <section className="environment-menu-section environment-menu-group" aria-label="Diagnostics">
-            <div className="environment-menu-title">Diagnostics</div>
-            {/* GitHub #18: export THIS session's tree (session + children) as an
-                anonymised bundle, with a preview before saving. */}
-            <DiagnosticsExportSection />
-          </section>
+          <DiagnosticsExportSection request={diagnosticsRequest} />
           </>}
         </div>
       )}

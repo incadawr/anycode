@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import { createDesktopStore } from "../store.js";
 import { TabContext } from "../tab-context.js";
 import type { UiToHostMessage } from "../../../shared/protocol.js";
-import { branchSwitchAction, runBranchSwitchAction } from "../App.js";
+import { branchSwitchAction, runBranchSwitchAction, diagnosticsExportAction } from "../App.js";
 import { matchKeymap } from "../keymap.js";
 import { useTabsStore } from "../tabs-store.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
@@ -87,12 +87,13 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     const dialog = host.querySelector('[role="dialog"][aria-label="Environment"]')!;
     expect(dialog).not.toBeNull();
     expect(dialog.getAttribute("aria-modal")).toBe("false");
-    for (const title of ["Workspace", "Session access", "Diagnostics"]) {
+    for (const title of ["Workspace", "Session access"]) {
       expect(dialog.querySelector('section[aria-label="' + title + '"]')).not.toBeNull();
     }
     expect(dialog.textContent).toContain("this session only");
     expect(dialog.querySelector('section[aria-label="Workspace"] .environment-menu-row-main > span')?.textContent).toBe("notes");
-    expect(dialog.querySelector('section[aria-label="Diagnostics"]')?.textContent?.match(/Diagnostics/g)).toHaveLength(1);
+    expect(dialog.querySelector('section[aria-label="Diagnostics"]')).toBeNull();
+    expect(dialog.lastElementChild?.textContent).toContain("Export diagnostics…");
     expect(dialog.querySelector('section[aria-label="Workspace"]')?.textContent).toContain("Git is not available for this workspace.");
     expect(dialog.querySelector('[aria-label="Native session access"]')).toBeNull();
     const access = '[data-environment-action="sessions-api-access"]';
@@ -635,4 +636,50 @@ it("palette activation reads current git availability and active tab", async () 
     store.setState({ git: { ...store.getState().git, status: null } });
     dispatch.mockClear(); action.run(); expect(dispatch).not.toHaveBeenCalled();
   } finally { getStore.mockRestore(); dispatch.mockRestore(); useTabsStore.setState({ activeTabId: previous }); }
+});
+
+it("hides a matching header folder and keeps differing titles", async () => {
+  await branchMenu(async (host) => {
+    const previous = useTabsStore.getState().tabs;
+    try {
+      await act(async () => useTabsStore.setState({ tabs: [{ tabId: "tab", title: "repo" }] as typeof previous }));
+      expect(host.querySelector(".environment-workspace")).toBeNull();
+      expect(host.querySelector(".environment-separator")).toBeNull();
+      expect(host.querySelector(".environment-trigger")?.getAttribute("aria-label")).toContain("repo");
+      await act(async () => useTabsStore.setState({ tabs: [{ tabId: "tab", title: "Fix login" }] as typeof previous }));
+      expect(host.querySelector(".environment-workspace")?.textContent).toContain("repo");
+    } finally { await act(async () => useTabsStore.setState({ tabs: previous })); }
+  });
+});
+
+it("exports through the bottom row and active-tab palette entry using the existing preview", async () => {
+  await branchMenu(async (host) => {
+    const previous = useTabsStore.getState();
+    const preview = vi.fn(async () => ({ ok: true, preview: "scrubbed bundle", summary: { bytes: 12, redactions: 0, truncated: false, sections: [] } }));
+    Object.assign(window.anycode, { diagnostics: { preview, save: vi.fn() } });
+    await act(async () => useTabsStore.setState({ activeTabId: "tab", tabs: [{ tabId: "tab", sessionId: "session-fixture" }] as typeof previous.tabs }));
+    try {
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+      const row = host.querySelector<HTMLButtonElement>('[data-environment-action="diagnostics-preview"]')!;
+      expect(row.textContent).toContain("Export diagnostics…");
+      await act(async () => row.click());
+      expect(preview).toHaveBeenCalledWith({ sessionId: "session-fixture" });
+      expect(host.textContent).toContain("scrubbed bundle");
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      const action = diagnosticsExportAction();
+      expect(action).toMatchObject({ id: "diagnostics.export", label: "Export diagnostics…", enabled: true });
+      await act(async () => action.run());
+      expect(preview).toHaveBeenCalledTimes(2);
+      expect(host.textContent).toContain("scrubbed bundle");
+      await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+      await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+      expect(preview).toHaveBeenCalledTimes(2);
+      expect(host.textContent).not.toContain("scrubbed bundle");
+      await act(async () => useTabsStore.setState({ activeTabId: "foreign" }));
+      expect(action.enabled).toBe(false);
+      action.run();
+      expect(preview).toHaveBeenCalledTimes(2);
+    } finally { await act(async () => useTabsStore.setState(previous)); }
+  });
 });
