@@ -7,10 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.88] - 2026-11-07
+
 ### Added
 
-- Parent sessions can place new Core session children in separate Git checkouts, with copyable recovery details and conservative cleanup; this separates cwd, not security permissions.
-- Root Claude and Codex tabs can receive three built-in AnyCode setup and browser skills, with Settings → Skills switches for the next process launch. Claude uses a session plugin and retries once without it after an unknown plugin startup failure. Codex forwards app skills through verified extra roots and falls back to ordinary Codex when incompatible. Recognition and model use depend on CLI compatibility.
+- Parent sessions can place new Core session children in separate Git checkouts, with copyable recovery details and conservative cleanup; this separates working folders, not security permissions.
+- Root Claude and Codex tabs can use three built-in AnyCode setup and browser skills, switchable in Settings → Skills for the next launch. If a CLI cannot load them, the session starts without them; recognition and model use depend on CLI compatibility.
 
 ## [0.0.87] - 2026-11-07
 
