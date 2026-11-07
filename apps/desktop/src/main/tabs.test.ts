@@ -2,6 +2,7 @@ import { createChildLayoutStore } from "../renderer/src/child-layout.js";
 import { NodeGitAdapter } from "@anycode/core/node-git";
 import * as childCleanup from "./child-worktree-cleanup.js";
 import { ChildWorktreeResources, type ChildWorktreeReceipt, type ChildWorktreeSnapshot } from "./child-worktree-resource.js";
+import { closeSessionForAgent } from "./communication-close-session.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
 /**
@@ -9294,7 +9295,7 @@ describe("peer host permission authority", () => {
 
 
 describe("Agent managed worktree admission", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
   function rig(engine: EngineId = "core", overrides: Partial<TabHostManagerDeps> = {}) {
     const live = shutdownableForkRig();
     const fork = vi.fn(live.fork);
@@ -9302,7 +9303,7 @@ describe("Agent managed worktree admission", () => {
     const receipt: ChildWorktreeReceipt = { ...snapshot, version: 1, id: "resource", appRunId: "run",
       parentSessionId: "parent", childSessionId: "child", path: "/ws/.anycode/worktrees/child-resource",
       branch: "anycode-wt/child-resource", phase: "active", reason: null };
-    const resources = { read: vi.fn(async () => receipt), snapshot: vi.fn(async () => snapshot), allocate: vi.fn(async () => receipt),
+    const resources = { findForSession: vi.fn(() => receipt), read: vi.fn(async () => receipt), snapshot: vi.fn(async () => snapshot), allocate: vi.fn(async () => receipt),
       update: vi.fn(async (_r: ChildWorktreeReceipt, phase: ChildWorktreeReceipt["phase"], reason: string) => ({ ...receipt, phase, reason })) };
     const manager = childManager(fork, windowRig().window, { childWorktrees: resources, engineReady: () => true, ...overrides });
     const root = manager.createTab({ workspace: "/ws", projectRoot: "/project", sessionId: "parent", engine, resume: false });
@@ -9310,6 +9311,37 @@ describe("Agent managed worktree admission", () => {
     root.tab.childWorktreePolicy = true;
     return { manager, tab: root.tab, host: live.hosts[0]!, fork, resources, receipt };
   }
+
+  it.each(["active", "retained", "removed", "unknown", "not-created"] as const)("describes continuation refusal for %s", phase => {
+    const receipt = { ...rig().receipt, phase };
+    const r = rig("core", { childWorktrees: { findForSession: () => receipt } as never });
+    const detail = r.manager.managedContinuationRefusal("child")!.detail;
+    if (phase === "active") expect(detail).toContain("existing session is not continued");
+    if (phase === "retained") expect(detail.toLowerCase()).toContain("inspect retained work at");
+    if (phase === "removed") { expect(detail).toContain("folder was removed"); expect(detail).not.toContain("inspect retained work at"); }
+    if (phase === "unknown" || phase === "not-created") expect(detail).toContain("whether");
+  });
+
+  it("records uncertainty when an opened root gives up respawning", async () => {
+    const r = rig("core", { limits: { maxRapidRespawns: 0 } });
+    const opened = r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
+    if (!opened.ok) throw Error("missing root");
+    (opened.tab.proc as unknown as FakeHost).emit("exit", 1); await flush();
+    expect(r.resources.update).toHaveBeenCalledWith(expect.objectContaining({ id: r.receipt.id, phase: "active" }), "unknown", expect.stringContaining("Host exited"));
+    expect(opened.tab.childWorktree?.phase).toBe("unknown");
+  });
+
+  it("releases closed managed roots to the journal lookup", async () => {
+    vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "removed", reason: "empty" });
+    const r = rig();
+    const findForSession = vi.fn(() => ({ ...r.receipt, phase: "removed" as const }));
+    Object.assign(r.resources, { findForSession });
+    const opened = r.manager.createTab({ workspace: r.receipt.path, sessionId: "opened", resume: false, childWorktree: r.receipt });
+    if (!opened.ok) throw Error("missing root");
+    await r.manager.closeTab(opened.tab.tabId);
+    expect(r.manager.managedContinuationRefusal("opened")?.detail).toContain("folder was removed");
+    expect(findForSession).toHaveBeenCalledWith("opened");
+  });
 
   it.each([true, false])("refuses managed follow-up after completion with policy=%s", async policy => {
     vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: "removed", reason: "empty" });
@@ -9404,13 +9436,32 @@ describe("Agent managed worktree admission", () => {
     const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockReturnValue(new Promise(resolve => { finish = resolve; }));
     const r = rig("core", { limits: { exitDeadlineMs: 5 } });
     r.host.emit("message", spawnRequest()); await flush();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     child(r).host.emit("message", childTerminalMsg());
-    await new Promise(resolve => setTimeout(resolve, 20)); await flush();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(r.manager.listChildRuns()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(30000);
+    vi.useRealTimers();
     expect(r.manager.listChildRuns()).toHaveLength(0);
     expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "terminal", finalText: expect.stringContaining("unknown") }));
     expect(settle.mock.calls[0]![0].signal?.aborted).toBe(true);
     finish({ phase: "removed", reason: "late" }); await flush();
     expect(childRunEvents(r.host).filter(e => e.kind === "terminal")).toHaveLength(1);
+  });
+
+  it("parent waits quietly for bounded child settlement", async () => {
+    let finish!: (value: { phase: "retained"; reason: string }) => void;
+    vi.spyOn(childCleanup, "settleChildWorktree").mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const r = rig(); r.host.emit("message", spawnRequest()); await flush();
+    child(r).host.emit("message", childTerminalMsg()); await flush();
+    r.manager.createTab({ workspace: "/other", sessionId: "other", resume: false });
+    const immediate = vi.spyOn(globalThis, "setImmediate");
+    let closed = false;
+    const closing = r.manager.closeTab(r.tab.tabId).then(() => { closed = true; });
+    await flush(); expect(closed).toBe(false);
+    expect(immediate).not.toHaveBeenCalled();
+    finish({ phase: "retained", reason: "kept" }); await closing;
+    expect(r.manager.listChildRuns()).toHaveLength(0);
   });
 
   it.each(["cancel", "parent", "quit"])("%s drains a writing child once through settlement", async action => {
@@ -9467,11 +9518,15 @@ describe("Agent managed worktree admission", () => {
     await r.manager.closeTab(r.tab.tabId);
     expect(settle).not.toHaveBeenCalled();
     expect(opened.tab.proc).not.toBeNull();
-    await r.manager.closeTab(opened.tab.tabId);
+    vi.spyOn(r.manager, "communicationRequest").mockResolvedValue({ state: "idle" });
+    const openedIds = new Set(["opened"]), notify = vi.fn();
+    expect(await closeSessionForAgent(r.manager, openedIds, "opened", notify)).toEqual({ ok: true });
+    expect(openedIds.size).toBe(0); expect(notify).toHaveBeenCalledWith(opened.tab.tabId);
     expect(settle).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])("real Git terminal/cancel preserves work and refs (dirty=%s)", async dirty => {
+  it.each(["empty", "dirty", "commit"])("real Git terminal/cancel preserves work and refs (%s)", async kind => {
+    const dirty = kind !== "empty";
     const scratch = await mkdtemp(join(tmpdir(), "managed-close-"));
     const git = (...args: string[]) => execFileSync("git", args, { cwd: scratch, encoding: "utf8", env: {
       ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
@@ -9488,6 +9543,8 @@ describe("Agent managed worktree admission", () => {
       c.host.postMessage.mockImplementation(() => {});
       const remove = vi.spyOn(NodeGitAdapter.prototype, "worktreeRemove");
       if (dirty) await writeFile(join(receipt.path, "work"), "preserve me");
+      if (kind === "commit") { git("-C", receipt.path, "add", "work"); git("-C", receipt.path, "commit", "-m", "Keep work"); }
+      const head = git("rev-parse", receipt.branch);
       if (dirty) r.host.emit("message", runCancel(c.accepted.requestId));
       else c.host.emit("message", childTerminalMsg({ finalText: "" }));
       await flush(); expect(remove).not.toHaveBeenCalled();
@@ -9495,11 +9552,15 @@ describe("Agent managed worktree admission", () => {
       await vi.waitFor(() => expect(r.manager.listChildRuns()).toHaveLength(0), { timeout: 5000 });
       expect((await resources.read(receipt.id)).phase).toBe(dirty ? "retained" : "removed");
       expect(remove).toHaveBeenCalledTimes(dirty ? 0 : 1);
+      const journal = await readFile(join(scratch, "data", "child-worktrees", `${receipt.id}.json`), "utf8");
+      remove.mockClear();
       const restarted = rig("core", { childWorktrees: new ChildWorktreeResources({ userData: join(scratch, "data"), appRunId: "next-run" }) });
       expect(restarted.manager.createTab({ workspace: scratch, sessionId: c.tab.sessionId, resume: true }))
         .toMatchObject({ ok: false, reason: "worktree_unavailable", worktreePath: receipt.path });
       expect(restarted.fork).toHaveBeenCalledOnce();
-      expect(git("rev-parse", receipt.branch)).toBe(receipt.baseSha);
+      expect(git("rev-parse", receipt.branch)).toBe(head);
+      expect(remove).not.toHaveBeenCalled();
+      expect(await readFile(join(scratch, "data", "child-worktrees", `${receipt.id}.json`), "utf8")).toBe(journal);
       if (dirty) expect(await readFile(join(receipt.path, "work"), "utf8")).toBe("preserve me");
     } finally { await rm(scratch, { recursive: true, force: true }); }
   });
@@ -9564,6 +9625,19 @@ describe("Agent managed worktree admission", () => {
     expect(r.fork).toHaveBeenCalledTimes(beforeLateAdd);
     expect(r.manager.listChildRuns()).toHaveLength(0);
     expect(r.resources.update).toHaveBeenCalledWith(r.receipt, "retained", expect.any(String));
+  });
+
+  it("does not write refusal into a parent removed during allocation", async () => {
+    const r = rig();
+    let reject!: (error: Error) => void;
+    r.resources.allocate.mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
+    r.host.emit("message", spawnRequest()); await flush();
+    r.manager.createTab({ workspace: "/other", sessionId: "other", resume: false });
+    await r.manager.closeTab(r.tab.tabId);
+    r.tab.childWorktreeRefusal = "closed parent";
+    reject(new Error("late allocation refusal")); await flush();
+    expect(r.tab.childWorktreeRefusal).toBe("closed parent");
+    expect(r.manager.listChildRuns()).toHaveLength(0);
   });
 
   it.each(["fork", "prepare"])("%s failure keeps receipt and releases the reservation", async failure => {

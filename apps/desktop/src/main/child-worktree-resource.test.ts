@@ -127,7 +127,7 @@ it("writes exclusive durable intent before add and retains partial add residue",
     return { ok: false, reason: "partial add" };
   });
   const resources = manager(); const snapshot = await resources.snapshot(root, root);
-  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect possible residue/);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect whether any residue was left/);
   const [receipt] = await receipts(); expect(receipt.phase).toBe("unknown");
   expect(await fs.readFile(path.join(receipt.path, "residue"), "utf8")).toBe("keep");
 });
@@ -135,7 +135,7 @@ it("writes exclusive durable intent before add and retains partial add residue",
 it("keeps original intent if atomic update fails after successful add", async () => {
   const resources = manager({ fs: { ...fs, rename: async () => { throw new Error("disk full"); } } });
   const snapshot = await resources.snapshot(root, root);
-  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect possible residue/);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect whether any residue was left/);
   const [receipt] = await receipts(); expect(receipt.phase).toBe("intent");
   expect(git(receipt.path, "rev-parse", "HEAD")).toBe(snapshot.baseSha);
 });
@@ -151,7 +151,7 @@ it("retains checkout when post-add listed identity disagrees", async () => {
     return instance;
   } });
   const snapshot = await resources.snapshot(root, root);
-  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect possible residue/);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect whether any residue was left/);
   const [receipt] = await receipts(); expect(receipt.phase).toBe("unknown");
   expect(git(receipt.path, "rev-parse", "HEAD")).toBe(snapshot.baseSha);
 });
@@ -187,7 +187,7 @@ it("atomically replaces a complete intent with a synced update", async () => {
 it("keeps a recovery receipt when add throws without saving external error text", async () => {
   vi.spyOn(NodeGitAdapter.prototype, "worktreeAdd").mockRejectedValue(new Error("sensitive external text"));
   const resources = manager(); const snapshot = await resources.snapshot(root, root);
-  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect possible residue/);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect whether any residue was left/);
   const [receipt] = await receipts(); expect(receipt.phase).toBe("unknown");
   expect(JSON.stringify(receipt)).not.toContain("sensitive external text");
 });
@@ -206,7 +206,7 @@ it("retains residue if canonical path disagrees after add", async () => {
     return path.basename(target).startsWith("child-") ? path.join(scratch, "elsewhere") : result;
   } } });
   const snapshot = await resources.snapshot(root, root);
-  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect possible residue/);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect whether any residue was left/);
   const [receipt] = await receipts(); expect(receipt.phase).toBe("unknown");
   expect(git(receipt.path, "rev-parse", "HEAD")).toBe(snapshot.baseSha);
 });
@@ -219,7 +219,7 @@ it("retains checkout when the post-add registration read fails", async () => {
     return instance;
   } });
   const snapshot = await resources.snapshot(root, root);
-  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect possible residue/);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect whether any residue was left/);
   const [receipt] = await receipts(); expect(receipt.phase).toBe("unknown");
   expect(git(receipt.path, "rev-parse", "HEAD")).toBe(snapshot.baseSha);
 });
@@ -253,7 +253,7 @@ it("retains checkout and records uncertainty when directory fsync fails after re
     return handle;
   } } });
   const snapshot = await resources.snapshot(root, root);
-  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect possible residue/);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/inspect whether any residue was left/);
   expect(syncs).toBe(4);
   const [receipt] = await receipts();
   expect(receipt.phase).toBe("unknown");
@@ -276,4 +276,18 @@ it("ignores a missing stale linked registration when snapshotting", async () => 
 it("does not claim retention when add refuses before creating the path", async () => {
   vi.spyOn(NodeGitAdapter.prototype, "worktreeAdd").mockResolvedValue({ ok: false, reason: "refused" });
   await expect(manager().allocate(await manager().snapshot(root, root), sessions)).rejects.toThrow(/inspect.*path/i);
+});
+
+
+it.each([true, false])("isolates identifiable corrupt receipts and names unidentifiable journals (identified=%s)", async identified => {
+  const resources = manager();
+  const receipt = await resources.allocate(await resources.snapshot(root, root), sessions);
+  const journal = path.join(userData, "child-worktrees", `${receipt.id}.json`);
+  const broken = identified ? '{"childSessionId":"child",' : '{broken';
+  await fs.writeFile(journal, broken);
+  const restarted = manager({ appRunId: "next-run" });
+  if (identified) expect(restarted.findForSession("ordinary")).toBeUndefined();
+  else expect(() => restarted.findForSession("ordinary")).toThrow(journal);
+  expect(() => restarted.findForSession("child")).toThrow(journal);
+  expect(await fs.readFile(journal, "utf8")).toBe(broken);
 });

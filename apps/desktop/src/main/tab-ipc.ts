@@ -790,6 +790,10 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   }
 
+  const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
+  if (openInTabId !== undefined) {
+    return { ok: false, reason: "already_open", focusTabId: openInTabId };
+  }
   const managedRefusal = deps.manager.managedContinuationRefusal?.(req.sessionId);
   if (managedRefusal) return { ok: false, reason: "worktree_unavailable", ...managedRefusal };
   const meta = await deps.persistence.getRootSession(req.sessionId);
@@ -815,10 +819,6 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // a resumed profile nobody diagnosed since boot is hydrated, not refused.
   if (!isEngineId(engine) || (!historyOnly && !(await spawnableWhenKnown(deps, engine, meta.codexProfileId)))) {
     return notReady(deps, engine, meta.connectionId, meta.codexProfileId);
-  }
-  const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
-  if (openInTabId !== undefined) {
-    return { ok: false, reason: "already_open", focusTabId: openInTabId };
   }
   // Codex-profiles W3-F: resume re-resolves the profile the session was
   // CREATED under (`meta.codexProfileId`, persisted host metadata — never the

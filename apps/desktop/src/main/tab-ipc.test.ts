@@ -3101,3 +3101,16 @@ it("refuses managed history before reading a legacy row or priming a host", asyn
     { kind: "resume", sessionId: "managed" })).toMatchObject({ ok: false, reason: "worktree_unavailable", worktreePath: "/retained" });
   expect(getRootSession).not.toHaveBeenCalled(); expect(createTab).not.toHaveBeenCalled(); expect(primeMcpSecrets).not.toHaveBeenCalled();
 });
+
+
+it("focuses an already open managed session before consulting receipts or history", async () => {
+  const { manager, createTab } = makeManager();
+  manager.sessionOpenInTab = () => "live-tab";
+  manager.managedContinuationRefusal = vi.fn(() => ({ detail: "Cannot resume" }));
+  const getRootSession = vi.fn(async () => null);
+  const { dialog } = makeDialog({ canceled: true, filePaths: [] });
+  expect(await handleCreate({ manager, dialog, persistence: { ...persistenceStub, getRootSession } },
+    { kind: "resume", sessionId: "managed" })).toEqual({ ok: false, reason: "already_open", focusTabId: "live-tab" });
+  expect(manager.managedContinuationRefusal).not.toHaveBeenCalled();
+  expect(getRootSession).not.toHaveBeenCalled(); expect(createTab).not.toHaveBeenCalled();
+});

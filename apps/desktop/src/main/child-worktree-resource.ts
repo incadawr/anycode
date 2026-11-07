@@ -124,7 +124,7 @@ export class ChildWorktreeResources {
         : "Allocation stopped before checkout creation";
       try { await this.replace(receipt); } catch { /* Durable intent remains authoritative. */ }
       throw new Error(addAttempted
-        ? `Child worktree allocation failed; inspect possible residue at path ${receipt.path}`
+        ? `Child worktree allocation failed; inspect whether any residue was left at path ${receipt.path}`
         : "Child worktree allocation failed; checkout creation was not attempted");
     }
   }
@@ -134,11 +134,27 @@ export class ChildWorktreeResources {
     let files: string[];
     try { files = readdirSync(this.directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+    let refusal: Error | undefined;
     for (const file of files) {
       if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
-      const receipt = JSON.parse(readFileSync(path.join(this.directory, file), "utf8")) as ChildWorktreeReceipt;
-      if (receipt.childSessionId === sessionId) return receipt;
+      const journal = path.join(this.directory, file);
+      let raw = "";
+      try {
+        raw = readFileSync(journal, "utf8");
+        const value = JSON.parse(raw);
+        validateReceipt(value, file.slice(0, -5));
+        if (value.childSessionId === sessionId) return value;
+      } catch {
+        // A truncated journal can still identify its owner. Ambiguous identity
+        // stays fail-closed; never discard evidence or echo damaged contents.
+        const ids = [...raw.matchAll(/"childSessionId"\s*:\s*("(?:[^"\\]|\\.)*")/g)];
+        let owner: unknown;
+        try { if (ids.length === 1) owner = JSON.parse(ids[0]![1]!); } catch { /* Unknown owner. */ }
+        if (typeof owner !== "string" || !owner || owner === sessionId)
+          refusal = new Error(`Worktree receipt could not be verified. Inspect and repair the resource journal file ${journal}; it has been preserved.`);
+      }
     }
+    if (refusal) throw refusal;
     return undefined;
   }
 
@@ -146,14 +162,7 @@ export class ChildWorktreeResources {
   async read(id: string): Promise<ChildWorktreeReceipt> {
     if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid receipt identity");
     const value = JSON.parse(await this.fs.readFile(this.receiptPath(id), "utf8"));
-    const strings = ["id", "appRunId", "parentSessionId", "childSessionId", "sourceRoot",
-      "storageRoot", "projectRoot", "baseSha", "path", "branch"];
-    if (!value || value.version !== 1 || value.id !== id ||
-        strings.some((key) => typeof value[key] !== "string" || !value[key]) ||
-        !["intent", "active", "unknown", "retained", "removed", "not-created"].includes(value.phase) ||
-        !(value.reason === null || typeof value.reason === "string")) {
-      throw new Error("Invalid receipt");
-    }
+    validateReceipt(value, id);
     return value;
   }
 
@@ -196,4 +205,15 @@ export class ChildWorktreeResources {
 export function receiptsEqual(a: ChildWorktreeReceipt, b: ChildWorktreeReceipt): boolean {
   const keys = Object.keys(a) as (keyof ChildWorktreeReceipt)[];
   return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
+}
+
+function validateReceipt(value: any, id: string): void {
+  const strings = ["id", "appRunId", "parentSessionId", "childSessionId", "sourceRoot",
+    "storageRoot", "projectRoot", "baseSha", "path", "branch"];
+  if (!value || value.version !== 1 || value.id !== id ||
+      strings.some((key) => typeof value[key] !== "string" || !value[key]) ||
+      !["intent", "active", "unknown", "retained", "removed", "not-created"].includes(value.phase) ||
+      !(value.reason === null || typeof value.reason === "string")) {
+    throw new Error("Invalid receipt");
+  }
 }

@@ -295,6 +295,11 @@ export interface BreakerLimits {
   exitDeadlineMs: number;
 }
 
+// Git status, registration checks and non-force removal can exceed host teardown.
+export const CHILD_WORKTREE_CLEANUP_DEADLINE_MS = 30000;
+const CHILD_FINAL_TEXT_LIMIT = 24000;
+const CHILD_DRAIN_RECHECK_MS = 25;
+
 export const DEFAULT_BREAKER_LIMITS: BreakerLimits = {
   minHealthyUptimeMs: 2000,
   maxRapidRespawns: 5,
@@ -1436,9 +1441,9 @@ export class TabHostManager {
         timer = setTimeout(() => {
           controller.abort();
           const reason = "Settlement deadline expired; inspect checkout and branch manually";
-          void resources.update(receipt, "unknown", reason).catch(() => {});
+          void resources.update({ ...receipt }, "unknown", reason).catch(() => {});
           resolve({ phase: "unknown", reason });
-        }, this.limits.exitDeadlineMs);
+        }, CHILD_WORKTREE_CLEANUP_DEADLINE_MS);
       });
       const cleanup = settleChildWorktree({ resources, receipt, signal: controller.signal,
         permission: { appRunId: receipt.appRunId, childSessionId: tab.sessionId,
@@ -1450,7 +1455,12 @@ export class TabHostManager {
       try { return await Promise.race([cleanup, deadline]); }
       finally { if (timer !== undefined) clearTimeout(timer); }
     };
-    const pending = settle().catch(() => ({ phase: "unknown", reason: "Settlement failed; inspect the receipt and checkout manually" }));
+    const pending = settle().catch(() => ({ phase: "unknown", reason: "Settlement failed; inspect the receipt and checkout manually" }))
+      .then(disposition => {
+        receipt.phase = disposition.phase as ChildWorktreeReceipt["phase"];
+        receipt.reason = disposition.reason;
+        return disposition;
+      });
     this.worktreeSettlements.set(receipt, pending);
     return pending;
   }
@@ -1461,8 +1471,15 @@ export class TabHostManager {
     try {
       const receipt = this.managedSessions.get(sessionId) ?? this.deps.childWorktrees?.findForSession?.(sessionId);
       if (!receipt) return undefined;
-      return { worktreePath: receipt.path, detail: `Managed worktree sessions cannot resume or reopen. Start a new session; inspect retained work at ${receipt.path} (${receipt.branch}). A removed checkout cannot be reopened.` };
-    } catch { return { detail: "Worktree receipts could not be verified. Inspect the resource journal before starting a new session." }; }
+      const recovery = receipt.phase === "active"
+        ? "The existing session is not continued; switch to its open tab."
+        : receipt.phase === "retained"
+          ? `Inspect retained work at ${receipt.path} (${receipt.branch}).`
+          : receipt.phase === "removed"
+            ? `The folder was removed (${receipt.path}); branch ${receipt.branch} was kept.`
+            : `Inspect the resource journal and check whether any work remains at ${receipt.path} (${receipt.branch}).`;
+      return { worktreePath: receipt.path, detail: `Managed worktree sessions cannot resume or reopen. Start a new session. ${recovery}` };
+    } catch (error) { return { detail: error instanceof Error ? error.message : "Worktree receipts could not be verified. Inspect the resource journal before starting a new session." }; }
   }
 
   get childWorktreeResources() { return this.deps.childWorktrees; }
@@ -1616,6 +1633,7 @@ export class TabHostManager {
     if (spawn === false) {
       this.tabs.delete(tab.tabId);
       this.bindings.delete(params.sessionId);
+      this.managedSessions.delete(params.sessionId);
       this.unpublishedTabs.delete(tab.tabId);
       return { ok: false, reason: "not_ready" };
     }
@@ -1630,6 +1648,7 @@ export class TabHostManager {
       this.logger.error(`[main] tab ${tab.tabId} workspace folder is missing (${workspace}); refusing the new session`);
       this.tabs.delete(tab.tabId);
       this.bindings.delete(params.sessionId);
+      this.managedSessions.delete(params.sessionId);
       this.unpublishedTabs.delete(tab.tabId);
       return { ok: false, reason: "folder_not_found", workspace };
     }
@@ -1811,7 +1830,7 @@ export class TabHostManager {
     onExited?: () => void | Promise<void>,
   ): Promise<void> {
     this.tabs.delete(tabId);
-    if (sessionId !== null) this.bindings.delete(sessionId);
+    if (sessionId !== null) { this.bindings.delete(sessionId); this.managedSessions.delete(sessionId); }
     this.deferredRegistrationRollbacks.delete(tabId);
     this.closingTabs.delete(tabId);
     this.unpublishedTabs.delete(tabId);
@@ -3425,19 +3444,11 @@ export class TabHostManager {
       entry.state = "cancelling";
     }
     if (childTab.state === "closing") {
-      // Already shutting down (a second cancel, or the drain loop revisiting
-      // a child it already reached) — do not re-send the shutdown message.
-      // fix-wave F1: this must NOT settle on a bare microtask. A
-      // bare `Promise.resolve()` here fed straight back into `drainChildren`'s
-      // `for(;;)` loop turns a revisit into a self-sustaining chain of
-      // already-settled microtasks: the loop reschedules itself before the
-      // event loop ever reaches a macrotask phase, so the real "exit" (or
-      // `ChildTerminal`) that would eventually clear this child from
-      // `childrenByParentTab` never gets a turn to run — starving not just
-      // this cascade but the whole main-process event loop (IPC, timers,
-      // windows, quit). `setImmediate` forces at least one real macrotask
-      // per revisit, so the loop can only ever spin bounded by real ticks.
-      return new Promise<void>((resolve) => setImmediate(resolve));
+      // Managed settlement is bounded independently. Wait for it instead of
+      // spinning while the parent drains; allow shutdown to start it first.
+      if (childTab.childWorktree) return (requestId && this.settlingChildRuns.get(requestId)) ||
+        new Promise<void>(resolve => setTimeout(resolve, CHILD_DRAIN_RECHECK_MS));
+      return new Promise<void>(resolve => setImmediate(resolve));
     }
     return this.shutdownTabHost(childTab).then(async () => {
       if (childTab.childWorktree) {
@@ -3613,9 +3624,9 @@ export class TabHostManager {
       const receipt = managedTab.childWorktree;
       const pending = this.settleManagedWorktree(receipt, managedTab).then(disposition => {
         const prefix = `Worktree ${disposition.phase}: ${receipt.path}\nBranch: ${receipt.branch}\n${disposition.reason}\n\n`;
-        const finalText = (prefix + terminal.finalText).slice(0, 24000);
+        const finalText = (prefix + terminal.finalText).slice(0, CHILD_FINAL_TEXT_LIMIT);
         this.finalizeChildRun(requestId, { ...terminal, finalText,
-          truncated: terminal.truncated || prefix.length + terminal.finalText.length > 24000 }, true);
+          truncated: terminal.truncated || prefix.length + terminal.finalText.length > CHILD_FINAL_TEXT_LIMIT }, true);
       }).finally(() => { this.settlingChildRuns.delete(requestId); });
       this.settlingChildRuns.set(requestId, pending);
       return;
@@ -3655,6 +3666,7 @@ export class TabHostManager {
     const childTab = this.tabs.get(entry.childTabId);
     if (childTab !== undefined) {
       this.tabs.delete(entry.childTabId);
+      this.managedSessions.delete(childTab.sessionId);
       const reaped = childTab.proc !== null ? this.shutdownTabHost(childTab) : Promise.resolve();
       if (childTab.engine === "core" && !childTab.childWorktree) {
         this.rememberResumableChild(entry, childTab, reaped);
@@ -4112,6 +4124,14 @@ export class TabHostManager {
       // Stale exit from an already-replaced host; ignore.
       return;
     }
+    if (tab.childWorktree && !deliberate) {
+      const receipt = tab.childWorktree;
+      const reason = "Host exited unexpectedly; checkout and branch require inspection";
+      // Mark uncertainty immediately, including when the respawn breaker trips.
+      const update = this.deps.childWorktrees?.update({ ...receipt }, "unknown", reason);
+      receipt.phase = "unknown"; receipt.reason = reason;
+      void update?.catch(() => {});
+    }
     tab.proc = null;
     this.deps.onFileActivityLifecycle?.(tab.tabId);
     tab.activityState = "idle";
@@ -4280,6 +4300,7 @@ export class TabHostManager {
     const unpublished = this.unpublishedTabs.delete(tab.tabId);
     this.tabs.delete(tab.tabId);
     this.bindings.delete(tab.sessionId);
+    this.managedSessions.delete(tab.sessionId);
     this.deferredRegistrationRollbacks.get(tab.tabId)?.();
     this.deferredRegistrationRollbacks.delete(tab.tabId);
     // A prepared tab was never announced: there is nothing for the renderer to
@@ -4538,6 +4559,7 @@ export class TabHostManager {
     this.deferredRegistrationRollbacks.delete(tabId);
     this.closingTabs.delete(tabId);
     this.bindings.delete(tab.sessionId);
+    this.managedSessions.delete(tab.sessionId);
     // Preview windows belong to the TAB, not the host proc — a respawn must
     // never close them, but a real close (here) must always destroy them.
     this.deps.onTabClosed?.(tabId);
