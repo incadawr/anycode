@@ -67,11 +67,11 @@ export function applyBrowserAccessChange(
 /** Loads the tab's effective state and follows main's pushes. Returns the state and a setter for a set result. */
 export function useBrowserAccessState(
   tabId: string | undefined,
-  bridge: BrowserAccessBridge,
+  bridge: BrowserAccessBridge | undefined,
 ): [BrowserAccessTabState | undefined, (state: BrowserAccessTabState) => void] {
   const [state, setState] = useState<BrowserAccessTabState | undefined>(undefined);
   useEffect(() => {
-    if (tabId === undefined) return;
+    if (tabId === undefined || !bridge) return;
     let cancelled = false;
     void bridge.get().then((result) => {
       if (cancelled || !result.ok) return;

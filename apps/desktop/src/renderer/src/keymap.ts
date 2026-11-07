@@ -33,6 +33,7 @@ export type ActionId =
   | "terminal.toggle"
   | "settings.open"
   | "branch.switch"
+  | "diagnostics.export"
   | "sidebar.toggle"
   | "sidebar.search"
   | "tab.activate"
@@ -96,6 +97,7 @@ export const ACTION_CATALOG: readonly ActionMeta[] = [
   { action: "terminal.toggle", name: "Toggle terminal", description: "Show or hide the integrated terminal.", editable: true },
   { action: "settings.open", name: "Open settings", description: "Open the settings page.", editable: true },
   { action: "branch.switch", name: "Switch branch", description: "Open the branch switcher.", editable: true },
+  { action: "diagnostics.export", name: "Export diagnostics", description: "Preview and save session diagnostics.", editable: false },
   { action: "sidebar.toggle", name: "Toggle sidebar", description: "Show or hide the sidebar.", editable: true },
   { action: "sidebar.search", name: "Search sidebar", description: "Focus the sidebar search field.", editable: true },
   { action: "tab.activate", name: "Activate tab by number", description: "Jump to the nth open tab (⌘1–⌘9).", editable: false },

@@ -9060,3 +9060,9 @@ dialog.role-picker-dialog {
   .environment-risk-icons { display: none; }
   .environment-risk-summary { display: inline-flex; }
 }
+.environment-diagnostics-link {
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  justify-content: space-between;
+}
+.environment-diagnostics-link > :first-child { text-decoration: underline; text-underline-offset: 3px; }

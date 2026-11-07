@@ -11,9 +11,11 @@
  */
 
 import { Button } from "../ui/index.js";
-import { useContext, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { TabContext } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { bindingFor, formatBinding } from "../keymap.js";
+import type { DesktopPlatform } from "../../../shared/window.js";
 import type {
   DiagnosticsPreviewResult,
   DiagnosticsSaveResult,
@@ -96,18 +98,21 @@ export function describeDiagnosticsHidden(visibleChars: number, totalChars: numb
  * session id there is nothing to export — the row says so instead of guessing
  * (an empty id would be refused by main anyway).
  */
-export function DiagnosticsExportSection() {
+export function DiagnosticsExportSection({ request = 0 }: { request?: number }) {
   const tabId = useContext(TabContext)?.tabId;
   const sessionId = useTabsStore((state) => state.tabs.find((tab) => tab.tabId === tabId)?.sessionId ?? null);
-  return <DiagnosticsExportRow sessionId={sessionId} />;
+  return <DiagnosticsExportRow key={request} sessionId={sessionId} autoStart={request > 0} />;
 }
 
-export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }) {
+export function DiagnosticsExportRow({ sessionId, autoStart = false }: { sessionId: string | null; autoStart?: boolean }) {
   const [phase, setPhase] = useState<DiagnosticsExportPhase>({ step: "idle" });
   const [shownChars, setShownChars] = useState(DIAGNOSTICS_PREVIEW_PAGE_CHARS);
   const bridge = typeof window !== "undefined" ? window.anycode?.diagnostics : undefined;
   const busy = phase.step === "previewing" || phase.step === "saving";
   const available = bridge !== undefined && sessionId !== null;
+  const platform: DesktopPlatform = window.anycode?.platform ?? "darwin";
+  const paletteBinding = bindingFor("palette.toggle");
+  const paletteHint = paletteBinding ? formatBinding(paletteBinding, platform) : "the command palette";
 
   const startPreview = async (): Promise<void> => {
     if (bridge === undefined || sessionId === null) {
@@ -133,6 +138,10 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
     setPhase({ step: "preview", preview: result.preview, summary: result.summary });
   };
 
+  useEffect(() => {
+    if (autoStart) void startPreview();
+  }, []);
+
   const save = async (preview: { preview: string; summary: DiagnosticsSummary }): Promise<void> => {
     if (bridge === undefined || sessionId === null) return;
     setPhase({ step: "saving", ...preview });
@@ -152,6 +161,18 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
 
   const showActions = phase.step === "preview" || phase.step === "saving";
   const page = showActions ? pageDiagnosticsPreview(phase.preview, shownChars) : null;
+
+  if (phase.step === "idle") return (
+    <Button variant="ghost" size="sm" type="button"
+      className="environment-menu-row environment-diagnostics-link"
+      data-environment-action="diagnostics-preview"
+      disabled={!available}
+      title={sessionId === null ? "This tab has no session id yet" : undefined}
+      onClick={() => void startPreview()}>
+      <span>Export diagnostics…</span>
+      <span className="environment-menu-scope">also in {paletteHint}</span>
+    </Button>
+  );
 
   return (
     <>
@@ -191,7 +212,7 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
               title={sessionId === null ? "This tab has no session id yet" : undefined}
               onClick={() => void startPreview()}
             >
-              Export
+              Export diagnostics…
             </Button>
           )}
         </span>
