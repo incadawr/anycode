@@ -656,7 +656,8 @@ async function spawnableWhenKnown(deps: TabIpcDeps, engine: EngineId, codexProfi
  *  - new: capacity-guard -> workspace source (GUI-P1: a preselected
  *    `req.workspace` skips the dialog; otherwise showOpenDialog, cancel ->
  *    "cancelled") -> fresh uuid session -> spawn + deliver.
- *  - resume: getRootSession (missing, or a child session's id -> "session_not_found") -> already_open guard
+ *  - resume: published running tab -> managed refusal -> getRootSession
+ *    (missing, or a child session's id -> "session_not_found")
 
  * MAX_TABS is enforced authoritatively by manager.createTab.
  */
@@ -790,7 +791,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   }
 
-  const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
+  const openInTabId = deps.manager.sessionOpenInTab(req.sessionId, true);
   if (openInTabId !== undefined) {
     return { ok: false, reason: "already_open", focusTabId: openInTabId };
   }

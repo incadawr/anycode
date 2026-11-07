@@ -23,7 +23,8 @@ while open. Empty checkouts are removed after verified safe shutdown; branches
 remain. Dirty files, new commits, ignored caches or uncertain writers keep the
 checkout. Closing a split panel does not close the child. After a crash there is
 no automatic cleanup. Managed sessions cannot resume; inspect a retained checkout
-and start a new session there manually.
+and start a new session there manually. Close and quit can wait for host shutdown
+(normally up to 2 seconds) plus up to 30 seconds of cleanup per managed tab.
 
 To recover work, first inspect `git -C '<child-path>' diff HEAD` and inspect
 untracked files separately. Commit in the retained checkout if needed, then in

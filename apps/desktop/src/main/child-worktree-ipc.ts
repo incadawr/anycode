@@ -20,13 +20,17 @@ export function registerChildWorktreeIpc(deps: {
     }
     const view: ChildWorktreeView = { enabled: tab.childWorktreePolicy === true, canToggle,
       lastRefusal: tab.childWorktreeRefusal, resources: [] };
-    const project = await realpath(tab.projectRoot);
+    let project: string;
+    try { project = await realpath(tab.projectRoot); }
+    catch { return view; }
     let files: string[];
     try { files = await readdir(join(deps.userData, "child-worktrees")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return view; throw error; }
-    for (const file of files) {
+    for (const file of files.sort()) {
       if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
-      const r = await deps.resources.read(file.slice(0, -5));
+      let r;
+      try { r = await deps.resources.read(file.slice(0, -5)); }
+      catch { continue; } // Preserve unreadable receipts; other resources remain visible.
       if (r.projectRoot !== project || (!canToggle && r.childSessionId !== tab.sessionId)) continue;
       const stale = r.appRunId !== deps.appRunId && ["intent", "active"].includes(r.phase);
       view.resources.push({ id: r.id, childSessionId: r.childSessionId, path: r.path, branch: r.branch,

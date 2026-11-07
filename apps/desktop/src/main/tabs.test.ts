@@ -69,6 +69,7 @@ import {
   guardedHostForwarder,
   hostOutputUsable,
   DEFAULT_BREAKER_LIMITS,
+  CHILD_WORKTREE_CLEANUP_DEADLINE_MS,
   TabHostManager,
   workspaceMissing,
   createPinReservations,
@@ -9312,14 +9313,18 @@ describe("Agent managed worktree admission", () => {
     return { manager, tab: root.tab, host: live.hosts[0]!, fork, resources, receipt };
   }
 
-  it.each(["active", "retained", "removed", "unknown", "not-created"] as const)("describes continuation refusal for %s", phase => {
+  it.each(["active", "retained", "removed", "unknown", "not-created", "intent"] as const)("describes continuation refusal for %s", phase => {
     const receipt = { ...rig().receipt, phase };
     const r = rig("core", { childWorktrees: { findForSession: () => receipt } as never });
     const detail = r.manager.managedContinuationRefusal("child")!.detail;
-    if (phase === "active") expect(detail).toContain("existing session is not continued");
+    if (phase === "active") {
+      expect(detail).toContain("existing session is not continued");
+      expect(detail).not.toMatch(/switch to its open tab|retained work|folder was removed/);
+    }
     if (phase === "retained") expect(detail.toLowerCase()).toContain("inspect retained work at");
     if (phase === "removed") { expect(detail).toContain("folder was removed"); expect(detail).not.toContain("inspect retained work at"); }
-    if (phase === "unknown" || phase === "not-created") expect(detail).toContain("whether");
+    if (phase === "unknown") expect(detail).toContain("whether");
+    if (phase === "not-created" || phase === "intent") expect(detail).not.toContain(receipt.path);
   });
 
   it("records uncertainty when an opened root gives up respawning", async () => {
@@ -9328,7 +9333,22 @@ describe("Agent managed worktree admission", () => {
     if (!opened.ok) throw Error("missing root");
     (opened.tab.proc as unknown as FakeHost).emit("exit", 1); await flush();
     expect(r.resources.update).toHaveBeenCalledWith(expect.objectContaining({ id: r.receipt.id, phase: "active" }), "unknown", expect.stringContaining("Host exited"));
-    expect(opened.tab.childWorktree?.phase).toBe("unknown");
+    expect(opened.tab.childWorktree?.phase).toBe("active");
+    await r.manager.closeTab(opened.tab.tabId);
+    expect(r.receipt.reason).toContain("Host exited");
+  });
+
+  it("does not cache refused managed creation or focus unpublished/nonrunning tabs", () => {
+    const r = rig();
+    Object.assign(r.resources, { findForSession: vi.fn(() => undefined) });
+    expect(r.manager.createTab({ workspace: r.receipt.path, sessionId: "parent", resume: false,
+      childWorktree: r.receipt })).toMatchObject({ ok: false, reason: "already_open" });
+    expect(r.manager.managedContinuationRefusal("parent")).toBeUndefined();
+    expect(r.manager.sessionOpenInTab("parent", true)).toBe(r.tab.tabId);
+    (r.manager as any).unpublishedTabs.add(r.tab.tabId);
+    expect(r.manager.sessionOpenInTab("parent", true)).toBeUndefined();
+    (r.manager as any).unpublishedTabs.delete(r.tab.tabId); r.tab.state = "closing";
+    expect(r.manager.sessionOpenInTab("parent", true)).toBeUndefined();
   });
 
   it("releases closed managed roots to the journal lookup", async () => {
@@ -9440,7 +9460,7 @@ describe("Agent managed worktree admission", () => {
     child(r).host.emit("message", childTerminalMsg());
     await vi.advanceTimersByTimeAsync(20);
     expect(r.manager.listChildRuns()).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(30000);
+    await vi.advanceTimersByTimeAsync(CHILD_WORKTREE_CLEANUP_DEADLINE_MS);
     vi.useRealTimers();
     expect(r.manager.listChildRuns()).toHaveLength(0);
     expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "terminal", finalText: expect.stringContaining("unknown") }));

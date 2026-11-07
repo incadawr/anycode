@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Button, Checkbox } from "../ui/index.js";
 import { CHILD_WORKTREE_LIMITATION, type ChildWorktreeView } from "../../../shared/child-worktree-view.js";
 
 /** Self-contained so the header menu can move this control without new state wiring. */
@@ -6,7 +7,13 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
   const [view, setView] = useState<ChildWorktreeView | null>(null);
   const [open, setOpen] = useState(false), [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState("");
   const revision = useRef(0), mutating = useRef(false);
+  const lifetime = useRef<object | null>(null);
+  useEffect(() => { const token = {}; lifetime.current = token;
+    mutating.current = false; setBusy(false);
+    return () => { if (lifetime.current === token) lifetime.current = null; };
+  }, [tabId]);
   const api = window.anycode.childWorktrees;
   useEffect(() => {
     if (!api) return;
@@ -26,28 +33,37 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
   }, [api, tabId, open]);
   if (!api) return null;
   const toggle = async (enabled: boolean) => {
+    const token = lifetime.current;
     revision.current++; mutating.current = true; setBusy(true);
-    try { setView(await api({ tabId, enabled })); setError(""); }
-    catch (e) { setError(String(e)); }
-    finally { mutating.current = false; setBusy(false); }
+    try { const next = await api({ tabId, enabled }); if (token === lifetime.current) { setView(next); setError(""); } }
+    catch (e) { if (token === lifetime.current) setError(String(e)); }
+    finally { if (token === lifetime.current) { mutating.current = false; setBusy(false); } }
   };
-  const copy = (text: string) => { void navigator.clipboard.writeText(text).catch(e => setError(String(e))); };
+  const copy = (text: string) => {
+    const token = lifetime.current;
+    void navigator.clipboard?.writeText(text).then(() => {
+      if (token !== lifetime.current) return;
+      setCopied(text);
+      setTimeout(() => { if (token === lifetime.current) setCopied(""); }, 1500);
+    }, () => {});
+  };
   return <details className="environment-control" onToggle={event => setOpen(event.currentTarget.open)}>
     <summary className="environment-trigger">Child worktrees{view?.enabled ? " · ON" : ""}</summary>
     <div className="environment-menu" style={{ maxHeight: "75vh", overflow: "auto", overflowWrap: "anywhere" }}>
     <p>{CHILD_WORKTREE_LIMITATION}</p>
-    <label><input type="checkbox" checked={view?.enabled ?? false} disabled={!view?.canToggle || busy}
-      onChange={event => void toggle(event.currentTarget.checked)} />New session children in worktrees</label>
+    <Checkbox label="New session children in worktrees" checked={view?.enabled ?? false}
+      disabled={!view?.canToggle || busy} onCheckedChange={enabled => void toggle(enabled)} />
     <p>Core session children only. Inline agents use the current cwd. No inherited trust or access grants.</p>
     {error && <p role="alert">{error}</p>}
-    {view?.lastRefusal && <p role="alert">{view.lastRefusal} Choose Core and start a new child.</p>}
+    {view?.lastRefusal && <p role="alert">Last creation refused: {view.lastRefusal}{/require Core|Core.*only/i.test(view.lastRefusal) ? " Choose Core and start a new child." : ""}</p>}
     <ul>{view?.resources.map(r => <li key={r.id}>
-      <strong>Worktree · cwd only</strong> · {r.phase === "active" ? "active (live)" : r.phase === "retained" ? "retained (kept)" : r.phase} · {r.childSessionId}
-      <p>{r.path} <button aria-label="Copy path" onClick={() => copy(r.path)}>Copy path</button></p>
-      <p>{r.branch} <button aria-label="Copy branch" onClick={() => copy(r.branch)}>Copy branch</button></p>
+      <strong>Worktree · cwd only</strong> · {r.phase === "active" ? "active (live)" : r.phase === "retained" ? "retained (kept)" : r.phase === "removed" ? "removed" : "unknown"} · {r.childSessionId}
+      <p>{r.path} <Button size="sm" variant="ghost" aria-label="Copy path" onClick={() => copy(r.path)}>{copied === r.path ? "Copied" : "Copy path"}</Button></p>
+      <p>{r.branch} <Button size="sm" variant="ghost" aria-label="Copy branch" onClick={() => copy(r.branch)}>{copied === r.branch ? "Copied" : "Copy branch"}</Button></p>
       <details><summary>Base {r.baseSha.slice(0, 12)}</summary>{r.baseSha}</details>
-      <p>{r.reason ?? (r.phase === "intent" ? "Creation pending; inspect any residue manually." : "Child checkout active.")}</p>
-      {r.phase === "removed" && <p>Folder removed; branch retained.</p>}
+      <p>{r.reason ?? (r.phase === "active" ? "Child checkout active." : r.phase === "retained"
+        ? "Checkout and branch kept; inspect manually." : r.phase === "removed"
+          ? "Folder removed; branch retained." : "Creation or completion unconfirmed; inspect the resource journal.")}</p>
     </li>)}</ul>
     <p>Review retained work manually: first <code>git -C '&lt;child-path&gt;' diff HEAD</code> (inspect untracked files separately),
       commit in the retained checkout if needed, then in the parent review <code>git diff &lt;base-sha&gt;..&lt;branch&gt;</code>.

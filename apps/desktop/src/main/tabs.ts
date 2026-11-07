@@ -1415,6 +1415,7 @@ export class TabHostManager {
   }
 
   private readonly observedExits = new WeakSet<UtilityProcess>();
+  private readonly crashedWorktrees = new WeakMap<TabHost, string>();
   private readonly uncertainWorktreeWriters = new WeakSet<TabHost>();
   private readonly worktreeHosts = new WeakMap<TabHost, UtilityProcess>();
   private readonly hostShutdowns = new WeakMap<UtilityProcess, Promise<void>>();
@@ -1433,6 +1434,7 @@ export class TabHostManager {
         await resources.update(receipt, "retained", "Creation did not start a host; checkout and branch retained");
         return { phase: "retained", reason: "Creation did not start a host; checkout and branch retained" };
       }
+      const crash = this.crashedWorktrees.get(tab);
       if (this.engineRegistrations(tab).length > 0) this.uncertainWorktreeWriters.add(tab);
       if (!this.observedExits.has(host)) await this.shutdownTabHost(tab);
       const controller = new AbortController();
@@ -1445,7 +1447,10 @@ export class TabHostManager {
           resolve({ phase: "unknown", reason });
         }, CHILD_WORKTREE_CLEANUP_DEADLINE_MS);
       });
-      const cleanup = settleChildWorktree({ resources, receipt, signal: controller.signal,
+      const cleanup = crash
+        ? resources.update({ ...receipt }, "unknown", crash).then(() => ({ phase: "unknown", reason: crash }),
+          () => ({ phase: "unknown", reason: `${crash}; receipt update failed` }))
+        : settleChildWorktree({ resources, receipt, signal: controller.signal,
         permission: { appRunId: receipt.appRunId, childSessionId: tab.sessionId,
           actualExit: this.observedExits.has(host), admissionStopped: tab.state === "closing",
           writersStopped: this.observedExits.has(host) && !this.uncertainWorktreeWriters.has(tab) && this.engineRegistrations(tab).length === 0 },
@@ -1472,13 +1477,15 @@ export class TabHostManager {
       const receipt = this.managedSessions.get(sessionId) ?? this.deps.childWorktrees?.findForSession?.(sessionId);
       if (!receipt) return undefined;
       const recovery = receipt.phase === "active"
-        ? "The existing session is not continued; switch to its open tab."
+        ? `The existing session is not continued; ${this.sessionOpenInTab(sessionId, true) ? "switch to its open tab" : "no open tab is available"}.`
         : receipt.phase === "retained"
           ? `Inspect retained work at ${receipt.path} (${receipt.branch}).`
           : receipt.phase === "removed"
             ? `The folder was removed (${receipt.path}); branch ${receipt.branch} was kept.`
-            : `Inspect the resource journal and check whether any work remains at ${receipt.path} (${receipt.branch}).`;
-      return { worktreePath: receipt.path, detail: `Managed worktree sessions cannot resume or reopen. Start a new session. ${recovery}` };
+            : receipt.phase === "not-created" || receipt.phase === "intent"
+              ? "Inspect the resource journal; checkout creation was not confirmed."
+              : `Inspect the resource journal and check whether any work remains at ${receipt.path} (${receipt.branch}).`;
+      return { worktreePath: ["intent", "not-created"].includes(receipt.phase) ? undefined : receipt.path, detail: `Managed worktree sessions cannot resume or reopen. Start a new session. ${recovery}` };
     } catch (error) { return { detail: error instanceof Error ? error.message : "Worktree receipts could not be verified. Inspect the resource journal before starting a new session." }; }
   }
 
@@ -1546,8 +1553,10 @@ export class TabHostManager {
   }
 
   /* */
-  sessionOpenInTab(sessionId: string): string | undefined {
-    return this.bindings.get(sessionId);
+  sessionOpenInTab(sessionId: string, publishedRunningOnly = false): string | undefined {
+    const id = this.bindings.get(sessionId);
+    if (publishedRunningOnly && (id === undefined || this.unpublishedTabs.has(id) || this.tabs.get(id)?.state !== "running")) return undefined;
+    return id;
   }
 
   /**
@@ -1576,7 +1585,6 @@ export class TabHostManager {
       const refusal = this.managedContinuationRefusal(params.sessionId);
       if (refusal) return { ok: false, reason: "worktree_unavailable", ...refusal };
     }
-    if (params.childWorktree) this.managedSessions.set(params.sessionId, params.childWorktree);
 
     // secret-clear on an open window lets `+` spawn a host with no provider key.
     const engine = params.engine ?? "core";
@@ -1593,6 +1601,7 @@ export class TabHostManager {
     if (this.atCapacity()) {
       return { ok: false, reason: "max_tabs", openTabs: this.rootCount(), maxTabs: this.effectiveMaxTabs() };
     }
+    if (params.childWorktree) this.managedSessions.set(params.sessionId, params.childWorktree);
     const workspace = canonicalWorkspace(params.workspace);
     const projectRoot = canonicalWorkspace(params.projectRoot ?? params.workspace);
     const worktree = params.worktree === undefined
@@ -4127,9 +4136,9 @@ export class TabHostManager {
     if (tab.childWorktree && !deliberate) {
       const receipt = tab.childWorktree;
       const reason = "Host exited unexpectedly; checkout and branch require inspection";
-      // Mark uncertainty immediately, including when the respawn breaker trips.
+      // Record crash disposition without changing the identity cleanup compares.
       const update = this.deps.childWorktrees?.update({ ...receipt }, "unknown", reason);
-      receipt.phase = "unknown"; receipt.reason = reason;
+      this.crashedWorktrees.set(tab, reason);
       void update?.catch(() => {});
     }
     tab.proc = null;
