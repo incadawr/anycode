@@ -75,6 +75,30 @@ Review compatibility and the destination before importing. This copies a skill
 into an AnyCode root; it does not forward the source tool's whole environment.
 Start a new Native session to load the result.
 
+## Setup help outside AnyCode
+
+Copy [skills/anycode-setup/SKILL.md](https://github.com/incadawr/anycode/blob/master/skills/anycode-setup/SKILL.md)
+from this repository into an `anycode-setup/` directory at one of these locations:
+
+| Tool / scope | Destination file |
+|---|---|
+| Claude Code, personal | `~/.claude/skills/anycode-setup/SKILL.md` |
+| Claude Code, project | `<project>/.claude/skills/anycode-setup/SKILL.md` |
+| Codex, personal / shared skills | `~/.agents/skills/anycode-setup/SKILL.md` |
+| Codex, project / shared skills | `<project>/.agents/skills/anycode-setup/SKILL.md` |
+
+These Codex locations follow its [local skills documentation](https://developers.openai.com/codex/skills/#where-to-save-skills).
+AnyCode also discovers `.agents/skills` directly in Native sessions. Its import
+pane scans the older `~/.codex/skills` catalog; that is separate from these
+current Codex installation paths.
+
+Ask the tool to use `anycode-setup` for an AnyCode configuration question. If the
+skill does not appear, restart that tool. The external copy reads the GitHub raw
+guide and needs permitted network access; it does not use the app's bundled docs.
+Alternatively, paste the [setup snippet](AGENTS-SNIPPET.md) into your project's
+`AGENTS.md` or `CLAUDE.md`. Keep the skill and snippet updated from the repository.
+Inside AnyCode, the built-in setup skill is already available.
+
 ## Disabling a skill
 
 - For a filesystem skill, switch it off in **Settings → Skills**. This writes

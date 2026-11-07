@@ -3,6 +3,8 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { anycodeSetupSkill } from "./builtin.js";
+import { parseFrontmatter } from "./frontmatter.js";
+import { anycodeSetupBody } from "./setup-body.js";
 
 // This is the same tree copied into packaged builds by extraResources.
 const docsDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../docs/user");
@@ -104,5 +106,28 @@ describe("packaged user guide navigation", () => {
     for (const text of ["list_sessions", "send_message", "Settings → Sessions API", "Copy MCP config", 'mode: "next_turn"']) {
       expect(api).toContain(text);
     }
+  });
+
+  it("keeps the external Agent Skills package synchronized with the shared setup body", () => {
+    const raw = readFileSync(resolve(docsDir, "../../skills/anycode-setup/SKILL.md"), "utf8");
+    const parsed = parseFrontmatter(raw);
+    if ("error" in parsed) throw new Error(parsed.error);
+    expect(Object.keys(parsed.fields).sort()).toEqual(["description", "name"]);
+    expect(parsed.fields.name).toBe("anycode-setup");
+    expect(parsed.fields.description).toMatch(/AnyCode configuration/);
+    expect(parsed.body.trim()).toBe(anycodeSetupBody(
+      "App documentation: https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/README.md\n" +
+      "Resolve relative page links under https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/.",
+      "Use available permitted read/edit and remote reading tools; retain their normal approval restrictions.",
+    ).trim());
+  });
+
+  it("offers a short, secret-safe instruction snippet reachable from the map", () => {
+    const snippet = pages.get("AGENTS-SNIPPET.md")!;
+    expect(snippet.trimEnd().split("\n").length).toBeGreaterThanOrEqual(15);
+    expect(snippet.trimEnd().split("\n").length).toBeLessThanOrEqual(20);
+    expect(snippet).toContain("https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/README.md");
+    expect(snippet).toContain("Never read ~/.anycode/secrets.json");
+    expect(snippet).toContain("Never read ~/.codex/auth.json");
   });
 });

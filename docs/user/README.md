@@ -40,6 +40,7 @@ Most changes need a new session; start with the page for your question below.
 | Use separate git checkouts | [Worktrees](worktrees.md) |
 | Recover changes from a child worktree | [Recovery](worktrees.md#recover-changes) |
 | Add or import a skill | [Skills](skills.md) |
+| Configure AnyCode from another tool | [External setup help](skills.md#setup-help-outside-anycode) |
 | A skill or profile is missing | [Troubleshooting](troubleshooting.md#skill-or-profile-missing) |
 | Add or import an MCP server | [MCP](mcp.md) |
 | An MCP server does not start | [MCP troubleshooting](troubleshooting.md#mcp-server-missing) |
@@ -69,5 +70,7 @@ Profile shows usage statistics. Appearance and Keyboard shortcuts save to
 `ui.theme` and `keybindings.overrides` in app settings. About contains update controls.
 
 This guide ships with the app and is read by the `anycode-setup` skill.
+For other tools, copy the [setup snippet](AGENTS-SNIPPET.md) into your project's
+`AGENTS.md` or `CLAUDE.md`.
 Developer documentation is available on
 [GitHub](https://github.com/incadawr/anycode/blob/master/docs/development/README.md).
