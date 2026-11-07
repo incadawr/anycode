@@ -712,6 +712,21 @@ it("disables the palette branch switch for an AnyCode-owned worktree", async () 
   } finally { getStore.mockRestore(); useTabsStore.setState({ activeTabId: previous.activeTabId, tabs: previous.tabs }); }
 });
 
+it("disables the palette branch switch for a managed child allocation", async () => {
+  const { tabRegistry } = await import("../tab-registry.js");
+  const store = createDesktopStore();
+  store.setState({ git: { ...store.getState().git, status: { head: { branch: "topic" } } as never } });
+  const previous = useTabsStore.getState();
+  const getStore = vi.spyOn(tabRegistry, "getStore").mockReturnValue(store);
+  const allocation = { id: "child", path: "/fixture/child", branch: "topic", baseRef: "main", ownedByAnyCode: false, parentSessionId: "parent-session" };
+  try {
+    useTabsStore.setState({ activeTabId: "tab", tabs: [{ tabId: "tab" }] as never, childWorktrees: { tab: allocation } as never });
+    expect(branchSwitchAction(null).enabled).toBe(false);
+    useTabsStore.setState({ childWorktrees: {} });
+    expect(branchSwitchAction(null).enabled).toBe(true);
+  } finally { getStore.mockRestore(); useTabsStore.setState({ activeTabId: previous.activeTabId, tabs: previous.tabs, childWorktrees: previous.childWorktrees }); }
+});
+
 /** Mounts the menu with a controllable Sessions API `get`; the trigger reads its state from that fetch. */
 async function sessionsMenu(get: () => Promise<unknown>) {
   const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
@@ -837,4 +852,47 @@ it("exports through the bottom row and active-tab palette entry using the existi
       expect(preview).toHaveBeenCalledTimes(2);
     } finally { getStore.mockRestore(); await act(async () => useTabsStore.setState(previous)); }
   });
+});
+
+
+it("resolves a child worktree's parent title live and omits unavailable attribution", async () => {
+  const previous = useTabsStore.getState();
+  const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication: { get: async () => ({ ok: false }) },
+    browserAccess: { get: async () => ({ ok: false }), onChanged: () => () => {} },
+    sessionPeers: { get: async () => ({ ok: false }) },
+  } });
+  const store = createDesktopStore();
+  store.setState({ workspace: "/fixture/child", git: { ...store.getState().git, statusKnown: true,
+    status: { head: { branch: "topic", sha: "abcdef", detached: false, ahead: null, behind: null }, dirtyCount: 0, staged: [], unstaged: [], untracked: [], filesTruncated: false } } });
+  const childWorktrees = { tab: { id: "child", path: "/fixture/child", branch: "topic", baseRef: "main", ownedByAnyCode: false, parentSessionId: "parent-session" } };
+  useTabsStore.setState({ childWorktrees, tabs: [{ tabId: "parent", sessionId: "parent-session", title: "Fix login" }] } as never);
+  const host = document.createElement("div"), root = createRoot(host);
+  const check = (title?: string) => {
+    const label = title ? `worktree of “${title}”` : undefined;
+    expect(host.querySelector(".environment-worktree-parent")?.textContent).toBe(label);
+    const tooltip = host.querySelector(".environment-trigger")?.getAttribute("title") ?? "";
+    if (label) expect(tooltip).toContain(label); else expect(tooltip).not.toContain("worktree of");
+  };
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    check("Fix login");
+    const branch = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.startsWith('Branch'))!;
+    expect(branch.disabled).toBe(true);
+    expect(branch.title).toBe("Branch is managed by the parent session");
+    expect(host.querySelector(".environment-worktree-block")?.textContent).toContain("Lifecycle · Managed by the parent session");
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
+    expect(host.querySelector(".environment-branch-picker")).toBeNull();
+    expect(host.querySelector('[aria-label="Exit worktree"]')).toBeNull();
+    await act(async () => useTabsStore.getState().setTitle("parent", "Fix redirect")); check("Fix redirect");
+    await act(async () => useTabsStore.setState({ tabs: [{ tabId: "parent", sessionId: "parent-session" }] } as never)); check();
+    await act(async () => useTabsStore.getState().removeTab("parent")); check();
+    await act(async () => useTabsStore.setState({ tabs: [{ tabId: "other", sessionId: "unknown", title: "Wrong parent" }] } as never)); check();
+    await act(async () => useTabsStore.setState({ childWorktrees: {}, tabs: [{ tabId: "tab", worktree: childWorktrees.tab }, { tabId: "parent", sessionId: "parent-session", title: "Fix login" }] } as never)); check();
+  } finally {
+    await act(async () => root.unmount()); useTabsStore.setState(previous);
+    if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode");
+  }
 });

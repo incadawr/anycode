@@ -119,7 +119,9 @@ export function branchSwitchAction(hint: string | null): PaletteAction {
   const current = () => {
     const tabId = useTabsStore.getState().activeTabId;
     const owned = useTabsStore.getState().tabs.find(t => t.tabId === tabId)?.worktree?.ownedByAnyCode === true;
-    return { tabId, enabled: !!tabId && !owned && tabRegistry.getStore(tabId)?.getState().git.status != null };
+    // a managed child allocation's branch is owned by the parent session (no tabs[].worktree entry)
+    const allocated = !!tabId && useTabsStore.getState().childWorktrees[tabId] !== undefined;
+    return { tabId, enabled: !!tabId && !owned && !allocated && tabRegistry.getStore(tabId)?.getState().git.status != null };
   };
   return {
     id: "branch.switch", label: "Switch branch…", hint, get enabled() { return current().enabled; },

@@ -90,10 +90,12 @@ describe("preload PORT_ENVELOPE_TYPE forwarding", () => {
     const listener = mockListeners.get(PORT_ENVELOPE_TYPE);
     expect(listener).toBeDefined();
 
-    listener?.({ ports: [] }, { tabId: "tab-child-1", workspace: "/ws", child: CHILD_FIELD });
+    const childWorktree = { id: "allocation", path: "/ws", branch: "topic", baseRef: "main", ownedByAnyCode: false, parentSessionId: "session-master" };
+    listener?.({ ports: [] }, { tabId: "tab-child-1", workspace: "/ws", child: CHILD_FIELD, childWorktree });
 
     const posted = postedEnvelope();
     expect(posted.child).toEqual(CHILD_FIELD);
+    expect(posted.childWorktree).toEqual(childWorktree);
     expect(posted.tabId).toBe("tab-child-1");
     expect(posted.workspace).toBe("/ws");
   });
@@ -123,6 +125,7 @@ describe("preload PORT_ENVELOPE_TYPE forwarding", () => {
     expect(posted.connectionId).toBe("conn-1");
     expect(posted.providerId).toBe("anthropic");
     expect(posted.child).toEqual(CHILD_FIELD);
+    expect(posted.childWorktree).toBeUndefined();
   });
 });
 

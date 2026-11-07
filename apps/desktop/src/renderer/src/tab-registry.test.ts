@@ -507,6 +507,21 @@ describe("tab-registry — routing by tabId", () => {
  * test below.
  */
 describe("tab-registry — child-session registration (CUT-S2 §2.5, slice S2c C2)", () => {
+  it("keeps allocation metadata for visible and hidden children until disposal", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const worktree = { id: "allocation", path: "/ws/child", branch: "topic", baseRef: "main", ownedByAnyCode: false, parentSessionId: "sess-root" };
+    for (const child of [undefined, childField()]) {
+      const id = child ? "hidden" : "allocated";
+      registry.registerPort(id, worktree.path, asPort(new FakeMessagePort()), undefined, child, undefined, undefined, worktree);
+      expect(tabsStore.getState().childWorktrees[id]).toEqual(worktree);
+      // a hidden child's only disposal point is markHostExited (its tabId never
+      // reaches disposeTab in production); the visible tab goes through disposeTab.
+      if (child) registry.markHostExited(id); else registry.disposeTab(id);
+      expect(tabsStore.getState().childWorktrees[id]).toBeUndefined();
+    }
+  });
+
   it("a child port delivery does not add a tab to the root tabsStore, but DOES record the relation", () => {
     const tabsStore = createTabsStore();
     const { registry, childRelationStore } = createTestRegistry(tabsStore);

@@ -9052,6 +9052,7 @@ dialog.role-picker-dialog {
 .environment-risk-summary { display: none; align-items: center; gap: 2px; }
 .environment-worktree-block { margin: var(--sp-2); padding: var(--sp-2); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .environment-worktree-block code { color: var(--text-2); }
+.environment-worktree-parent { color: var(--text-2); font-style: italic; }
 @container session-header (width < 720px) {
   .environment-risk-icons { display: none; }
   .environment-risk-summary { display: inline-flex; }

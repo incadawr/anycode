@@ -58,8 +58,12 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const tabStore = useTabStoreApi();
   const send = useTabSend();
   const tabId = useContext(TabContext)?.tabId;
-  const worktree = useTabsStore(s => s.tabs.find(t => t.tabId === tabId)?.worktree);
-  const ownedWorktree = worktree?.ownedByAnyCode === true;
+  const allocatedWorktree = useTabsStore(s => tabId ? s.childWorktrees[tabId] : undefined);
+  const worktree = useTabsStore(s => s.tabs.find(t => t.tabId === tabId)?.worktree) ?? allocatedWorktree;
+  const parentTitle = useTabsStore(s => allocatedWorktree ? s.tabs.find(t => t.sessionId === allocatedWorktree.parentSessionId)?.title : undefined);
+  const parentLabel = parentTitle?.trim() ? `worktree of “${parentTitle}”` : undefined;
+  const ownedWorktree = worktree?.ownedByAnyCode === true || !!allocatedWorktree;
+  const branchLockReason = allocatedWorktree ? "Branch is managed by the parent session" : "Managed worktree branch; switch from the parent checkout";
   const [browserAccess, setBrowserAccess] = useBrowserAccessState(tabId, window.anycode?.browserAccess);
   const [sessionsEnabled, setSessionsEnabled] = useState(false);
   const accessNames: string[] = [];
@@ -235,7 +239,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Environment: ${label}${worktree ? ", Worktree" : ""}${accessCount ? `, ${accessPhrase} enabled` : ""}`}
-        title={workspacePath}
+        title={parentLabel ? `${workspacePath}\n${parentLabel}` : workspacePath}
         onClick={toggle}
       >
         <Folder />
@@ -290,7 +294,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
               <IconButton label="Copy path" icon={<Copy />} onClick={copyWorkspace} />
             </div>
 
-            {worktree && <EnvironmentWorktree worktree={worktree} known={statusKnown} dirtyCount={dirtyCount} />}
+            {worktree && <EnvironmentWorktree parentLabel={parentLabel} managed={!!allocatedWorktree} worktree={worktree} known={statusKnown} dirtyCount={dirtyCount} />}
             {statusKnown && status && (
               <>
                 <Button
@@ -299,7 +303,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   className="environment-menu-row"
                   ref={branchRef}
                   disabled={ownedWorktree}
-                  title={ownedWorktree ? "Managed worktree branch; switch from the parent checkout" : undefined}
+                  title={ownedWorktree ? branchLockReason : undefined}
                   aria-haspopup="listbox"
                   onClick={() => { setDiagnosticsRequest(0); setBranchesOpen(true); }}
                 >
@@ -307,7 +311,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   <span className="environment-menu-row-main">
                     <span>Branch</span>
                     <span className="environment-menu-row-detail">{branch}</span>
-                    {ownedWorktree && <span className="environment-menu-row-detail environment-menu-row-detail-prose">Managed worktree branch; switch from the parent checkout</span>}
+                    {ownedWorktree && <span className="environment-menu-row-detail environment-menu-row-detail-prose">{branchLockReason}</span>}
                   </span>
                   <span aria-hidden="true">›</span>
                 </Button>
