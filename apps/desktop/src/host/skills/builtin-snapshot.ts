@@ -119,8 +119,9 @@ export function prepareBuiltinSnapshot(input: SnapshotInput, runtime: Runtime = 
     directory(join(root, "skills"));
     if (input.engine === "claude") {
       directory(join(root, ".claude-plugin"));
-      file(join(root, ".claude-plugin/plugin.json"), '{"name":"anycode-app"}\n');
-      total += 23;
+      const manifest = '{"name":"anycode-app"}\n';
+      file(join(root, ".claude-plugin/plugin.json"), manifest);
+      total += Buffer.byteLength(manifest, "utf8");
     }
     for (const def of definitions) {
       const bytes = Buffer.byteLength(def.skillMd, "utf8"); total += bytes;

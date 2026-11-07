@@ -32,7 +32,7 @@ reason appears in the Skills pane (see troubleshooting).
 
 ## Roots and precedence
 
-Skills are discovered from these roots, highest precedence first. A skill with
+In Native tabs, skills are discovered from these roots, highest precedence first. A skill with
 the same name in a higher root replaces the one below it, silently:
 
 1. `<project>/.anycode/skills/`
@@ -62,7 +62,10 @@ file and the built-in returns.
   tool accepts only names from that list; an unknown name returns the available
   names.
 
-Skills apply to Native tabs only. Codex and Claude tabs do not receive them.
+Filesystem skills apply to Native tabs only. Claude root tabs can also receive
+three app builtins through a separate session plugin; see below. Codex delivery
+is not implemented yet. Independently installed CLI skills follow that CLI's
+rules and are not controlled by this pane.
 
 ## Disabling a skill
 
@@ -75,8 +78,10 @@ Skills apply to Native tabs only. Codex and Claude tabs do not receive them.
 { "skills": { "disabled": ["commit-style"] } }
 ```
 
-Built-in skills do not appear in the Skills pane, so disable them with
-`skills.disabled` as well.
+The three app builtins below appear in **Built into AnyCode**. Their switch
+edits the selected personal or workspace config using the original builtin ID.
+Either config can disable a builtin: enabling it in the workspace does not undo
+a personal disable. Other Native builtins can be disabled through config.
 
 Disabled names do not count toward the cap. A session loads at most **64 skills**
 after deduplication; overflow drops from the lowest precedence first. The list of
@@ -85,8 +90,9 @@ not fit are dropped, and the prompt says how many.
 
 ## Built-in skills
 
-The app ships these skills. They are in-memory, need no file, and are shadowed by
-any same-name filesystem skill.
+Native ships the following in-memory skills. In Native, a same-name filesystem
+skill replaces the builtin. The separate app catalog in Claude is unaffected
+by such files.
 
 | Skill | Available when | Purpose |
 |---|---|---|
@@ -96,6 +102,40 @@ any same-name filesystem skill.
 | `using-subagents` | always | Delegating through the Agent tool: choosing the inline or session tier, detach, models, parallel limits, reading outcomes and writing the child prompt. |
 | `creating-subagents` | always | Writing `.anycode/agents/*.md` profiles. |
 | `anycode-setup` | always | Read-only help with configuring AnyCode. It reads your files and explains the fix; any edit needs your approval. It never prints secrets. |
+
+## Built into AnyCode in Claude tabs
+
+Three app-owned definitions are prepared for each new root Claude process,
+including a process started to resume a session:
+
+| Builtin ID in `skills.disabled` | Claude alias | Planned Codex alias (not delivered yet) |
+|---|---|---|
+| `anycode-setup` | `anycode-app:anycode-setup` | `anycode-app-setup` |
+| `using-browser-preview` | `anycode-app:using-browser-preview` | `anycode-app-browser-preview` |
+| `control-browser` | `anycode-app:control-browser` | `anycode-app-control-browser` |
+
+This is a separate app catalog and namespace. A same-name project, personal or
+plugin file never replaces it. Those file sources are not exported to Claude or
+Codex, even if their switches are on. The other three Native builtins are not
+exported either. Browser definitions require the corresponding tools.
+
+Settings → Skills previews configuration for the next launch, not the state of
+a running process. A new process reads policy again; toggles do not hot reload
+or revoke a running snapshot. Invalid/unreadable policy, an untrusted workspace,
+unsupported CLI or preparation failure can leave the adapter unavailable while
+ordinary chat continues. Windows forwarding is unavailable in this MVP.
+
+Preparation failures produce an **unavailable** warning in the concrete session.
+The pane does not report a process generation or preparation/catalog success.
+A **prepared** snapshot means only that files were made; **CLI-reported**
+metadata would mean recognition, not proof that the model read or followed the
+body. Model-use acceptance is a separate check in a fresh profile.
+
+Snapshots are sealed and isolated per process. Normal cleanup waits for proof
+that the owned process group has exited. A crash or uncertain ownership retains
+the snapshot conservatively; restarting does not sweep those slots. Retained
+slots can eventually exhaust the fixed quota, disabling forwarding for later
+launches while ordinary chat remains available.
 
 ## How to verify it applied
 

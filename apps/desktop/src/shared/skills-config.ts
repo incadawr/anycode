@@ -86,7 +86,15 @@ export interface SkillRowView {
   path: string;
 }
 
+/** Settings preview only; the host independently checks policy at each launch. */
+export interface BuiltinSkillSetting {
+  id: string;
+  userDisabled: boolean;
+  projectDisabled: boolean;
+}
 export interface SkillsSnapshot {
+  builtins?: BuiltinSkillSetting[];
+  builtinNotice?: string;
   rows: SkillRowView[];
   /** Fail-soft discovery/plugin-discovery problems (never throws). */
   problems: string[];
@@ -97,14 +105,19 @@ export interface SkillsListRequest {
   tabId?: string;
 }
 
-/** Response of a mutation that changes the catalog: a fresh snapshot, or a typed refusal. */
+/** A builtin-only update leaves filesystem rows/problems in the caller unchanged. */
 export type SkillsMutationResult =
-  | { ok: true; snapshot: SkillsSnapshot }
+  | { ok: true; snapshot: SkillsSnapshot; builtinsOnly?: boolean }
   | { ok: false; reason: SkillsRefusalReason };
 
 // ── set-enabled / delete / reveal (identity = name, NEVER a path) ──
 
-export interface SkillsSetEnabledRequest {
+export type SkillsSetEnabledRequest = {
+  tabId?: string;
+  builtinId: string;
+  scope: SkillScope;
+  enabled: boolean;
+} | {
   tabId?: string;
   name: string;
   enabled: boolean;

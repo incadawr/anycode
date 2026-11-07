@@ -26,6 +26,7 @@
  * surface to defend beyond that lookup.
  */
 
+import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
 import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
@@ -208,18 +209,28 @@ const scopeSchema: z.ZodType<SkillScope> = z.enum(["project", "user"]);
 
 const listSchema = z.object({ tabId: z.string().optional() });
 
-const setEnabledSchema = z.object({
+const fileEnabledSchema = z.object({
+  path: z.unknown().optional(), // Legacy display-only field; never used for resolution.
   tabId: z.string().optional(),
   name: z.string().min(1),
   enabled: z.boolean(),
-});
+}).strict();
+const builtinEnabledSchema = z.object({
+  tabId: z.string().optional(),
+  builtinId: z.enum(["anycode-setup", "using-browser-preview", "control-browser"]),
+  scope: scopeSchema,
+  enabled: z.boolean(),
+}).strict();
+const setEnabledSchema = z.union([fileEnabledSchema, builtinEnabledSchema]);
 
 const deleteSchema = z.object({
+  builtinId: z.never().optional(),
   tabId: z.string().optional(),
   name: z.string().min(1),
 });
 
 const revealSchema = z.object({
+  builtinId: z.never().optional(),
   tabId: z.string().optional(),
   name: z.string().min(1),
 });
@@ -241,9 +252,10 @@ const createSchema = z.object({
 const importScanSchema = z.object({ tabId: z.string().optional() });
 
 const importApplySchema = z.object({
+  builtinId: z.never().optional(),
   tabId: z.string().optional(),
   scope: scopeSchema,
-  ids: z.array(z.string().min(1)),
+  ids: z.array(z.string().min(1).refine(id => !id.startsWith("builtin:"))),
 });
 
 // ── path resolution helpers ──
@@ -343,6 +355,36 @@ function pluginWorldFor(
   return deps.pluginDiscoveryOptions?.(home, workspace || home);
 }
 
+/** Configuration preview, never export authority or a claim about a running CLI. */
+async function builtinSettings(deps: SkillsIpcDeps, tabId?: string): Promise<Pick<SkillsSnapshot, "builtins" | "builtinNotice">> {
+  const workspace = resolveWorkspace(deps, tabId);
+  let readable = true;
+  const disabled = async (base?: string): Promise<string[]> => {
+    if (!base) return [];
+    const path = anycodeConfigPath(base);
+    try {
+      if (!await deps.fs.exists(path)) return [];
+      const raw = JSON.parse(await deps.fs.readFile(path));
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error();
+      const skills = raw.skills;
+      if (skills !== undefined && (!skills || typeof skills !== "object" || Array.isArray(skills))) throw new Error();
+      const values = skills?.disabled === undefined ? [] : skills.disabled;
+      if (!Array.isArray(values) || values.some(v => typeof v !== "string")) throw new Error();
+      return values;
+    } catch { readable = false; return []; }
+  };
+  const user = await disabled(deps.home());
+  const project = workspace === deps.home() ? user : await disabled(workspace);
+  return {
+    builtins: ENGINE_BUILTIN_SKILLS.map(({ id }) => ({
+      id, userDisabled: user.includes(id), projectDisabled: project.includes(id),
+    })),
+    builtinNotice: !readable ? "Configuration unreadable or invalid; availability cannot be previewed." :
+      process.platform === "win32" ? "Unavailable on Windows; ordinary CLI chat is available." :
+      "Settings for the next Claude process, including resume. Host policy, workspace trust, CLI support and available tools are checked at launch.",
+  };
+}
+
 /**
  * Builds the joined catalog snapshot. No resolvable workspace ⇒ scans with
  * `workspace===home` (buildSkillRoots' own "load once" collapse), which
@@ -356,6 +398,7 @@ async function buildSnapshot(deps: SkillsIpcDeps, tabId: string | undefined): Pr
 
   const scan = await scanSkillsAdmin(deps.fs, scanOptions(deps, home, effectiveWorkspace));
   return {
+    ...await builtinSettings(deps, tabId),
     rows: scan.rows.map((row) => toRowView(row, hasWorkspace)),
     problems: scan.problems,
   };
@@ -404,6 +447,15 @@ export async function handleSkillsSetEnabled(deps: SkillsIpcDeps, raw: unknown):
   const parsed = setEnabledSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
+  }
+  if ("builtinId" in parsed.data) {
+    const { tabId, builtinId, scope, enabled } = parsed.data;
+    const workspace = resolveWorkspace(deps, tabId);
+    if (scope === "project" && !workspace) return { ok: false, reason: "no_workspace" };
+    try {
+      await setSkillEnabled(deps.fs, scopeConfigPath(scope, workspace ?? deps.home(), deps.home()), builtinId, enabled);
+      return { ok: true, builtinsOnly: true, snapshot: { rows: [], problems: [], ...await builtinSettings(deps, tabId) } };
+    } catch { return { ok: false, reason: "io_error" }; }
   }
   const { tabId, name, enabled } = parsed.data;
   const found = await findRow(deps, tabId, name);

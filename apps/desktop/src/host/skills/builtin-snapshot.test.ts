@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildEngineBuiltinSkills } from "../engine-builtin-skills.js";
 import { createEngineBrowserBridge } from "../engines/browser-bridge.js";
 import { prepareBuiltinSnapshot } from "./builtin-snapshot.js";
 
+describe.skipIf(process.platform === "win32")("POSIX builtin snapshots", () => {
 let home: string;
 const children: ChildProcess[] = [];
 beforeEach(() => { home = fs.mkdtempSync(join(fs.realpathSync(tmpdir()), "builtin-")); });
@@ -145,7 +146,7 @@ it.each(["claude", "codex"] as const)("%s publishes all three fixed definitions 
     expect(fs.statSync(path).nlink).toBe(1);
   }
   const next = prepareBuiltinSnapshot({ ...input(), engine, browser, disabled: ["anycode-setup"] });
-  expect(fs.readdirSync(join(next.root, "skills"))).toHaveLength(2);
+  expect(fs.readdirSync(join(next.root, "skills")).sort()).toEqual(engine === "claude" ? ["control-browser", "using-browser-preview"] : ["anycode-app-browser-preview", "anycode-app-control-browser"]);
   expect(fs.readdirSync(join(lease.root, "skills"))).toHaveLength(3);
   lease.abortNeverSpawned(); next.abortNeverSpawned();
 });
@@ -198,4 +199,6 @@ it("ESRCH before direct exit and a non-dedicated child cannot authorize cleanup"
   proc.emit("exit", 0, null);
   expect(fs.existsSync(a.root)).toBe(false); expect(fs.existsSync(b.root)).toBe(true);
   expect(probe).toHaveBeenCalledTimes(1);
+});
+
 });

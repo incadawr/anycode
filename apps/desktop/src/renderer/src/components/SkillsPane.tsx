@@ -31,6 +31,8 @@
  * any mutator/reveal on a plugin source, so this is belt-and-suspenders, not
  * the only enforcement point.
  */
+import { ENGINE_BUILTIN_SKILLS } from "../../../shared/engine-skills.js";
+import type { BuiltinSkillSetting } from "../../../shared/skills-config.js";
 import { useEffect, useRef, useState } from "react";
 import type {
   SkillHarnessKind,
@@ -57,6 +59,41 @@ import { Chevron, Download, FileIcon, Folder, Plus, Search, Spinner, Trash, X } 
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { Button, Field, IconButton, Input, Textarea } from "../ui/index.js";
 
+/** App settings have no file identity or filesystem controls. */
+export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: {
+  settings: BuiltinSkillSetting[]; notice?: string; scope: SkillScope; query: string;
+  onToggle: (id: string, enabled: boolean) => void;
+}) {
+  return <div className="mcp-section">
+    <div className="mcp-section-title">Built into AnyCode</div>
+    <p className="skills-pane-hint">{notice}</p>
+    <p className="skills-pane-hint">Changes affect the next process launch, including resume; running sessions keep their snapshot.
+      This pane does not report process state. Unavailable warnings appear in the session; a prepared snapshot or CLI-reported metadata does not prove model use.
+      Same-name files do not replace this app catalog. Codex: not yet delivered.</p>
+    <ul className="skills-row-list mcp-row-list">
+      {ENGINE_BUILTIN_SKILLS.filter(def => [def.id, def.description, def.claude, def.codex].join(" ").toLowerCase().includes(query.trim().toLowerCase())).map(def => {
+        const setting = settings.find(row => row.id === def.id);
+        if (!setting) return null;
+        const enabled = !(scope === "project" ? setting.projectDisabled : setting.userDisabled);
+        return <li className="skills-row mcp-row" key={def.id}>
+          <div className="mcp-row-lines">
+            <div className="mcp-row-line1">{def.id}</div>
+            <div className="mcp-row-line2">{def.description}</div>
+            <div className="mcp-row-line2">Claude: {def.claude} · Codex (planned): {def.codex}</div>
+            <div className="mcp-row-line2">{setting.userDisabled ? "Disabled in personal settings. " : ""}
+              {setting.projectDisabled ? "Disabled in workspace settings. " : ""}
+              {!setting.userDisabled && !setting.projectDisabled ? "Enabled in settings; availability checked at launch." : "Either scope can disable this skill."}</div>
+          </div>
+          <button type="button" role="switch" aria-checked={enabled}
+            aria-label={`${enabled ? "Disable" : "Enable"} ${def.id} in ${scope} settings`}
+            className={`settings-switch${enabled ? " settings-switch-on" : ""}`}
+            onClick={() => onToggle(def.id, !enabled)}><span className="settings-switch-thumb" /></button>
+        </li>;
+      })}
+    </ul>
+  </div>;
+}
+
 // ── bridge (DI, same ethic as McpServersPane.tsx's McpConfigBridge) ──
 
 /** Subset of `window.anycode.skills` this pane drives, injectable so tests never touch a real `window`. */
@@ -72,7 +109,7 @@ export interface SkillsBridge {
 
 // ── pure helpers (unit-tested directly — see SkillsPane.test.ts) ──
 
-export type SkillsSourceFilter = "all" | SkillSourceKind;
+export type SkillsSourceFilter = "all" | "builtin" | SkillSourceKind;
 
 /** Trivial substring filter over name+description (design §5 W3: "no fuzzy engine", same ethic as McpServersPane's filterMcpRows). */
 export function filterSkillRows(rows: readonly SkillRowView[], query: string): SkillRowView[] {
@@ -337,6 +374,7 @@ export interface SkillsPaneProps {
 }
 
 export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChange }: SkillsPaneProps) {
+  const [builtinError, setBuiltinError] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<SkillsSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SkillsSourceFilter>("all");
@@ -376,7 +414,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
   }, [bridge, tabId]);
 
   // the scope chip's count (null while the snapshot loads).
-  const rowCount = snapshot ? snapshot.rows.length : null;
+  const rowCount = snapshot ? snapshot.rows.length + (snapshot.builtins?.length ?? 0) : null;
   useEffect(() => {
     onCountChange?.(rowCount);
   }, [rowCount, onCountChange]);
@@ -391,6 +429,14 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
   const rows = snapshot ? sortSkillRows(filterSkillsBySource(filterSkillRows(snapshot.rows, searchQuery), sourceFilter)) : [];
   const { personal, plugin } = partitionSkillRows(rows);
   const showProblems = snapshot !== null && !problemsDismissed && snapshot.problems.length > 0;
+
+  async function toggleBuiltin(builtinId: string, enabled: boolean): Promise<void> {
+    const result = await bridge.setEnabled({ tabId, builtinId, scope: scopeMode, enabled });
+    if (result.ok) {
+      setBuiltinError(null);
+      setSnapshot(previous => previous ? { ...previous, builtins: result.snapshot.builtins, builtinNotice: result.snapshot.builtinNotice } : previous);
+    } else setBuiltinError(skillRefusalMessage(result.reason));
+  }
 
   async function toggleRow(row: SkillRowView): Promise<void> {
     if (!canManageSkillRow(row)) {
@@ -474,7 +520,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
 
   return (
     <section className="settings-section skills-pane">
-      <p className="skills-pane-hint">Changes apply to newly started tasks.</p>
+      <p className="skills-pane-hint">File skills apply to new Native sessions; app builtins apply to the next Claude process.</p>
 
       <div className="skills-pane-toolbar mcp-pane-toolbar">
         <label className="settings-search skills-pane-search mcp-pane-search">
@@ -495,6 +541,7 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
           onChange={(e) => setSourceFilter(e.target.value as SkillsSourceFilter)}
         >
           <option value="all">All</option>
+          <option value="builtin">Built into AnyCode</option>
           <option value="project">Workspace</option>
           <option value="user">Personal</option>
           <option value="plugin">Plugin</option>
@@ -537,6 +584,11 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
         <div className="settings-mcp-empty">Loading skills…</div>
       ) : (
         <>
+          {(sourceFilter === "all" || sourceFilter === "builtin") && snapshot.builtins && <BuiltinSkillGroup
+            settings={snapshot.builtins} notice={snapshot.builtinNotice} scope={scopeMode}
+            query={searchQuery} onToggle={(id, enabled) => void toggleBuiltin(id, enabled)} />}
+          {builtinError && <div role="alert">{builtinError}</div>}
+          <p className="skills-pane-hint">File skills below apply to Native tabs. They are not delivered to Claude or Codex.</p>
           <div className="mcp-section">
             <div className="mcp-section-title">
               Workspace and personal skills{" "}

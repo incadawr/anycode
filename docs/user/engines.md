@@ -80,8 +80,14 @@ See [proxy.md](proxy.md).
 - A Codex or Claude tab can delegate to your subagent profiles when at least one
   profile exists. The Codex tool is `anycode_agent`; the Claude tool is
   `mcp__anycode__agent`. Neither appears in a child session.
-- AnyCode skills (including `anycode-setup`) load only in Native tabs. Codex and
-  Claude tabs do not receive them.
+- Root Claude processes can receive three app builtins: `anycode-setup`,
+  `using-browser-preview` and `control-browser`, in the `anycode-app:` namespace.
+  Settings → Skills controls the next process launch, including resume.
+  Preparation failures appear in the session; the pane does not show process
+  state or prove model use.
+- Codex delivery is not implemented yet. Filesystem skills remain Native-only;
+  same-name files do not replace Claude's app catalog. Windows forwarding is
+  unavailable. See [skills.md](skills.md) for policy, aliases and crash retention.
 
 ## How to verify it applied
 

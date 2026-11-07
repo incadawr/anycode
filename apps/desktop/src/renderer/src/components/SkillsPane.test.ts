@@ -387,3 +387,38 @@ describe("plugin group cross-link (S1-C, design 4732 §6)", () => {
     expect(source).toContain('new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "plugins" })');
   });
 });
+
+describe("app builtin settings", () => {
+  it("renders aliases, scoped switches and next-launch wording without file actions", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { BuiltinSkillGroup } = await import("./SkillsPane.js");
+    const html = renderToStaticMarkup(createElement(BuiltinSkillGroup, {
+      settings: [{ id: "anycode-setup", userDisabled: true, projectDisabled: false }],
+      notice: "Settings for the next Claude process",
+      scope: "project", query: "", onToggle: () => {},
+    }));
+    expect(html).toContain("Built into AnyCode");
+    expect(html).toContain("anycode-app:anycode-setup");
+    expect(html).toContain("anycode-app-setup");
+    expect(html).toContain("next Claude process");
+    expect(html).toContain("Disabled in personal settings");
+    expect(html).toContain('aria-checked="true"');
+    expect(html).toContain("not yet delivered");
+    expect(html).not.toMatch(/Reveal|Delete|Import|delivered to Claude/);
+  });
+});
+
+it("never marks an enabled file row as delivered to an external engine", async () => {
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { createElement } = await import("react");
+  const { SkillRowItem } = await import("./SkillsPane.js");
+  const noop = () => {};
+  const html = renderToStaticMarkup(createElement(SkillRowItem, {
+    row: row({ name: "anycode-setup" }), confirmDelete: false, onToggle: noop,
+    onReveal: noop, onRequestDelete: noop, onCancelDelete: noop, onConfirmDelete: noop,
+  }));
+  expect(html).not.toMatch(/Claude|Codex|delivered|CLI-reported/);
+  expect(html).toContain("Reveal anycode-setup");
+  expect(html).toContain("Delete anycode-setup");
+});
