@@ -19,6 +19,7 @@ import { canonicalWorkspaceKey } from "@anycode/core/workspace-trust";
 import type { CreateSessionOutcome, CreateSessionRequest } from "./communication-server.js";
 import { normalizeHandle, type SessionAccessStore } from "./communication-sessions.js";
 import type { NewSessionPin, ResumePinResult } from "./session-pin.js";
+import type { ChildWorktreeReceipt } from "./child-worktree-resource.js";
 import type { TabHostManager } from "./tabs.js";
 import {
   SET_SESSION_EFFORT_OPERATION,
@@ -119,6 +120,19 @@ function remaining(deadline: number): number {
   return Math.max(1, deadline - Date.now());
 }
 
+/** Capture before the shared creator queue; policy changes affect only later calls. */
+function captureManagedOpen(deps: CreateSessionByAgentDeps, policy: CreatorAdmissionPolicy) {
+  const tabs = deps.manager();
+  const summary = policy.kind === "native" ? tabs?.listTabs().find(t => t.sessionId === policy.openerSessionId) : undefined;
+  const parent = summary && tabs?.getTab(summary.tabId);
+  if (!parent?.childWorktreePolicy || !tabs) return undefined;
+  const { proc, hostGeneration, workspace, projectRoot } = parent;
+  return { parent, workspace, projectRoot, resources: tabs.childWorktreeResources,
+    current: () => deps.manager() === tabs && tabs.getTab(parent.tabId) === parent &&
+      parent.proc === proc && proc !== null && parent.hostGeneration === hostGeneration &&
+      parent.workspace === workspace && parent.projectRoot === projectRoot && parent.state === "running" };
+}
+
 /**
  * The full `create_session` admission + creation path. Mirrors the previous
  * `main/index.ts` closure exactly; the wiring (this function + the real deps
@@ -131,14 +145,17 @@ export async function createSessionForAgent(
   deps: CreateSessionByAgentDeps,
   policy: CreatorAdmissionPolicy = { kind: "external" },
 ): Promise<CreateSessionOutcome> {
+  const managed = captureManagedOpen(deps, policy);
   let deliver: (() => Promise<{ state: string; messageId?: string }>) | undefined;
   const outcome = await creationAdmissionFor(deps.agentOpenedSessions, deps.listTabs).run(() =>
-    createAdmittedSession(request, deps, policy, callback => { deliver = callback; }));
+    createAdmittedSession(request, deps, policy, callback => { deliver = callback; }, managed));
+  if (!outcome.ok && managed) managed.parent.childWorktreeRefusal = outcome.detail ?? outcome.reason;
   return outcome.ok && deliver ? { ...outcome, delivery: await deliver() } : outcome;
 }
 
 async function createAdmittedSession(request: CreateSessionRequest, deps: CreateSessionByAgentDeps,
-  policy: CreatorAdmissionPolicy, afterCreation: (deliver: () => Promise<{ state: string; messageId?: string }>) => void): Promise<CreateSessionOutcome> {
+  policy: CreatorAdmissionPolicy, afterCreation: (deliver: () => Promise<{ state: string; messageId?: string }>) => void,
+  managed: ReturnType<typeof captureManagedOpen>): Promise<CreateSessionOutcome> {
   const projects = deps.projects;
   const tabs = deps.manager();
   const sessions = deps.sessions();
@@ -148,16 +165,22 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
     key = policy.kind === "native" ? deps.realpathSync(request.workspace) : canonicalWorkspaceKey(request.workspace, deps.realpathSync);
   } catch { return { ok: false, reason: "folder_not_found" }; }
   const peerKey = normalizePeerWorkspaceKey(key, deps.platform);
+  const current = () => !managed || managed.current();
   const authorized = async () => {
     try {
-      return policy.kind === "native" ? peerKey !== null && await policy.authorize(request.workspace, peerKey, projects.isAllowed(key)) : projects.isAllowed(key);
+      if (!current()) return false;
+      const allowed = policy.kind === "native" ? peerKey !== null && await policy.authorize(request.workspace, peerKey, projects.isAllowed(key)) : projects.isAllowed(key);
+      return allowed && current();
     } catch { return false; }
   };
   if (!await authorized()) return { ok: false, reason: "not_allowed" };
   const trust = await deps.readTrustStore();
+  if (!current()) return { ok: false, reason: "not_allowed" };
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
   const engine = request.engine ?? "core";
+  if (managed && (engine !== "core" || key !== managed.workspace || !managed.resources))
+    return { ok: false, reason: "not_ready", detail: "Worktree SessionOpen requires Core, the opener checkout, and an available allocator." };
   if (request.fast !== undefined && engine !== "codex") return { ok: false, reason: "invalid_argument", detail: "fast is only available for Codex" };
   if (request.account !== undefined && engine !== "codex") {
     // `account` names a Codex account; on any other engine there is nothing it
@@ -208,6 +231,7 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
   }
   try {
     await deps.mcpSecretPrime(key);
+    if (!current()) return { ok: false, reason: "not_allowed" };
   } catch {
     return { ok: false, reason: "not_ready" };
   }
@@ -242,12 +266,24 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
       : { ok: false, reason: "not_ready", detail: pin.detail };
   }
   const releasePin = pin.release;
+  if (!current()) { releasePin(); return { ok: false, reason: "not_allowed" }; }
   if (!await authorized()) {
     releasePin();
     return { ok: false, reason: "not_allowed" };
   }
   const sessionId = deps.randomUUID();
   let handle: string | undefined;
+  let receipt: ChildWorktreeReceipt | undefined;
+  let retained = false;
+  const refuse = async (outcome: CreateSessionOutcome): Promise<CreateSessionOutcome> => {
+    if (outcome.ok || !receipt || !managed) return outcome;
+    if (!retained) {
+      retained = true;
+      try { await managed.resources!.update(receipt, "retained", "Session creation did not complete; worktree retained"); }
+      catch { /* The durable allocation receipt remains available. */ }
+    }
+    return { ...outcome, detail: `${outcome.detail ?? outcome.reason}. Worktree retained: ${receipt.path} (${receipt.branch}).` };
+  };
   /**
    * Registers everything the FIRST port envelope (and the sidebar) attributes
    * this session by: agent ownership, the shared/exposed flag, and the handle
@@ -295,8 +331,15 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
     // outcome — reporting the session as created before that fork ran let the
     // folder vanish during the wait while the API had already answered with a
     // session that could never receive a message (and spent its creation slot).
+    if (managed) {
+      const snapshot = await managed.resources!.snapshot(managed.workspace, managed.projectRoot);
+      if (!current()) return refuse({ ok: false, reason: "not_allowed" });
+      receipt = await managed.resources!.allocate(snapshot, { parentSessionId: managed.parent.sessionId, childSessionId: sessionId });
+      if (!await authorized()) return refuse({ ok: false, reason: "not_allowed" });
+    }
     created = await tabs.createTabAwaitingInitialSpawn({
-      workspace: key,
+      workspace: receipt?.path ?? key,
+      ...(managed ? { projectRoot: managed.projectRoot, childWorktree: receipt, initialSpawnAllowed: current } : {}),
       sessionId,
       resume: false,
       engine,
@@ -308,8 +351,11 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
       // i.e. before this await resolves — the attribution must already be
       // registered for that first envelope to carry the agent badge + title.
       beforeDeferredPortDelivery: () => registerAttribution(),
-      ...(wantsPreparation ? { deferPublication: true } : {}),
+      ...(wantsPreparation || managed ? { deferPublication: true } : {}),
     });
+  } catch (error) {
+    if (!managed) throw error;
+    return refuse({ ok: false, reason: "not_ready", detail: error instanceof Error ? error.message : "Session creation failed" });
   } finally {
     releasePin();
   }
@@ -321,8 +367,8 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
     // can never receive a message; propagate that as the folder refusal, not the
     // generic not_ready. Nothing was registered and the caller's rate budget
     // stays unspent (only `ok` creations count).
-    if (created.reason === "folder_not_found") return { ok: false, reason: "folder_not_found" };
-    return { ok: false, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) };
+    if (created.reason === "folder_not_found") return refuse({ ok: false, reason: "folder_not_found" });
+    return refuse({ ok: false, reason: created.reason === "max_tabs" ? ("too_many" as const) : ("not_ready" as const) });
   }
   const tab = created.tab;
 
@@ -347,8 +393,10 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
       }
     };
     await tabs.abortPreparedTab(tab.tabId, deleteRow);
-    return { ok: false, reason, ...(policy.kind === "native" ? { sessionId, tabId: tab.tabId } : {}), ...(detail !== undefined ? { detail } : {}) };
+    return refuse({ ok: false, reason, ...(policy.kind === "native" ? { sessionId, tabId: tab.tabId } : {}), ...(detail !== undefined ? { detail } : {}) });
   };
+
+  if (!current()) return abortPrepared("not_ready", "The opener changed during creation");
 
   if (wantsPreparation) {
     const deadline = Date.now() + (deps.preparationDeadlineMs ?? DEFAULT_PREPARATION_DEADLINE_MS);
@@ -362,13 +410,16 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
         await tabs.communicationRequest(sessionId, "get_session_status", undefined, tab.workspace, {
           timeoutMs: remaining(deadline),
         });
+        if (!current()) return abortPrepared("not_ready", "The opener changed during preparation");
         ready = true;
         break;
       } catch {
         // Host still booting, or it never will: bounded by the deadline below.
       }
+      if (!current()) return abortPrepared("not_ready", "The opener changed during preparation");
       if (Date.now() >= deadline) break;
       await delay(Math.min(pollMs, remaining(deadline)));
+      if (!current()) return abortPrepared("not_ready", "The opener changed during preparation");
     }
     if (!ready) return abortPrepared("not_ready", "the new session host did not become ready in time");
 
@@ -418,6 +469,7 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
       } catch {
         return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
       }
+      if (!current()) return abortPrepared("not_ready", "The opener changed during preparation");
       const result = outcome as SetSessionEffortOutcome | null;
       if (result === null || typeof result !== "object" || typeof result.ok !== "boolean") {
         return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
@@ -437,13 +489,16 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
       if (!result || typeof result !== "object" || typeof result.ok !== "boolean") return abortPrepared("not_ready", "the new session could not configure its speed");
       if (!result.ok) return abortPrepared(result.reason === "invalid_argument" ? "invalid_argument" : "not_ready", result.detail);
     }
+  }
+  if (wantsPreparation || managed) {
+    if (managed && !await authorized()) return abortPrepared("not_ready", "The opener is no longer authorized");
     // 4. Only now does this session exist for anyone else.
     if (!tabs.publishPreparedTab(tab.tabId)) {
       return abortPrepared("not_ready", "the prepared session host exited before it could be published");
     }
   }
 
-  if (created.deferred !== true || wantsPreparation) {
+  if (created.deferred !== true || wantsPreparation || managed) {
     registerAttribution();
     tabs.deliverTabPort(tab);
   }

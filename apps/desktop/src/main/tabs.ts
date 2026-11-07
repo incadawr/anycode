@@ -992,6 +992,8 @@ export type DeferredInitialSpawnOutcome =
 
 /** The arguments of `createTab` / `createTabAwaitingInitialSpawn`. */
 export interface CreateTabParams {
+  /** Main custody guard, re-run immediately before a deferred first fork. */
+  initialSpawnAllowed?: () => boolean;
   workspace: string;
   projectRoot?: string;
   worktree?: WorktreeIdentity;
@@ -1404,6 +1406,8 @@ export class TabHostManager {
     }));
   }
 
+  get childWorktreeResources() { return this.deps.childWorktrees; }
+
   atCapacity(): boolean {
     return this.rootCount() >= this.effectiveMaxTabs();
   }
@@ -1541,6 +1545,7 @@ export class TabHostManager {
     if (deferPublication) this.unpublishedTabs.add(tab.tabId);
     const spawn = this.spawnTabHost(tab, {
       firstSpawn: true,
+      initialSpawnAllowed: params.initialSpawnAllowed,
       onDeferredInitialSpawn: params.onDeferredInitialSpawn,
       beforeDeferredPortDelivery: params.beforeDeferredPortDelivery,
     });
@@ -1761,6 +1766,7 @@ export class TabHostManager {
     tab: TabHost,
     opts: {
       firstSpawn: boolean;
+      initialSpawnAllowed?: () => boolean;
       identityRefreshed?: boolean;
       priorEffort?: ReasoningEffort;
       onDeferredInitialSpawn?: () => void;
@@ -1768,6 +1774,7 @@ export class TabHostManager {
       beforeDeferredPortDelivery?: (tab: TabHost) => void;
     },
   ): void | false | "deferred" {
+    if (opts.firstSpawn && opts.initialSpawnAllowed?.() === false) return false;
     // GitHub #6: never fork into a cwd that does not exist — the host could not
     // boot, and the tab would sit in "Connecting to host…" with no error. The
     // tab stays (so the user can see which folder is gone and close it) and
