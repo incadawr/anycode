@@ -4,6 +4,84 @@ The Sessions API lets an external agent, such as Claude Code or Codex, list the
 live AnyCode sessions you share with it, read their status and last answer, and
 send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 
+## Native session peers (experimental)
+
+Native peer tools connect sessions inside AnyCode without configuring an HTTP
+client or sharing a bearer token. They use the same delivery broker as the
+HTTP Sessions API below, with separate access rules. They are behind the
+experimental native sessions flag, **off by default**: development builds only,
+started with `ANYCODE_NATIVE_SESSIONS_ENABLED=1`. Packaged builds keep them off.
+
+With the flag on, trusted root sessions in the same exact folder have native
+access by default. The tab's environment menu has **Native session access** to
+turn the project off and **Allow communication** / **Revoke communication** for
+an explicit pair of folders. Both folders must be trusted and enabled. Nested
+folders and sibling worktrees need their own pair grant. Cross-folder opening
+also needs **Allow agents to open tasks here** on the destination. File lookup
+stays inside the caller's folder even with a pair grant.
+
+**Enable local Sessions API**, per-tab sharing and **External approvals** control
+HTTP access only. Native peers work with HTTP OFF, without a listening socket or
+discovery token. HTTP ON, changing its port or regenerating its token does not
+grant or revoke native access. Opening a native peer does not turn HTTP on or
+force the new tab to be shared externally; the normal new-session default applies.
+
+| Core tool | What it returns |
+|---|---|
+| `SessionsList` | Up to 20 accessible live root sessions by default (maximum 50): session/tab ids, workspace, engine, activity, addressability, optional title/model/effort and up to five recent paths in the caller's folder. `scope: "granted"` includes granted folders. Cursor pagination and `ownMessageId` queries currently return `unavailable`. |
+| `WhoEdits` | Evidence for one exact path in the caller's workspace: successful Edit/Write/NotebookEdit reports (`reported_write`), shell candidates (`observed_during_shell`), observation start time, sampler coverage/freshness and limitations. It returns no file contents or command text. |
+| `SessionSend` | A message id and delivery state, without waiting for the answer. Payloads are limited to 32,000 characters. Only `next_turn` works; native `steer` returns `unavailable`. |
+| `SessionOpen` | A new independent root's session/tab ids, optional label and first-message delivery receipt. Workspace and engine default to the caller's. Model/effort still pass creation checks. It does not create a child managed by `Agent`. |
+
+Core roots can send/open in Build, Edit, Auto, Full access (`yolo`) and
+Orchestrate, under Core's permission checks. Build, Edit, Auto and Orchestrate
+ask a human for each operation; ordinary Full access follows its allow policy.
+Plan, unknown authority, children and restricted callers cannot send/open.
+Claude/Codex roots currently fail closed for send/open because their native
+preset authority is not carried to main. A resumed Orchestrate tab stays closed
+for peer mutations until its host re-reports mode/Orchestrate authority.
+
+For replies, `SessionSend {"replyTo":"<received-message-id>","payload":"…"}`
+derives the recipient from the original message. The default `reply: "explicit"`
+requires the receiver to send a reply. Opt in with `reply: "on_turn_end"` to
+receive one public terminal result for the turn that took the message. Its public
+answer is capped at 4,000 characters; reasoning, tool output and history are
+excluded. An accepted explicit reply suppresses that automatic result. A reply
+starts a new request in the sender's engine when its inbox drains, waiting if
+busy; the original tool call does not wait or poll for it.
+
+Limits and uncertainty:
+
+- Chains allow at most 8 hops and 32 messages within 30 minutes; exceeding them
+  returns `refused` with `reason: "loop_limited"`. Sends, including replies,
+  are limited to 20/minute per sender and 60/minute per workspace. Creation shares
+  the HTTP budget of 5/minute and 8 live agent-opened tabs.
+- `queued` is inbox admission; `acknowledged` is turn start, not proof the model
+  applied the message. `unknown` means receipt or completion cannot be confirmed.
+  Do not blindly resend. A stable `idempotencyKey` deduplicates identical sends
+  from the same principal; changed input is refused. Opening is not idempotent:
+  inspect existing tabs before retrying. An interrupted open may return `unknown`
+  with known session/tab ids, and first-message delivery may be uncertain separately.
+- Restart restores cards, never model payloads or pending reply subscriptions.
+  Settled delivery states survive; lost queued delivery and pending subscriptions
+  can become unknown. There is no exactly-once execution guarantee across crashes.
+- `WhoEdits` always reports overall coverage as `partial`. Records expire after
+  30 minutes and can be evicted. Empty records do not mean nobody wrote the file.
+  Bash attribution is incomplete: bounded metadata samples and overlapping shell
+  windows identify candidates, never a proven author or file owner. Background
+  processes, external editors, late events, excluded trees and stale/partial
+  baselines can hide writes; MultiEdit is not indexed.
+- Windows live behavior has not been verified. The experimental flag remains off
+  by default; tool declarations and fixture coverage do not establish live support
+  for every engine or platform.
+
+`ListConnections` is separate and remains available without the peer flag. It
+lists safe connection/model metadata and the current route. `current` identifies
+an API connection for Core or a `native_cli` route for Claude/Codex, without
+claiming the active API connection is the CLI's account. Optional provenance is
+`selected`, `applied` or `unknown`. Readiness is last observed health, possibly
+unknown or stale, rather than a live authentication check or a promise of admission.
+
 ## Tools
 
 | Tool | What it does |

@@ -106,3 +106,24 @@ resent when acceptance is uncertain. After an interrupted transition, reopen
 the session to restore a verified OFF configuration before continuing. If
 verification or saving recovery state fails, admission remains closed and the
 tab shows that recovery is required.
+
+## Coordinate with peer sessions
+
+Behind the experimental native sessions flag (off by default, development builds
+only), a Core root can use `SessionSend` and `SessionOpen` to coordinate with
+independent root tabs. These are separate from `Agent` children: opening a peer
+does not give the caller child lifecycle control. See
+[native session peers](sessions-api.md#native-session-peers-experimental).
+
+Orchestrate permits peer send/open with a separate human ask for **each**
+operation through Core's permission gate. It does not grant access to another
+project: both folders still need trust, native access and an explicit pair grant;
+opening across folders also needs the destination's allow-open switch. The
+receiver runs under its own permissions. HTTP sharing and External approvals do
+not supply these grants.
+
+Plan without Orchestrate, children and restricted callers cannot send/open.
+Claude/Codex roots currently remain closed for peer mutations, even if tools are
+declared. A resumed Orchestrate tab is closed until its host re-reports authority.
+Use an explicit reply or opt into one `on_turn_end` result to wake the sender in
+a new turn; receiving a reply does not turn an error or cancellation into success.

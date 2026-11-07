@@ -17,7 +17,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Core root sessions can send messages and open sessions in Edit, Auto and Orchestrate modes after required approval.
+- Behind the experimental native sessions flag, Core root sessions can discover peers, exchange messages and open independent tabs under per-tab permissions, with bounded replies and file activity evidence. Claude/Codex peer mutations remain unavailable.
 
 - Sessions API reports the created session and tab ids when first-message delivery is interrupted.
 
