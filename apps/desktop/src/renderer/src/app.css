@@ -1764,7 +1764,6 @@ body {
 
 .environment-trigger {
   white-space: nowrap;
-  flex-wrap: nowrap;
   max-width: 100%;
   display: inline-flex;
   align-items: center;
@@ -1801,6 +1800,7 @@ body {
   /* п.6: room for the session cwd. workspaceLabel() already
      head-ellipsizes it to ≤44 chars, so it stays on one line; the base
      end-ellipsis only kicks in if the bar is narrower than that. */
+  /* Sacrifice the folder width before shrinking the branch label. */
   flex: 0 100 auto;
   min-width: 0;
   max-width: 44ch;

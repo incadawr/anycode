@@ -6,6 +6,9 @@ import { createRoot } from "react-dom/client";
 import { createDesktopStore } from "../store.js";
 import { TabContext } from "../tab-context.js";
 import type { UiToHostMessage } from "../../../shared/protocol.js";
+import { branchSwitchAction, runBranchSwitchAction } from "../App.js";
+import { matchKeymap } from "../keymap.js";
+import { useTabsStore } from "../tabs-store.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 
 import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
@@ -464,11 +467,12 @@ it("offers creation last only without an exact name and Enter creates and switch
     await filterBranches(host, "topic");
     expect(host.querySelector('[role="option"]:last-child')).not.toBeNull();
     expect(Array.from(host.querySelectorAll('[role="option"]')).at(-1)?.textContent).toBe('Create branch “topic”');
+    await act(async () => store.getState().gitRequestStarted("unrelated-refresh", { kind: "refresh", label: "refresh" }));
     await filterBranches(host, "new/topic");
     await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "new/topic", switch: true } }));
     expect(host.textContent).toContain("Creating…");
-    const requestId = Object.keys(store.getState().git.pending)[0]!;
+    const requestId = Object.entries(store.getState().git.pending).find(([, request]) => request.kind === "mutation")![0];
     await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId, outcome: { ok: false, reason: "Creation refused" } }));
     expect(host.querySelector('[role="dialog"]')).not.toBeNull();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Creation refused");
@@ -589,4 +593,64 @@ it("shows known nonzero git counts and copies the unchanged path with one reset 
     });
     expect(vi.getTimerCount()).toBe(0);
   } finally { vi.useRealTimers(); if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard); else Reflect.deleteProperty(navigator, "clipboard"); }
+});
+
+it("uses a creation-specific dirty warning and keeps creation pending open", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store, 3);
+    await filterBranches(host, "feature/new");
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const warning = host.querySelector('[role="alert"]')!;
+    expect(warning.textContent).toContain("Create and switch to feature/new?");
+    expect(warning.textContent).not.toContain("Git will refuse");
+    await clickText(host, "Create and switch");
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "feature/new", switch: true } }));
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+});
+it("suspends branch choices when status disappears and recovers their indices", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    const status = store.getState().git.status;
+    await act(async () => store.setState({ git: { ...store.getState().git, status: null } }));
+    await filterBranches(host, "feature/new");
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(0);
+    const count = send.mock.calls.length;
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send.mock.calls).toHaveLength(count);
+    await act(async () => store.setState({ git: { ...store.getState().git, status } }));
+    await readyBranches(store);
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "feature/new", switch: true } }));
+  });
+});
+
+it("connects App's shortcut and palette command to the active tab panel and disables both without git", async () => {
+  await branchMenu(async (host, store) => {
+    const { tabRegistry } = await import("../tab-registry.js");
+    const previous = useTabsStore.getState().activeTabId;
+    const getStore = vi.spyOn(tabRegistry, "getStore").mockImplementation(id => id === "tab" ? store : undefined);
+    useTabsStore.setState({ activeTabId: "tab" });
+    const escape = () => act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    try {
+      await escape();
+      const match = matchKeymap(new KeyboardEvent("keydown", { key: "B", code: "KeyB", metaKey: true, shiftKey: true }), "darwin")!;
+      await act(async () => { expect(runBranchSwitchAction(match.action)).toBe(true); });
+      expect(document.activeElement).toBe(host.querySelector(".environment-branch-picker input"));
+      await escape();
+      const action = branchSwitchAction("⇧⌘B");
+      expect(action).toMatchObject({ id: "branch.switch", label: "Switch branch…", hint: "⇧⌘B", enabled: true });
+      await act(async () => action.run());
+      expect(document.activeElement).toBe(host.querySelector(".environment-branch-picker input"));
+      await escape();
+      await act(async () => store.setState({ git: { ...store.getState().git, status: null } }));
+      expect(branchSwitchAction(null).enabled).toBe(false);
+      await act(async () => { branchSwitchAction(null).run(); runBranchSwitchAction(match.action); });
+      expect(host.querySelector('[role="dialog"]')).toBeNull();
+      expect(runBranchSwitchAction("sidebar.toggle")).toBe(false);
+      useTabsStore.setState({ activeTabId: "foreign" });
+      expect(branchSwitchAction(null).enabled).toBe(false);
+    } finally { getStore.mockRestore(); useTabsStore.setState({ activeTabId: previous }); }
+  });
 });

@@ -114,6 +114,22 @@ const EMPTY_PREVIEWS: readonly PreviewPanelInfo[] = [];
 const EMPTY_CHILD_SPLIT_ROWS: readonly ChildSplitRow[] = [];
 const EMPTY_IDS: readonly string[] = [];
 
+/** Shared branch command for the global shortcut and command palette. */
+export function branchSwitchAction(hint: string | null): PaletteAction {
+  const tabId = useTabsStore.getState().activeTabId;
+  const enabled = !!tabId && tabRegistry.getStore(tabId)?.getState().git.status != null;
+  return {
+    id: "branch.switch", label: "Switch branch…", hint, enabled,
+    run: () => { if (enabled) window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: tabId })); },
+  };
+}
+
+export function runBranchSwitchAction(action: ActionId): boolean {
+  if (action !== "branch.switch") return false;
+  branchSwitchAction(null).run();
+  return true;
+}
+
 /**
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
  * FIRST settings snapshot has actually loaded (`snapshot !== null` — avoids
@@ -1519,6 +1535,7 @@ export function App() {
         return;
       }
       event.preventDefault();
+      if (runBranchSwitchAction(match.action)) return;
       switch (match.action) {
         case "palette.toggle":
           openPalette("actions");
@@ -1534,9 +1551,6 @@ export function App() {
           break;
         case "settings.open":
           setSettingsOpen(true);
-          break;
-        case "branch.switch":
-          runSwitchBranch();
           break;
         case "sidebar.toggle":
           handleToggleSidebarCollapsed();
@@ -1707,10 +1721,6 @@ export function App() {
     useTabsStore.getState().setTerminalOpen(currentTabId, !tab.terminalOpen);
   }
 
-  function runSwitchBranch(): void {
-    window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: useTabsStore.getState().activeTabId }));
-  }
-
   function runFocusModeMenu(): void {
     // R7 seam (slice-R7-cut §3): broadcast to the single mounted ModeMenu,
     // which owns its own focus/open response — replaces the R5 `.mode-chip`
@@ -1813,13 +1823,7 @@ export function App() {
       enabled: true,
       run: () => handleToggleSidebarCollapsed(),
     },
-    {
-      id: "branch.switch",
-      label: "Switch branch…",
-      hint: hintFor("branch.switch"),
-      enabled: activeStore?.getState().git.status != null,
-      run: () => runSwitchBranch(),
-    },
+    branchSwitchAction(hintFor("branch.switch")),
     {
       id: "mode.focus",
       label: "Change permission mode…",

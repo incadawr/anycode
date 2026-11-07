@@ -68,9 +68,9 @@ export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged 
   const id = useId();
   const list = useRef<HTMLDivElement>(null);
   const query = filter.trim().toLowerCase();
-  const matching = (branches ?? []).filter(b => !b.current && b.name !== status?.head.branch && b.name.toLowerCase().includes(query));
+  const matching = (status ? branches ?? [] : []).filter(b => !b.current && b.name !== status?.head.branch && b.name.toLowerCase().includes(query));
   const createName = filter.trim();
-  const offerCreate = !!createName && branches !== null && !loading && !error && !(branches.some(b => b.name.toLowerCase() === query) || status?.head.branch?.toLowerCase() === query);
+  const offerCreate = !!status && !!createName && branches !== null && !loading && !error && !(branches.some(b => b.name.toLowerCase() === query) || status?.head.branch?.toLowerCase() === query);
   const names = [status ? gitPillLabel(status) : null, ...(!loading && !error ? matching.map(b => b.name) : []), ...(offerCreate ? [createName] : [])].filter((n): n is string => n !== null);
   const index = Math.min(active, Math.max(0, names.length - 1));
   useEffect(() => { list.current?.querySelector('[data-active="true"]')?.scrollIntoView?.({ block: "nearest" }); }, [index, filter]);
@@ -89,9 +89,11 @@ export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged 
     </div>
     {phase === "warning" && <div role="alert" className="environment-switch-warning">
       <strong>{status?.dirtyCount} uncommitted changes</strong>
-      <div>Switch to {target}? Changes may move to the new branch. If they would be overwritten, Git will refuse the switch.</div>
+      <div>{creating.current
+        ? `Create and switch to ${target}? Your uncommitted changes will stay in the working tree on the new branch.`
+        : `Switch to ${target}? Changes may move to the new branch. If they would be overwritten, Git will refuse the switch.`}</div>
       <div className="environment-menu-actions">
-        <Button variant="ghost" size="sm" onClick={() => performSwitch(target!)}>Switch anyway</Button>
+        <Button variant="ghost" size="sm" onClick={() => performSwitch(target!)}>{creating.current ? "Create and switch" : "Switch anyway"}</Button>
         <Button variant="secondary" size="sm" onClick={() => { setPhase("idle"); setTarget(null); }}>Cancel</Button>
       </div>
     </div>}
