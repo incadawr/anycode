@@ -62,8 +62,11 @@ it("releases a failed durable explicit reservation", async () => {
 });
 it("ignores wrong generation, unrelated turn and replaced process", async () => {
   const f = await fixture(), source = await f.seed(); f.end(source.envelope.messageId, "completed", "bad", 2); f.end("unrelated");
-  expect(f.post).toHaveBeenCalledTimes(1); f.hosts[1]!.proc = {}; f.end(source.envelope.messageId);
-  await f.broker.reconcile(); expect(source.subscription?.state).toBe("unknown"); expect(f.post).toHaveBeenCalledTimes(1);
+  const barrier = await f.seed(); f.end(barrier.envelope.messageId);
+  await vi.waitFor(() => expect(barrier.subscription?.state).toBe("auto"));
+  expect(source.subscription?.state).toBe("pending");
+  expect(f.post).toHaveBeenCalledTimes(3); f.hosts[1]!.proc = {}; f.end(source.envelope.messageId);
+  await f.broker.reconcile(); expect(source.subscription?.state).toBe("unknown"); expect(f.post).toHaveBeenCalledTimes(3);
 });
 it.each([false, true])("new broker restores cards without replay after auto accepted=%s", async accepted => {
   const f = await fixture(), source = await f.seed();

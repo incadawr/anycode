@@ -83,11 +83,11 @@ function endpoint(id: string, kind: PeerHost["engine"], workspace: string) {
   return { session, requests, finishes };
 }
 
-async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "codex") {
+async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "codex", generation = 1) {
   const dir = realpathSync(await mkdtemp(join(tmpdir(), "peer-integration-")));
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const other = join(dir, "other"); await mkdir(other);
-  const hosts: PeerHost[] = [a, b].map((engine, i) => ({ sessionId: i ? "b" : "a", tabId: i ? "b" : "a", proc: {}, generation: 1,
+  const hosts: PeerHost[] = [a, b].map((engine, i) => ({ sessionId: i ? "b" : "a", tabId: i ? "b" : "a", proc: {}, generation,
     workspace: i ? other : dir, workspaceKey: i ? other : dir, live: true, root: true, restricted: false, readOnly: false, engine, activity: "idle" }));
   const ends = hosts.map(h => endpoint(h.sessionId, h.engine, h.workspace));
   const policy = createSessionPeerPolicyStore({ file: join(dir, "policy") });
@@ -126,7 +126,8 @@ async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "
   const openers = new Map<string, string>();
   const fork = vi.fn(async (input: any) => {
     const host = { ...hosts[0]!, ...input, tabId: input.sessionId, proc: {}, generation: 1 };
-    hosts.push(host);
+    hosts.push(host); ends.push(endpoint(host.sessionId, host.engine, host.workspace));
+    doors.push(connect(host, ends.length - 1));
     return { ok: true, tab: host };
   });
   const manager = { atCapacity: () => false, createTabAwaitingInitialSpawn: fork,
@@ -141,7 +142,9 @@ async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "
     agentSessionOpeners: openers, agentSessionTitles: new Map(), listTabs: tabs,
   } as unknown as CreateSessionByAgentDeps;
   const handler = createSessionPeersHandler({ open: createSessionPeerOpener(creator), current, targets: () => hosts, access, prepare, send: (caller, input, authorizePeer) => replies.send(caller, input, async id => { const host = await authorizePeer(id); return { ...host, pid: host.generation, state: "running" }; }) });
-  const doors = hosts.map((host, i) => {
+  const terminals: SessionPeerTurnEvent[] = [];
+  let terminalGeneration = generation;
+  const connect = (host: PeerHost, i: number) => {
     const port = createSessionPeersPort((message: any) => {
       void handler(host.tabId, host.proc!, message.request).then(result => port.handle({ type: "session_peers_response", requestId: message.request.requestId, result }));
     });
@@ -155,15 +158,19 @@ async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "
       const accepted = turns.accept(host, host.proc!, { ...event, generation: host.generation });
       if (!accepted) return;
       host.turnContext = turns.active(host.proc!);
-      if (accepted.type === "session_peer_terminal") terminal(host.sessionId, accepted);
+      if (accepted.type === "session_peer_terminal") {
+        const emitted = { ...accepted, generation: terminalGeneration };
+        terminals.push(emitted); terminal(host.sessionId, emitted);
+      }
     });
     cleanups.push(async () => { port.dispose(); wire.dispose(); });
     const permission = { requestPermission: vi.fn(async () => ({ behavior: "allow" as const })) };
     const authority = { mode: "yolo" as "yolo" | "plan", root: true, orchestrate: false };
     const bridge = createSessionPeerBridge({ port, cwd: host.workspace, broker: permission, authority: () => authority });
     return { call: (name: string, input: unknown) => bridge.call(name, input, new AbortController().signal, "call"), authority, permission, port };
-  });
-  return { dir, other, hosts, ends, broker, drain, policy, doors, post, prepare, options, openers, fork, manager, creator };
+  };
+  const doors = hosts.map(connect);
+  return { dir, other, hosts, ends, broker, drain, policy, doors, post, prepare, options, openers, fork, manager, creator, terminals, terminalGeneration: (value: number) => { terminalGeneration = value; } };
 }
 
 it.each(pairs)("%s → %s automatic public result reaches the next native request, idle and busy", async (a, b) => {
@@ -262,6 +269,8 @@ it.each([false, true])("new broker reads the saved journal without replay, auto 
   await f.broker.ledger.flush();
   const restarted = await createCommunicationBroker(f.options); cleanups.push(() => restarted.dispose());
   const saved = restarted.ledger.messages.get(source.envelope.messageId)!;
+  expect(saved.envelope).toMatchObject({ sender: "session:a", principal: { kind: "session", sessionId: "a", tabId: "a" } });
+  expect(saved.principal).toEqual({ kind: "session", sessionId: "a", tabId: "a" });
   expect(saved.subscription?.state).toBe(accepted ? "auto" : "unknown");
   const count = f.post.mock.calls.length;
   await restarted.reconcile(); expect(f.post.mock.calls.slice(count).every(call => call[1] !== "send_message")).toBe(true);
@@ -290,4 +299,47 @@ it("open refuses cross workspace without target opt-in and caller posture escape
     Object.assign(f.hosts[0]!, { readOnly: false, root: true, restricted: false });
   }
   expect(f.fork).not.toHaveBeenCalled();
+});
+
+it("drops a stale terminal from the same process after a generation change", async () => {
+  const f = await fixture("core", "codex", 2);
+  f.terminalGeneration(1);
+  await f.doors[0]!.call("SessionSend", { sessionId: "b", payload: "stale", reply: "on_turn_end" });
+  const source = [...f.broker.ledger.messages.values()][0]!;
+  await vi.waitFor(() => expect(f.ends[1]!.finishes).toHaveLength(1));
+  f.ends[1]!.finishes.shift()!("stale-answer");
+  await vi.waitFor(() => expect(f.terminals).toHaveLength(1));
+  expect(f.terminals[0]).toMatchObject({ generation: 1 });
+  f.terminalGeneration(2);
+  await f.doors[0]!.call("SessionSend", { sessionId: "b", payload: "barrier", reply: "on_turn_end" });
+  const barrier = [...f.broker.ledger.messages.values()].at(-1)!;
+  await vi.waitFor(() => expect(f.ends[1]!.finishes).toHaveLength(1));
+  f.ends[1]!.finishes.shift()!("current-answer");
+  await vi.waitFor(() => expect(barrier.subscription?.state).toBe("auto"));
+  await vi.waitFor(() => expect(f.ends[0]!.requests).toHaveLength(1));
+  await f.broker.ledger.flush();
+  expect(source.subscription).toEqual({ state: "pending" });
+  expect(f.broker.ledger.messages.size).toBe(3);
+  expect(JSON.stringify(f.ends[0]!.requests)).not.toContain("stale-answer");
+  expect(f.post).toHaveBeenCalledTimes(3);
+});
+
+it("open first message crosses the real broker and inbox with authenticated attribution", async () => {
+  const f = await fixture();
+  const result = await f.doors[0]!.call("SessionOpen", { firstMessage: "open-message-nonce" });
+  expect(result).toMatchObject({ output: { status: "opened", sessionId: "opened-2", tabId: "opened-2", delivery: { state: "acknowledged" } } });
+  await vi.waitFor(() => expect(f.ends[2]!.requests).toHaveLength(1));
+  expect(JSON.stringify(f.ends[2]!.requests[0])).toContain("open-message-nonce");
+  expect([...f.broker.ledger.messages.values()][0]!.envelope).toMatchObject({ recipientSessionId: "opened-2",
+    sender: "session:a", principal: { kind: "session", sessionId: "a", tabId: "a" } });
+});
+it("cross-workspace open needs both persisted pair consent and target open opt-in", async () => {
+  const f = await fixture();
+  f.creator.projects = { isAllowed: () => true };
+  f.policy.setPairGrant(f.dir, f.other, false);
+  expect(await f.doors[0]!.call("SessionOpen", { workspace: f.other })).toMatchObject({ output: { status: "refused" } });
+  expect(f.fork).not.toHaveBeenCalled();
+  f.policy.setPairGrant(f.dir, f.other, true);
+  expect(await f.doors[0]!.call("SessionOpen", { workspace: f.other })).toMatchObject({ output: { status: "opened" } });
+  expect(f.fork).toHaveBeenCalledWith(expect.objectContaining({ workspace: f.other }));
 });
