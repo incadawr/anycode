@@ -5491,10 +5491,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           case "turn_rejected": {
-            // A busy response cannot revoke a request already owning a turn.
-            // Claude still has a pending native echo here; keep it for its
-            // acceptance/unsent outcome instead of restoring a duplicate.
-            if (message.reason === "busy" && get().turn.status === "running" && get().turn.requestId === message.requestId) return;
+            // For untracked requests, a stale busy response must not restore
+            // an already started queue item or Claude's pending native echo.
+            // Tracked deliveries must still reconcile contradictory outcomes.
+            if (message.reason === "busy" && get().turn.status === "running" && get().turn.requestId === message.requestId && !get().orchestrationDeliveries.some(item => item.requestId === message.requestId)) return;
             // Slice P7.14: if the host rejected the very drain we just sent (the
             // race in §0/§2.3 — busy/unsupported_images), return the item to the
             // HEAD of the queue and pause so it isn't re-sent silently. The
