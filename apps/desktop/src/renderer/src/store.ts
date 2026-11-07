@@ -887,6 +887,8 @@ export type GitPanelView = "changes" | "history" | "diff";
 export type GitPendingKind = "refresh" | "branches" | "log" | "diff" | "mutation";
 
 export interface GitPendingRequest {
+  /** Optional UI observer, called only for this request after its result is applied. */
+  onResult?: (outcome: GitCommandOutcome) => void;
   kind: GitPendingKind;
   /** kind:"diff" only — what was asked for, so a stale/mismatched result is dropped. */
   diff?: { path: string | null; target: GitDiffTarget };
@@ -2959,6 +2961,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
      */
     function applyGitResult(requestId: string, outcome: GitCommandOutcome): void {
+      const onResult = get().git.pending[requestId]?.onResult;
       if (!get().git.pending[requestId]) {
         console.warn(`[git] git_result for unknown requestId "${requestId}" — ignored (reset race).`);
         return;
@@ -3018,6 +3021,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
         return { git: next };
       });
+      onResult?.(outcome);
     }
 
     function scheduleFlush(): void {

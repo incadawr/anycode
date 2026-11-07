@@ -2066,6 +2066,18 @@ button.environment-menu-row:hover,
   background: var(--bg-hover);
 }
 
+
+.environment-switch-warning, .environment-switch-error {
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: var(--fs-sm);
+}
+.environment-switch-warning { background: color-mix(in srgb, var(--warning) 15%, transparent); }
+.environment-switch-error { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.environment-branch-row[aria-disabled="true"] { cursor: default; opacity: .65; }
+
 .environment-menu-note {
   padding: var(--sp-2);
   color: var(--text-3);

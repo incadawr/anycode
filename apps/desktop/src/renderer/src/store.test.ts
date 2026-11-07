@@ -6257,6 +6257,7 @@ describe("git slice — panel state + reset semantics (ruling R9)", () => {
       panelOpen: false,
       view: "changes",
       branches: null,
+      branchesError: null,
       log: null,
       diff: null,
       confirm: null,

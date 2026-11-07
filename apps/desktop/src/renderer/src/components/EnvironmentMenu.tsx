@@ -189,14 +189,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   }
 
 
-  function switchBranch(name: string): void {
-    if (!status || name === status.head.branch) {
-      return;
-    }
-    dispatch({ op: "switch_branch", name }, { kind: "mutation", label: "switch branch" });
-    setOpen(false);
-  }
-
   function copyWorkspace(): void {
     const write = navigator.clipboard?.writeText(workspacePath);
     if (!write) {
@@ -237,7 +229,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         <div className="environment-menu" role="dialog" aria-modal="false" aria-label="Environment">
           {branchesOpen ? <EnvironmentBranchPicker back={() => setBranchesOpen(false)}
             retry={() => dispatch({ op: "branches" }, { kind: "branches", label: "branches" })}
-            select={switchBranch} /> : <>
+            switched={() => setOpen(false)} /> : <>
           <section className="environment-menu-section" aria-label="Workspace">
             <div className="environment-menu-title">Workspace</div>
             <Button variant="ghost" size="sm" type="button" className="environment-menu-row" onClick={copyWorkspace}>

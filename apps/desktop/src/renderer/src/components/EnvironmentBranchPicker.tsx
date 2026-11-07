@@ -1,12 +1,41 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { useTabStore } from "../tab-context.js";
+import { useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { Button } from "../ui/components/Button.js";
-import { GitBranch } from "./icons.js";
+import { GitBranch, Spinner } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 
-export function EnvironmentBranchPicker({ back, retry, select }: {
-  back: () => void; retry: () => void; select: (name: string) => void;
+export function EnvironmentBranchPicker({ back, retry, switched }: {
+  back: () => void; retry: () => void; switched: () => void;
 }) {
+  const store = useTabStoreApi();
+  const send = useTabSend();
+  const alive = useRef(true);
+  const inFlight = useRef(false);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const [target, setTarget] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"idle" | "warning" | "pending" | "error">("idle");
+  const [switchError, setSwitchError] = useState("");
+  const locked = phase === "pending" || phase === "warning";
+  function performSwitch(name: string) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setTarget(name);
+    setPhase("pending");
+    const requestId = crypto.randomUUID();
+    store.getState().gitRequestStarted(requestId, { kind: "mutation", label: "switch branch", onResult: outcome => {
+      if (!alive.current) return;
+      inFlight.current = false;
+      if (outcome.ok) switched();
+      else { setSwitchError(outcome.reason); setPhase("error"); }
+    } });
+    send({ type: "git_command", requestId, command: { op: "switch_branch", name } });
+  }
+  function select(name: string) {
+    if (locked || inFlight.current) return;
+    setTarget(name);
+    if ((store.getState().git.status?.dirtyCount ?? 0) > 0) setPhase("warning");
+    else performSwitch(name);
+  }
   const status = useTabStore(s => s.git.status);
   const branches = useTabStore(s => s.git.branches);
   const error = useTabStore(s => s.git.branchesError);
@@ -19,20 +48,33 @@ export function EnvironmentBranchPicker({ back, retry, select }: {
   const names = [status ? gitPillLabel(status) : null, ...(!loading && !error ? matching.map(b => b.name) : [])].filter((n): n is string => n !== null);
   const index = Math.min(active, Math.max(0, names.length - 1));
   useEffect(() => { list.current?.querySelector('[data-active="true"]')?.scrollIntoView?.({ block: "nearest" }); }, [index, filter]);
-  function choose(i: number) { if (i > 0 && names[i]) select(names[i]!); }
+  function choose(i: number) { if (!locked && i > 0 && names[i]) select(names[i]!); }
   function option(name: string, i: number) {
-    return <div key={name} id={`${id}-${i}`} role="option" aria-selected={i === 0} data-active={index === i}
+    return <div key={name} id={`${id}-${i}`} role="option" aria-selected={i === 0} aria-disabled={locked} aria-busy={phase === "pending" && name === target} data-active={index === i}
       className={`environment-branch-row${i === 0 ? " environment-branch-row-current" : ""}`}
       onMouseMove={() => setActive(i)} onClick={() => choose(i)}>
-      <GitBranch /><span title={name}>{name}</span>{i === 0 && <span aria-label="Current branch">✓</span>}
+      {phase === "pending" && name === target ? <Spinner className="icon-spin" /> : <GitBranch />}<span title={name}>{name}</span>{phase === "pending" && name === target && <span role="status">Switching…</span>}{i === 0 && <span aria-label="Current branch">✓</span>}
     </div>;
   }
   return <section className="environment-branch-picker" aria-label="Switch branch">
     <div className="environment-menu-actions">
-      <Button variant="ghost" size="sm" aria-label="Back" onClick={back}>‹</Button>
+      <Button variant="ghost" size="sm" aria-label="Back" disabled={phase === "pending"} onClick={back}>‹</Button>
       <span>Switch branch</span>
     </div>
-    <input className="environment-menu-text-input" aria-label="Filter branches" placeholder="Filter branches"
+    {phase === "warning" && <div role="alert" className="environment-switch-warning">
+      <strong>{status?.dirtyCount} uncommitted changes</strong>
+      <div>Switch to {target}? Changes may move to the new branch. If they would be overwritten, Git will refuse the switch.</div>
+      <div className="environment-menu-actions">
+        <Button variant="secondary" size="sm" onClick={() => performSwitch(target!)}>Switch anyway</Button>
+        <Button variant="ghost" size="sm" onClick={() => { setPhase("idle"); setTarget(null); }}>Cancel</Button>
+      </div>
+    </div>}
+    {phase === "error" && <div role="alert" className="environment-switch-error">
+      <strong>Couldn't switch to {target}</strong>
+      <div>{switchError}</div>
+      <Button variant="secondary" size="sm" onClick={() => performSwitch(target!)}>Retry</Button>
+    </div>}
+    <input disabled={locked} className="environment-menu-text-input" aria-label="Filter branches" placeholder="Filter branches"
       role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={id}
       aria-activedescendant={names.length ? `${id}-${index}` : undefined} value={filter}
       onChange={e => { setFilter(e.target.value); setActive(0); }}
@@ -41,7 +83,7 @@ export function EnvironmentBranchPicker({ back, retry, select }: {
           e.preventDefault(); setActive(Math.max(0, Math.min(names.length - 1, index + (e.key === "ArrowDown" ? 1 : -1))));
         } else if (e.key === "Enter") { e.preventDefault(); choose(index); }
       }} />
-    <div id={id} role="listbox" aria-label="Branches" aria-busy={loading}>
+    <div id={id} role="listbox" aria-label="Branches" aria-busy={loading || phase === "pending"}>
       {status && <div role="group" aria-label="Current"><div className="environment-menu-note">Current</div>{option(names[0]!, 0)}</div>}
       {!loading && !error && branches !== null && <div role="group" aria-label="Matching">
         <div className="environment-menu-note">Matching · {matching.length}</div>
@@ -49,7 +91,7 @@ export function EnvironmentBranchPicker({ back, retry, select }: {
       </div>}
     </div>
     {loading || (!error && branches === null) ? <div role="status" className="environment-menu-note">Loading branches…</div>
-      : error ? <div role="alert" className="environment-menu-note">Couldn't list branches: {error} <Button variant="ghost" size="sm" onClick={retry}>Retry</Button></div>
+      : error ? <div role="alert" className="environment-menu-note">Couldn't list branches: {error} <Button variant="ghost" size="sm" disabled={locked} onClick={retry}>Retry</Button></div>
       : !matching.length && <div className="environment-menu-note">No branches match</div>}
   </section>;
 }

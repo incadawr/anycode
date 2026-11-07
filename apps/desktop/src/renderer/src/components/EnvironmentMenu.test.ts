@@ -5,6 +5,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { createDesktopStore } from "../store.js";
 import { TabContext } from "../tab-context.js";
+import type { UiToHostMessage } from "../../../shared/protocol.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 
 import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
@@ -267,7 +268,7 @@ it("navigates options with arrows and Enter sends the existing switch command", 
     expect(document.getElementById(active!)?.textContent).toBe("topic/z");
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(send).toHaveBeenCalledWith("tab", expect.objectContaining({ type: "git_command", command: { op: "switch_branch", name: "topic/z" } }));
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
   });
 });
 
@@ -315,5 +316,93 @@ it("keeps a long branch name available in the row and its tooltip", async () => 
     const option = host.querySelector('[role="option"][aria-selected="false"]')!;
     expect(option.textContent).toBe(name);
     expect(option.querySelector("span")?.getAttribute("title")).toBe(name);
+  });
+});
+
+const clickText = async (host: HTMLElement, text: string) => act(async () => {
+  Array.from(host.querySelectorAll("button")).find(b => b.textContent === text)!.click();
+});
+async function readyBranches(store: ReturnType<typeof createDesktopStore>, dirtyCount = 0) {
+  await act(async () => store.setState({ git: { ...store.getState().git, pending: Object.fromEntries(Object.entries(store.getState().git.pending).filter(([, p]) => p.kind === "mutation")), branches: branchItems,
+    status: { ...store.getState().git.status!, dirtyCount } } }));
+}
+const pickTopic = async (host: HTMLElement) => act(async () => host.querySelector<HTMLElement>('[role="option"][aria-selected="false"]')!.click());
+function switchRequest(send: ReturnType<typeof vi.spyOn>) {
+  const calls = send.mock.calls as [string, UiToHostMessage][];
+  return calls.map(c => c[1]).filter((m): m is Extract<UiToHostMessage, { type: "git_command" }> => m.type === "git_command" && m.command.op === "switch_branch").at(-1)!;
+}
+
+it("warns on dirty selection; Cancel keeps the branch and confirm sends the same request", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store, 3);
+    await pickTopic(host);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("3 uncommitted changes");
+    expect(switchRequest(send)).toBeUndefined();
+    await clickText(host, "Cancel");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(store.getState().git.status!.head.branch).toBe("main");
+    expect(switchRequest(send)).toBeUndefined();
+    await pickTopic(host);
+    await clickText(host, "Switch anyway");
+    expect(switchRequest(send).command).toEqual({ op: "switch_branch", name: "topic/z" });
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+});
+
+it("switches clean trees directly, locks controls with a row spinner, and closes on success", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await pickTopic(host);
+    const request = switchRequest(send);
+    expect(request.command).toEqual({ op: "switch_branch", name: "topic/z" });
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[role="option"][aria-busy="true"]')?.textContent).toContain("topic/z");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Switching");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.disabled).toBe(true);
+    const count = send.mock.calls.length;
+    await pickTopic(host);
+    expect(send.mock.calls).toHaveLength(count);
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: request.requestId, outcome: { ok: true, kind: "unit" } }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+it("keeps refusals readable inside the panel, retains Current, and retries the request", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await pickTopic(host);
+    const fail = async (reason: string) => act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: switchRequest(send).requestId, outcome: { ok: false, reason } }));
+    await fail("Local changes would be overwritten by checkout.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Local changes would be overwritten");
+    expect(host.querySelector('[aria-selected="true"]')?.textContent).toBe("main✓");
+    const first = switchRequest(send).requestId;
+    await clickText(host, "Retry");
+    expect(switchRequest(send).requestId).not.toBe(first);
+    expect(switchRequest(send).command).toEqual({ op: "switch_branch", name: "topic/z" });
+    await fail("Still refused");
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+    expect(host.querySelector('section[aria-label="Session access"]')).not.toBeNull();
+  });
+});
+
+it.each([true, false])("ignores a stale switch result after close/reopen (success=%s)", async ok => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await pickTopic(host);
+    const old = switchRequest(send);
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
+    await readyBranches(store);
+    await pickTopic(host);
+    const current = switchRequest(send);
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: old.requestId,
+      outcome: ok ? { ok: true, kind: "unit" } : { ok: false, reason: "Old refusal" } }));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("Old refusal");
+    expect(host.querySelector('[role="option"][aria-busy="true"]')).not.toBeNull();
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: current.requestId, outcome: { ok: true, kind: "unit" } }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 });
