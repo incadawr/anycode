@@ -141,3 +141,12 @@ or action.
 - **"preview is not visible; open the preview panel"**: the preview is hidden.
   Open the preview panel and retry.
 - **"stale"**: the page changed. The agent takes a new snapshot.
+
+## Local dev-server boundaries
+
+A loopback preview grants only the exact origin it opened: scheme, host spelling
+and port. A page at `http://localhost:5173` cannot fetch another loopback port
+or switch to `127.0.0.1` through that grant. Open or navigate the new target
+explicitly to establish its own preview origin. Remote subresources are blocked
+under ordinary local-preview policy. Full browser access does not widen this
+loopback grant.

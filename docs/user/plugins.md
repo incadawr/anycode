@@ -31,6 +31,15 @@ its name, version, and what it contributes. Anything the manifest does not
 declare is not granted — capabilities are derived from content, never
 self-declared by the plugin.
 
+## Contribution limits
+
+Plugin `hooks` and `commands` declarations are parsed but do not contribute
+hooks or commands in this version. Workflows use workflow roots. `docs`,
+`promptOverlays` and `engineSupport` are reserved for official plugins;
+non-official declarations are ignored with a problem, and this version does
+not contribute these surfaces. Non-official plugins cannot shadow builtin
+skill or profile names.
+
 ## Tiers
 
 - **Official ✓** — from AnyCode's signed plugin index. Verified signature and
@@ -109,11 +118,11 @@ same rules as MCP servers:
   discovery file in `ANYCODE_SESSIONS_DISCOVERY`, only while the Sessions API
   runs. The token is never placed in its environment, arguments or log.
 - To write a service that bridges an outside channel, see the
-  [channel plugin guide](../development/channel-plugins.md).
+  [channel plugin guide](https://github.com/incadawr/anycode/blob/master/docs/development/channel-plugins.md).
 
 ## Example: Telegram remote control
 
-[`examples/telegram-remote`](../../examples/telegram-remote/) is a service plugin
+[`examples/telegram-remote`](https://github.com/incadawr/anycode/blob/master/examples/telegram-remote) is a service plugin
 that reaches your shared sessions from Telegram. Its secrets are saved in
 Settings → MCP → Secrets, and the install sheet lists them. See
 [Remote control from a chat app](remote-control.md).
@@ -152,7 +161,7 @@ installed but contributes nothing.
   as before.
 
 For authoring your own plugin (manifest reference, layout, signing), see
-[docs/development/plugins-authoring.md](../development/plugins-authoring.md).
+[docs/development/plugins-authoring.md](https://github.com/incadawr/anycode/blob/master/docs/development/plugins-authoring.md).
 
 ### Account sources
 

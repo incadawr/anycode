@@ -43,7 +43,8 @@ the same name in a higher root replaces the one below it, silently:
 6. built-in skills shipped with the app
 
 Plugin skill roots come from installed plugins — see [plugins.md](plugins.md)
-for the tiers, install flow, and consent rules.
+for the tiers, install flow, and consent rules. Non-official plugin roots
+that claim a builtin name are dropped with a problem; they cannot shadow it.
 
 ### Precedence example
 
@@ -65,6 +66,14 @@ file and the built-in returns.
 Filesystem skills apply to Native tabs only. Claude and Codex root tabs can also receive
 three app builtins through their CLI skill mechanisms; see below. Independently
 installed CLI skills follow that CLI's rules and are not controlled by this pane.
+
+## Import from other tools
+
+Settings → Skills can scan `~/.claude/skills`, `~/.codex/skills`,
+`~/.zcode/skills`, project `.claude/skills` and installed Claude Code plugins.
+Review compatibility and the destination before importing. This copies a skill
+into an AnyCode root; it does not forward the source tool's whole environment.
+Start a new Native session to load the result.
 
 ## Disabling a skill
 
@@ -115,6 +124,8 @@ including a process started to resume a session:
 | `using-browser-preview` | `anycode-app:using-browser-preview` | `anycode-app-browser-preview` |
 | `control-browser` | `anycode-app:control-browser` | `anycode-app-control-browser` |
 
+The setup policy is shared with Native, with engine-specific location and tool
+wording. Browser engine bodies are shorter texts using registered bridge names.
 This is a separate app catalog and namespace. A same-name project, personal or
 plugin file never replaces it. Those file sources are not exported to Claude or
 Codex, even if their switches are on. The other three Native builtins are not

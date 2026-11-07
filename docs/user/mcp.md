@@ -15,6 +15,11 @@ ignored, even if the higher entry is disabled or failed.
    same `mcpServers` shape. The MCP pane shows these entries read-only, and
    **Import to project** copies one into the project config.
 
+In an untrusted folder, project config and `.mcp.json` servers are skipped with
+a folder-not-trusted problem. User entries still load. Configured servers are
+also forwarded to root Claude and Codex tabs when their CLI process starts;
+restart the session after a change.
+
 ## One stdio server
 
 ```json
@@ -124,7 +129,9 @@ These problems appear as strips in **Settings → MCP**.
   directory, URL, and environment variables. Values typed into the environment
   rows are masked afterwards; for tokens, prefer a `${env:NAME}` reference.
 - **Import**: scans Claude, Codex, zcode and `.mcp.json` for servers and offers to
-  add them. Imported servers start disabled until you enable them.
+  add them. Sources include `~/.claude.json`, `.claude/settings*.json`,
+  `.mcp.json`, `~/.codex/config.toml` and `~/.zcode/cli/config.json`.
+  Imported servers start disabled until you enable them.
 - Per-row controls to enable, edit or delete a server.
 
 ## How to verify it applied

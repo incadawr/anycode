@@ -32,7 +32,7 @@ Most changes need a new session; start with the page for your question below.
 | Stop repeated approval prompts | [Always-allow rules](permissions.md#always-allow-rules) |
 | Configure automatic command review | [Ask classifier](permissions.md#ask-classifier) |
 | Delegate work to another session | [Subagents](subagents.md) |
-| Define a named subagent profile | [Profile files](subagents.md#your-own-profiles) |
+| Define a named subagent profile | [Profile files](subagents.md#profile-files) |
 | Run a parent that plans and delegates | [Orchestrate](orchestration.md#orchestrate-mode) |
 | Choose planner, executor and reviewer routes | [Roles](roles.md#configure-roles) |
 | A role is refused or falls back | [Role routing](roles.md#fallbacks-and-read-only-roles) |

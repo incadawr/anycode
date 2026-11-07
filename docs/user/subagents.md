@@ -39,7 +39,6 @@ automatically.
 |---|---|
 | `general-purpose` | Full toolset under the parent's permission gate. The default for delegated build work. |
 | `explore` | Read-only reconnaissance. It sweeps many files and returns the conclusion. Set `ANYCODE_EXPLORE_MODEL` to run it on a cheaper model. |
-
 | `planner` | Read-only planning, default 30 turns. |
 | `executor` | Implementation, default 80 turns. |
 | `reviewer` | Read-only review, default 40 turns. |
