@@ -8,7 +8,7 @@ import { DEFAULT_SETTINGS, settingsSchema } from "../settings/schema.js";
 
 const account = { email: "person@example.test", organization: "organization", tokenSource: "oauth" };
 const key = () => claudeCatalogKey(account, "trusted-cli", "2.1.215")!;
-const models = [{ id: "account-model", label: "Account model 6.0" }];
+const models = [{ id: "account-model", label: "Account model 6.0", resolvedId: "claude-account-6" }];
 
 describe("Claude catalog cache", () => {
   it("invalidates the CLI fingerprint when its executable changes", () => {
@@ -41,8 +41,8 @@ describe("Claude catalog cache", () => {
     ]) expect(selectClaudeCatalog({ status: "ready", catalogIdentity: identity }, cached)).toEqual([]);
   });
   it("prefers the latest initialize names and projects only selectable fields", () => {
-    const fresh = projectClaudeModels([{ value: "fresh", displayName: "Fresh 7.0", account, token: "secret", supportsEffort: true, supportedEffortLevels: ["high", "invalid"] }], text => text);
-    expect(fresh).toEqual([{ id: "fresh", label: "Fresh 7.0", efforts: ["high"] }]);
+    const fresh = projectClaudeModels([{ value: "fresh", resolvedModel: "claude-fresh-7", displayName: "Fresh 7.0", account, token: "secret", supportsEffort: true, supportedEffortLevels: ["high", "invalid"] }], text => text);
+    expect(fresh).toEqual([{ id: "fresh", label: "Fresh 7.0", resolvedId: "claude-fresh-7", efforts: ["high"] }]);
     expect(selectClaudeCatalog({ status: "ready", catalogIdentity: key(), models: fresh }, { identity: key(), models })).toEqual(fresh);
     expect(projectClaudeModels([{ value: "safe", displayName: "person@example.test" }, { value: "sk-ant-api03-abcdef123456" }], maskCredentials)).toEqual([{ id: "safe", label: "<redacted>" }]);
     expect(selectClaudeCatalog({ status: "ready", catalogIdentity: key(), models: [] }, { identity: key(), models })).toEqual([]);

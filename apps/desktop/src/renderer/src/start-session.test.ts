@@ -685,7 +685,7 @@ describe("submitStartDraft — codex draft-model agreement", () => {
     expect(explicit.createTab).not.toHaveBeenCalled();
   });
 
-  it("the claude lane is unchanged — forwards draft.model raw when set, omits when null (no catalog consulted)", async () => {
+  it("the Claude request agrees with the displayed fallback for stale and unset picks", async () => {
     const set = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     set.tabsStore.getState().openDraft("/ws/a");
     set.tabsStore.getState().setDraftPrompt("hello");
@@ -693,7 +693,7 @@ describe("submitStartDraft — codex draft-model agreement", () => {
     set.tabsStore.getState().setDraftEngine("claude");
     await submitStartDraft(set.deps);
     expect(set.createTab).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "new", engine: "claude", engineModel: "opus[1m]" }),
+      expect.objectContaining({ kind: "new", engine: "claude", engineModel: "default" }),
     );
 
     const unset = makeDeps({ ok: true, tabId: "t2", workspace: "/ws/a" });
@@ -702,7 +702,7 @@ describe("submitStartDraft — codex draft-model agreement", () => {
     unset.tabsStore.getState().setDraftEngine("claude");
     await submitStartDraft(unset.deps);
     const req = (unset.createTab.mock.calls as unknown as [Record<string, unknown>[]])[0]![0]!;
-    expect(req.engineModel).toBeUndefined();
+    expect(req.engineModel).toBe("default");
   });
 });
 
@@ -882,4 +882,15 @@ describe("Claude start orchestration intent", () => {
     expect(r.createTab).not.toHaveBeenCalled();
     expect(r.tabsStore.getState().draft).toBe(draft);
   });
+});
+
+it("preserves a full-id fallback pick as the confirmed catalog alias on submit", async () => {
+  const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+  tabsStore.getState().openDraft("/ws/a");
+  tabsStore.getState().setDraftPrompt("hello");
+  tabsStore.getState().setDraftEngine("claude");
+  tabsStore.getState().setDraftModel("claude-opus-5-5");
+  tabsStore.getState().setClaudeModels([{ id: "default" }, { id: "opus", label: "Live Opus 5.5", resolvedId: "claude-opus-5-5" }]);
+  await submitStartDraft(deps);
+  expect(createTab).toHaveBeenCalledWith(expect.objectContaining({ engineModel: "opus" }));
 });

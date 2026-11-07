@@ -845,7 +845,7 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
     expect(engine.snapshot().model).toBe("sonnet");
   });
 
-  it("a refused set_model is a clean no-op — the prior model survives (w0-16 live behaviour)", async () => {
+  it("a refused set_model is a clean no-op — the prior model survives (synthetic w0-16 behaviour)", async () => {
     const transport = new FakeTransport({ refuse: { set_model: "model rejected" } });
     const engine = engineWith(transport);
     const rejected = await engine.selectModel("sonnet");
@@ -1558,7 +1558,7 @@ describe("Claude session — messages racing the final context read", () => {
 });
 
 describe("ClaudeEngine — presentation surface", () => {
-  it("projects the live catalog and the frozen preset table, and reports cost without ever logging it", async () => {
+  it("projects the synthetic catalog and the frozen preset table, and reports cost without ever logging it", async () => {
     const transport = new FakeTransport({
       frames: streamFrames("w0-02-control-writeprobe.jsonl"),
       contextUsage: { totalTokens: 1, maxTokens: 2 },

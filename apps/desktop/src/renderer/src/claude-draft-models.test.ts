@@ -27,3 +27,7 @@ describe("Claude draft fallback", () => {
     expect(pickEngineModels({ id: "claude", model: { current: "account-model", available: live } }, CLAUDE_DRAFT_MODELS, []).claude).toBe(live);
   });
 });
+
+it("resolves a full fallback id to the confirmed wire alias before rendering", () => {
+  expect(resolveClaudeDraftModel("claude-opus-5-5", [{ id: "default", resolvedId: "claude-opus-5-5" }, { id: "opus", resolvedId: "claude-opus-5-5" }])).toBe("opus");
+});

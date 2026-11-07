@@ -112,6 +112,7 @@ import {
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
 import { activeProviderView, connectionById } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
+import { resolveClaudeDraftModel } from "../claude-draft-models.js";
 import { useClaudeDraftModels } from "../use-claude-draft-models.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
@@ -459,19 +460,7 @@ export const DEFAULT_CLAUDE_DRAFT_PRESET = "ask";
 // Shared with the role editor; keep the existing export for callers/tests.
 export { CLAUDE_DRAFT_MODELS } from "../claude-draft-models.js";
 
-/**
- * Resolves the Claude draft's displayed model id. Same hazard as
- * `resolveCodexDraftModel`: `draft.model` is a single field shared with the
- * Core and Codex model chips and is NOT reset on an engine switch, so a leftover
- * id from another engine must never be displayed or submitted as if it were a
- * Claude id. Exported for unit testing.
- */
-export function resolveClaudeDraftModel(draftModel: string | null, available: readonly EngineModelChoice[]): string {
-  if (draftModel !== null && available.some((m) => m.id === draftModel)) {
-    return draftModel;
-  }
-  return available[0]?.id ?? "";
-}
+export { resolveClaudeDraftModel };
 
 /**
  * Resolves the Codex draft's displayed/selected model id. the

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { startClaudeCatalogRefresh } from "./use-claude-draft-models.js";
-import { CLAUDE_DRAFT_MODELS } from "./claude-draft-models.js";
+import { createStartTabRequest } from "./start-session.js";
+import { resolveClaudeDraftModel, CLAUDE_DRAFT_MODELS } from "./claude-draft-models.js";
 import type { ClaudeDoctorReport } from "../../shared/claude-doctor.js";
 
 it("uses fallback before confirmation, then cached choices, then fallback on failed identity", async () => {
@@ -30,4 +31,16 @@ describe("Claude catalog refresh ordering", () => {
     apply({ report: { status: "ready", models: [{ id: "disposed" }] } });
     expect(writes).toHaveLength(count);
   });
+});
+
+it("prefers arriving confirmed choices and normalizes display and submit to the same alias", async () => {
+  const models = [{ id: "opus", label: "Confirmed Opus 5.5", resolvedId: "claude-opus-5-5" }];
+  let choices: typeof CLAUDE_DRAFT_MODELS = [];
+  const stop = startClaudeCatalogRefresh({ recheck: async () => ({ report: { status: "ready", models } }), onSnapshotChanged: () => () => {} }, value => { choices = value; });
+  await Promise.resolve();
+  expect(choices).toBe(models);
+  const draft = { workspace: "/ws", engine: "claude" as const, model: "claude-opus-5-5" };
+  expect(createStartTabRequest(draft, null, choices)).toMatchObject({ engineModel: resolveClaudeDraftModel(draft.model, choices) });
+  expect(resolveClaudeDraftModel(draft.model, choices)).toBe("opus");
+  stop();
 });

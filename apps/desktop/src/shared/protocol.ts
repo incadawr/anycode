@@ -104,6 +104,8 @@ export interface EngineCapabilitiesProjection {
 
 /** One selectable model choice for a non-core engine's draft/mid-session picker (cut §3.1). */
 export interface EngineModelChoice {
+  /** Optional read-back id for resolving full-id picks to catalog aliases. */
+  resolvedId?: string;
   supportsFast?: boolean;
   id: string;
   label?: string;

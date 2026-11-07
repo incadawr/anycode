@@ -2654,8 +2654,8 @@ async function bootClaudeSession(
   // The first turn-scoped `system/init` is the earliest proof the native
   // session exists — and the only honest source of the POSTURE. `ClaudeEngine`
   // has by now reconciled its settings against that init, so `snapshot()`
-  // carries the catalog `value` (`opus[1m]`) rather than the resolved id the
-  // CLI reports (`claude-opus-4-8`); persisting the latter would fail
+  // carries the catalog `value` (for example `opus`) rather than the resolved id the
+  // CLI reports (for example `claude-opus-5-5`); persisting the latter would fail
   // `catalog.has()` on the next resume and fall back to the default model.
   claudeEngine.onFirstSystemInit((init) => {
     const settled = claudeEngine.snapshot();

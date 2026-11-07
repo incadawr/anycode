@@ -9,6 +9,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CLAUDE_DRAFT_MODELS } from "../../../renderer/src/claude-draft-models.js";
 import { CLAUDE_ENGINE_CAPABILITIES } from "./claude-engine.js";
 import { CLAUDE_EFFORT_LEVELS, ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
@@ -41,7 +42,7 @@ function fixtureModels(): unknown {
   return (init.raw.response as { response: { models: unknown } }).response.models;
 }
 
-describe("ClaudeModelCatalog — built from the live initialize models[], never a static enum", () => {
+describe("ClaudeModelCatalog — built from synthetic initialize models[]", () => {
   const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
 
   it("decodes the synthetic catalog", () => {
@@ -259,4 +260,9 @@ describe("ClaudeModelCatalog.selectableForResolved — the ambiguous read-back (
   it("an exact `value` hit wins outright (the CLI reporting a selectable id verbatim)", () => {
     expect(catalog.selectableForResolved("sonnet")!.value).toBe("sonnet");
   });
+});
+
+it("resolves every fallback id through the synthetic initialize catalog", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
+  expect(CLAUDE_DRAFT_MODELS.map(model => catalog.resolveId(model.id))).toEqual(["default", "fable", "opus", "sonnet", "haiku"]);
 });

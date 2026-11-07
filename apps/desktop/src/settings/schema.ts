@@ -941,6 +941,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
           identity: z.string().regex(/^[a-f0-9]{64}$/),
           models: z.array(z.object({
             id: z.string().min(1).max(200),
+            resolvedId: z.string().min(1).max(200).optional(),
             label: z.string().max(256).optional(),
             efforts: z.array(z.enum(["low", "medium", "high", "xhigh", "max"])).max(5).optional(),
           })).max(100),

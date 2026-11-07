@@ -16,3 +16,12 @@ export const CLAUDE_DRAFT_MODELS: readonly EngineModelChoice[] = [
   { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
   { id: "claude-haiku-5-5", label: "Haiku 5.5" },
 ];
+
+/** One model decision for both the draft chip and submission. Exact wire ids win. */
+export function resolveClaudeDraftModel(draftModel: string | null, available: readonly EngineModelChoice[]): string {
+  const models = available.length ? available : CLAUDE_DRAFT_MODELS;
+  const exact = models.find(model => model.id === draftModel);
+  const resolved = models.find(model => model.resolvedId === draftModel && model.id !== "default")
+    ?? models.find(model => model.resolvedId === draftModel);
+  return exact?.id ?? resolved?.id ?? models[0]?.id ?? "";
+}

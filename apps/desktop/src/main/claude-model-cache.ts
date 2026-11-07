@@ -35,7 +35,9 @@ export function projectClaudeModels(raw: unknown, clean: (value: string) => stri
       ? entry.supportedEffortLevels : [];
     const efforts = [...new Set<string>(levels.filter((v: unknown) =>
       ["low", "medium", "high", "xhigh", "max"].includes(v as string)))];
-    return [{ id: entry.value, label, ...(efforts.length ? { efforts } : {}) }];
+    const resolvedId = typeof entry.resolvedModel === "string" && /^[\w.:[\]-]{1,200}$/.test(entry.resolvedModel)
+      && clean(entry.resolvedModel) === entry.resolvedModel ? entry.resolvedModel : undefined;
+    return [{ id: entry.value, label, ...(resolvedId ? { resolvedId } : {}), ...(efforts.length ? { efforts } : {}) }];
   });
 }
 export function selectClaudeCatalog(report: ClaudeDoctorReport, cached?: ClaudeModelCache): EngineModelChoice[] {
