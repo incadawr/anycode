@@ -48,8 +48,8 @@ below; the snippet shows only the sections discussed here.
 - **Tools** (Settings → Tools):
   - `tools.concurrency`: parallel read-only tool calls (default 4).
   - `tools.stallTimeoutMs`: per-attempt provider stream watchdog (default 90000 ms).
-  - `tools.maxTurns`: turn limit for the main agent (default 100).
-  - `tools.subagentMaxTurns`: turn limit for subagents (default 40).
+  - `tools.maxTurns`: optional turn limit for an interactive top-level Native session; without it there is no turn limit.
+  - `tools.subagentMaxTurns`: turn limit for subagents (default 150, subject to role budgets). Accepts a positive integer.
   - `tools.maxRetries`: provider retry attempts (the pane's "Retry attempts"; default 8).
   - `tools.networkRetryBudgetMs`: wall-clock budget for riding out a network outage (the pane's "Network retry budget (ms)"; default 300000 ms, 5 minutes).
   - `tools.grepBackend`: `"rg"` (default) or `"tgrep"`.

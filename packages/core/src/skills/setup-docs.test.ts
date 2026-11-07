@@ -98,6 +98,11 @@ describe("packaged user guide navigation", () => {
     }
   });
 
+  it("makes the MCP guide reachable from the setup index", () => {
+    expect(links(readme)).toContain("mcp.md");
+    expect(pages.get("mcp.md")?.trim()).toBeTruthy();
+  });
+
   it("keeps the README precedence contract and config boundaries discoverable", () => {
     expect(readme).toMatch(/project `?\.anycode\/?`? beats the user `?~\/\.anycode\/?`?/i);
     expect(readme).toContain("~/.anycode/settings.json");

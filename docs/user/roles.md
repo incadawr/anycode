@@ -15,7 +15,7 @@ Open **Settings → Roles**, or `/roles` in the desktop composer. There are five
 | `planner` | Read-only Native child | 30 |
 | `executor` | Child that implements work | 80 |
 | `reviewer` | Read-only Native child | 40 |
-| `explore` | Read-only Native child | Default subagent budget, normally 40 |
+| `explore` | Read-only Native child | Default subagent budget, normally 150 |
 
 Set a primary route and, optionally, ordered fallbacks for each child role.
 A route selects an engine, an exact connection or a provider (one of these),
@@ -72,11 +72,14 @@ session limit reached”.
 
 ## Turn budgets and reminders
 
-The default child budget is 40, with a ceiling of 200. For built-in and Settings
+The default child budget is 150; a configured budget can be any positive integer.
+Built-in planner, executor and reviewer defaults are 100, 300 and 150 turns.
+For built-in and Settings
 roles, `tools.subagentMaxTurns` takes priority over the role's default budget.
 A markdown profile's explicit `maxTurns` takes priority over that setting.
 An explicit internal run request can override the budget; `Agent` itself has
-no `maxTurns` field. Adaptive budgets apply only when no explicit budget exists.
+no `maxTurns` field. Adaptive budgets apply only when no explicit budget exists
+and range from 60 to 400 turns.
 
 A supervisor waiting on children without activity receives an idle reminder
 after 15 minutes and then every ten minutes. `ANYCODE_SUPERVISOR_IDLE_MS` changes

@@ -493,14 +493,14 @@ describe("Session — builtin anycode-setup skill wire", () => {
       await h.waitFor(agentEventOf("loop_end"));
 
       // The Skill tool call resolved against the REAL dispatch pipeline: the
-      // loaded builtin body (topic table included) landed in model-visible
+      // loaded builtin body landed in model-visible
       // history as the tool result.
       const skillResult = h.engine
         .historyItems()
         .flatMap((item) => (item.message.role === "tool" ? item.message.content : []))
         .find((part) => part.text.includes("# AnyCode setup"));
       expect(skillResult).toBeDefined();
-      expect(skillResult?.text).toContain("docs/user/mcp.md");
+      expect(skillResult?.text).toContain("Read README.md first");
       expect(skillResult?.text).toContain("NEVER print, quote or summarize API keys");
     } finally {
       h.close();

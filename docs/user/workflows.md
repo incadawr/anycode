@@ -25,7 +25,7 @@ tool.
 - **Schema:** `description` (required), optional `name` (defaults to the file
   name), 1–16 `steps`, each with `id`, `agentType` (a persona or profile name),
   `promptTemplate`, optional `dependsOn`, `tools` (extra tools such as `WebSearch`)
-  and `maxTurns` (1–200), plus an optional `outputTemplate`.
+  and `maxTurns` (any positive integer), plus an optional `outputTemplate`.
 - **Templates:** `${input}` and `${steps.<id>}`. A step can reference only steps listed
   in its own `dependsOn`. Cycles, duplicate ids and unknown steps reject the file.
 - **Limits:** 600 s per step, 1,800 s per run, 100,000 bytes of output.

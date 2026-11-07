@@ -39,15 +39,19 @@ automatically.
 |---|---|
 | `general-purpose` | Full toolset under the parent's permission gate. The default for delegated build work. |
 | `explore` | Read-only reconnaissance. It sweeps many files and returns the conclusion. Set `ANYCODE_EXPLORE_MODEL` to run it on a cheaper model. |
-| `planner` | Read-only planning, default 30 turns. |
-| `executor` | Implementation, default 80 turns. |
-| `reviewer` | Read-only review, default 40 turns. |
+| `planner` | Read-only planning, default 100 turns. |
+| `executor` | Implementation, default 300 turns. |
+| `reviewer` | Read-only review, default 150 turns. |
 
 `general-purpose` and `explore` are reserved; profiles can replace the other
-three. They normally use the default child limit (40) unless the role has a
+three. They normally use the default child limit (150) unless the role has a
 specific budget. See [roles](roles.md#turn-budgets-and-reminders) for precedence.
 Built-in read-only personas have no Bash, Write or Edit tools. Core session
 children additionally enforce a plan-mode gate for read-only profiles.
+
+In Native sessions, at most four new children can start per turn. Core children
+use a context window capped at 128,000 tokens and Bash output to the model is
+capped at 10,000 bytes.
 
 ## Profile files
 
@@ -80,7 +84,7 @@ any nested line makes the whole file invalid, and the profile is not loaded.
 | `engine` | no | `codex` or `claude`: uses that CLI. Desktop session children inherit a posture mapped from the parent mode; inline one-shot children use acceptEdits / workspace-write. See [permissions](permissions.md#engine-presets). |
 | `tools` | no | Tool allowlist. Core inline and session children. |
 | `effort` | no | Reasoning tier: `off`, `low`, `medium`, `high`, `xhigh` or `max`. `model_reasoning_effort` is accepted as an alias. |
-| `maxTurns` | no | Turn budget for each run, 1 to 200. Default 40. |
+| `maxTurns` | no | Turn budget for each run, any positive integer. If omitted, the configured child limit or role default applies. |
 | `connection` | no | Exact connection id to run on. Ids are in `provider.connections[].id` in `~/.anycode/settings.json`. |
 | `provider` | no | Provider id (for example `z-ai` or `deepseek`) resolved to a configured connection. |
 | `permissions.allow` | no | Rules that run without asking. `Tool` or `Tool(pattern)`, comma-separated. Core inline and session children. |
