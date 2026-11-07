@@ -123,7 +123,13 @@ test('fixture commands tolerate host plan/orchestrate reminders without bypassin
 
 const acceptance = await import(process.env.PEER_JUDGEMENT_MODULE ?? './session-peers-smoke.mjs');
 const card = text => ({id:'one',text:`${text} delivery-proof`,links:['Peer']});
+const replyObservation = kind => ({
+  requests:[{incoming:{messageId:'reply',replyTo:'original',sender:'session:b',recipientSessionId:'a',kind:kind === 'automatic' ? 'task_result' : 'agent_message',payload:'reply-proof'}}],
+  completedAt:0,received:{messageId:'original',sender:'session:a',recipientSessionId:'b',payload:'trigger'},nonce:'reply-proof',kind,
+  outgoing:[{id:'reply',text:'Outgoing reply-proof',links:['A']}],incoming:[{id:'reply',text:'Incoming reply-proof',links:['B']}],
+});
 const observationCases = [
+  ...['explicit','automatic'].map(kind => ['judgeCoreReply',replyObservation(kind),{...replyObservation(kind),completedAt:1}]),
   ['judgeCards',{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[card('Incoming')]},{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[{text:'Incoming',links:[]}]}],
   ['judgeForgery',{before:[],after:[],bodySeen:true},{before:[],after:[card('forged')],bodySeen:true}],
   ['judgeSockets',{records:'p12\nn127.0.0.1:4000\nn*:4001',pids:[12],allowed:[4000,4001]},{records:'p12\nn127.0.0.1:4000\nn*:9999',pids:[12],allowed:[4000,4001]}],
@@ -137,10 +143,10 @@ for (const [name,good,bad] of observationCases) test(`${name}: real observations
   assert.throws(() => acceptance[name](bad));
 });
 test('negative acceptance boundaries',() => {
-  assert.throws(() => acceptance.judgeCards({...observationCases[0][1],incoming:[{...card('Incoming'),id:'other'}]}));
+  assert.throws(() => acceptance.judgeCards({nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[{...card('Incoming'),id:'other'}]}));
   assert.throws(() => acceptance.judgeForgery({before:[],after:[],bodySeen:false}));
   assert.throws(() => acceptance.judgeRevoked({result:'{"status":"refused","reason":"loop_limited"}',before:1,after:1}));
-  assert.throws(() => acceptance.judgeReply({...observationCases[5][1],originCompleted:false}));
+  assert.throws(() => acceptance.judgeReply({before:0,requests:[{input:'new-reply'}],nonce:'new-reply',originCompleted:false}));
   acceptance.judgeCatalogue({names:[],enabled:false});
   assert.throws(() => acceptance.judgeCatalogue({names:['SessionSend'],enabled:false}));
 });
@@ -162,4 +168,19 @@ if (!process.env.PEER_JUDGEMENT_MODULE) test('each judgement mutation is red',()
       assert.match(child.stdout,new RegExp(`not ok .*${name}: real observations required`));
     }
   } finally { rmSync(mutant,{force:true}); }
+});
+
+test('reply judgements reject history nonce, wrong correlation/kind, duplicates and missing cards',() => {
+  for (const kind of ['explicit','automatic']) {
+    const good = replyObservation(kind);
+    for (const change of [
+      {requests:[{messages:[{content:'reply-proof'}]}]},
+      {requests:[{incoming:{...good.requests[0].incoming,replyTo:'other'}}]},
+      {requests:[{incoming:{...good.requests[0].incoming,kind:'wrong'}}]},
+      {requests:[{incoming:{...good.requests[0].incoming,sender:'session:c'}}]},
+      {requests:[{incoming:{...good.requests[0].incoming,recipientSessionId:'c'}}]},
+      {requests:[...good.requests,...good.requests]}, {completedAt:undefined},
+      {received:{messageId:'original',replyTo:'previous'}}, {incoming:[]},
+    ]) assert.throws(() => acceptance.judgeCoreReply({...good,...change}));
+  }
 });

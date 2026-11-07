@@ -2,6 +2,7 @@
  * Extension API: createPeerSmoke() returns start/close, openPeers(tab),
  * sendPeer(source,target,payload), waitNative(engine,after,nonce), native(engine),
  * openPeer(coreSource,input), cards(tab), grant(source,target,enabled), httpOff(), screenshot(name).
+ * Target selection: --target-engine codex (default) | core.
  * Tool-emitting prompts currently require a core source. Native doubles receive
  * and answer requests; they do not interpret core command prompts.
  * Hooks return raw observations; UI/reply acceptance belongs to the caller.
@@ -84,18 +85,20 @@ export function captureLaunchLog(app, file, privateValues = []) {
     return output;
   };
 }
-export async function createPeerSmoke({ pngDir, nativeEnabled = true } = {}) {
+export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngine = 'codex' } = {}) {
+  assert(['codex','core'].includes(targetEngine), 'Unsupported target engine');
   const root = realpathSync(mkdtempSync(join(tmpdir(),'anycode-peers-')));
   pngDir ??= join(root,'png');
   let fixtures, app, cdp, info, closing, launchIssue, saveLog;
   let skips = 0;
-  const catalogues = [];
+  const catalogues = [], replyRequests = [];
+  let replyFixture;
   const nonce = randomUUID();
   const check = (name,status) => { if (status === 'SKIP') skips++; console.log(`[${nonce}] ${status} ${name}`); };
   const path = leaf => inside(root,join(root,leaf));
   const evaluate = expression => evaluateSmoke(cdp,expression);
   const invoke = (name,...args) => evaluate(`window.anycode.${name}(...${JSON.stringify(args)})`);
-  const native = engine => engine === 'core' ? fixtures.providerInputs : (existsSync(path(`${engine}.jsonl`)) ? readFileSync(path(`${engine}.jsonl`),'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(frame => engine === 'claude' ? frame.type === 'user' : frame.method === 'turn/start') : []);
+  const native = (engine, tab) => engine === 'core' ? fixtures.providerInputs.filter(messages => !tab || messages.some(m => m.role === 'system' && JSON.stringify(m.content).includes(`Working directory: ${tab.workspace}`))) : (existsSync(path(`${engine}.jsonl`)) ? readFileSync(path(`${engine}.jsonl`),'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(frame => engine === 'claude' ? frame.type === 'user' : frame.method === 'turn/start') : []);
   async function api(route,body) {
     const response = await cdp.automation(info,route,body ? 'POST' : 'GET',body);
     assert(response.ok, 'Automation request failed'); return response.result;
@@ -115,7 +118,8 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true } = {}) {
     })();
   }
   const driver = {
-    root, pngDir, nonce, check, native, evaluate, invoke, api, close, catalogues,
+    root, pngDir, nonce, check, native, evaluate, invoke, api, close, catalogues, replyRequests,
+    armReply(value) { replyFixture = value; },
     get exitCode() { return skips ? 2 : 0; },
     reportFailure(error) { if (!closing) console.error(`Launcher log (temporary root/launcher.log; removed at teardown):\n${saveLog?.(error.message) ?? ''}`); },
     async start() {
@@ -131,12 +135,31 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true } = {}) {
               const input = JSON.parse(body); fixtures.providerInputs.push(input.messages);
               catalogues.push((input.tools ?? []).map(t => t.function?.name));
               const last = input.messages.at(-1);
-              const command = parsePeerCommand(last);
-              const delta = command ? {tool_calls:[{index:0,id:randomUUID(),type:'function',function:{name:command.tool ?? 'SessionSend',arguments:JSON.stringify(command.input)}}]} : {content:'fixture ready'};
-              response.writeHead(200,{'Content-Type':'text/event-stream'});
-              const frame = {id:randomUUID(),object:'chat.completion.chunk',created:0,model:'core-model'};
-              response.write(`data: ${JSON.stringify({...frame,choices:[{index:0,delta,finish_reason:null}]})}\n\n`);
-              response.end(`data: ${JSON.stringify({...frame,choices:[{index:0,delta:{},finish_reason:command ? 'tool_calls' : 'stop'}]})}\n\ndata: [DONE]\n\n`);
+              const incoming = parseIncomingPeer(last);
+              const entry = {index:replyRequests.length, messages:input.messages, incoming};
+              replyRequests.push(entry);
+              let command = parsePeerCommand(last), answer = 'fixture ready';
+              const responding = incoming && replyFixture && incoming.payload.includes(replyFixture.trigger);
+              if (responding) {
+                const fixture = replyFixture;
+                entry.replyKind = fixture.kind;
+                // Delay the fixture model response until the originating tool has completed.
+                // The real incoming model request already exists; no request is injected.
+                fixture.received = entry;
+                fixture.release = () => {
+                  if (fixture.kind === 'explicit') command = {tool:'SessionSend',input:{replyTo:incoming.messageId,payload:fixture.nonce}};
+                  else answer = fixture.nonce;
+                  finish();
+                };
+              }
+              function finish() {
+                const delta = command ? {tool_calls:[{index:0,id:randomUUID(),type:'function',function:{name:command.tool ?? 'SessionSend',arguments:JSON.stringify(command.input)}}]} : {content:answer};
+                response.writeHead(200,{'Content-Type':'text/event-stream'});
+                const frame = {id:randomUUID(),object:'chat.completion.chunk',created:0,model:'core-model'};
+                response.write(`data: ${JSON.stringify({...frame,choices:[{index:0,delta,finish_reason:null}]})}\n\n`);
+                response.end(`data: ${JSON.stringify({...frame,choices:[{index:0,delta:{},finish_reason:command ? 'tool_calls' : 'stop'}]})}\n\ndata: [DONE]\n\n`);
+              }
+              if (!responding) finish();
             } catch { response.writeHead(400); response.end(); }
           });
         });
@@ -156,7 +179,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true } = {}) {
         await wait(() => evaluate("typeof window.anycode?.createTab === 'function' && !!window.__anycodeAutomation"));
         check('launch','PASS');
         driver.tabs = [];
-        for (const [name,engine] of (nativeEnabled ? [['A','core'],['B','codex']] : [['A','core']])) {
+        for (const [name,engine] of (nativeEnabled ? [['A','core'],['B',targetEngine]] : [['A','core']])) {
           mkdirSync(path(name));
           const tab = await invoke('createTab',{kind:'new',workspace:path(name),engine});
           assert(tab.ok,'Could not create fixture tab');
@@ -221,12 +244,16 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true } = {}) {
       assert(sessionId,'Target logical session missing');
       return driver.tool(source,'SessionSend',{sessionId,payload,reply:options?.reply ?? 'explicit'},options);
     },
-    waitNative(engine,after,token) { return wait(() => native(engine).slice(after).find(frame => !token || JSON.stringify(frame).includes(token))); },
-    async cards(tab) {
+    waitNative(engine,after,token,tab) { return wait(() => native(engine,tab).slice(after).find(frame => !token || JSON.stringify(frame).includes(token))); },
+    async cards(tab, full = false) {
       assert((await api(`/tabs/${tab.tabId}/select`,{})).ok);
       await new Promise(r => setTimeout(r,300));
       await evaluate(`document.querySelectorAll('.agent-message-stack-toggle[aria-expanded="false"]').forEach(el => el.click())`);
       await new Promise(r => setTimeout(r,300));
+      if (full) {
+        await evaluate(`document.querySelectorAll('[data-block-id^="agent-message:"] .child-report-toggle[aria-expanded="false"]').forEach(el => el.click())`);
+        await new Promise(r => setTimeout(r,300));
+      }
       return evaluate(`Array.from(document.querySelectorAll('[data-block-id^="agent-message:"]')).map(el => ({id:el.dataset.blockId,text:el.textContent,links:Array.from(el.querySelectorAll('.agent-message-identity button')).map(b=>b.textContent)}))`);
     },
     async httpOff() {
@@ -259,11 +286,11 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true } = {}) {
 /** Each write mode must prove a distinct new native request; plan never gets auto-approved. */
 export async function checkAuthoritySteps(driver,source,target) {
   async function deliver(label,nonce) {
-    const before = driver.native(target.engine).length;
+    const before = driver.native(target.engine,target).length;
     try {
       await driver.sendPeer(source,target,nonce);
-      await driver.waitNative(target.engine,before,nonce);
-      judgeDelivery({before,requests:driver.native(target.engine),nonce});
+      await driver.waitNative(target.engine,before,nonce,target);
+      judgeDelivery({before,requests:driver.native(target.engine,target),nonce});
       driver.check(label,'PASS');
     } catch (error) { driver.check(label,'FAIL'); throw error; }
   }
@@ -274,9 +301,9 @@ export async function checkAuthoritySteps(driver,source,target) {
   await driver.screenshot('peer-orchestrate.png');
   await driver.orchestrate(source,false);
   await driver.selectMode(source,'plan');
-  const before = driver.native(target.engine).length;
+  const before = driver.native(target.engine,target).length;
   const result = await driver.sendPeer(source,target,`${driver.nonce}-plan`,{approve:false});
-  assert.equal(driver.native(target.engine).length,before,'Plan sent a native request');
+  assert.equal(driver.native(target.engine,target).length,before,'Plan sent a native request');
   // Core may deny the tool before it reaches the peer host. Do not label that "refused".
   const text = typeof result === 'string' ? result : JSON.stringify(result);
   assert(!/loop_limited/.test(text),'Unrelated loop refusal');
@@ -361,27 +388,30 @@ export async function checkAcceptance(driver,source,target) {
   });
   await check('http-off-sockets-peer-delivery',async () => {
     judgeSockets(await driver.httpOff());
-    const before = driver.native(target.engine).length, nonce = `${driver.nonce}-http-off`;
-    await driver.sendPeer(source,target,nonce); await driver.waitNative(target.engine,before,nonce);
-    judgeDelivery({before,requests:driver.native(target.engine),nonce});
+    const before = driver.native(target.engine,target).length, nonce = `${driver.nonce}-http-off`;
+    await driver.sendPeer(source,target,nonce); await driver.waitNative(target.engine,before,nonce,target);
+    judgeDelivery({before,requests:driver.native(target.engine,target),nonce});
     judgeSockets(await driver.httpOff());
   });
   await check('grant-revoked',async () => {
     await driver.grant(source,target,false);
-    const before = driver.native(target.engine).length;
+    const before = driver.native(target.engine,target).length;
     const result = await driver.sendPeer(source,target,`${driver.nonce}-revoked`);
-    judgeRevoked({result,before,after:driver.native(target.engine).length});
+    judgeRevoked({result,before,after:driver.native(target.engine,target).length});
   });
   await check('grant-restored',async () => {
     await driver.grant(source,target,true);
-    const before = driver.native(target.engine).length, nonce = `${driver.nonce}-restored`;
-    await driver.sendPeer(source,target,nonce); await driver.waitNative(target.engine,before,nonce);
-    judgeDelivery({before,requests:driver.native(target.engine),nonce});
+    const before = driver.native(target.engine,target).length, nonce = `${driver.nonce}-restored`;
+    await driver.sendPeer(source,target,nonce); await driver.waitNative(target.engine,before,nonce,target);
+    judgeDelivery({before,requests:driver.native(target.engine,target),nonce});
   });
   await check('native-catalogue-on',async () => judgeCatalogue({names:driver.catalogues.at(-1),enabled:true}));
   await check('native-catalogue-off',async () => judgeCatalogue({names:await driver.catalogueOff(),enabled:false}));
-  driver.check('explicit-reply-double-has-no-peer-tool-protocol','SKIP');
-  driver.check('automatic-reply-native-target-authority-fail-closed','SKIP');
+  if (target.engine === 'core') await checkCoreReplies(driver,source,target);
+  else {
+    driver.check('explicit-reply-double-has-no-peer-tool-protocol','SKIP');
+    driver.check('automatic-reply-native-target-authority-fail-closed','SKIP');
+  }
   await check('file-evidence-and-unknown',async () => {
     const file = join(source.workspace,'reported.txt');
     await driver.tool(source,'Write',{file_path:file,content:'fixture write'});
@@ -391,6 +421,60 @@ export async function checkAcceptance(driver,source,target) {
     const state = await driver.api(`/state/${source.tabId}`);
     judgeFileEvidence({written,untouched,sessionId:state.tabs.find(t => t.tabId === source.tabId).sessionId});
   });
+}
+
+/** Parse only the actual last incoming message, never a nonce in conversation history. */
+export function parseIncomingPeer(message) {
+  const match = message?.role === 'user' && typeof message.content === 'string' &&
+    message.content.match(/^\[AnyCode authenticated agent message (.+)\]\n([\s\S]*)$/);
+  return match ? {...JSON.parse(match[1]),payload:match[2]} : null;
+}
+export function judgeCoreReply({requests, completedAt, received, nonce, kind, outgoing, incoming}) {
+  assert(Number.isInteger(completedAt) && completedAt >= 0, 'Missing original tool completion boundary');
+  assert(received?.messageId, 'Missing real incoming request');
+  assert.equal(received.replyTo, undefined, 'Original request is already a reply');
+  assert(nonce && !received.payload.includes(nonce), 'Reply nonce must differ from original payload');
+  const replies = requests.slice(completedAt).filter(r => r.incoming?.replyTo === received.messageId && r.incoming.payload.includes(nonce));
+  assert.equal(replies.length,1,'Expected one fresh correlated reply request after tool completion');
+  assert.notEqual(replies[0].incoming.messageId,received.messageId, 'Reply reused original identity');
+  assert.equal(replies[0].incoming.sender,`session:${received.recipientSessionId}`, 'Reply did not come from target');
+  assert.equal(`session:${replies[0].incoming.recipientSessionId}`,received.sender, 'Reply did not wake source');
+  assert.equal(replies[0].incoming.kind,kind === 'automatic' ? 'task_result' : 'agent_message');
+  judgeCards({outgoing:outgoing.filter(c => c.text.includes(nonce)),incoming:incoming.filter(c => c.text.includes(nonce)),nonce});
+}
+export async function checkCoreReplies(driver,source,target) {
+  for (const kind of ['explicit','automatic']) {
+    const fixture = {kind,trigger:`${driver.nonce}-${kind}-trigger`,nonce:`${driver.nonce}-${kind}-reply`};
+    driver.armReply(fixture);
+    try {
+      const result = JSON.parse(await driver.sendPeer(source,target,fixture.trigger,{reply:kind === 'automatic' ? 'on_turn_end' : 'explicit'}));
+      assert.equal(result.status,'sent','Origin tool did not complete successfully');
+      await wait(() => fixture.received);
+      assert.equal(fixture.received.incoming.messageId,result.messageId, 'Fixture received a different delivery');
+      const completedAt = driver.replyRequests.length;
+      fixture.release();
+      if (kind === 'explicit') {
+        const permission = await wait(async () => (await driver.api(`/state/${target.tabId}`)).snapshot.states[target.tabId]?.permission);
+        assert.equal(permission.toolName,'SessionSend');
+        assert((await driver.api(`/tabs/${target.tabId}/permission`,{behavior:'allow',requestId:permission.requestId})).ok);
+      }
+      await wait(() => driver.replyRequests.slice(completedAt).some(r => r.incoming?.replyTo === fixture.received.incoming.messageId && r.incoming.payload.includes(fixture.nonce)));
+      await wait(async () => (await driver.api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.turn?.status === 'idle');
+      const outgoing = await driver.cards(target,true);
+      await driver.screenshot(`peer-${kind}-reply-outgoing.png`);
+      const incoming = await driver.cards(source,true);
+      await driver.screenshot(`peer-${kind}-reply-incoming.png`);
+      const evidence = {requests:driver.replyRequests,completedAt,received:fixture.received.incoming,originResult:result,nonce:fixture.nonce,kind,outgoing,incoming};
+      writeFileSync(join(driver.pngDir,`${kind}-reply.json`),JSON.stringify(evidence,null,2));
+      judgeCoreReply(evidence);
+      driver.check(`${kind}-reply-new-core-request-idle`,'PASS');
+    } catch (error) {
+      writeFileSync(join(driver.pngDir,`${kind}-reply-failure.json`),JSON.stringify({requests:driver.replyRequests,error:error.message},null,2));
+      driver.check(`${kind}-reply-new-core-request-idle`,'FAIL');
+      throw error;
+    } finally { driver.armReply(undefined); }
+  }
+  driver.check('reply-busy-variant-not-run','SKIP');
 }
 
 export async function runSmoke(options) {
@@ -404,6 +488,7 @@ export async function runSmoke(options) {
     const [source,target] = driver.tabs;
     await driver.selectMode(source,'build');
     driver.check('source-build-mode','PASS');
+    if (target.engine === 'core') await driver.selectMode(target,'build');
     await checkAuthoritySteps(driver,source,target);
     await driver.selectMode(source,'build');
     await checkAcceptance(driver,source,target);
@@ -413,5 +498,7 @@ export async function runSmoke(options) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const index = process.argv.indexOf('--png-dir');
-  process.exitCode = await runSmoke(index < 0 ? {} : {pngDir:resolve(process.argv[index+1])});
+  const engine = process.argv.indexOf('--target-engine');
+  process.exitCode = await runSmoke({...(index < 0 ? {} : {pngDir:resolve(process.argv[index+1])}),
+    targetEngine:engine < 0 ? 'codex' : process.argv[engine+1]});
 }
