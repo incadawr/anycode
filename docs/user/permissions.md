@@ -18,7 +18,7 @@ Pick the mode from the mode chip in the composer. A new tab starts in `build`.
 | `build` | read-only tools; shell commands AnyCode's classifier proves read-only | writes, other side effects and read-only tools needing approval | nothing |
 | `edit` | read-only tools; Write and Edit inside the session workspace; the read-only shell commands above | writes outside the workspace, other side effects and read-only tools needing approval | nothing |
 | `auto` | everything except high-risk tools | high-risk tools, including Bash unless proven read-only or covered by a rule | nothing |
-| `yolo` | everything except tools with mandatory approval | BrowserEval | nothing |
+| `yolo` | everything except tools with mandatory approval | BrowserEval on every call, including with Full browser access | nothing |
 
 The composer names the modes: "Read-only planning", "Ask before edits", "Edit
 files in this project without asking", "Ask only for risky actions", and "Never

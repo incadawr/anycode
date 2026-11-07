@@ -80,7 +80,8 @@ Work down this list:
    off when loaded. Split it.
 6. **No new session yet.** Discovery runs when a session starts.
 7. **Engine tab.** Root Claude and Codex processes can receive the three app
-   built-ins `anycode-setup`, `using-browser-preview`, and `control-browser`;
+   built-ins `anycode-setup`, `using-browser-preview`, and `control-browser`
+   under [engine aliases](skills.md#built-into-anycode-in-claude-and-codex-tabs);
    browser skills require browser tools. Enable them and start a new process.
    Windows forwarding is unavailable, and CLI compatibility or preparation
    failures can leave them unavailable. Recognition does not guarantee model use.
