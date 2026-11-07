@@ -42,6 +42,7 @@ export default defineConfig(({ command }) => {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
             host: resolve(__dirname, "src/host/index.ts"),
+            "builtin-policy-worker": resolve(__dirname, "src/host/skills/builtin-policy-worker.ts"),
             // Input key IS the output filename (`host` -> `host.js`) — the
             // literal here must match main/index.ts's own path resolution
             // (`resolveRecognizerProbeChildEntry`'s
