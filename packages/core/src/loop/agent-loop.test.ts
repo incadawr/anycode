@@ -44,6 +44,7 @@ import type {
 } from "../types/permissions.js";
 import { ModePermissionEngine } from "../permissions/index.js";
 import { InMemoryHookRunner } from "../dispatch/hook-runner.js";
+import { createAgentTool } from "../tools/agent.js";
 import { createInspectImageTool } from "../tools/inspect-image.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import { todoWriteTool } from "../tools/todo-write.js";
@@ -6035,4 +6036,22 @@ describe("assistant text history", () => {
     const parts = loop.history.items.flatMap(item => item.message.role === "assistant" ? item.message.content : []);
     expect(parts.filter(part => part.type === "text")).toEqual(text.trim() ? [{type:"text",text}] : []);
   });
+});
+
+
+it("limits fresh Agent calls across steps and resets on the next turn", async () => {
+  const calls = Array.from({ length: 5 }, (_, i) => ({ type: "tool_call" as const, toolCall: { id: `agent-${i}`, name: "Agent", input: { description: "d", prompt: "p" } } }));
+  const modelPort = new MockModelPort([
+    [...calls.slice(0, 2), { type: "finish", finishReason: "tool_calls", usage: {} }],
+    [...calls.slice(2), { type: "finish", finishReason: "tool_calls", usage: {} }],
+    [{ type: "finish", finishReason: "stop", usage: {} }],
+    [{ ...calls[0]!, toolCall: { ...calls[0]!.toolCall, id: "next-turn" } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+    [{ type: "finish", finishReason: "stop", usage: {} }],
+  ]);
+  const run = vi.fn(async () => ({ status: "completed" as const, finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 }));
+  const loop = makeLoop({ modelPort, registry: makeRegistry({ Agent: createAgentTool() }), subagents: { run } });
+  await collect(loop.runTurn("first"));
+  expect(run).toHaveBeenCalledTimes(4);
+  await collect(loop.runTurn("second"));
+  expect(run).toHaveBeenCalledTimes(5);
 });

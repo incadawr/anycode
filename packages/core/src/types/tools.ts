@@ -147,6 +147,8 @@ export type ToolEmittedEvent = Extract<
 
 export interface ToolContext {
   toolCallId: string;
+  /** Per-turn fresh-child admission guard. */
+  admitSubagent?: () => boolean;
   /** Ownership belongs to the outer turn, not this tool call. */
   foregroundRuns?: import("../subagents/foreground-runs.js").ForegroundRuns;
   /** Linked signal: parent turn abort or dispatcher timeout aborts the handler. */

@@ -91,7 +91,7 @@ const DEFAULT_AGENT_TYPE = "general-purpose";
 
 /** Base description shared by both declarations (CUT-S2 §2.1); sessionTier:true appends one sentence. */
 const BASE_DESCRIPTION =
-  'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
+  'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Delegate only distinct, necessary work; avoid duplicate investigations and batch related questions. At most four new children may be started per turn. Independent Agent calls issued together run concurrently. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
   ' By default, starts a session child in the background and returns immediately with its id. Continue useful work or end your turn; the report arrives as a new turn. AgentStatus can inspect progress. Session children enforce profile restrictions on core connections. Use tier "inline" for short lookups whose result you need in this turn. Explicit tier "session" also starts in the background by default. Set detach false to wait, with automatic background handoff after a long wait. send_to delivers a follow-up to your own still-running session child.';
@@ -269,6 +269,10 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           errorKind: "invalid_input",
           error: `Unknown agent_type "${agentType}". Available agent types: ${available.join(", ")}. See the using-subagents skill.`,
         };
+      }
+
+      if (input.continue_session === undefined && input.send_to === undefined && ctx.admitSubagent?.() === false) {
+        return { ok: false, errorKind: "invalid_input", error: "Agent: this turn already attempted four child launches. Use their results or continue in a later turn." };
       }
 
       // Engine-profile routing (CUT-S4 §2.2), BEFORE the tier branch:

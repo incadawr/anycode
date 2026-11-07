@@ -1167,7 +1167,9 @@ export class AgentLoop {
     const mode = options?.mode ?? this.config.mode;
     const config = this.config;
 
+    let admittedSubagents = 0;
     const dispatchCtx: DispatchContext = {
+      admitSubagent: () => admittedSubagents < 4 ? (++admittedSubagents, true) : false,
       foregroundRuns,
       registry: this.config.registry,
       hooks: this.config.hooks,
