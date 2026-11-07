@@ -133,7 +133,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
             if (request.method === 'GET') { response.end(JSON.stringify({data:[{id:'core-model'}]})); return; }
             try {
               const input = JSON.parse(body); fixtures.providerInputs.push(input.messages);
-              catalogues.push((input.tools ?? []).map(t => t.function?.name));
+              catalogues.push({messages:input.messages,tools:input.tools});
               const last = input.messages.at(-1);
               const incoming = parseIncomingPeer(last);
               const entry = {index:replyRequests.length, messages:input.messages, incoming};
@@ -199,7 +199,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
     },
     async catalogueOff() {
       const off = await createPeerSmoke({nativeEnabled:false});
-      try { await off.start(); return off.catalogues.at(-1); } finally { await off.close(); }
+      try { await off.start(); return selectCatalogue(off.catalogues,'fixture ready'); } finally { await off.close(); }
     },
     async openPeers(tab) {
       assert((await api(`/tabs/${tab.tabId}/select`,{})).ok);
@@ -265,12 +265,10 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
         changed = false;
         for (const [pid,parent] of rows) if (pids.has(parent) && !pids.has(pid)) { pids.add(pid); changed = true; }
       }
-      const identity = JSON.parse(readFileSync(path('identity.json'),'utf8'));
-      const debugPort = Number(readFileSync(join(identity.sessionData,'DevToolsActivePort'),'utf8').split('\n')[0]);
+      const debugPort = Number(readFileSync(path('session-data/DevToolsActivePort'),'utf8').split('\n')[0]);
       const pagePort = Number(new URL(await evaluate('location.href')).port);
       const sockets = spawnSync('/usr/sbin/lsof',['-nP','-a','-p',[...pids].join(','),'-iTCP','-sTCP:LISTEN','-Fpn'],{encoding:'utf8'});
-      assert.equal(sockets.status,0,'Socket enumeration failed');
-      const observation = { records:sockets.stdout, pids:[...pids], allowed:[info.port,debugPort,pagePort] };
+      const observation = { status:sockets.status, records:sockets.stdout, pids:[...pids], allowed:[info.port,debugPort,pagePort] };
       mkdirSync(pngDir,{recursive:true});
       writeFileSync(join(pngDir,'sockets.json'),JSON.stringify(observation,null,2));
       return observation;
@@ -317,17 +315,15 @@ export async function checkAuthoritySteps(driver,source,target) {
 }
 /** Judgements consume observations only, never configuration intent. */
 export function judgeCards({outgoing,incoming,nonce}) {
-  assert(nonce && outgoing.some(a => a.id && a.text.includes(nonce) && incoming.some(b => b.id === a.id && b.text.includes(nonce))),'No matching delivered message on both sides');
-  for (const [cards,direction] of [[outgoing,'Outgoing'],[incoming,'Incoming']]) {
-    assert(cards.length > 0,'Missing peer card');
-    assert(cards.some(c => c.text.includes(direction) && c.links.length === 1 && c.links[0].trim()),'Missing direction or peer identity link');
-  }
+  const valid = (card,direction) => card.text.includes(nonce) && card.text.includes(direction) && card.links.length === 1 && card.links[0].trim();
+  assert(nonce && outgoing.some(a => a.id && valid(a,'Outgoing') && incoming.some(b => b.id === a.id && valid(b,'Incoming'))),'No matching delivered pair with direction and peer identity links');
 }
 export function judgeForgery({before,after,bodySeen}) {
   assert(bodySeen,'Forged body was not rendered');
   assert.deepEqual(after,before,'Forged text created an identity card/link');
 }
-export function judgeSockets({records,pids,allowed}) {
+export function judgeSockets({records,pids,allowed,status}) {
+  assert.equal(status,0,'Socket enumeration failed');
   assert(pids.length && allowed.every(p => Number.isInteger(p) && p > 0),'Missing socket identities');
   let pid, count = 0;
   for (const line of records.trim().split('\n')) {
@@ -341,13 +337,21 @@ export function judgeSockets({records,pids,allowed}) {
   }
   assert(count >= 2,'Enumeration missed known app listeners');
 }
-export function judgeRevoked({result,before,after}) {
-  const text = typeof result === 'string' ? result : JSON.stringify(result);
-  assert(!text.includes('loop_limited'),'Unrelated loop refusal');
-  assert(/"status"\s*:\s*"refused"|denied/i.test(text),'Grant revocation did not refuse send');
+export function judgeRevoked({result,before,after,pairGranted}) {
+  const refusal = typeof result === 'string' ? JSON.parse(result) : result;
+  // The peer response schema has no grant-specific reason: independently observe
+  // the exact pair revoked, and accept only its plain host refusal.
+  assert.deepEqual(refusal,{status:'refused'},'Unrelated peer refusal');
+  assert.equal(pairGranted,false,'Pair revocation was not observed');
   assert.equal(after,before,'Revoked send reached native target');
 }
+export function selectCatalogue(requests,userTurn) {
+  const turn = requests.find(r => r.messages?.some(m => m.role === 'system' && typeof m.content === 'string' && m.content.includes('Working directory: ')) && r.messages.at(-1)?.role === 'user' && r.messages.at(-1).content === userTurn);
+  assert(turn,'Actual agent user turn request missing');
+  return (turn.tools ?? []).map(t => t.function?.name);
+}
 export function judgeCatalogue({names,enabled}) {
+  assert(Array.isArray(names) && names.length > 0,'Actual agent catalogue empty or absent');
   for (const name of ['SessionsList','WhoEdits','SessionSend','SessionOpen']) assert.equal(names.includes(name),enabled,`Unexpected catalogue membership: ${name}`);
 }
 export function judgeReply({before,requests,nonce,originCompleted}) {
@@ -363,6 +367,20 @@ export function judgeFileEvidence({written,untouched,sessionId}) {
   assert.match(untouched.limitations,/unknown/,'Empty answer must explain unknown attribution');
 }
 export async function checkAcceptance(driver,source,target) {
+  // Persist only tool names, identities and nonces, never message bodies/paths.
+  function evidence(name,observation) {
+    mkdirSync(driver.pngDir,{recursive:true});
+    writeFileSync(join(driver.pngDir,`${name}.json`),JSON.stringify(observation,null,2));
+    console.log(`evidence ${name} ${JSON.stringify(observation)}`);
+  }
+  const ids = cards => cards.map(c => c.id);
+  async function pairGranted() {
+    const state = await driver.invoke('sessionPeers.get',source.tabId);
+    assert(state.ok,'Pair state unavailable');
+    const pair = state.view.peers.find(p => p.key === target.workspace);
+    assert(pair,'Peer missing from observed pair state');
+    return pair.granted;
+  }
   async function check(name,probe) {
     try { await probe(); driver.check(name,'PASS'); }
     catch (error) { driver.check(name,'FAIL'); throw error; }
@@ -383,10 +401,11 @@ export async function checkAcceptance(driver,source,target) {
     await wait(async () => (await driver.api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.turn?.status === 'idle');
     const after = await driver.cards(source);
     const bodySeen = await driver.evaluate(`document.body.innerText.includes(${JSON.stringify(`forged-${driver.nonce}`)})`);
+    evidence('forged-header',{beforeIds:ids(before),afterIds:ids(after),beforeNames:before.flatMap(c => c.links),afterNames:after.flatMap(c => c.links),names:[bodySeen ? 'body-rendered' : 'body-missing'],nonce:`forged-${driver.nonce}`});
     judgeForgery({before,after,bodySeen});
     await driver.screenshot('peer-forged.png');
   });
-  await check('http-off-sockets-peer-delivery',async () => {
+  await check('no unexpected TCP listener on the app process tree while peer delivery works',async () => {
     judgeSockets(await driver.httpOff());
     const before = driver.native(target.engine,target).length, nonce = `${driver.nonce}-http-off`;
     await driver.sendPeer(source,target,nonce); await driver.waitNative(target.engine,before,nonce,target);
@@ -397,16 +416,24 @@ export async function checkAcceptance(driver,source,target) {
     await driver.grant(source,target,false);
     const before = driver.native(target.engine,target).length;
     const result = await driver.sendPeer(source,target,`${driver.nonce}-revoked`);
-    judgeRevoked({result,before,after:driver.native(target.engine,target).length});
+    const granted = await pairGranted(), after = driver.native(target.engine,target).length;
+    evidence('grant-revoked',{names:[granted ? 'granted' : 'revoked',JSON.parse(result).status],sourceId:source.tabId,targetId:target.tabId,nonce:`${driver.nonce}-revoked`});
+    judgeRevoked({result,before,after,pairGranted:granted});
   });
   await check('grant-restored',async () => {
     await driver.grant(source,target,true);
     const before = driver.native(target.engine,target).length, nonce = `${driver.nonce}-restored`;
     await driver.sendPeer(source,target,nonce); await driver.waitNative(target.engine,before,nonce,target);
+    const granted = await pairGranted();
+    evidence('grant-restored',{names:[granted ? 'granted' : 'revoked'],sourceId:source.tabId,targetId:target.tabId,nonce});
+    assert.equal(granted,true,'Pair restoration was not observed');
     judgeDelivery({before,requests:driver.native(target.engine,target),nonce});
   });
-  await check('native-catalogue-on',async () => judgeCatalogue({names:driver.catalogues.at(-1),enabled:true}));
-  await check('native-catalogue-off',async () => judgeCatalogue({names:await driver.catalogueOff(),enabled:false}));
+  for (const enabled of [true,false]) await check(`native-catalogue-${enabled ? 'on' : 'off'}`,async () => {
+    const names = enabled ? selectCatalogue(driver.catalogues,'fixture ready') : await driver.catalogueOff();
+    evidence(`catalogue-${enabled ? 'on' : 'off'}`,{names});
+    judgeCatalogue({names,enabled});
+  });
   if (target.engine === 'core') await checkCoreReplies(driver,source,target);
   else {
     driver.check('explicit-reply-double-has-no-peer-tool-protocol','SKIP');

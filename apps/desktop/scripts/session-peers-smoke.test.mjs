@@ -132,8 +132,8 @@ const observationCases = [
   ...['explicit','automatic'].map(kind => ['judgeCoreReply',replyObservation(kind),{...replyObservation(kind),completedAt:1}]),
   ['judgeCards',{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[card('Incoming')]},{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[{text:'Incoming',links:[]}]}],
   ['judgeForgery',{before:[],after:[],bodySeen:true},{before:[],after:[card('forged')],bodySeen:true}],
-  ['judgeSockets',{records:'p12\nn127.0.0.1:4000\nn*:4001',pids:[12],allowed:[4000,4001]},{records:'p12\nn127.0.0.1:4000\nn*:9999',pids:[12],allowed:[4000,4001]}],
-  ['judgeRevoked',{result:'{"status":"refused"}',before:1,after:1},{result:'{"status":"refused"}',before:1,after:2}],
+  ['judgeSockets',{status:0,records:'p12\nn127.0.0.1:4000\nn*:4001',pids:[12],allowed:[4000,4001]},{records:'p12\nn127.0.0.1:4000\nn*:9999',pids:[12],allowed:[4000,4001]}],
+  ['judgeRevoked',{pairGranted:false,result:'{"status":"refused"}',before:1,after:1},{result:'{"status":"refused"}',before:1,after:2}],
   ['judgeCatalogue',{names:['SessionsList','WhoEdits','SessionSend','SessionOpen'],enabled:true},{names:['SessionsList'],enabled:true}],
   ['judgeReply',{before:0,requests:[{input:'new-reply'}],nonce:'new-reply',originCompleted:true},{before:1,requests:[{input:'new-reply'}],nonce:'new-reply',originCompleted:true}],
   ['judgeFileEvidence',{written:{status:'file_activity',records:[{sessionId:'a',evidence:'reported_write',toolName:'Write'}]},untouched:{status:'file_activity',records:[],candidates:[],limitations:'unknown writers'},sessionId:'a'},{written:{status:'file_activity',records:[]},untouched:{status:'unknown'},sessionId:'a'}],
@@ -147,7 +147,7 @@ test('negative acceptance boundaries',() => {
   assert.throws(() => acceptance.judgeForgery({before:[],after:[],bodySeen:false}));
   assert.throws(() => acceptance.judgeRevoked({result:'{"status":"refused","reason":"loop_limited"}',before:1,after:1}));
   assert.throws(() => acceptance.judgeReply({before:0,requests:[{input:'new-reply'}],nonce:'new-reply',originCompleted:false}));
-  acceptance.judgeCatalogue({names:[],enabled:false});
+  assert.throws(() => acceptance.judgeCatalogue({names:[],enabled:false}));
   assert.throws(() => acceptance.judgeCatalogue({names:['SessionSend'],enabled:false}));
 });
 test('loop refusal cannot prove plan authority',async () => {
@@ -158,14 +158,25 @@ if (!process.env.PEER_JUDGEMENT_MODULE) test('each judgement mutation is red',()
   const source = readFileSync(new URL('./session-peers-smoke.mjs',import.meta.url),'utf8');
   const mutant = new URL(`./.peer-judgement-mutant-${process.pid}.mjs`,import.meta.url);
   try {
-    for (const [name] of observationCases) {
-      const changed = source.replace(new RegExp(`(export function ${name}\\([^\\n]+\\) \\{)`),'$1 return;');
+    const mutations = observationCases.map(([name]) => [name,new RegExp(`(export function ${name}\\([^\\n]+\\) \\{)`),'$1 return;']);
+    mutations.push(
+      ['empty sockets',"assert(count >= 2,'Enumeration missed known app listeners');",''],
+      ['unrelated sockets',"assert(pids.includes(pid),'Socket outside isolated process tree');",''],
+      ['failed sockets',"assert.equal(status,0,'Socket enumeration failed');",''],
+      ['old reply nonce','nonce && !received.payload.includes(nonce)','nonce'],
+      ['reused reply id',"assert.notEqual(replies[0].incoming.messageId,received.messageId, 'Reply reused original identity');",''],
+      ['file session','r.sessionId === sessionId &&',''],
+      ['file candidates','assert.deepEqual(untouched.candidates,[]);',''],
+      ['file unknown',"assert.match(untouched.limitations,/unknown/,'Empty answer must explain unknown attribution');",''],
+    );
+    for (const [name,pattern,replacement] of mutations) {
+      const changed = source.replace(pattern,replacement);
       assert.notEqual(changed,source);
       writeFileSync(mutant,changed);
       const childEnv = {...process.env,PEER_JUDGEMENT_MODULE:mutant.href}; delete childEnv.NODE_TEST_CONTEXT;
       const child = spawnSync(process.execPath,['--test',new URL(import.meta.url).pathname],{env:childEnv,encoding:'utf8'});
       assert.equal(child.status,1,`${name} mutant survived`);
-      assert.match(child.stdout,new RegExp(`not ok .*${name}: real observations required`));
+      assert.match(child.stdout,/not ok /);
     }
   } finally { rmSync(mutant,{force:true}); }
 });
@@ -175,6 +186,8 @@ test('reply judgements reject history nonce, wrong correlation/kind, duplicates 
     const good = replyObservation(kind);
     for (const change of [
       {requests:[{messages:[{content:'reply-proof'}]}]},
+      {received:{...good.received,payload:good.nonce}},
+      {requests:[{incoming:{...good.requests[0].incoming,messageId:good.received.messageId}}]},
       {requests:[{incoming:{...good.requests[0].incoming,replyTo:'other'}}]},
       {requests:[{incoming:{...good.requests[0].incoming,kind:'wrong'}}]},
       {requests:[{incoming:{...good.requests[0].incoming,sender:'session:c'}}]},
@@ -183,4 +196,37 @@ test('reply judgements reject history nonce, wrong correlation/kind, duplicates 
       {received:{messageId:'original',replyTo:'previous'}}, {incoming:[]},
     ]) assert.throws(() => acceptance.judgeCoreReply({...good,...change}));
   }
+});
+
+test('judgeCatalogue selects the actual user turn rather than title refinement',() => {
+  const turn = {messages:[{role:'system',content:'Working directory: fixture-workspace'},{role:'user',content:'fixture ready'}],tools:[{function:{name:'Read'}}]};
+  const title = {messages:[{role:'user',content:'fixture ready'}],tools:[]};
+  assert.deepEqual(acceptance.selectCatalogue([title,turn,title],'fixture ready'),['Read']);
+  assert.throws(() => acceptance.selectCatalogue([title],'fixture ready'));
+  for (const names of [[],undefined]) assert.throws(() => acceptance.judgeCatalogue({names,enabled:false}));
+});
+test('judgeCards binds direction and identity to the delivered pair',() => {
+  for (const side of ['outgoing','incoming']) for (const change of [{links:[]},{text:'delivery-proof'}]) {
+    const observation = {nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[card('Incoming')]};
+    observation[side] = [{...observation[side][0],...change},{id:'neighbour',text:'Outgoing Incoming',links:['Peer']}];
+    assert.throws(() => acceptance.judgeCards(observation));
+  }
+});
+test('judgeSockets rejects empty, incomplete, unrelated and failed enumeration',() => {
+  const good = {records:'p12\nn*:4000\nn*:4001',pids:[12],allowed:[4000,4001],status:0};
+  for (const change of [{records:''},{records:'p12\n'},{records:'p12\nn*:4000'},
+    {records:'p99\nn*:4000\nn*:4001'}, {status:1}, {status:null,error:{code:'EACCES'}},
+    {status:1,stderr:'permission denied'}]) assert.throws(() => acceptance.judgeSockets({...good,...change}));
+});
+test('judgeRevoked requires observed revoked pair and rejects unrelated refusals',() => {
+  const good = {result:'{"status":"refused"}',before:1,after:1,pairGranted:false};
+  acceptance.judgeRevoked(good);
+  for (const reason of ['target_busy','loop_limited','other']) assert.throws(() => acceptance.judgeRevoked({...good,result:{status:'refused',reason}}));
+  for (const pairGranted of [true,undefined]) assert.throws(() => acceptance.judgeRevoked({...good,pairGranted}));
+});
+test('judgeFileEvidence rejects missing unknown explanation, wrong session and candidates independently',() => {
+  const good = observationCases.find(([name]) => name === 'judgeFileEvidence')[1];
+  for (const change of [{untouched:{...good.untouched,limitations:'no writers'}},
+    {written:{...good.written,records:[{sessionId:'other',evidence:'reported_write',toolName:'Write'}]}},
+    {untouched:{...good.untouched,candidates:[{sessionId:'other'}]}}]) assert.throws(() => acceptance.judgeFileEvidence({...good,...change}));
 });
