@@ -38,7 +38,7 @@ force the new tab to be shared externally; the normal new-session default applie
 
 Core roots can send/open in Build, Edit, Auto, `yolo` and Orchestrate, under
 Core's permission checks. Build, Edit, Auto and Orchestrate ask a human for each
-operation; ordinary `yolo` follows its allow policy. Plan, unknown authority,
+operation; ordinary `yolo` follows its allow policy. Plan without Orchestrate, unknown authority,
 children and restricted callers cannot send/open. A resumed Orchestrate tab stays
 closed for peer mutations until its host re-reports mode/Orchestrate authority.
 
