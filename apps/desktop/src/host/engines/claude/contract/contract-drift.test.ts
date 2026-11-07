@@ -1,6 +1,5 @@
 /**
- * Two-layer drift gate over the pinned Claude Code contract (cut §1.3 B4,
- * contract-draft.md §3/§4):
+ * Two-layer drift gate over the pinned Claude Code contract:
  *
  *  1. Always-on (this file, every `pnpm test` run): protocol.ts's message-type
  *     vocabulary stays a subset of the pin, `SUPPORTED_CLAUDE_VERSION` covers

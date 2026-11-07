@@ -3,8 +3,7 @@
  * main/codex-doctor.ts): trust-gate -> `--version` preflight (floor gate
  * `>=2.1.212`, R5-proved zero structural drift 212->214) -> auth-probe -> report.
  *
- * Auth-probe = EXACTLY the $0 control-handshake technique proved by W0 probe
- * #13 (`references/claude-code-2.1.212/fixtures/w0-13-authprobe-signed{in,out}.jsonl`):
+ * Auth-probe uses a no-turn control handshake:
  * a single `control_request{subtype:"initialize"}` over stream-json NDJSON,
  * with `CLAUDE_CONFIG_DIR=<profile>`, NO user turn EVER sent, EOF immediately
  * after the `control_response` (~300-800ms live). Sending a "cheap prompt"

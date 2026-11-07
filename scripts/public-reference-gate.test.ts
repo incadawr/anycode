@@ -391,13 +391,6 @@ describe("public tree carries no tracker card references", () => {
     expect(scanText("docs/x.md", `see ${MARK.toUpperCase()}_123`)).not.toEqual([]);
     expect(scanText(`scripts/${MARK.toUpperCase()}#123.mjs`, "clean body")).not.toEqual([]);
     expect(scanText("AGENTS.md", `history lives in ${card}`)).not.toEqual([]);
-    const findingsPath = "references/claude-code-2.1.212/W0-FINDINGS.md";
-    const finding = readFileSync(join(ROOT, findingsPath), "utf8").split("\n").find(
-      (line) => line.includes("The permission prompt mechanism was confirmed."),
-    );
-    expect(finding).toBeDefined();
-    const leakedFinding = finding!.replace("permission prompt mechanism", `${MARK.toUpperCase()}.3`);
-    expect(scanLine(findingsPath, leakedFinding)).not.toEqual([]);
     expect(scanText("sample.ts", `mkdtemp(join(tmp, "${PRODUCT}4294-"))`)).not.toEqual([]);
     expect(scanText("sample.ts", `// ${glued} notes`)).not.toEqual([]);
     expect(scanText("sample.ts", `// working-docs/${MARK}102-track/evidence`)).not.toEqual([]);

@@ -31,7 +31,7 @@ import { ENV_CLAUDE_CONTEXT_WINDOW, ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY, enc
 const scratchDir = makeTrustedScratchDir("claude-client");
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
-const fixturesDir = fileURLToPath(new URL("../../../../../../references/claude-code-2.1.212/fixtures/", import.meta.url));
+const fixturesDir = fileURLToPath(new URL("./contract/fixtures/", import.meta.url));
 
 function fixture(name: string): string {
   return join(fixturesDir, name);
@@ -269,7 +269,7 @@ describe("ClaudeClient", () => {
   }, 30_000);
 
   it("reaps a stubborn detached process group on close (orphan real-PoC)", async () => {
-    const pidFile = join(fixturesDir, `..`, `..`, `stubborn-${Date.now()}.pid`);
+    const pidFile = join(scratchDir, `stubborn-${Date.now()}.pid`);
     pidFiles.push(pidFile);
     const client = makeClient(["--stubborn-group", `--pid-file=${pidFile}`]);
     await client.start();

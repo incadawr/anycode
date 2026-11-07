@@ -207,7 +207,7 @@ export function createBrowserControlTools(options: BrowserControlToolsOptions = 
   );
   const typeMetadata = baseMetadata(
     "BrowserType",
-    "Types text into an input, textarea or contenteditable of the open preview by ref (preferred) or selector. Password and file fields are refused. Set remote:true only when the page is a non-local origin; the user will be asked.",
+    "Types text into an input, textarea or contenteditable of the open preview by ref (preferred) or selector. Password fields require Full browser access; file fields are refused. Set remote:true only when the page is a non-local origin; access may require approval.",
     BROWSER_CONTROL_TIMEOUT_MS,
     false,
   );

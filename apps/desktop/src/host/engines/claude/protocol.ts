@@ -1,6 +1,6 @@
 /**
  * Narrow NDJSON/control-protocol vocabulary pinned to CC-W0 evidence from the
- * live `claude` CLI v2.1.212 (references/claude-code-2.1.212/contract-draft.md).
+ * live `claude` CLI v2.1.212 (see the engine-local contract/ directory).
  * Intentionally transport-only: no approval acceptance, model override, or
  * event-to-AgentEvent translation is implied by these shapes — that is CC-C's
  * job. Deliberately NOT shared with host/engines/codex/protocol.ts: the two
