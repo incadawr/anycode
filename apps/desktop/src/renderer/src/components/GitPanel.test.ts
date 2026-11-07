@@ -1,15 +1,24 @@
+// @vitest-environment jsdom
 /**
  * Pure-logic tests for GitPanel's exported helpers (design .../
  * slice-5.8-cut.md §2.6). Same rationale as GitDiffPane.test.ts/
- * GitPill.test.ts: no jsdom in this package's vitest config, so the panel's
- * actual JSX/tab wiring is exercised only by the (owner) live-Electron smoke
+ * GitPill.test.ts: only the branch-lock test below uses jsdom (pragma above).
+ * The panel's actual JSX/tab wiring is otherwise exercised only by the (owner)
+ * live-Electron smoke
  * — this file covers the pure dispatch-shape builders the component's JSX
  * calls into, plus the guard that keeps destructive intent construction the
 
  */
-import { describe, expect, it } from "vitest";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { describe, expect, it, vi } from "vitest";
 import type { WireGitStatus } from "../../../shared/protocol.js";
-import { buildDiffRequest, buildUnstageAllRequest, discardAllIntent, stagedPaths, unstagedPaths } from "./GitPanel.js";
+import { createDesktopStore } from "../store.js";
+import { TabContext } from "../tab-context.js";
+import { useTabsStore } from "../tabs-store.js";
+import { GitPanel, buildDiffRequest, buildUnstageAllRequest, discardAllIntent, stagedPaths, unstagedPaths } from "./GitPanel.js";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function status(overrides: Partial<WireGitStatus>): WireGitStatus {
   return {
@@ -77,5 +86,41 @@ describe("discardAllIntent", () => {
   it("stages a discard intent over every unstaged path (never a wire command directly, ruling R2)", () => {
     const s = status({ unstaged: [{ path: "a.ts", kind: "modified" }, { path: "b.ts", kind: "deleted" }] });
     expect(discardAllIntent(s)).toEqual({ op: "discard", paths: ["a.ts", "b.ts"] });
+  });
+});
+
+describe("GitPanel branch lock", () => {
+  async function withPanel(tabs: unknown[], childWorktrees: Record<string, unknown>, check: (host: HTMLElement) => void): Promise<void> {
+    const { tabRegistry } = await import("../tab-registry.js");
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const previous = useTabsStore.getState();
+    useTabsStore.setState({ tabs, childWorktrees } as never);
+    const store = createDesktopStore();
+    store.setState({ git: { ...store.getState().git, panelOpen: true, status: status({}) } });
+    const host = document.createElement("div"), root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(GitPanel))));
+      check(host);
+    } finally {
+      await act(async () => root.unmount());
+      send.mockRestore();
+      useTabsStore.setState({ tabs: previous.tabs, childWorktrees: previous.childWorktrees });
+    }
+  }
+  const select = (host: HTMLElement) => host.querySelector<HTMLSelectElement>('select[aria-label="Current branch"]');
+  const newBranch = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('button[aria-label="New branch"]');
+
+  it("disables the branch select and new-branch button for owned and child worktrees, and not otherwise", async () => {
+    await withPanel([{ tabId: "tab", worktree: { ownedByAnyCode: true } }], {}, host => {
+      expect(select(host)?.disabled).toBe(true);
+      expect(select(host)?.title).toBe("Managed worktree branch; switch from the parent checkout");
+      expect(newBranch(host)?.disabled).toBe(true);
+    });
+    const allocation = { id: "child", path: "/fixture/child", branch: "topic", baseRef: "main", ownedByAnyCode: false, parentSessionId: "parent-session" };
+    await withPanel([{ tabId: "tab" }], { tab: allocation }, host => {
+      expect(select(host)?.disabled).toBe(true);
+      expect(select(host)?.title).toBe("Branch is managed by the parent session");
+      expect(newBranch(host)?.disabled).toBe(true);
+    });
   });
 });

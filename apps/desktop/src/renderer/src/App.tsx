@@ -29,7 +29,7 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
 import { startTabBootstrap } from "./tab-bootstrap.js";
-import { useTabsStore } from "./tabs-store.js";
+import { isBranchLocked, useTabsStore } from "./tabs-store.js";
 import { tabRegistry, type DesktopStoreApi } from "./tab-registry.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "./tab-context.js";
 import { replayStore, childVisible } from "./replay.js";
@@ -117,11 +117,9 @@ const EMPTY_IDS: readonly string[] = [];
 /** Shared branch command for the global shortcut and command palette. */
 export function branchSwitchAction(hint: string | null): PaletteAction {
   const current = () => {
-    const tabId = useTabsStore.getState().activeTabId;
-    const owned = useTabsStore.getState().tabs.find(t => t.tabId === tabId)?.worktree?.ownedByAnyCode === true;
-    // a managed child allocation's branch is owned by the parent session (no tabs[].worktree entry)
-    const allocated = !!tabId && useTabsStore.getState().childWorktrees[tabId] !== undefined;
-    return { tabId, enabled: !!tabId && !owned && !allocated && tabRegistry.getStore(tabId)?.getState().git.status != null };
+    const tabsState = useTabsStore.getState();
+    const tabId = tabsState.activeTabId;
+    return { tabId, enabled: !!tabId && !isBranchLocked(tabsState, tabId) && tabRegistry.getStore(tabId)?.getState().git.status != null };
   };
   return {
     id: "branch.switch", label: "Switch branch…", hint, get enabled() { return current().enabled; },

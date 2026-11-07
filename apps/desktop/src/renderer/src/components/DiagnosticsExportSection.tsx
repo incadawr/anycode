@@ -110,7 +110,7 @@ export function DiagnosticsExportRow({ sessionId, autoStart = false }: { session
   const bridge = typeof window !== "undefined" ? window.anycode?.diagnostics : undefined;
   const busy = phase.step === "previewing" || phase.step === "saving";
   const available = bridge !== undefined && sessionId !== null;
-  const platform: DesktopPlatform = window.anycode?.platform ?? "darwin";
+  const platform: DesktopPlatform = (typeof window !== "undefined" ? window.anycode?.platform : undefined) ?? "darwin";
   const paletteBinding = bindingFor("palette.toggle");
   const paletteHint = paletteBinding ? formatBinding(paletteBinding, platform) : "the command palette";
 

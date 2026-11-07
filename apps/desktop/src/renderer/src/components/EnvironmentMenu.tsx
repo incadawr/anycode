@@ -3,7 +3,7 @@
  * it keeps the current workspace/branch quiet in the chrome and funnels the
  * rare, detailed work into the existing Git inspector drawer.
  */
-import { useTabsStore } from "../tabs-store.js";
+import { branchLockReason, isBranchLocked, useTabsStore } from "../tabs-store.js";
 import { NativeSessionAccess } from "./NativeSessionAccess.js";
 import { SessionAccessRow, type SessionAccessBridge } from "./SessionAccessRow.js";
 import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
@@ -60,10 +60,11 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const tabId = useContext(TabContext)?.tabId;
   const allocatedWorktree = useTabsStore(s => tabId ? s.childWorktrees[tabId] : undefined);
   const worktree = useTabsStore(s => s.tabs.find(t => t.tabId === tabId)?.worktree) ?? allocatedWorktree;
-  const parentTitle = useTabsStore(s => allocatedWorktree ? s.tabs.find(t => t.sessionId === allocatedWorktree.parentSessionId)?.title : undefined);
-  const parentLabel = parentTitle?.trim() ? `worktree of “${parentTitle}”` : undefined;
-  const ownedWorktree = worktree?.ownedByAnyCode === true || !!allocatedWorktree;
-  const branchLockReason = allocatedWorktree ? "Branch is managed by the parent session" : "Managed worktree branch; switch from the parent checkout";
+  // An untitled parent falls back to its folder name (the name its header shows).
+  const parentTitle = useTabsStore(s => { const parent = allocatedWorktree && s.tabs.find(t => t.sessionId === allocatedWorktree.parentSessionId); return parent?.title?.trim() || (parent?.workspace ? basename(parent.workspace) : undefined); });
+  const parentLabel = parentTitle ? `worktree of “${parentTitle}”` : undefined;
+  const ownedWorktree = useTabsStore(s => isBranchLocked(s, tabId));
+  const lockReason = useTabsStore(s => branchLockReason(s, tabId)) ?? "";
   const [browserAccess, setBrowserAccess] = useBrowserAccessState(tabId, window.anycode?.browserAccess);
   const [sessionsEnabled, setSessionsEnabled] = useState(false);
   const accessNames: string[] = [];
@@ -84,18 +85,19 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
-  // One fetch per tab; later changes arrive through SessionAccessRow's onEnabledChange.
+  // A tab switch clears the state; a reopen refetches and keeps the last value while loading.
+  useEffect(() => { setSessionsEnabled(false); }, [tabId]);
+  // In-menu changes still arrive through SessionAccessRow's onEnabledChange.
   useEffect(() => {
     let cancelled = false;
     const epoch = sessionsEpoch.current;
-    setSessionsEnabled(false);
     const communication = window.anycode?.communication as SessionAccessBridge | undefined;
     if (!communication) return;
     void communication.get().then(result => {
       if (!cancelled && result.ok && epoch === sessionsEpoch.current) setSessionsEnabled(result.view.tabs.find(t => t.tabId === tabId)?.enabled ?? false);
     });
     return () => { cancelled = true; };
-  }, [tabId]);
+  }, [tabId, open]);
   // D8 overlay wiring: the preview WebContentsView must hide while this
   // header dropdown is up.
   useOverlayFlag(open);
@@ -243,8 +245,8 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         onClick={toggle}
       >
         <Folder />
-        {worktree && <span className="environment-worktree-label" title="Worktree">worktree</span>}
-        {showWorkspace && <span className="environment-workspace" title={workspacePath}>{workspaceLabel(workspacePath)}</span>}
+        {worktree && <span className="environment-worktree-label">worktree</span>}
+        {showWorkspace && <span className="environment-workspace">{workspaceLabel(workspacePath)}</span>}
         {branch && (
           <>
             {showWorkspace && <span className="environment-separator" aria-hidden="true">/</span>}
@@ -256,7 +258,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         {statusKnown && status && gitAheadBehindLabel(status.head) && <span className="environment-git-count">{gitAheadBehindLabel(status.head)}</span>}
         {accessCount > 0 && <span className="environment-risks" aria-label={`${accessPhrase} enabled`}>
           <span className="environment-risk-icons">
-            {browserAccess?.fullAccess && <span title="Full browser access"><Globe /></span>}
+            {browserAccess?.fullAccess && <span title="Full browser access: the agent can open any website, click and type in the preview without asking; BrowserEval always asks"><Globe /></span>}
             {sessionsEnabled && <span title="Sessions API enabled"><Robot /></span>}
           </span>
           <span className="environment-risk-summary" title={`${accessPhrase} enabled`}><Warning />{accessCount}</span>
@@ -303,7 +305,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   className="environment-menu-row"
                   ref={branchRef}
                   disabled={ownedWorktree}
-                  title={ownedWorktree ? branchLockReason : undefined}
+                  title={ownedWorktree ? lockReason : undefined}
                   aria-haspopup="listbox"
                   onClick={() => { setDiagnosticsRequest(0); setBranchesOpen(true); }}
                 >
@@ -311,7 +313,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   <span className="environment-menu-row-main">
                     <span>Branch</span>
                     <span className="environment-menu-row-detail">{branch}</span>
-                    {ownedWorktree && <span className="environment-menu-row-detail environment-menu-row-detail-prose">{branchLockReason}</span>}
+                    {ownedWorktree && <span className="environment-menu-row-detail environment-menu-row-detail-prose">{lockReason}</span>}
                   </span>
                   <span aria-hidden="true">›</span>
                 </Button>

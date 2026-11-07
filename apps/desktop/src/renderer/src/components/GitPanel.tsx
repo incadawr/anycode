@@ -14,11 +14,12 @@
  * refuses server-side; this only keeps the UI honest about it). Errors render
 
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { GitBranchInfo, GitCommitInfo, GitDiffTarget, GitFileChange } from "@anycode/core";
 import type { GitCommand, WireGitStatus } from "../../../shared/protocol.js";
 import type { GitDestructiveIntent, GitDiffState, GitPanelView, GitPendingRequest } from "../store.js";
-import { useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { branchLockReason, useTabsStore } from "../tabs-store.js";
 import { GitDiffPane } from "./GitDiffPane.js";
 import { Chevron, Plus, Search, X } from "./icons.js";
 
@@ -515,9 +516,10 @@ interface BranchControlsProps {
   status: WireGitStatus | null;
   branches: GitBranchInfo[] | null;
   dispatch(command: GitCommand, pending: GitPendingRequest): void;
+  lockReason: string | null;
 }
 
-function GitBranchControls({ status, branches, dispatch }: BranchControlsProps) {
+function GitBranchControls({ status, branches, dispatch, lockReason }: BranchControlsProps) {
   const [creating, setCreating] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
 
@@ -532,7 +534,7 @@ function GitBranchControls({ status, branches, dispatch }: BranchControlsProps) 
 
   function handleCreate(): void {
     const trimmed = newBranchName.trim();
-    if (!trimmed) {
+    if (!trimmed || lockReason !== null) {
       return;
     }
     dispatch({ op: "create_branch", name: trimmed, switch: true }, { kind: "mutation", label: "create branch" });
@@ -546,6 +548,8 @@ function GitBranchControls({ status, branches, dispatch }: BranchControlsProps) 
         className="git-branch-select"
         aria-label="Current branch"
         value={selected}
+        disabled={lockReason !== null}
+        title={lockReason ?? undefined}
         onChange={(event) => handleSwitch(event.target.value)}
       >
         {selected === "" && (
@@ -582,7 +586,7 @@ function GitBranchControls({ status, branches, dispatch }: BranchControlsProps) 
           </button>
         </span>
       ) : (
-        <button type="button" className="git-btn git-branch-new" aria-label="New branch" onClick={() => setCreating(true)}>
+        <button type="button" className="git-btn git-branch-new" aria-label="New branch" disabled={lockReason !== null} title={lockReason ?? undefined} onClick={() => setCreating(true)}>
           <Plus />
         </button>
       )}
@@ -593,6 +597,8 @@ function GitBranchControls({ status, branches, dispatch }: BranchControlsProps) 
 export function GitPanel({ visible = true }: { visible?: boolean }) {
   const tabStore = useTabStoreApi();
   const send = useTabSend();
+  const tabId = useContext(TabContext)?.tabId;
+  const lockReason = useTabsStore((state) => branchLockReason(state, tabId));
 
   const panelOpen = useTabStore((state) => state.git.panelOpen);
   const pendingRefresh = useTabStore((state) => Object.values(state.git.pending).some((request) => request.kind === "refresh" || request.kind === "branches"));
@@ -656,7 +662,7 @@ export function GitPanel({ visible = true }: { visible?: boolean }) {
     <aside className="git-panel" aria-label="Review changes">
       <div className="git-panel-header">
         <span className="git-panel-title">Review</span>
-        <GitBranchControls status={status} branches={branches} dispatch={dispatch} />
+        <GitBranchControls status={status} branches={branches} dispatch={dispatch} lockReason={lockReason} />
         <button type="button" className="git-btn git-panel-refresh" onClick={refresh}>
           Refresh
         </button>

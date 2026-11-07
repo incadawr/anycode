@@ -266,6 +266,16 @@ export interface TabRegistry {
   ): void;
 }
 
+/** Sets or clears (`undefined`) a tab's allocation record; returns the same state when nothing changes, so subscribers are not notified. */
+function setChildWorktreeRecord(tabsStore: TabsStoreApi, tabId: string, record: PortEnvelope["childWorktree"]): void {
+  tabsStore.setState(s => {
+    if (record === undefined ? !(tabId in s.childWorktrees) : s.childWorktrees[tabId] === record) return s;
+    const next = { ...s.childWorktrees };
+    if (record) next[tabId] = record; else delete next[tabId];
+    return { childWorktrees: next };
+  });
+}
+
 /**
  * Builds a tab registry bound to `tabsStore`. `createStore` is injectable
  * (defaults to the real `createDesktopStore`) so tests can hand each tab a
@@ -831,11 +841,7 @@ export function createTabRegistry(
           .getState()
           .registerChild(child.parentSessionId, child.spawnToolCallId, tabId, child.childSessionId);
       }
-      tabsStore.setState(s => {
-        const next = { ...s.childWorktrees };
-        if (childWorktree) next[tabId] = childWorktree; else delete next[tabId];
-        return { childWorktrees: next };
-      });
+      setChildWorktreeRecord(tabsStore, tabId, childWorktree);
       attach(entry, tabId, port);
       return true;
     },
@@ -885,10 +891,7 @@ export function createTabRegistry(
         // the managed-allocation record is this tab's only other per-tab
         // state; disposeTab (the root path) clears it, a hidden child never
         // reaches disposeTab, so clear it here too.
-        tabsStore.setState(s => {
-          const next = { ...s.childWorktrees }; delete next[tabId];
-          return { childWorktrees: next };
-        });
+        setChildWorktreeRecord(tabsStore, tabId, undefined);
         closedTabIds.add(tabId);
       } else {
         tabsStore.getState().setHostExited(tabId, true);
@@ -906,10 +909,7 @@ export function createTabRegistry(
     },
 
     disposeTab(tabId): void {
-      tabsStore.setState(s => {
-        const next = { ...s.childWorktrees }; delete next[tabId];
-        return { childWorktrees: next };
-      });
+      setChildWorktreeRecord(tabsStore, tabId, undefined);
       useDockStore.getState().clearActivity(tabId);
       agentTitles.delete(tabId);
       closedTabIds.add(tabId);

@@ -584,3 +584,16 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
 export type TabsStoreApi = ReturnType<typeof createTabsStore>;
 
 export const useTabsStore = createTabsStore();
+
+/** Why AnyCode fixes this tab's checkout branch (`null` = switchable). Shared by the menu, the Git drawer and the palette. */
+export function branchLockReason(state: Pick<TabsState, "tabs" | "childWorktrees">, tabId: string | null | undefined): string | null {
+  if (!tabId) return null;
+  // a managed child allocation's branch is owned by the parent session (no tabs[].worktree entry)
+  if (state.childWorktrees[tabId] !== undefined) return "Branch is managed by the parent session";
+  if (state.tabs.find(t => t.tabId === tabId)?.worktree?.ownedByAnyCode === true) return "Managed worktree branch; switch from the parent checkout";
+  return null;
+}
+
+export function isBranchLocked(state: Pick<TabsState, "tabs" | "childWorktrees">, tabId: string | null | undefined): boolean {
+  return branchLockReason(state, tabId) !== null;
+}

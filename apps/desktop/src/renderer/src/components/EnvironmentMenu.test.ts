@@ -110,7 +110,7 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("true");
     await click(browser);
     expect(browserAccess.set).toHaveBeenCalledWith("tab", false);
-    expect(host.querySelector('[title="Full browser access"]')).toBeNull();
+    expect(host.querySelector('[title^="Full browser access"]')).toBeNull();
     expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
     expect(host.querySelector('.environment-menu-title .environment-menu-scope')?.textContent).toBe("1 on");
     expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("false");
@@ -669,7 +669,7 @@ it.each([true, false, undefined])("shows worktree context and guards owned branc
   try {
     await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
     expect(!!host.querySelector('.environment-worktree-label')).toBe(owned !== undefined);
-    expect(host.querySelector('[title="Full browser access"] svg')).not.toBeNull();
+    expect(host.querySelector('[title^="Full browser access"] svg')).not.toBeNull();
     expect(host.querySelector('[title="Sessions API enabled"] svg')).not.toBeNull();
     expect(host.querySelector('.environment-risk-summary')?.textContent).toBe("2");
     expect(host.querySelector('.environment-trigger')?.getAttribute('aria-label')).toContain(", Full browser access and Sessions API enabled");
@@ -757,10 +757,11 @@ it("keeps the Sessions API risk state while the menu reopens (no reset to off wh
   try {
     expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
     await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
-    expect(pendingOpen).toHaveLength(1);
+    // opening the menu refetches (the trigger's own fetch plus SessionAccessRow's); the state stays on while they are in flight
+    expect(pendingOpen).toHaveLength(2);
     expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
     expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("1 on");
-    await act(async () => pendingOpen[0]!(sessionsView(true)));
+    await act(async () => pendingOpen.forEach(resolve => resolve(sessionsView(true))));
   } finally { await restore(); }
 });
 
@@ -887,6 +888,9 @@ it("resolves a child worktree's parent title live and omits unavailable attribut
     expect(host.querySelector(".environment-branch-picker")).toBeNull();
     expect(host.querySelector('[aria-label="Exit worktree"]')).toBeNull();
     await act(async () => useTabsStore.getState().setTitle("parent", "Fix redirect")); check("Fix redirect");
+    await act(async () => useTabsStore.setState({ tabs: [{ tabId: "parent", sessionId: "parent-session" }] } as never)); check();
+    await act(async () => useTabsStore.setState({ tabs: [{ tabId: "parent", sessionId: "parent-session", title: "  ", workspace: "/fixture/parent-repo" }] } as never)); check("parent-repo");
+    await act(async () => useTabsStore.setState({ tabs: [{ tabId: "parent", sessionId: "parent-session", workspace: "/fixture/parent-repo" }] } as never)); check("parent-repo");
     await act(async () => useTabsStore.setState({ tabs: [{ tabId: "parent", sessionId: "parent-session" }] } as never)); check();
     await act(async () => useTabsStore.getState().removeTab("parent")); check();
     await act(async () => useTabsStore.setState({ tabs: [{ tabId: "other", sessionId: "unknown", title: "Wrong parent" }] } as never)); check();
