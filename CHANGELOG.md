@@ -17,6 +17,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Core root sessions can send messages and open sessions in Edit, Auto and Orchestrate modes after required approval.
+
 - Sessions API reports the created session and tab ids when first-message delivery is interrupted.
 
 - Sessions API shows an unknown delivery status when a session cannot confirm receipt, keeping unexpected internal data out of the response.

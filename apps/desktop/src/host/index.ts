@@ -5002,6 +5002,8 @@ const ready = startHostWithActivity(boot, () => session, (message) => process.pa
 // subsequent reports precede any peer request made under the changed mode.
 void ready.then(() => session?.observePermissionMode(mode => {
   process.parentPort.postMessage({ type: "mode_changed", mode });
+}, enabled => {
+  process.parentPort.postMessage({ type: "orchestrate_changed", enabled });
 }));
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 

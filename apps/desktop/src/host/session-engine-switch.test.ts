@@ -198,6 +198,29 @@ describe("Session — engine switch", () => {
     } finally { finish(); h.close(); }
   });
 
+  it("republishes Core authority after a native engine with the same display mode", async () => {
+    const core = new SwitchableFakeEngine([]);
+    const native = new NextFakeEngine();
+    const h = createHarness({ steps: [], engine: core,
+      switchEngineFactory: async target => target === "codex" ? native : new SwitchableFakeEngine([]) });
+    const modes: PermissionMode[] = [], orchestrate: boolean[] = [];
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.observePermissionMode(mode => modes.push(mode), enabled => orchestrate.push(enabled));
+      expect(modes).toEqual(["build"]);
+      expect(orchestrate).toEqual([false]);
+      h.send({ type: "engine_switch_request", requestId: "native", engine: "codex", model: "test-model" });
+      await h.waitFor(isEngineSwitched);
+      expect(modes).toEqual(["build"]);
+      expect(orchestrate).toEqual([false]);
+      h.send({ type: "engine_switch_request", requestId: "core", engine: "core", model: "test-model" });
+      await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === "core"));
+      expect(modes).toEqual(["build", "build"]);
+      expect(orchestrate).toEqual([false, false]);
+    } finally { h.close(); }
+  });
+
   it("keeps a bounded duplicate window without refusing all requests after 1024 attempts", async () => {
     const old = new SwitchableFakeEngine([]);
     const next = new NextFakeEngine();

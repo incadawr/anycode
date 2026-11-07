@@ -1487,10 +1487,17 @@ export class Session {
   private busyValue = false;
   private activityListener?: (state: SessionActivityState) => void;
   private permissionModeListener?: (mode: PermissionMode) => void;
+  private orchestrateListener?: (enabled: boolean) => void;
   /** Host control-plane authority, independent of renderer connect/replay. */
-  observePermissionMode(listener: (mode: PermissionMode) => void): void {
+  observePermissionMode(listener: (mode: PermissionMode) => void, orchestrateListener?: (enabled: boolean) => void): void {
     this.permissionModeListener = listener;
-    listener(this.engine.mode());
+    this.orchestrateListener = orchestrateListener;
+    this.publishPermissionAuthority();
+  }
+  private publishPermissionAuthority(): void {
+    if (this.engine.id !== "core") return;
+    this.permissionModeListener?.(this.engine.mode());
+    this.orchestrateListener?.(this.orchestrate);
   }
   private get busy(): boolean { return this.busyValue; }
   private set busy(value: boolean) {
@@ -1854,7 +1861,10 @@ export class Session {
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
     this.outbound.observeEmissions((message) => {
-      if (message.type === "mode_changed") this.permissionModeListener?.(message.mode);
+      if (this.engine.id === "core") {
+        if (message.type === "mode_changed") this.permissionModeListener?.(message.mode);
+        if (message.type === "orchestrate_changed") this.orchestrateListener?.(message.enabled);
+      }
       if (message.type === "file_snapshot" && this.turnId !== null) this.presentationJournal.recordFileSnapshot(this.turnId, message);
     });
     this.engine = options.engine;
@@ -2810,6 +2820,7 @@ export class Session {
     }
     this.outbound.observeEmissions(undefined);
     this.permissionModeListener = undefined;
+    this.orchestrateListener = undefined;
     this.presentationJournal.clear();
     this.detachedCardStates.clear();
   }
@@ -4697,6 +4708,8 @@ export class Session {
       if (nextMode !== previousMode) {
         this.outbound.emit({ type: "mode_changed", mode: nextMode });
       }
+      // Main cleared authority at identity commit; republish even if the display mode is unchanged.
+      this.publishPermissionAuthority();
       // Dispose ONLY after the new engine is live and the notice emitted.
       try { await previousEngine.dispose("session-close"); }
       catch (error) { console.error(`[host] previous engine dispose threw: ${describeError(error)}`); }
