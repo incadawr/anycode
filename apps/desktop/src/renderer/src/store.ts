@@ -6472,8 +6472,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       setHostExited(missingWorkspace = false, failure): void {
-        for (const requestId of Object.keys(get().git.pending)) {
-          applyGitResult(requestId, { ok: false, reason: failure?.message ?? "Host process exited" });
+        const reason = failure?.message ?? "Host process exited";
+        for (const [requestId, pending] of Object.entries(get().git.pending)) {
+          if (pending.kind === "mutation") {
+            applyGitResult(requestId, { ok: false, reason });
+            continue;
+          }
+          // Read-only loads (refresh/branches/log/diff) are retired without
+          // lastError: a host restart is not a git failure, so the panel must
+          // not show one. A dropped branch list keeps its own retry affordance
+          // via branchesError.
+          set((state) => {
+            const nextPending = { ...state.git.pending };
+            delete nextPending[requestId];
+            return {
+              git: {
+                ...state.git,
+                pending: nextPending,
+                branchesError: pending.kind === "branches" ? reason : state.git.branchesError,
+              },
+            };
+          });
         }
         // Slice P7.14: the host dying is an anomalous end — hold a non-empty
         // queue paused so nothing drains silently once a new host connects.

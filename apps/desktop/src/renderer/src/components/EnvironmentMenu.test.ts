@@ -585,6 +585,24 @@ it.each(["exit", "respawn", "timeout"])("unlocks an unanswered switch after %s",
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   }); } finally { vi.useRealTimers(); }
 });
+it("ignores a late success for a switch retired by its timeout: error stays, no second switch, dialog stays open", async () => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try { await branchMenu(async (host, store, send) => {
+    await readyBranches(store); await pickTopic(host);
+    const request = switchRequest(send);
+    const sent = send.mock.calls.length;
+    await act(async () => vi.advanceTimersByTime(30_000));
+    expect(store.getState().git.pending[request.requestId]).toBeUndefined();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("timed out");
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: request.requestId, outcome: { ok: true, kind: "unit" } }));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("timed out");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    expect(send.mock.calls).toHaveLength(sent);
+  }); } finally { warn.mockRestore(); vi.useRealTimers(); }
+});
 it.each([false, true])("Enter creates a partial match unless an arrow selects it: %s", async arrow => {
   await branchMenu(async (host, store, send) => {
     await readyBranches(store, 1);
