@@ -4998,6 +4998,11 @@ async function boot(): Promise<void> {
 }
 
 const ready = startHostWithActivity(boot, () => session, (message) => process.parentPort.postMessage(message));
+// Initial authority comes from the booted engine, including resume settings;
+// subsequent reports precede any peer request made under the changed mode.
+void ready.then(() => session?.observePermissionMode(mode => {
+  process.parentPort.postMessage({ type: "mode_changed", mode });
+}));
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
 let peerDrainTransport: ReturnType<typeof createSessionPeerDrainTransport> | undefined;

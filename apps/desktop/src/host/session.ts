@@ -1486,6 +1486,12 @@ export class Session {
 
   private busyValue = false;
   private activityListener?: (state: SessionActivityState) => void;
+  private permissionModeListener?: (mode: PermissionMode) => void;
+  /** Host control-plane authority, independent of renderer connect/replay. */
+  observePermissionMode(listener: (mode: PermissionMode) => void): void {
+    this.permissionModeListener = listener;
+    listener(this.engine.mode());
+  }
   private get busy(): boolean { return this.busyValue; }
   private set busy(value: boolean) {
     this.busyValue = value;
@@ -1848,6 +1854,7 @@ export class Session {
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
     this.outbound.observeEmissions((message) => {
+      if (message.type === "mode_changed") this.permissionModeListener?.(message.mode);
       if (message.type === "file_snapshot" && this.turnId !== null) this.presentationJournal.recordFileSnapshot(this.turnId, message);
     });
     this.engine = options.engine;
@@ -2802,6 +2809,7 @@ export class Session {
       console.error(`[host] compaction record flush failed: ${describeError(error)}`);
     }
     this.outbound.observeEmissions(undefined);
+    this.permissionModeListener = undefined;
     this.presentationJournal.clear();
     this.detachedCardStates.clear();
   }

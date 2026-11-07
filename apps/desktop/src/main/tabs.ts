@@ -399,6 +399,8 @@ export interface TabHost {
   /** = host cwd, known before fork. */
   workspace: string;
   peerWorkspaceKey?: string;
+  /** Last validated permission mode reported by the current host incarnation. */
+  permissionMode?: PermissionMode;
   /**
    * GitHub #6: the workspace folder was gone when a host spawn was attempted,
    * so no host was forked. Sticky until a later spawn actually reaches a fork;
@@ -1336,8 +1338,11 @@ export class TabHostManager {
       turnContext: tab.proc ? this.peerTurns.active(tab.proc) : undefined,
       workspace: tab.workspace, workspaceKey: tab.peerWorkspaceKey ?? "",
       live: tab.state === "running" && tab.proc !== null, root: !tab.childOf,
-      // Mutations stay closed until the host permission authority is wired.
-      restricted: !!tab.childOf, readOnly: true,
+      // Core: plan is read-only; build asks and yolo allows after the Core tool gate.
+      // Claude/Codex mode() is display-only "build", including read-only presets.
+      // Their native preset authority is not carried here: keep both closed.
+      restricted: !!tab.childOf, readOnly: tab.engine !== "core" ||
+        (tab.permissionMode !== "build" && tab.permissionMode !== "yolo"),
       title: this.deps.agentTitleOf?.(tab.sessionId),
       model: tab.modelOverride ?? (!tab.initialResume ? tab.engineModel : undefined) ?? undefined,
       effort: tab.effortOverride ?? (!tab.initialResume ? tab.engineEffort : undefined) ?? undefined,
@@ -2011,6 +2016,7 @@ export class TabHostManager {
       try { logStderr?.(chunk); } catch { /* logging is best effort */ }
       startupStderr = (startupStderr + chunk.toString()).slice(-16384);
     });
+    delete tab.permissionMode;
     tab.proc = child;
     delete tab.hostFailure;
     tab.spawnedAt = this.now();
@@ -2047,6 +2053,11 @@ export class TabHostManager {
     // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
     // export. Never the payload — noteWireMessage reads those two fields.
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
+    if (data.type === "mode_changed" || data.type === "host_ready" || data.type === "session_checkpoint") {
+      const mode = (message as { mode?: unknown }).mode;
+      if (tab.proc === child && (mode === "plan" || mode === "build" || mode === "yolo")) tab.permissionMode = mode;
+      return;
+    }
     if (data.type === "file_activity" || data.type === "shell_activity") {
       if (tab.proc === child) this.deps.onFileActivity?.(tab.tabId, child, message);
       return;

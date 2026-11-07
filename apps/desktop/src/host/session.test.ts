@@ -10451,3 +10451,18 @@ describe("detached subagent wire events", () => {
     } finally { h.close(); }
   });
 });
+
+
+it("publishes authoritative permission mode at boot and after changes without a UI handshake", async () => {
+  const h = createHarness({ steps: [], mode: "plan" });
+  const modes: string[] = [];
+  try {
+    h.session.observePermissionMode(mode => modes.push(mode));
+    expect(modes).toEqual(["plan"]);
+    h.send({ type: "set_mode", mode: "build" });
+    await h.waitUntil(() => modes.length === 2);
+    h.send({ type: "set_mode", mode: "plan" });
+    await h.waitUntil(() => modes.length === 3);
+    expect(modes).toEqual(["plan", "build", "plan"]);
+  } finally { h.close(); }
+});
