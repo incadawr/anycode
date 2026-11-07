@@ -693,8 +693,11 @@ describe("submitStartDraft — codex draft-model agreement", () => {
     set.tabsStore.getState().setDraftEngine("claude");
     await submitStartDraft(set.deps);
     expect(set.createTab).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "new", engine: "claude", engineModel: "default" }),
+      expect.objectContaining({ kind: "new", engine: "claude" }),
     );
+
+    const selectedReq = (set.createTab.mock.calls as unknown as [Record<string, unknown>[]])[0]![0]!;
+    expect(selectedReq).not.toHaveProperty("engineModel");
 
     const unset = makeDeps({ ok: true, tabId: "t2", workspace: "/ws/a" });
     unset.tabsStore.getState().openDraft("/ws/a");

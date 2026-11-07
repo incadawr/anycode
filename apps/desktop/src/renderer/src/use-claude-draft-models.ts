@@ -5,6 +5,8 @@ import { CLAUDE_DRAFT_MODELS } from "./claude-draft-models.js";
 import { useTabsStore } from "./tabs-store.js";
 
 type Snapshot = { report: ClaudeDoctorReport };
+// Shared by picker mounts, including mounts while only the fallback is available.
+const lastRecheck = new WeakMap<object, number>();
 /** Subscribe first; a pushed account verdict supersedes any pending invoke. */
 export function startClaudeCatalogRefresh(bridge: {
   recheck(): Promise<Snapshot>;
@@ -13,10 +15,15 @@ export function startClaudeCatalogRefresh(bridge: {
   let active = true, pushed = false;
   if (!current.length) setModels(CLAUDE_DRAFT_MODELS);
   const apply = ({ report }: Snapshot) => {
-    if (active) setModels(report.status === "ready" && report.models?.length ? report.models : CLAUDE_DRAFT_MODELS);
+    if (!active || report.status === "error" || report.status === "update_required") return;
+    setModels(report.status === "ready" && report.models?.length ? report.models : CLAUDE_DRAFT_MODELS);
   };
   const unsubscribe = bridge.onSnapshotChanged(snapshot => { pushed = true; apply(snapshot); });
-  if (Date.now() - confirmedAt >= 60_000) void bridge.recheck().then(snapshot => { if (!pushed) apply(snapshot); }, () => { if (!pushed) apply({ report: { status: "error" } }); });
+  const checkedAt = Math.max(confirmedAt, lastRecheck.get(bridge) ?? 0);
+  if (Date.now() - checkedAt >= 60_000) {
+    lastRecheck.set(bridge, Date.now());
+    void bridge.recheck().then(snapshot => { if (!pushed) apply(snapshot); }, () => {});
+  }
   return () => { active = false; unsubscribe(); };
 }
 export function useClaudeDraftModels(enabled: boolean) {

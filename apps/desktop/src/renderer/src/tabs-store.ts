@@ -150,10 +150,11 @@ export interface TabsState {
   activeTabId: string | null;
   /** At most one parked New Session draft (§4.1) — never a `TabInfo` row, so the automation snapshot stays byte-identical. */
   draft: SessionDraft | null;
-  /** Codex draft model catalog: [] = unloaded/invalidated; submit refuses rather than guess. */
+  /** Account-confirmed Claude choices, or the static fallback before confirmation. */
   claudeModels: readonly EngineModelChoice[];
   claudeCatalogConfirmedAt: number;
   setClaudeModels(models: readonly EngineModelChoice[]): void;
+  /** Codex draft model catalog: [] = unloaded/invalidated; submit refuses rather than guess. */
   codexModels: readonly EngineModelChoice[];
   /** Invariant: `draftActive` implies `draft !== null`. Whether the start screen is the thing currently shown. */
   draftActive: boolean;

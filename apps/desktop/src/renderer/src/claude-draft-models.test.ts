@@ -19,7 +19,7 @@ describe("Claude draft fallback", () => {
     expect(resolveClaudeDraftModel(opus.id, CLAUDE_DRAFT_MODELS)).toBe("claude-opus-5-5");
     expect(CLAUDE_DRAFT_MODELS.some(model => model.id.includes("[1m]"))).toBe(false);
     expect(resolveClaudeDraftModel(null, CLAUDE_DRAFT_MODELS)).toBe("");
-    expect(resolveClaudeDraftModel("opus[1m]", CLAUDE_DRAFT_MODELS)).toBe("default");
+    expect(resolveClaudeDraftModel("opus[1m]", CLAUDE_DRAFT_MODELS)).toBe("");
   });
 
   it("preserves versioned live names when a running session supplies its catalog", () => {

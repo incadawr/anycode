@@ -94,13 +94,14 @@ export function createStartTabRequest(
       ...(draft.connectionId !== undefined ? { connectionId: draft.connectionId } : {}),
     };
   }
+  const claudeModel = resolveClaudeDraftModel(draft.model, claudeModels);
   return {
     kind: "new",
     workspace: draft.workspace,
     engine: draft.engine,
     ...(draft.engine === "codex"
       ? (codexEngineModel !== null ? { engineModel: codexEngineModel } : {})
-      : draft.model === null ? {} : { engineModel: resolveClaudeDraftModel(draft.model, claudeModels) }),
+      : claudeModel ? { engineModel: claudeModel } : {}),
     ...(draft.enginePreset !== undefined ? { enginePreset: draft.enginePreset } : {}),
     ...(draft.codexProfileId !== undefined ? { codexProfileId: draft.codexProfileId } : {}),
   };

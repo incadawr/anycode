@@ -59,6 +59,21 @@ describe("createClaudeOnboardingController — recheck", () => {
     expect(runDoctor).not.toHaveBeenCalled();
   });
 
+  it("retains the confirmed catalog on errors and clears it on an account verdict", async () => {
+    let report: ClaudeDoctorReport = { status: "ready", catalogIdentity: "a".repeat(64), models: [{ id: "opus" }] };
+    const controller = createClaudeOnboardingController(baseDeps({
+      readBinaryPathSetting: async () => "/opt/claude", fs: fakeExecutableFs("/opt/claude"),
+      runDoctor: async () => report,
+    }));
+    await controller.recheck();
+    report = { status: "error", error: "timeout" };
+    expect((await controller.recheck()).report.models).toEqual([{ id: "opus" }]);
+    report = { status: "ready", catalogIdentity: "b".repeat(64) };
+    expect((await controller.recheck()).report.models ?? []).toEqual([]);
+    report = { status: "signed_out" };
+    expect((await controller.recheck()).report.models ?? []).toEqual([]);
+  });
+
   it("runs the doctor with no CLAUDE_CONFIG_DIR override when a binary IS discovered, and reports ready (owner pivot: ambient default)", async () => {
     const report: ClaudeDoctorReport = { status: "ready", version: "2.1.212" };
     const runDoctor = vi.fn(async (_binaryPath: string, _options: RunClaudeDoctorOptions) => report);

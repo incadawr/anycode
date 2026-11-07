@@ -46,7 +46,8 @@ export function projectClaudeModels(raw: unknown, clean: (value: string) => stri
     if (!entry || typeof entry.value !== "string" || !/^[\w.:[\]-]{1,200}$/.test(entry.value)) return [];
     if (clean(entry.value) !== entry.value) return [];
     const name = typeof entry.displayName === "string" ? entry.displayName : entry.value;
-    const label = clean(name).slice(0, 256);
+    const suffix = entry.value.endsWith("[1m]") ? " (1M)" : "";
+    const label = clean(name).slice(0, 256 - suffix.length) + suffix;
     const levels = entry.supportsEffort === true && Array.isArray(entry.supportedEffortLevels)
       ? entry.supportedEffortLevels : [];
     const efforts = [...new Set<string>(levels.filter((v: unknown) =>

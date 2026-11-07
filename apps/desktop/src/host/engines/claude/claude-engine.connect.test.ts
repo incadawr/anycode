@@ -383,6 +383,19 @@ describe("connect: a requested model reaches the engine by alias OR by full reso
   const setModelBodies = (spawn: ReturnType<typeof fakeSpawn>): unknown[] =>
     spawn.capturedControls().filter((c) => c.subtype === "set_model").map((c) => c.request.model);
 
+  it("engineModel full Opus id sends ordinary Opus on the wire", async () => {
+    const spawn = fakeSpawn({ tokenSource: "oauth" }, [
+      { value: "default", resolvedModel: "claude-opus-5-5" },
+      { value: "opus[1m]", resolvedModel: "claude-opus-5-5" },
+      { value: "opus", resolvedModel: "claude-opus-5-5" },
+    ]);
+    const connected = await buildClaudeRuntime({ ...baseOptions(spawn.spawnImpl), selection: { model: "claude-opus-5-5", origin: "draft" } });
+    try {
+      expect(setModelBodies(spawn)).toEqual(["opus"]);
+      expect(spawn.capturedArgs()).not.toContain("opus[1m]");
+    } finally { await connected.engine.dispose("session-close"); }
+  });
+
   it("a full resolved id boots that model — not the default, and set_model carries the wire value", async () => {
     const spawn = fakeSpawn({ tokenSource: "oauth" }, FULL_ID_MODELS);
     const connected = await startClaudeEngine({

@@ -80,3 +80,8 @@ it("persists a random salt per cache profile", () => {
     expect(loadClaudeCatalogSalt(dir)).toBeUndefined();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+it("marks extended context aliases in live labels", () => {
+  expect(projectClaudeModels([{ value: "opus[1m]", displayName: "Opus" }], text => text))
+    .toEqual([{ id: "opus[1m]", label: "Opus (1M)" }]);
+});

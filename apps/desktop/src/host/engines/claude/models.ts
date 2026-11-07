@@ -162,14 +162,16 @@ export class ClaudeModelCatalog {
    * first. Adopting `default` for a session that is really pinned to opus would
    * re-point that session the day the account's default model changes —
    * `default` is a MOVING alias, and a concrete alias is not. So a concrete
-   * entry wins whenever one exists; `default` is only chosen when the CLI is
+   * entry wins whenever one exists, preferring ordinary context when ambiguous;
+   * `default` is only chosen when the CLI is
    * reporting a model nothing else in the catalog names.
    */
   selectableForResolved(resolved: string): ClaudeModelEntry | undefined {
     const exact = this.get(resolved);
     if (exact !== undefined) return exact;
     const matches = this.entries.filter((entry) => entry.resolvedModel === resolved);
-    return matches.find((entry) => entry.value !== DEFAULT_MODEL_ALIAS) ?? matches[0];
+    return matches.find((entry) => entry.value !== DEFAULT_MODEL_ALIAS && !entry.value.endsWith("[1m]"))
+      ?? matches.find((entry) => entry.value !== DEFAULT_MODEL_ALIAS) ?? matches[0];
   }
 
   /**

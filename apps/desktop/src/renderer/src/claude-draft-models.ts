@@ -24,5 +24,5 @@ export function resolveClaudeDraftModel(draftModel: string | null, available: re
   const exact = models.find(model => model.id === draftModel);
   const resolved = models.find(model => model.resolvedId === draftModel && model.id !== "default" && !model.id.endsWith("[1m]"))
     ?? models.find(model => model.resolvedId === draftModel);
-  return exact?.id ?? resolved?.id ?? models[0]?.id ?? "";
+  return exact?.id ?? resolved?.id ?? "";
 }

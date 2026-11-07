@@ -343,6 +343,12 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
     const models = selectClaudeCatalog(report, deps.readModelCatalog?.());
     if (models.length || "models" in report) report.models = models;
     else delete report.models;
+    // A failed probe cannot establish a new account; keep the last confirmed choices.
+    if (report.status === "error" && lastReport?.models &&
+        (!report.catalogIdentity || report.catalogIdentity === lastReport.catalogIdentity)) {
+      report.catalogIdentity = lastReport.catalogIdentity;
+      report.models = lastReport.models;
+    }
     const snapshot: ClaudeOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
     lastReport = report;
     await persist(snapshot);

@@ -266,3 +266,14 @@ it("resolves every fallback id through the synthetic initialize catalog", () => 
   const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
   expect(CLAUDE_DRAFT_MODELS.map(model => catalog.resolveId(model.id))).toEqual(["default", "fable", "opus", "sonnet", "haiku"]);
 });
+
+it("prefers ordinary Opus when the extended alias has the same resolved id", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize([
+    { value: "default", resolvedModel: "claude-opus-5-5" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-5-5" },
+    { value: "opus", resolvedModel: "claude-opus-5-5" },
+  ]);
+  expect(catalog.resolveId("claude-opus-5-5")).toBe("opus");
+  expect(catalog.selectableForResolved("claude-opus-5-5")?.value).toBe("opus");
+  expect(catalog.resolveId("opus[1m]")).toBe("opus[1m]");
+});

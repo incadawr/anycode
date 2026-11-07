@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { startClaudeCatalogRefresh } from "./use-claude-draft-models.js";
 import { createStartTabRequest } from "./start-session.js";
 import { resolveClaudeDraftModel, CLAUDE_DRAFT_MODELS } from "./claude-draft-models.js";
@@ -61,4 +61,40 @@ it("does not seed fallback over an existing stale catalog", () => {
   const stop = startClaudeCatalogRefresh({ recheck: () => new Promise(() => {}), onSnapshotChanged: () => () => {} }, value => writes.push(value), [{ id: "opus" }]);
   expect(writes).toEqual([]);
   stop();
+});
+
+it("keeps confirmed choices on transient error and timeout", async () => {
+  const models = [{ id: "opus" }];
+  const writes: unknown[] = [];
+  let push = (_snapshot: { report: ClaudeDoctorReport }) => {};
+  const stop = startClaudeCatalogRefresh({ recheck: async () => { throw new Error("timeout"); }, onSnapshotChanged: fn => { push = fn; return () => {}; } }, value => writes.push(value), models);
+  await Promise.resolve();
+  push({ report: { status: "error" } });
+  expect(writes).toEqual([]);
+  push({ report: { status: "ready", catalogIdentity: "new-identity" } });
+  expect(writes).toEqual([CLAUDE_DRAFT_MODELS]);
+  stop();
+});
+it("backs off repeated fallback mounts for sixty seconds", async () => {
+  let probes = 0;
+  const bridge = { recheck: async () => { probes++; return { report: { status: "signed_out" as const } }; }, onSnapshotChanged: () => () => {} };
+  const mount = () => startClaudeCatalogRefresh(bridge, () => {}, CLAUDE_DRAFT_MODELS);
+  const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+  try {
+    mount()();
+    await Promise.resolve();
+    now.mockReturnValue(159_999);
+    mount()();
+    expect(probes).toBe(1);
+    now.mockReturnValue(160_000);
+    mount()();
+    expect(probes).toBe(2);
+  } finally { now.mockRestore(); }
+});
+it("omits engineModel when a shared draft id has no Claude match", () => {
+  const draft = { workspace: "/ws", engine: "claude" as const, model: "gpt-other" };
+  for (const models of [CLAUDE_DRAFT_MODELS, [{ id: "opus" }]]) {
+    expect(resolveClaudeDraftModel(draft.model, models)).toBe("");
+    expect(createStartTabRequest(draft, null, models)).not.toHaveProperty("engineModel");
+  }
 });
