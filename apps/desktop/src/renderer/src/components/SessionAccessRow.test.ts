@@ -30,7 +30,7 @@ describe("SessionAccessRow", () => {
     const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
     expect(html).toContain(SESSION_SWITCH_TITLE);
     expect(html).toContain("Open a session to share it.");
-    expect(html).toMatch(/<input[^>]*disabled=""/);
+    expect(html).toMatch(/<button[^>]*disabled=""/);
   });
 
   it("the row is labelled as a Sessions API group for assistive tech", () => {
@@ -87,7 +87,7 @@ describe("SessionAccessRow External approvals", () => {
     expect(html).toContain('data-environment-action="sessions-api-approvals"');
     expect(html).toContain(SESSION_APPROVALS_NOTE.replace(/'/g, "&#x27;"));
     expect(html).toContain("External approvals off");
-    expect(html).not.toMatch(/<input[^>]*checked=""/);
+    expect(html).toContain('aria-checked="false"');
     expect(renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }))).toContain("External approvals on");
   });
 

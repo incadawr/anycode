@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from "vitest";
+// Mount the real rows: switches must retain the same tab-scoped bridge calls.
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { createDesktopStore } from "../store.js";
+import { TabContext } from "../tab-context.js";
+import { EnvironmentMenu } from "./EnvironmentMenu.js";
+
 import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
 import {
   formatEnvironmentHooksDetail,
@@ -139,4 +147,70 @@ describe("formatEnvironmentHooksDetail", () => {
     const hooks = [hook({ event: "Stop", command: "a" }), hook({ event: "Stop", command: "b" })];
     expect(formatEnvironmentHooksDetail(hooks)).toBe("2 hooks (Stop 2)");
   });
+});
+
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+it("opens one dialog trigger with sections and preserves access toggle handlers", async () => {
+  const originalShowModal = HTMLDialogElement.prototype.showModal;
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  const store = createDesktopStore();
+  store.setState({ workspace: "/fixture/notes", git: { ...store.getState().git, status: null, statusKnown: true } });
+  const view = (enabled: boolean, approvals = false) => ({ tabs: [{ tabId: "tab", enabled, approvals }] });
+  const communication = {
+    get: async () => ({ ok: true, envControlled: false, view: view(false) }),
+    setSessionAccess: vi.fn(async (_id, enabled) => ({ ok: true, view: view(enabled) })),
+    setSessionApprovals: vi.fn(async (_id, approvals) => ({ ok: true, view: view(true, approvals) })),
+    setSessionHandle: vi.fn(),
+  };
+  const browserAccess = {
+    get: async () => ({ ok: true, tabs: [{ tabId: "tab", fullAccess: true }] }),
+    onChanged: () => () => {},
+    set: vi.fn(async (tabId, fullAccess) => ({ ok: true, tab: { tabId, fullAccess } })),
+  };
+  const originalBridge = Object.getOwnPropertyDescriptor(window, "anycode");
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication, browserAccess,
+    sessionPeers: { get: async () => ({ ok: true, view: { available: false } }) },
+  } });
+  const host = document.createElement("div"); const root = createRoot(host);
+  const click = async (selector: string) => act(async () => host.querySelector<HTMLButtonElement>(selector)!.click());
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    expect(host.querySelectorAll("[aria-haspopup]")).toHaveLength(1);
+    expect(host.querySelector("[aria-haspopup]")?.getAttribute("aria-haspopup")).toBe("dialog");
+    await click(".environment-trigger");
+    const dialog = host.querySelector('[role="dialog"][aria-label="Environment"]')!;
+    expect(dialog).not.toBeNull();
+    expect(dialog.getAttribute("aria-modal")).toBe("false");
+    for (const title of ["Workspace", "Session access", "Diagnostics"]) {
+      expect(dialog.querySelector('section[aria-label="' + title + '"]')).not.toBeNull();
+    }
+    expect(dialog.textContent).toContain("this session only");
+    expect(dialog.querySelector('section[aria-label="Workspace"]')?.textContent).toContain("Git is not available for this workspace.");
+    expect(dialog.querySelector('[aria-label="Native session access"]')).toBeNull();
+    const access = '[data-environment-action="sessions-api-access"]';
+    expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("false");
+    await click(access);
+    expect(communication.setSessionAccess).toHaveBeenCalledWith("tab", true);
+    expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector(".environment-menu-dependents input")).not.toBeNull();
+    await click('[data-environment-action="sessions-api-approvals"]');
+    expect(communication.setSessionApprovals).toHaveBeenCalledWith("tab", true);
+    expect(host.querySelector(".environment-menu-row-detail-warning")?.textContent).toBe("Agent can use any website without asking");
+    const browser = '[data-environment-action="browser-full-access"]';
+    expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("true");
+    await click(browser);
+    expect(browserAccess.set).toHaveBeenCalledWith("tab", false);
+    expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("false");
+    await click(browser);
+    expect(host.textContent).toContain("Allow full browser access?");
+    expect(browserAccess.set).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.unmount());
+    HTMLDialogElement.prototype.showModal = originalShowModal;
+    if (originalBridge) Object.defineProperty(window, "anycode", originalBridge);
+    else Reflect.deleteProperty(window, "anycode");
+  }
 });

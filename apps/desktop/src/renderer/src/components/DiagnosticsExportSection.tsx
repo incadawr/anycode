@@ -10,6 +10,7 @@
  * "Export" -> review -> "Save bundle…".
  */
 
+import { Button } from "../ui/components/Button.js";
 import { useContext, useState } from "react";
 import { TabContext } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -158,12 +159,12 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
         <span className="environment-menu-spacer" aria-hidden="true" />
         <span className="environment-menu-row-main">
           <span>Diagnostics</span>
-          <span className="environment-menu-row-detail environment-menu-row-detail-wrap">{describeDiagnosticsExport(phase)}</span>
+          <span className="environment-menu-row-detail environment-menu-row-detail-prose">{describeDiagnosticsExport(phase)}</span>
         </span>
         <span className="environment-menu-actions">
           {showActions ? (
             <>
-              <button
+              <Button variant="ghost" size="sm"
                 type="button"
                 className="environment-menu-open"
                 data-environment-action="diagnostics-save"
@@ -171,8 +172,8 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
                 onClick={() => void save({ preview: phase.preview, summary: phase.summary })}
               >
                 Save bundle…
-              </button>
-              <button
+              </Button>
+              <Button variant="ghost" size="sm"
                 type="button"
                 className="environment-menu-open"
                 data-environment-action="diagnostics-cancel"
@@ -180,10 +181,10 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
                 onClick={() => setPhase({ step: "idle" })}
               >
                 Cancel
-              </button>
+              </Button>
             </>
           ) : (
-            <button
+            <Button variant="ghost" size="sm"
               type="button"
               className="environment-menu-open"
               data-environment-action="diagnostics-preview"
@@ -192,7 +193,7 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
               onClick={() => void startPreview()}
             >
               Export
-            </button>
+            </Button>
           )}
         </span>
       </div>
@@ -203,22 +204,22 @@ export function DiagnosticsExportRow({ sessionId }: { sessionId: string | null }
           {page.hiddenChars > 0 && (
             <div className="environment-menu-note environment-menu-row-detail-wrap">
               <span>{describeDiagnosticsHidden(page.visible.length, phase.preview.length)}</span>{" "}
-              <button
+              <Button variant="ghost" size="sm"
                 type="button"
                 className="environment-menu-open"
                 data-environment-action="diagnostics-show-more"
                 onClick={() => setShownChars(shownChars + DIAGNOSTICS_PREVIEW_PAGE_CHARS)}
               >
                 Show more
-              </button>{" "}
-              <button
+              </Button>{" "}
+              <Button variant="ghost" size="sm"
                 type="button"
                 className="environment-menu-open"
                 data-environment-action="diagnostics-show-all"
                 onClick={() => setShownChars(phase.preview.length)}
               >
                 Show all
-              </button>
+              </Button>
             </div>
           )}
         </>

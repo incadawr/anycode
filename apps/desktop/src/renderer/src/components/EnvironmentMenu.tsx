@@ -14,7 +14,8 @@ import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Ellipsis, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
+import { Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
+import { Button } from "../ui/components/Button.js";
 import { gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";
 // "Set up" routes through the same settings-open + pane-select
@@ -215,7 +216,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
       <button
         type="button"
         className="environment-trigger"
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Environment: ${label}`}
         onClick={toggle}
@@ -229,112 +230,111 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             <span className="environment-branch">{branch}</span>
           </>
         )}
-      </button>
-      <button
-        type="button"
-        className="environment-more"
-        aria-label="Open environment menu"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={toggle}
-      >
-        <Ellipsis />
+        <span aria-hidden="true">⌄</span>
       </button>
 
       {open && (
-        <div className="environment-menu" role="menu" aria-label="Environment">
-          <div className="environment-menu-title">Environment</div>
-          <button type="button" className="environment-menu-row" role="menuitem" onClick={copyWorkspace}>
-            <Folder />
-            <span className="environment-menu-row-main">
-              <span>Workspace</span>
-              <span className="environment-menu-row-detail environment-menu-row-detail-wrap">{copied ? "Copied" : workspacePath}</span>
-            </span>
-          </button>
+        <div className="environment-menu" role="dialog" aria-modal="false" aria-label="Environment">
+          <section className="environment-menu-section" aria-label="Workspace">
+            <div className="environment-menu-title">Workspace</div>
+            <Button variant="ghost" size="sm" type="button" className="environment-menu-row" onClick={copyWorkspace}>
+              <Folder />
+              <span className="environment-menu-row-main">
+                <span>Workspace</span>
+                <span className="environment-menu-row-detail environment-menu-row-detail-wrap">{copied ? "Copied" : workspacePath}</span>
+              </span>
+            </Button>
 
-          {statusKnown && status && (
-            <>
-              <button
-                type="button"
-                className="environment-menu-row"
-                role="menuitem"
-                aria-expanded={branchesOpen}
-                onClick={() => setBranchesOpen((current) => !current)}
-              >
-                <GitBranch />
-                <span className="environment-menu-row-main">
-                  <span>Branch</span>
-                  <span className="environment-menu-row-detail">{branch}</span>
-                </span>
-                <span className={`environment-menu-chevron${branchesOpen ? " environment-menu-chevron-open" : ""}`}>⌄</span>
-              </button>
-              {branchesOpen && branches && (
-                <div className="environment-branches" role="group" aria-label="Branches">
-                  {branches.map((item) => (
-                    <button
-                      key={item.name}
-                      type="button"
-                      className={`environment-branch-row${item.current ? " environment-branch-row-current" : ""}`}
-                      onClick={() => switchBranch(item.name)}
-                    >
-                      <GitBranch />
-                      <span>{item.name}</span>
-                      {item.current && <span aria-label="Current branch">✓</span>}
-                    </button>
-                  ))}
+            {statusKnown && status && (
+              <>
+                <Button
+                  variant="ghost" size="sm"
+                  type="button"
+                  className="environment-menu-row"
+                  aria-expanded={branchesOpen}
+                  onClick={() => setBranchesOpen((current) => !current)}
+                >
+                  <GitBranch />
+                  <span className="environment-menu-row-main">
+                    <span>Branch</span>
+                    <span className="environment-menu-row-detail">{branch}</span>
+                  </span>
+                  <span className={`environment-menu-chevron${branchesOpen ? " environment-menu-chevron-open" : ""}`}>⌄</span>
+                </Button>
+                {branchesOpen && branches && (
+                  <div className="environment-branches" role="group" aria-label="Branches">
+                    {branches.map((item) => (
+                      <Button variant="ghost" size="sm"
+                        key={item.name}
+                        type="button"
+                        className={`environment-branch-row${item.current ? " environment-branch-row-current" : ""}`}
+                        onClick={() => switchBranch(item.name)}
+                      >
+                        <GitBranch />
+                        <span>{item.name}</span>
+                        {item.current && <span aria-label="Current branch">✓</span>}
+                      </Button>
+                    ))}
+                  </div>
+                )}
+                <Button variant="ghost" size="sm" type="button" className="environment-menu-row" onClick={openInspector}>
+                  <span className="environment-menu-spacer" aria-hidden="true" />
+                  <span className="environment-menu-row-main">
+                    <span>Changes</span>
+                    <span className="environment-menu-row-detail">{changesLabel(dirtyCount)}</span>
+                  </span>
+                  <span className="environment-menu-open">Open</span>
+                </Button>
+              </>
+            )}
+            {statusKnown && status === null && <div className="environment-menu-note">Git is not available for this workspace.</div>}
+            {!statusKnown && <div className="environment-menu-note">Checking repository…</div>}
+            {engine === null && (
+              <>
+                <div className="environment-menu-row" role="group" aria-label="Language servers">
+                  <ServerStack />
+                  <span className="environment-menu-row-main">
+                    <span>Language servers</span>
+                    <span className="environment-menu-row-detail environment-menu-row-detail-prose">{formatEnvironmentLspDetail(lspServers)}</span>
+                  </span>
+                  <span className="environment-menu-actions">
+                    {hasCrashedLspServer(lspServers) && (
+                      <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="lsp-restart" onClick={restartLsp}>Restart</Button>
+                    )}
+                    {lspServers.length > 0 ? (
+                      <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="lsp-details" onClick={openLspDetails}>Details</Button>
+                    ) : (
+                      <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openLspSetup}>Set up</Button>
+                    )}
+                  </span>
                 </div>
-              )}
-              <button type="button" className="environment-menu-row" role="menuitem" onClick={openInspector}>
-                <span className="environment-menu-spacer" aria-hidden="true" />
-                <span className="environment-menu-row-main">
-                  <span>Changes</span>
-                  <span className="environment-menu-row-detail">{changesLabel(dirtyCount)}</span>
-                </span>
-                <span className="environment-menu-open">Open</span>
-              </button>
-            </>
-          )}
-          {engine === null && (
-            <>
-              <div className="environment-menu-row" role="group" aria-label="Language servers">
-                <ServerStack />
-                <span className="environment-menu-row-main">
-                  <span>Language servers</span>
-                  <span className="environment-menu-row-detail">{formatEnvironmentLspDetail(lspServers)}</span>
-                </span>
-                <span className="environment-menu-actions">
-                  {hasCrashedLspServer(lspServers) && (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-restart" onClick={restartLsp}>Restart</button>
-                  )}
-                  {lspServers.length > 0 ? (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-details" onClick={openLspDetails}>Details</button>
-                  ) : (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openLspSetup}>Set up</button>
-                  )}
-                </span>
-              </div>
-              <div className="environment-menu-row" role="group" aria-label="Hooks">
-                <HookIcon />
-                <span className="environment-menu-row-main">
-                  <span>Hooks</span>
-                  <span className="environment-menu-row-detail">{formatEnvironmentHooksDetail(hookDeclarations)}</span>
-                </span>
-                <span className="environment-menu-actions">
-                  <button type="button" className="environment-menu-open" data-environment-action="hooks-details" onClick={openHooksDetails}>Details</button>
-                </span>
-              </div>
-            </>
-          )}
-          {/* the per-session Sessions API switch (any engine; main owns the state). */}
-          <SessionAccessRow />
-          {tabId && <NativeSessionAccess key={tabId} tabId={tabId} />}
-          {/* the per-session "Full browser access" switch (asks before turning ON). */}
-          <BrowserAccessRow />
-          {/* GitHub #18: export THIS session's tree (session + children) as an
-              anonymised bundle, with a preview before saving. */}
-          <DiagnosticsExportSection />
-          {statusKnown && status === null && <div className="environment-menu-note">Git is not available for this workspace.</div>}
-          {!statusKnown && <div className="environment-menu-note">Checking repository…</div>}
+                <div className="environment-menu-row" role="group" aria-label="Hooks">
+                  <HookIcon />
+                  <span className="environment-menu-row-main">
+                    <span>Hooks</span>
+                    <span className="environment-menu-row-detail environment-menu-row-detail-prose">{formatEnvironmentHooksDetail(hookDeclarations)}</span>
+                  </span>
+                  <span className="environment-menu-actions">
+                    <Button variant="ghost" size="sm" type="button" className="environment-menu-open" data-environment-action="hooks-details" onClick={openHooksDetails}>Details</Button>
+                  </span>
+                </div>
+              </>
+            )}
+          </section>
+          <section className="environment-menu-section environment-menu-group" aria-label="Session access">
+            <div className="environment-menu-title">Session access <span className="environment-menu-scope">this session only</span></div>
+            {/* the per-session Sessions API switch (any engine; main owns the state). */}
+            <SessionAccessRow />
+            {tabId && <NativeSessionAccess key={tabId} tabId={tabId} />}
+            {/* the per-session "Full browser access" switch (asks before turning ON). */}
+            <BrowserAccessRow />
+          </section>
+          <section className="environment-menu-section environment-menu-group" aria-label="Diagnostics">
+            <div className="environment-menu-title">Diagnostics</div>
+            {/* GitHub #18: export THIS session's tree (session + children) as an
+                anonymised bundle, with a preview before saving. */}
+            <DiagnosticsExportSection />
+          </section>
         </div>
       )}
     </div>
