@@ -14,10 +14,10 @@ import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
-import { Button } from "../ui/index.js";
+import { Copy, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
+import { Button, IconButton } from "../ui/index.js";
 import { EnvironmentBranchPicker } from "./EnvironmentBranchPicker.js";
-import { gitPillLabel } from "./GitPill.js";
+import { gitAheadBehindLabel, gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";
 // "Set up" routes through the same settings-open + pane-select
 // seam SkillsPane uses (slash-menu.ts owns both event names).
@@ -95,6 +95,28 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   useOverlayFlag(open);
   const [branchesOpen, setBranchesOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [switchPending, setSwitchPending] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const returning = useRef(false);
+  const branchRef = useRef<HTMLButtonElement>(null);
+  const copyTimer = useRef<number | undefined>(undefined);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; window.clearTimeout(copyTimer.current); };
+  }, []);
+  const close = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+  useEffect(() => {
+    if (open && !branchesOpen) {
+      if (returning.current) branchRef.current?.focus();
+      else panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      returning.current = false;
+    }
+  }, [open, branchesOpen]);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const dispatch = useCallback(
@@ -122,12 +144,13 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     }
     function closeFromOutside(event: PointerEvent): void {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setOpen(false);
+        if (!switchPending) close();
       }
     }
     function closeFromEscape(event: KeyboardEvent): void {
       if (event.key === "Escape") {
-        setOpen(false);
+        event.preventDefault();
+        if (!switchPending) close();
       }
     }
     window.addEventListener("pointerdown", closeFromOutside);
@@ -136,7 +159,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
       window.removeEventListener("pointerdown", closeFromOutside);
       window.removeEventListener("keydown", closeFromEscape);
     };
-  }, [open]);
+  }, [open, switchPending, close]);
 
   useEffect(() => {
     function openBranches(event: Event) {
@@ -159,14 +182,15 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const label = branch ? `${basename(workspacePath)} · ${branch}` : basename(workspacePath);
 
   function toggle(): void {
-    setOpen((current) => !current);
+    if (switchPending) return;
+    if (open) close(); else setOpen(true);
     setBranchesOpen(false);
   }
 
   function openInspector(): void {
     tabStore.getState().gitSetView("changes");
     tabStore.getState().gitSetPanelOpen(true);
-    setOpen(false);
+    close();
   }
 
   // cross-review F4: a missing TabContext must not look like a
@@ -174,7 +198,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   function openPanel(apply: (id: string) => void): void {
     if (tabId) apply(tabId);
     else console.warn("EnvironmentMenu: no tab context, panel not opened");
-    setOpen(false);
+    close();
   }
 
   function openLspDetails(): void {
@@ -187,7 +211,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   function openLspSetup(): void {
     window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
     window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "language-servers" }));
-    setOpen(false);
+    close();
   }
 
   function openHooksDetails(): void {
@@ -207,8 +231,10 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     }
     void write.then(
       () => {
+        if (!mounted.current) return;
+        window.clearTimeout(copyTimer.current);
         setCopied(true);
-        window.setTimeout(() => setCopied(false), 1500);
+        copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
       },
       () => {},
     );
@@ -217,6 +243,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   return (
     <div ref={rootRef} className={`environment-control environment-control-${placement}`}>
       <button
+        ref={triggerRef}
         type="button"
         className={`environment-trigger${branch ? " environment-trigger-has-branch" : ""}`}
         aria-haspopup="dialog"
@@ -233,23 +260,40 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             <span className="environment-branch">{branch}</span>
           </>
         )}
+        {statusKnown && dirtyCount > 0 && <span className="environment-git-count" aria-label={changesLabel(dirtyCount)}>●{dirtyCount}</span>}
+        {statusKnown && status && gitAheadBehindLabel(status.head) && <span className="environment-git-count">{gitAheadBehindLabel(status.head)}</span>}
         <span aria-hidden="true">⌄</span>
       </button>
 
       {open && (
-        <div className="environment-menu" role="dialog" aria-modal="false" aria-label="Environment">
-          {branchesOpen ? <EnvironmentBranchPicker back={() => setBranchesOpen(false)}
+        <div ref={panelRef} className="environment-menu" role="dialog" aria-modal="false" aria-label="Environment"
+          onBlur={event => {
+            if (!branchesOpen && !switchPending && event.relatedTarget && !rootRef.current?.contains(event.relatedTarget as Node)) setOpen(false);
+          }}
+          onKeyDown={event => {
+            if (event.key !== "Tab" || !branchesOpen) return;
+            const controls = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]') ?? []);
+            const first = controls[0], last = controls.at(-1);
+            if (!first || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+              event.preventDefault();
+              (event.shiftKey ? last : first)?.focus();
+            }
+          }}>
+          {branchesOpen ? <EnvironmentBranchPicker back={() => { returning.current = true; setBranchesOpen(false); }}
+            pendingChanged={setSwitchPending}
             retry={() => dispatch({ op: "branches" }, { kind: "branches", label: "branches" })}
-            switched={() => setOpen(false)} /> : <>
+            switched={close} /> : <>
           <section className="environment-menu-section" aria-label="Workspace">
             <div className="environment-menu-title">Workspace</div>
-            <Button variant="ghost" size="sm" type="button" className="environment-menu-row" onClick={copyWorkspace}>
+            <div className="environment-menu-row">
               <Folder />
               <span className="environment-menu-row-main">
                 <span>{basename(workspacePath)}</span>
-                <span className="environment-menu-row-detail environment-menu-row-detail-wrap">{copied ? "Copied" : workspacePath}</span>
+                <span className="environment-menu-row-detail environment-workspace-path" title={workspacePath}><bdi dir="ltr">{workspacePath}</bdi></span>
               </span>
-            </Button>
+              {copied && <span role="status">Copied</span>}
+              <IconButton label="Copy path" icon={<Copy />} onClick={copyWorkspace} />
+            </div>
 
             {statusKnown && status && (
               <>
@@ -257,6 +301,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   variant="ghost" size="sm"
                   type="button"
                   className="environment-menu-row"
+                  ref={branchRef}
                   aria-haspopup="listbox"
                   onClick={() => setBranchesOpen(true)}
                 >

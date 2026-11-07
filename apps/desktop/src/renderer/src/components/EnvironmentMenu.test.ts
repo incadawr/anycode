@@ -391,6 +391,7 @@ it.each([true, false])("ignores a stale switch result after close/reopen (succes
     await readyBranches(store);
     await pickTopic(host);
     const old = switchRequest(send);
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {} } }));
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
     await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
     await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
@@ -418,7 +419,7 @@ async function filterBranches(host: HTMLElement, value: string) {
 it("trims the filter and Enter switches the first match without an arrow key", async () => {
   await branchMenu(async (host, store, send) => {
     await readyBranches(store);
-    expect(host.querySelector('h3')?.textContent).toBe("Switch branch · 3");
+    expect(host.querySelector('h3')?.parentElement?.textContent).toContain("Switch branch3 branches");
     expect(host.textContent).toContain("↑↓ · Enter · Esc");
     const input = await filterBranches(host, "  TOPIC/A  ");
     expect(host.querySelector('[aria-label="Matching"]')?.textContent).toBe("Matching · 1topic/a");
@@ -497,4 +498,95 @@ it("opens the branch screen directly from a tab-scoped command and focuses its f
     await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
     expect(document.activeElement).toBe(host.querySelector("input"));
   });
+});
+
+it("focuses Copy path on open, restores Branch on Back and trigger on Escape/outside", async () => {
+  await branchMenu(async host => {
+    const trigger = host.querySelector<HTMLButtonElement>(".environment-trigger")!;
+    const back = host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!;
+    expect(document.activeElement).toBe(host.querySelector("input"));
+    const input = host.querySelector("input")!;
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true })));
+    expect(document.activeElement).toBe(back);
+    await act(async () => back.click());
+    expect(document.activeElement?.textContent).toContain("Branch");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(document.activeElement).toBe(trigger);
+    await act(async () => trigger.click());
+    expect(document.activeElement).toBe(host.querySelector('[aria-label="Copy path"]'));
+    await act(async () => document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+});
+it("lets Tab leave the main panel without moving focus back", async () => {
+  await branchMenu(async host => {
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+    const outside = document.createElement("button"); document.body.append(outside);
+    try {
+      await act(async () => outside.focus());
+      expect(host.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.activeElement).toBe(outside);
+    } finally { outside.remove(); }
+  });
+});
+it("keeps pending switches open and recovers when their store record resets", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store); await pickTopic(host);
+    const request = switchRequest(send);
+    expect(store.getState().git.pending[request.requestId]).toMatchObject({ kind: "mutation", label: "switch branch" });
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => store.getState().reset());
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    expect(host.querySelector('[aria-busy="true"]')).toBeNull();
+    await act(async () => store.setState({ git: { ...store.getState().git, statusKnown: true,
+      status: { head: { branch: "main", sha: "abcdef", detached: false, ahead: null, behind: null }, staged: [], unstaged: [], untracked: [], dirtyCount: 0, filesTruncated: false } } }));
+    await readyBranches(store); await pickTopic(host);
+    expect(switchRequest(send).requestId).not.toBe(request.requestId);
+  });
+});
+it("allows another warning target and emphasizes Cancel", async () => {
+  await branchMenu(async (host, store) => {
+    await readyBranches(store, 3); await pickTopic(host);
+    await act(async () => Array.from(host.querySelectorAll<HTMLElement>('[role="option"]')).at(-1)!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Switch to topic/a?");
+    expect(Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Cancel")?.className).toContain("secondary");
+  });
+});
+it("shows known nonzero git counts and copies the unchanged path with one reset timer", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  vi.useFakeTimers();
+  try {
+    await branchMenu(async (host, store) => {
+      await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+      await act(async () => store.setState({ git: { ...store.getState().git, status: {
+        ...store.getState().git.status!, dirtyCount: 3, head: { ...store.getState().git.status!.head, ahead: 2, behind: 1 }
+      } } }));
+      const trigger = host.querySelector(".environment-trigger")!;
+      expect(trigger.textContent).toContain("●3"); expect(trigger.textContent).toContain("↑2 ↓1");
+      await act(async () => store.setState({ git: { ...store.getState().git, status: {
+        ...store.getState().git.status!, dirtyCount: 0, head: { ...store.getState().git.status!.head, ahead: 0, behind: null }
+      } } }));
+      expect(trigger.textContent).not.toContain("●"); expect(trigger.textContent).not.toContain("↑");
+      const copy = host.querySelector<HTMLButtonElement>('[aria-label="Copy path"]')!;
+      await act(async () => copy.click());
+      expect(writeText).toHaveBeenCalledWith("/fixture/repo");
+      expect(host.querySelector('[role="status"]')?.textContent).toBe("Copied");
+      expect(host.textContent).toContain("/fixture/repo");
+      await act(async () => vi.advanceTimersByTime(1000));
+      await act(async () => copy.click());
+      await act(async () => vi.advanceTimersByTime(600));
+      expect(host.querySelector('[role="status"]')?.textContent).toBe("Copied");
+      await act(async () => vi.advanceTimersByTime(900));
+      expect(host.querySelector('[role="status"]')).toBeNull();
+      await act(async () => store.setState({ git: { ...store.getState().git, statusKnown: false } }));
+      expect(trigger.textContent).not.toContain("●3"); expect(trigger.textContent).not.toContain("↑2");
+      await act(async () => copy.click()); // unmount must cancel this timer
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard); else Reflect.deleteProperty(navigator, "clipboard"); }
 });

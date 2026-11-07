@@ -2046,11 +2046,6 @@ button.environment-menu-row:hover,
   margin-left: 0;
 }
 
-.environment-branch-picker .environment-menu-text-input {
-  flex: none;
-  height: 2rem;
-}
-
 .environment-branch-picker .environment-branch-row {
   min-width: 0;
   justify-content: flex-start;
@@ -2082,6 +2077,12 @@ button.environment-menu-row:hover,
   white-space: pre-wrap;
   font-size: var(--fs-sm);
 }
+
+.environment-git-count { flex: none; font-size: var(--fs-xs); }
+.environment-workspace-path { direction: rtl; text-align: left; }
+.environment-branch-count { margin-left: auto; color: var(--text-3); font-size: var(--fs-xs); }
+.environment-switch-error { max-height: 10rem; overflow: auto; }
+
 .environment-switch-warning { background: color-mix(in srgb, var(--warning) 15%, transparent); }
 .environment-switch-error { background: color-mix(in srgb, var(--danger) 15%, transparent); }
 .environment-branch-row[aria-disabled="true"] { cursor: default; opacity: .65; }

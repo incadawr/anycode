@@ -9693,3 +9693,15 @@ describe("Claude ordinary pending echoes", () => {
     expect(store.getState().orchestrationDeliveries).toEqual([]);
   });
 });
+
+it("notifies a git result observer exactly once for its own request", () => {
+  const store = createDesktopStore();
+  const observer = vi.fn();
+  store.getState().gitRequestStarted("own", { kind: "mutation", label: "switch branch", onResult: observer });
+  store.getState().applyHostMessage({ type: "git_result", requestId: "foreign", outcome: { ok: true, kind: "unit" } });
+  expect(observer).not.toHaveBeenCalled();
+  const outcome = { ok: false as const, reason: "refused" };
+  store.getState().applyHostMessage({ type: "git_result", requestId: "own", outcome });
+  store.getState().applyHostMessage({ type: "git_result", requestId: "own", outcome });
+  expect(observer).toHaveBeenCalledExactlyOnceWith(outcome);
+});

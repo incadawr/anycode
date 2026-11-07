@@ -4,19 +4,32 @@ import { Button, SearchInput } from "../ui/index.js";
 import { GitBranch, Spinner } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 
-export function EnvironmentBranchPicker({ back, retry, switched }: {
-  back: () => void; retry: () => void; switched: () => void;
+export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged }: {
+  pendingChanged: (pending: boolean) => void; back: () => void; retry: () => void; switched: () => void;
 }) {
   const store = useTabStoreApi();
   const send = useTabSend();
   const alive = useRef(true);
   const inFlight = useRef(false);
+  const request = useRef<string | null>(null);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const creating = useRef(false);
   const [target, setTarget] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "warning" | "pending" | "error">("idle");
   const [switchError, setSwitchError] = useState("");
-  const locked = phase === "pending" || phase === "warning";
+  const locked = phase === "pending";
+  const pending = useTabStore(s => s.git.pending);
+  const filterRef = useRef<HTMLElement>(null);
+  useEffect(() => { pendingChanged(locked); return () => pendingChanged(false); }, [locked, pendingChanged]);
+  useEffect(() => {
+    if (inFlight.current && request.current && !pending[request.current]) {
+      inFlight.current = false;
+      request.current = null;
+      setPhase("idle");
+      setTarget(null);
+    }
+  }, [pending]);
+  useEffect(() => { if (!locked) filterRef.current?.querySelector<HTMLInputElement>("input")?.focus(); }, [locked]);
   function performSwitch(name: string, create = creating.current) {
     if (inFlight.current) return;
     creating.current = create;
@@ -29,8 +42,10 @@ export function EnvironmentBranchPicker({ back, retry, switched }: {
     setTarget(name);
     setPhase("pending");
     const requestId = crypto.randomUUID();
+    request.current = requestId;
     store.getState().gitRequestStarted(requestId, { kind: "mutation", label: create ? "create branch" : "switch branch", onResult: outcome => {
-      if (!alive.current) return;
+      if (!alive.current || request.current !== requestId) return;
+      request.current = null;
       inFlight.current = false;
       if (outcome.ok) switched();
       else { setSwitchError(outcome.reason); setPhase("error"); }
@@ -67,17 +82,17 @@ export function EnvironmentBranchPicker({ back, retry, switched }: {
       {phase === "pending" && name === target ? <Spinner className="icon-spin" /> : <GitBranch />}<span title={name}>{create ? `Create branch “${name}”` : name}</span>{phase === "pending" && name === target && <span role="status">{creating.current ? "Creating…" : "Switching…"}</span>}{i === 0 && <span aria-label="Current branch">✓</span>}
     </div>;
   }
-  return <section className="environment-branch-picker" aria-label="Switch branch">
+  return <section ref={filterRef} className="environment-branch-picker" aria-label="Switch branch">
     <div className="environment-menu-actions">
       <Button variant="ghost" size="sm" aria-label="Back" disabled={phase === "pending"} onClick={back}>‹</Button>
-      <h3>Switch branch · {branches?.length ?? "…"}</h3>
+      <h3>Switch branch</h3><span className="environment-branch-count">{branches?.length ?? "…"} branches</span>
     </div>
     {phase === "warning" && <div role="alert" className="environment-switch-warning">
       <strong>{status?.dirtyCount} uncommitted changes</strong>
       <div>Switch to {target}? Changes may move to the new branch. If they would be overwritten, Git will refuse the switch.</div>
       <div className="environment-menu-actions">
-        <Button variant="secondary" size="sm" onClick={() => performSwitch(target!)}>Switch anyway</Button>
-        <Button variant="ghost" size="sm" onClick={() => { setPhase("idle"); setTarget(null); }}>Cancel</Button>
+        <Button variant="ghost" size="sm" onClick={() => performSwitch(target!)}>Switch anyway</Button>
+        <Button variant="secondary" size="sm" onClick={() => { setPhase("idle"); setTarget(null); }}>Cancel</Button>
       </div>
     </div>}
     {phase === "error" && <div role="alert" className="environment-switch-error">
@@ -85,7 +100,7 @@ export function EnvironmentBranchPicker({ back, retry, switched }: {
       <div>{switchError}</div>
       <Button variant="secondary" size="sm" onClick={() => performSwitch(target!)}>Retry</Button>
     </div>}
-    <SearchInput autoFocus label="Filter branches" disabled={locked} className="environment-menu-text-input" aria-label="Filter branches" placeholder="Filter branches"
+    <SearchInput autoFocus label="Filter branches" disabled={locked} aria-label="Filter branches" placeholder="Filter branches"
       role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={id}
       aria-describedby={`${id}-hint`} aria-activedescendant={names.length ? `${id}-${index}` : undefined} value={filter}
       onValueChange={value => { setFilter(value); setActive(value.trim() ? 1 : 0); }}
