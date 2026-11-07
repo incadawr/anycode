@@ -1,0 +1,33 @@
+# AnyCode
+
+> User documentation for configuring and using AnyCode coding sessions.
+
+Start with the documentation map, then follow the matching task or symptom.
+Check the session's engine and installed version before applying instructions.
+
+## User guide
+
+- [Documentation map](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/README.md): Start here for task and symptom navigation.
+- [Project instruction snippet](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/AGENTS-SNIPPET.md): Copy setup and secret-handling instructions into AGENTS.md or CLAUDE.md.
+- [Getting started](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/getting-started.md): Connect a project, review trust, use session controls, rewind and compact context.
+- [Providers](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/providers.md): Configure connections, effort, images, quotas and setup export or import.
+- [Configuration](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/configuration.md): Distinguish app settings, shared config, merge rules and environment overrides.
+- [Engines](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/engines.md): Set up Native, Codex and Claude engines, binaries and accounts.
+- [Permissions](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/permissions.md): Choose modes, approval rules, classifiers and engine presets.
+- [Orchestration](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/orchestration.md): Use Orchestrate mode or a manual supervisor workflow.
+- [Roles](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/roles.md): Configure role routes, fallbacks, profiles and parallel child limits.
+- [Subagents](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/subagents.md): Define profiles, delegate to child sessions and inspect their outcomes.
+- [Skills](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/skills.md): Create, import, disable and verify skills, or install external setup help.
+- [Hooks](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/hooks.md): Configure commands for prompt, tool and stop events.
+- [Workflows](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/workflows.md): Define bounded sequences of dependent subagent steps.
+- [Worktrees](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/worktrees.md): Enter, leave and recover changes from isolated git checkouts.
+- [MCP](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/mcp.md): Add or import MCP servers, manage trust and verify connections.
+- [Language servers](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/lsp.md): Configure language servers and diagnostics after file edits.
+- [Plugins](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/plugins.md): Install plugins and understand contributions, trust and account sources.
+- [Browser](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/browser.md): Operate the preview with browser tools and understand access boundaries.
+- [Proxy](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/proxy.md): Configure network profiles and per-connection proxy routing.
+- [Sessions API](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/sessions-api.md): Share live sessions and communicate through the local API or MCP adapter.
+- [Remote control](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/remote-control.md): Control shared sessions and approvals through Telegram.
+- [CLI and commands](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/cli.md): Use terminal flags, slash commands, keyboard shortcuts and updates.
+- [Files and paths](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/files-and-paths.md): Locate configuration, extension roots, state, logs and packaged documentation.
+- [Troubleshooting](https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/troubleshooting.md): Diagnose missing integrations, provider errors, engine startup and logs.

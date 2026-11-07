@@ -130,4 +130,18 @@ describe("packaged user guide navigation", () => {
     expect(snippet).toContain("Never read ~/.anycode/secrets.json");
     expect(snippet).toContain("Never read ~/.codex/auth.json");
   });
+
+  it("indexes every guide file exactly once in llms.txt with a one-line description", () => {
+    const index = readFileSync(resolve(docsDir, "../../llms.txt"), "utf8");
+    const base = "https://raw.githubusercontent.com/incadawr/anycode/master/docs/user/";
+    const entries = [...index.matchAll(/^- \[([^\]]+)\]\(([^)]+)\): ([^\n]+)$/gm)];
+    const indexed = entries.map(([, title, url, description]) => {
+      expect(title!.trim()).not.toBe("");
+      expect(description!.trim()).not.toBe("");
+      expect(url!.startsWith(base)).toBe(true);
+      return url!.slice(base.length);
+    });
+    expect(indexed.sort()).toEqual([...pages.keys()].sort());
+    expect(entries[0]![2]).toBe(`${base}README.md`);
+  });
 });
