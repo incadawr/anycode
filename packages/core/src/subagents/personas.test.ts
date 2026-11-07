@@ -99,24 +99,24 @@ describe("personas", () => {
     const planner = PERSONAS.planner;
     expect([...planner.tools]).toEqual([...PERSONAS.explore.tools]);
     expect(planner.tools).not.toContain("Bash");
-    expect(planner.turnBudget).toBe(30);
-    expect(ROLE_TURN_BUDGETS.planner).toBe(30);
+    expect(planner.turnBudget).toBe(100);
+    expect(ROLE_TURN_BUDGETS.planner).toBe(100);
     expect(planner.systemPrompt).toContain("read-only senior engineer");
   });
 
   it("executor exists with general-purpose-equal tools, budget 80, and its prompt body", () => {
     const executor = PERSONAS.executor;
     expect([...executor.tools]).toEqual([...PERSONAS["general-purpose"].tools]);
-    expect(executor.turnBudget).toBe(80);
-    expect(ROLE_TURN_BUDGETS.executor).toBe(80);
+    expect(executor.turnBudget).toBe(300);
+    expect(ROLE_TURN_BUDGETS.executor).toBe(300);
     expect(executor.systemPrompt).toContain("implement a written brief literally");
   });
 
   it("reviewer exists with read-only tools, budget 40, and its prompt body", () => {
     const reviewer = PERSONAS.reviewer;
     expect([...reviewer.tools]).toEqual([...PERSONAS.explore.tools]);
-    expect(reviewer.turnBudget).toBe(40);
-    expect(ROLE_TURN_BUDGETS.reviewer).toBe(40);
+    expect(reviewer.turnBudget).toBe(150);
+    expect(ROLE_TURN_BUDGETS.reviewer).toBe(150);
     expect(reviewer.systemPrompt).toContain("CLEAN, MINOR, or DEFECTS");
     expect(reviewer.systemPrompt).not.toContain("run the targeted tests before you report");
     expect(reviewer.systemPrompt).toContain("do not run tests");

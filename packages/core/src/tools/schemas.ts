@@ -367,7 +367,7 @@ export const agentInputSchema = z.object({
     .describe(
       "Session tier only: child session id of a STILL-RUNNING earlier Agent call of this conversation — `prompt` is delivered to that child as its next input (it re-reviews on its own context). The original Agent call keeps waiting. Not for finished children (use continue_session).",
     ),
-});
+}).strict();
 
 export type AgentInput = z.output<typeof agentInputSchema>;
 

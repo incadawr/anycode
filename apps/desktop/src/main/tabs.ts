@@ -34,6 +34,7 @@ import type { AgentDelivery, SessionActivityState } from "../shared/communicatio
 import { randomUUID } from "node:crypto";
 import { fstatSync, realpathSync, statSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
+import { DEFAULT_SUBAGENT_MAX_TURNS } from "@anycode/core";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import type { AgentEnvelope } from "../shared/communication.js";
 import {
@@ -83,7 +84,7 @@ import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { childSessionLimitMessage, clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
-import { ENV_CONNECTION_ID, ENV_MAX_TURNS, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL } from "./host-env.js";
+import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL, ENV_SUBAGENT_MAX_TURNS } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import { sessionToolEnv } from "../shared/session-env.js";
 import { ENV_MCP_SECRETS } from "../shared/mcp-secrets.js";
@@ -536,8 +537,8 @@ export interface TabHost {
     restrictions?: import("@anycode/core").SessionProfileRestrictions;
     /**
      * the CREATING spawn's turn budget (from the profile's
-     * frontmatter, req.maxTurns). Populated only for a FRESH child — a
-     * follow-up (resumed) child never carries one. Rides argv once, as
+     * frontmatter, req.maxTurns). A resumed child uses the saved creating
+     * budget. Rides argv on each host boot, as
      * `--child-max-turns <n>`, with the child linkage arguments.
      */
     maxTurns?: number;
@@ -576,6 +577,7 @@ interface ChildRunLedgerEntry {
  * so a follow-up can only ever reach a child this parent really had.
  */
 interface ResumableChild {
+  maxTurns?: number;
   restrictions?: import("@anycode/core").SessionProfileRestrictions;
   parentSessionId: string;
   connectionId?: string;
@@ -1087,6 +1089,9 @@ export interface ChildRunSummary {
   childSessionId: string;
   state: "starting" | "running" | "cancelling";
   pid: number | null;
+  /** Effective stamped budget and model override for dev automation. */
+  maxTurns?: number;
+  model?: string;
   /**
    * GitHub #17 slice F: the child tab's ACTUAL fork time on
    * this manager's injected clock (`tabs.get(...).spawnedAt`), so the live
@@ -1412,6 +1417,8 @@ export class TabHostManager {
       state: e.state,
       pid: this.tabs.get(e.childTabId)?.proc?.pid ?? null,
       forkedAt: this.tabs.get(e.childTabId)?.spawnedAt ?? null,
+      ...(this.tabs.get(e.childTabId)?.childOf?.maxTurns !== undefined ? { maxTurns: this.tabs.get(e.childTabId)!.childOf!.maxTurns } : {}),
+      ...(this.tabs.get(e.childTabId)?.modelOverride !== undefined ? { model: this.tabs.get(e.childTabId)!.modelOverride } : {}),
     }));
   }
 
@@ -2804,14 +2811,18 @@ export class TabHostManager {
       connectionId = resolved;
     }
 
-    const requestedModel = req.model ?? resolvedProviderModel;
+    let requestedModel = req.model ?? resolvedProviderModel ?? req.inheritedModel;
     if (engine === "core" && requestedModel !== undefined) {
       let detail: string | void;
       try { detail = this.deps.validateChildModel?.(requestedModel, connectionId); }
       catch { detail = "Model validation failed."; }
       if (detail !== undefined) {
-        reject("not_ready", `Agent: this model is not available on the selected connection; select a matching provider/connection. ${detail}`);
-        return;
+        if (req.inheritedModel !== undefined && req.model === undefined && resolvedProviderModel === undefined) {
+          requestedModel = undefined;
+        } else {
+          reject("not_ready", `Agent: this model is not available on the selected connection; select a matching provider/connection. ${detail}`);
+          return;
+        }
       }
     }
 
@@ -3006,11 +3017,12 @@ export class TabHostManager {
     // never the ambient `~/.codex` one. A core parent carries no profile (core
     // owns no Codex account), so its codex child takes the DEFAULT account —
     // resolved before the readiness gate above, so gate and argv agree.
-    // + 4820 F1: the CREATING spawn's stamped budget (only a fresh
-    // child carries one) — minted once here, used both for the argv stamp
+    // The creating budget is saved and reused on resume, and used for the argv stamp
     // (childOf.maxTurns, below) and for the accepted event's effective-cap
     // carry (4820 F1, at admit).
-    const stampedMaxTurns = resumable === undefined ? req.maxTurns : undefined;
+    const stampedMaxTurns = resumable === undefined
+      ? engine === "core" ? this.resolveAcceptedChildMaxTurns(req.maxTurns, this.env(connectionId)) : req.maxTurns
+      : resumable.maxTurns;
     const childTab: TabHost = {
       tabId: childTabId,
       workspace: receipt?.path ?? parentTab.workspace,
@@ -3044,8 +3056,7 @@ export class TabHostManager {
         permissionMode: req.permissionMode,
         ...((resumable !== undefined ? resumable.restrictions : req.restrictions) !== undefined
           ? { restrictions: resumable !== undefined ? resumable.restrictions : req.restrictions } : {}),
-        // only the CREATING spawn carries a budget; a follow-up
-        // (resumable) child keeps whatever its session started with.
+        // A follow-up reuses the budget saved from the creating run.
         ...(stampedMaxTurns !== undefined ? { maxTurns: stampedMaxTurns } : {}),
       },
     };
@@ -3291,18 +3302,7 @@ export class TabHostManager {
     return typeof model === "string" && model.length > 0 ? model : "default";
   }
 
-  /**
-   * review F1: the EFFECTIVE core-child turn cap to carry on the
-   * run's `accepted` event — `undefined` (field omitted) when neither source
-   * set one, in which case the child host internally falls back to core's
-   * DEFAULT_MAX_TURNS and the PARENT-side budget latch falls back to the SAME
-   * shared constant (never a duplicated literal). Precedence mirrors the
-   * child host's own resolveChildMaxTurns exactly: a stamped
-   * `--child-max-turns` (the creating spawn's budget, argv) outranks the
-   * connection env's ANYCODE_MAX_TURNS (settings-derived, read off the same
-   * `env()` the fork itself used). Returned raw when malformed — main never
-   * re-validates what buildHostEnv already wrote.
-   */
+  /** Match the creating core child's subagent budget and its argv stamp. */
   private resolveAcceptedChildMaxTurns(stamped: number | undefined, env: NodeJS.ProcessEnv | undefined): number | undefined {
     if (stamped !== undefined) {
       // GitHub #17 slice A: a stamped request budget keeps its
@@ -3312,12 +3312,9 @@ export class TabHostManager {
       // accepted acknowledgement itself).
       return isValidEffectiveChildMaxTurns(stamped) ? stamped : undefined;
     }
-    const raw = env?.[ENV_MAX_TURNS];
-    if (raw === undefined || raw.trim() === "") {
-      return undefined;
-    }
-    const parsed = Number(raw);
-    return isValidEffectiveChildMaxTurns(parsed) ? parsed : undefined;
+    const raw = env?.[ENV_SUBAGENT_MAX_TURNS];
+    const parsed = raw === undefined || raw.trim() === "" ? DEFAULT_SUBAGENT_MAX_TURNS : Number(raw);
+    return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : DEFAULT_SUBAGENT_MAX_TURNS;
   }
 
   /** requestId -> its owning parent's cancel of a still-live run (Agent tool abort/timeout, cut §0.5's ctx.abortSignal). */
@@ -3696,6 +3693,7 @@ export class TabHostManager {
   private rememberResumableChild(entry: ChildRunLedgerEntry, childTab: TabHost, reaped: Promise<void>): void {
     const record: ResumableChild = {
       parentSessionId: entry.parentSessionId,
+      ...(childTab.childOf?.maxTurns !== undefined ? { maxTurns: childTab.childOf.maxTurns } : {}),
       ...(childTab.childOf?.restrictions !== undefined ? { restrictions: childTab.childOf.restrictions } : {}),
       ...(childTab.connectionId !== undefined ? { connectionId: childTab.connectionId } : {}),
       ...(childTab.modelOverride !== undefined ? { modelOverride: childTab.modelOverride } : {}),

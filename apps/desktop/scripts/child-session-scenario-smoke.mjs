@@ -6,8 +6,7 @@
  *   item 1  A real model calling `Agent(tier:"session")` — the declaration
  *        works as discovery, no hand-holding beyond the tool's own schema.
  *   item 2  `GET /state` shows two DISTINCT OS pids (master, child) while the
- *        parent's own Agent tool_call is still `status:"running"` — the
- *        parent tool is genuinely blocked on the child, not a fire-and-forget.
+ *        parent tool_call reports its successful background handoff.
  *   item 3  The child is NOWHERE user-facing: absent from `/sessions`, and
  *        `/state`'s per-tab `states` map (fed by the renderer's own
  *        root-only `tabsStore.tabs`) has exactly ONE key (the master) — the
@@ -49,16 +48,9 @@
  *
  * REUSE (CUT-S2 §3 D2's own directive — the seam is exports, not a rewrite):
  * every generic process/fs/HTTP/polling helper below is IMPORTED, unmodified,
- * from the already-green `child-session-explicit-provider-smoke.mjs` (§4.2
- * item 13's harness) — that file only grew `export` keywords plus one `import.
- * meta.url` main-module guard around its own auto-invoked `run()`, so a
- * direct `node child-session-explicit-provider-smoke.mjs` run is untouched
- * byte-for-byte in behavior (verified: re-run after the edit, still
- * `5/4 steps passed — ALL GREEN`). In particular `step1LaunchApp` is reused
- * UNMODIFIED for the whole launch/profile/settings-seed sequence (the SAME
- * real v2 `provider.connections[]` seed as the item 13 harness — the "PITFALLS"
- * lesson: only that file's seed round-trips the current settings schema) —
- * this script never edits or duplicates that seed. The one piece of state
+ * from `child-session-explicit-provider-smoke.mjs` (§4.2 item 13's harness).
+ * The launch helper accepts optional connection model and proxy overrides for
+ * this scenario; its own default behavior remains unchanged. The debug port
  * this script threads INTO that reused function without touching its source
  * is `process.env.REMOTE_DEBUGGING_PORT`, set on `process.env` itself before
  * calling it: `step1LaunchApp` builds its spawned env as `{...process.env,
@@ -86,15 +78,15 @@
  *
  * Each step prints `[step N] PASS/FAIL <detail>`; the first FAIL tears down
  * and exits 1. Step 1 (discovery) allows exactly ONE prompt retry for live-
- * model nondeterminism, then a documented SKIP (exit 0, not a FAIL) if the
- * model never calls the Agent tool with `tier:"session"` at all — same
- * discipline as the item 13 harness, for the same reason (a live-model
- * limitation is not a product failure). Evidence (2 PNGs + a JSON result
+ * model nondeterminism; failure to exercise the required call fails the run.
+ * Evidence (2 PNGs + a JSON result
  * dump) lands in `working-docs/child-session-smoke/evidence/S2/`.
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import { Readable } from "node:stream";
 import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -111,6 +103,7 @@ import {
   isPidAlive,
   killTree,
   pass,
+  parseEnvFile,
   saveScreenshot,
   settleTurn,
   sleep,
@@ -124,11 +117,11 @@ const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
 const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S2");
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;
-const SUBAGENT_SLEEP_SECONDS = 9;
-const TERMINAL_WAIT_TIMEOUT_MS = 45_000;
+const SUBAGENT_SLEEP_SECONDS = 20;
+const TERMINAL_WAIT_TIMEOUT_MS = 120_000;
 const CHILD_PID_DEATH_TIMEOUT_MS = 20_000;
 
 const FLAGS = { keep: process.argv.slice(2).includes("--keep") };
@@ -359,23 +352,11 @@ async function step1Discovery(ctx) {
   }
 
   if (!anyAgentSeen) {
-    ctx.skipped = true;
-    ctx.skipReason = "model never called Agent";
-    await settleTurn(ctx, step);
-    pass(step, "SKIPPED (documented) — Agent tool never dispatched by the live model after 1 retry; see warning above");
-    return;
+    fail(step, "model never called Agent after retry");
   }
 
   if (!hasSessionTierInput(result.block) && result.childRuns.length === 0) {
-    ctx.skipped = true;
-    ctx.skipReason = 'model did not use tier:"session"';
-    await settleTurn(ctx, step);
-    console.warn(
-      "[child-session-scenario-smoke] SKIPPED: the model called Agent but never with tier:\"session\", after 1 " +
-        `retry (last block: ${JSON.stringify(result.block)}). Documented live-model non-compliance, NOT a product failure.`,
-    );
-    pass(step, "SKIPPED (documented) — model never issued tier:\"session\" after 1 retry; see warning above");
-    return;
+    fail(step, `model did not invoke tier:session after retry: ${JSON.stringify(result.block)}`);
   }
 
   if (result.childRuns.length === 0) {
@@ -392,7 +373,7 @@ async function step1Discovery(ctx) {
   pass(step, `discovery worked — a real model invoked Agent(tier:"session") and the child was admitted (requestId=${result.childRuns[0].requestId})`);
 }
 
-// ── step 2 (§4.2 item 2): two distinct OS pids; parent tool still "running" ──
+// ── step 2: distinct pids, background handoff, model and budget ──
 
 function step2DistinctPidsRunning(ctx) {
   const step = 2;
@@ -413,12 +394,15 @@ function step2DistinctPidsRunning(ctx) {
   assert(step, entry.pid !== rootSummary.pid, `expected distinct OS pids, got master=${rootSummary.pid} child=${entry.pid} (SAME pid)`);
   assert(
     step,
-    block !== null && block.status === "running",
-    `expected the parent's Agent tool_call to still be status:"running" while the child is admitted, got ${JSON.stringify(block)}`,
+    block !== null && block.status === "success" && block.modelText?.includes("started in the background"),
+    `expected a successful background handoff while the child is admitted, got ${JSON.stringify(block)}`,
   );
+  assert(step, entry.model === "glm-5.2", `expected inherited model glm-5.2, got ${JSON.stringify(entry)}`);
+  assert(step, entry.maxTurns === 150, `expected child budget 150, got ${JSON.stringify(entry)}`);
+  assert(step, block.input.model === undefined && block.input.provider === undefined && block.input.max_turns === undefined, `expected implicit model/provider/budget: ${JSON.stringify(block.input)}`);
 
   ctx.rootPid = rootSummary.pid;
-  pass(step, `two distinct OS pids confirmed — master pid=${rootSummary.pid}, child pid=${entry.pid} — parent tool_call still "running"`);
+  pass(step, `distinct pids and background handoff; inherited model=${entry.model}, budget=${entry.maxTurns}`);
 }
 
 // ── step 3 (§4.2 item 3): the child is nowhere — /sessions, /state root tabs+states, sidebar row count ──
@@ -555,10 +539,10 @@ async function step5TerminalAndCompletedOpen(ctx) {
   const terminalBlock = await pollUntil(TERMINAL_WAIT_TIMEOUT_MS, 300, async () => {
     const { transcript } = await getTranscriptBlocks(ctx, step, ctx.tabId);
     const block = transcript.find((b) => b.kind === "tool_call" && b.toolCallId === ctx.toolCallId);
-    return block && (block.status === "success" || block.status === "error") ? block : undefined;
+    return block?.subagent?.final ? block : undefined;
   });
   assert(step, terminalBlock !== null, `the parent's Agent tool_call never reached a terminal status within ${TERMINAL_WAIT_TIMEOUT_MS}ms`);
-  assert(step, terminalBlock.status === "success", `expected the trivial child task to succeed, got status=${terminalBlock.status}: ${JSON.stringify(terminalBlock)}`);
+  assert(step, terminalBlock.subagent.final.status === "completed", `expected the child to complete: ${JSON.stringify(terminalBlock)}`);
   assert(step, typeof terminalBlock.modelText === "string" && terminalBlock.modelText.length > 0, `master card has no final text: ${JSON.stringify(terminalBlock)}`);
 
   const pidDead = await pollUntil(CHILD_PID_DEATH_TIMEOUT_MS, 300, async () => (isPidAlive(ctx.childPid) ? undefined : true));
@@ -591,6 +575,69 @@ async function step5TerminalAndCompletedOpen(ctx) {
     `terminal text landed on the master card (resultRendered=true), child OS pid ${ctx.childPid} confirmed REAPED ` +
       `before Open, Open-on-completed hydrated ${transcriptCount} durable transcript block(s) with the composer absent`,
   );
+}
+
+async function step6RejectUnknownField(ctx) {
+  const step = 6;
+  await settleTurn(ctx, step);
+  const before = await getTranscriptBlocks(ctx, step, ctx.tabId);
+  const ids = new Set(before.transcript.filter((b) => b.kind === "tool_call").map((b) => b.toolCallId));
+  // Simulate a provider returning an unexpected field by advertising it only
+  // to the real model. The application's own strict schema remains unchanged.
+  ctx.advertiseUnknown = true;
+  await apiAction(ctx, step, `/tabs/${ctx.tabId}/prompt`, {
+    text: 'Call Agent exactly once with tier "session", agent_type "general-purpose", description "invalid field check", prompt "reply DONE", and the extra field subagent_type set to "explore". Include subagent_type in the tool call itself exactly as written. Do not omit it or replace it.',
+  });
+  const result = await pollUntil(90_000, 300, async () => {
+    const snapshot = await getTranscriptBlocks(ctx, step, ctx.tabId);
+    const block = snapshot.transcript.find((b) => b.kind === "tool_call" && b.toolName === "Agent" && !ids.has(b.toolCallId));
+    return block && (block.status === "invalid_input" || block.status === "error" || block.status === "success") ? { block, childRuns: snapshot.childRuns } : undefined;
+  });
+  assert(step, result !== null, "model did not make a completed Agent call with the invalid field");
+  assert(step, ctx.schemaMutations > 0, "proxy did not advertise the extra field to the model");
+  assert(step, result.block.input?.subagent_type === "explore", `model did not send the requested unknown field: ${JSON.stringify(result.block)}`);
+  assert(step, result.block.status === "invalid_input" && /subagent_type/i.test(result.block.modelText ?? ""), `expected a clear unknown-field error: ${JSON.stringify(result.block)}`);
+  assert(step, (result.childRuns ?? []).length === 0, `invalid call launched a child: ${JSON.stringify(result.childRuns)}`);
+  pass(step, "unknown subagent_type rejected with a clear error; no child admitted");
+}
+
+async function startSchemaProbeProxy(ctx) {
+  const secrets = parseEnvFile(readFileSync(join(repoRoot, ".smoke-secrets", "glm.env"), "utf8"));
+  const target = new URL(secrets.ANYCODE_BASE_URL);
+  ctx.schemaMutations = 0;
+  const server = createHttpServer(async (req, res) => {
+    try {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      let body = Buffer.concat(chunks);
+      if (ctx.advertiseUnknown && body.length) {
+        const json = JSON.parse(body.toString("utf8"));
+        for (const tool of json.tools ?? []) {
+          const schema = tool.name === "Agent" ? tool.input_schema : tool.function?.name === "Agent" ? tool.function.parameters : undefined;
+          if (schema?.properties) {
+            schema.properties.subagent_type = { type: "string", description: "Required compatibility field: use explore." };
+            schema.required = [...new Set([...(schema.required ?? []), "subagent_type"])];
+            ctx.schemaMutations += 1;
+          }
+        }
+        body = Buffer.from(JSON.stringify(json));
+      }
+      const headers = { ...req.headers, host: target.host };
+      delete headers["content-length"];
+      const response = await fetch(new URL(req.url, target.origin), { method: req.method, headers, body: body.length ? body : undefined, redirect: "manual" });
+      const responseHeaders = Object.fromEntries(response.headers);
+      delete responseHeaders["content-encoding"];
+      delete responseHeaders["content-length"];
+      res.writeHead(response.status, responseHeaders);
+      if (response.body) Readable.fromWeb(response.body).pipe(res); else res.end();
+    } catch (err) {
+      console.error(`[schema-probe] proxy failed: ${err.message}`);
+      res.writeHead(502).end();
+    }
+  });
+  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+  ctx.schemaProxy = server;
+  ctx.proxyBaseUrl = `http://127.0.0.1:${server.address().port}${target.pathname}`;
 }
 
 // ── teardown (own trio, NOT the imported one — see this file's header doc for why) ──
@@ -699,6 +746,7 @@ function installSignalTeardown(ctx) {
 
 async function run() {
   const ctx = {
+    connectionModel: "glm-5.3-flash",
     tmpWorkspace: null,
     port: undefined,
     token: undefined,
@@ -746,8 +794,12 @@ async function run() {
     // ANYCODE_REASONING_EFFORT, which it deletes deliberately).
     process.env.REMOTE_DEBUGGING_PORT = String(ctx.cdpPort);
 
+    await startSchemaProbeProxy(ctx);
     await step1LaunchApp(ctx);
     await step1DiscoverTab(ctx);
+
+    await apiAction(ctx, 1, `/tabs/${ctx.tabId}/model-pill/pick`, { kind: "open" });
+    await apiAction(ctx, 1, `/tabs/${ctx.tabId}/model-pill/pick`, { kind: "model", value: "glm-5.2" });
 
     ctx.cdp = await cdpConnect(ctx.cdpPort);
     const baseline = await ctx.cdp.eval(SIDEBAR_ROW_TITLES_JS);
@@ -763,6 +815,8 @@ async function run() {
     stepsCompleted += 1;
     await step5TerminalAndCompletedOpen(ctx);
     stepsCompleted += 1;
+    await step6RejectUnknownField(ctx);
+    stepsCompleted += 1;
   } catch (err) {
     failedStep = err instanceof SmokeFailure ? err.step : "unknown";
     if (!(err instanceof SmokeFailure)) {
@@ -771,6 +825,8 @@ async function run() {
   }
 
   await teardown(ctx, failedStep, stepsCompleted);
+  ctx.schemaProxy?.closeAllConnections();
+  ctx.schemaProxy?.close();
   process.exit(failedStep === null ? 0 : 1);
 }
 

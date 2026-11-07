@@ -271,3 +271,29 @@ it("keeps a new tab's origin unknown after a failed refresh of an older snapshot
   await navigate({ ...request, pane: "plugins", tabId: "c" });
   expect(output()).toBe("plugins:c");
 });
+
+it("clears a saved turn limit and shows inline errors for invalid input", async () => {
+  const setPatch = vi.fn(async () => {});
+  const settings = cloneDefaults();
+  settings.tools.maxTurns = 300;
+  store.setState({ snapshot: { ...store.getState().snapshot!, settings }, setPatch } as never);
+  await mount();
+  const rootTurns = container.querySelector<HTMLInputElement>('input[placeholder="Unlimited"]')!;
+  const childTurns = container.querySelector<HTMLInputElement>('input[placeholder="150"]')!;
+  const setValue = async (input: HTMLInputElement, value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  expect(rootTurns.value).toBe("300");
+  await setValue(rootTurns, "");
+  await setValue(childTurns, "oops");
+  expect(childTurns.getAttribute("aria-invalid")).toBe("true");
+  expect(container.textContent).toContain("Enter a positive whole number or leave blank.");
+  await click("Save tools settings");
+  expect(setPatch).not.toHaveBeenCalled();
+  await setValue(childTurns, "");
+  await click("Save tools settings");
+  expect(setPatch).toHaveBeenCalledWith(expect.objectContaining({ tools: expect.objectContaining({ maxTurns: "" }) }));
+});

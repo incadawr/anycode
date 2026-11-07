@@ -70,7 +70,6 @@ import {
 } from "../context/budget.js";
 import { HeuristicTokenizer, type Tokenizer } from "../context/tokenizer.js";
 import {
-  DEFAULT_MAX_TURNS,
   DEFAULT_TOOL_CONCURRENCY,
   MAX_CEILING_ROUNDS,
   type ReasoningEffort,
@@ -255,7 +254,7 @@ export interface AgentLoopConfig {
   mode: PermissionMode;
   ports: CorePorts;
   cwd: string;
-  /** Turn budget for one runTurn call; DEFAULT_MAX_TURNS when omitted. */
+  /** Turn budget for one runTurn call; unlimited when omitted. */
   maxTurns?: number;
   /**
    * Turn budget handed to subagent children spawned from this loop
@@ -304,8 +303,7 @@ export interface AgentLoopConfig {
    * apply: the ladder is ON, its window is CEILING_DECISION_TIMEOUT_MS and it
    * may hand out at most `maxTurns` extra turns in total, over at most
    * MAX_CEILING_ROUNDS rounds. `{ enabled: false }` restores the
-   * wall. The subagent runner additionally passes the two child clamps
-   * (maxTurnsCeiling, outcomeDeadlineAt).
+   * wall. The subagent runner also passes its outcome deadline.
    */
   ceiling?: CeilingConfig;
   /**
@@ -314,7 +312,7 @@ export interface AgentLoopConfig {
    * and cuts the turn when it catches a tandem-repeat loop. Omitted => ON,
    * matching the ladder's own default-on posture. `{ enabled: false }`
    * disables both channels and restores behaviour byte-for-byte.
-   * Exempt on a supervised root exactly like the ceiling
+   * Exempt on a supervised root
    * (`ceiling.supervisedRoot() === true`, checked live at the moment a
    * verdict fires) — a human watching the screen can just press Stop.
    */
@@ -1076,7 +1074,7 @@ export class AgentLoop {
     },
   ): AsyncGenerator<AgentEvent, void, unknown> {
     const signal = options?.signal;
-    const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
+    const maxTurns = this.config.maxTurns;
     const deadlineAt = this.config.deadlineAt;
     const turnId = options?.turnId;
 
@@ -1167,7 +1165,9 @@ export class AgentLoop {
     const mode = options?.mode ?? this.config.mode;
     const config = this.config;
 
+    let admittedSubagents = 0;
     const dispatchCtx: DispatchContext = {
+      admitSubagent: () => admittedSubagents < 4 ? (++admittedSubagents, true) : false,
       foregroundRuns,
       registry: this.config.registry,
       hooks: this.config.hooks,
@@ -1306,28 +1306,18 @@ export class AgentLoop {
         // successful tool call in the round, no grant budget left, no window,
         // an unreadable verdict — falls through to the same loop_end the cap
         // produced before the slice.
-        const effectiveMaxTurns = maxTurns + this.ceilingGrantedTurns;
-        if (turn > effectiveMaxTurns) {
-          // remainder (owner rule 2026-08-22): a supervised root has
-          // NO turn ceiling at all — checked live on every trip, never cached,
-          // so a session that starts supervised and goes quiet mid-run falls
-          // under the ladder from that point on. No decision call, no grant,
-          // no event, no termination: the loop simply continues as if the cap
-          // were never reached. Children never receive this predicate
-          // (buildChildConfig omits it), so they always keep the ladder.
-          if (this.config.ceiling?.supervisedRoot?.() !== true) {
-            const ceiling = yield* this.tryCeilingGrant(maxTurns, signal, turn - 1);
-            if (ceiling !== "granted") {
-              yield* this.emitLoopEnd(
-                "max_turns",
-                turn - 1,
-                signal,
-                turnId,
-                turn - 1 >= 1 ? turn - 1 : undefined,
-                ceiling === "done",
-              );
-              return;
-            }
+        if (maxTurns !== undefined && turn > maxTurns + this.ceilingGrantedTurns && this.config.ceiling?.supervisedRoot?.() !== true) {
+          const ceiling = yield* this.tryCeilingGrant(maxTurns, signal, turn - 1);
+          if (ceiling !== "granted") {
+            yield* this.emitLoopEnd(
+              "max_turns",
+              turn - 1,
+              signal,
+              turnId,
+              turn - 1 >= 1 ? turn - 1 : undefined,
+              ceiling === "done",
+            );
+            return;
           }
         }
 

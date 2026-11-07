@@ -1327,7 +1327,10 @@ export type OAuthStartResult =
  * W12): the connection graph is CRUD-only (`connection-*` channels below) —
  * main refine-rejects ANY `provider` key sent through this generic path.
  */
-export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider">;
+export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider" | "tools"> & {
+  /** Empty maxTurns clears the optional root turn limit. */
+  tools?: Omit<DeepPartial<AnycodeSettings["tools"]>, "maxTurns"> & { maxTurns?: number | "" };
+};
 
 // ── connection CRUD request payloads (companions to the connection-* channels) ──
 

@@ -35,7 +35,7 @@ export interface WorkflowStepDefinition {
    * WebFetch-only child instead of erroring.
    */
   tools?: readonly string[];
-  /** Optional per-step turn budget; the runner caps it at SUBAGENT_MAX_TURNS_CEILING. */
+  /** Optional per-step turn budget; a positive safe integer. */
   maxTurns?: number;
 }
 

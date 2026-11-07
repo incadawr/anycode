@@ -14,7 +14,6 @@ import {
   p90,
   type BudgetSample,
 } from "./budget-learning.js";
-import { SUBAGENT_MAX_TURNS_CEILING } from "../types/config.js";
 
 function samples(role: string, model: string | undefined, turns: number[]): BudgetSample[] {
   return turns.map((t) => ({ role, ...(model !== undefined ? { model } : {}), turns: t }));
@@ -61,9 +60,9 @@ describe("learnBaseBudget (formula)", () => {
   });
 
   it("is ceil(p90 * 1.25) once the pool is large enough", () => {
-    // p90 of 5 equal samples at 40 turns = 40; 40 * 1.25 = 50.
-    const pool = samples("explore", "m1", [40, 40, 40, 40, 40]);
-    expect(learnBaseBudget(pool, { role: "explore", model: "m1" })).toBe(50);
+    // p90 of 5 equal samples at 80 turns = 80; 80 * 1.25 = 100.
+    const pool = samples("explore", "m1", [80, 80, 80, 80, 80]);
+    expect(learnBaseBudget(pool, { role: "explore", model: "m1" })).toBe(100);
   });
 
   it("prefers the same-model pool over the same-role pool", () => {
@@ -96,7 +95,8 @@ describe("learnBaseBudget (formula)", () => {
     expect(learnBaseBudget(samples("r", undefined, [500, 500, 500, 500, 500]), { role: "r" })).toBe(
       LEARNED_BUDGET_MAX,
     );
-    expect(LEARNED_BUDGET_MAX).toBeLessThanOrEqual(SUBAGENT_MAX_TURNS_CEILING);
+    expect(LEARNED_BUDGET_MAX).toBe(400);
+    expect(LEARNED_BUDGET_MIN).toBe(60);
   });
 
   it("one outlier run cannot move the budget past the clamp", () => {
@@ -108,8 +108,8 @@ describe("learnBaseBudget (formula)", () => {
 
   it("only the last 30 records of a pool count (recent history wins)", () => {
     const old = samples("r", undefined, Array.from({ length: 30 }, () => 100));
-    const recent = samples("r", undefined, Array.from({ length: 30 }, () => 25));
+    const recent = samples("r", undefined, Array.from({ length: 30 }, () => 60));
     // Chronological order: old first, recent last. Only `recent` is in the window.
-    expect(learnBaseBudget([...old, ...recent], { role: "r" })).toBe(Math.ceil(25 * 1.25));
+    expect(learnBaseBudget([...old, ...recent], { role: "r" })).toBe(Math.ceil(60 * 1.25));
   });
 });

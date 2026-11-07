@@ -32,8 +32,7 @@ export interface SubagentRequest {
    */
   tools?: readonly string[];
   /**
-   * Requested turn budget; wins over the host default, capped at
-   * SUBAGENT_MAX_TURNS_CEILING. Turns are what ends a long child run;
+   * Requested turn budget; wins over the host default. Turns are what ends a long child run;
    * SUBAGENT_LOOP_DEADLINE_MS only catches a hung one.
    */
   maxTurns?: number;

@@ -26,7 +26,6 @@ import { z } from "zod";
 import type { WorkflowDefinition, WorkflowStepDefinition } from "../ports/workflow.js";
 import { scanTemplateRefs } from "./template.js";
 import {
-  SUBAGENT_MAX_TURNS_CEILING,
   MAX_WORKFLOW_STEPS,
   WORKFLOW_TEMPLATE_MAX_BYTES,
 } from "../types/config.js";
@@ -72,7 +71,7 @@ const stepSchema = z.object({
   // it with what boot actually provides, so an unresolvable name is a silent
   // skip in the child registry, never a parse failure.
   tools: z.array(z.string().min(1)).optional(),
-  maxTurns: z.number().int().min(1).max(SUBAGENT_MAX_TURNS_CEILING).optional(),
+  maxTurns: z.number().int().safe().min(1).optional(),
 });
 
 const definitionSchema = z.object({

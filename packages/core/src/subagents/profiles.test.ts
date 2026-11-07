@@ -15,7 +15,6 @@ import { PERSONAS } from "./personas.js";
 import {
   AGENT_PROFILE_PROMPT_MAX_BYTES,
   MAX_AGENT_PROFILES,
-  SUBAGENT_MAX_TURNS_CEILING,
 } from "../types/config.js";
 import type { FileStat, FileSystemPort } from "../ports/file-system.js";
 
@@ -569,7 +568,7 @@ describe("discoverAgentProfiles — engine + tools conflict (R4)", () => {
 describe("discoverAgentProfiles — maxTurns frontmatter (§2.3)", () => {
   it("attaches the budget to the persona and refuses an out-of-range one (profile not registered)", async () => {
     const good = md({ name: "good", description: "d", maxTurns: "12" }, "BODY");
-    const overCeiling = String(SUBAGENT_MAX_TURNS_CEILING + 1);
+    const overCeiling = "0";
     const bad = md({ name: "bad", description: "d", maxTurns: overCeiling }, "BODY");
     const fs = new FakeFs({ [WS]: { "good.md": good, "bad.md": bad } });
 
@@ -579,7 +578,7 @@ describe("discoverAgentProfiles — maxTurns frontmatter (§2.3)", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("bad.md");
     expect(problems[0]).toContain(`maxTurns "${overCeiling}"`);
-    expect(problems[0]).toContain(String(SUBAGENT_MAX_TURNS_CEILING));
+    expect(problems[0]).toContain("positive safe integer");
   });
 
   it("leaves turnBudget unset when the line is absent — the persona default applies", async () => {

@@ -39,7 +39,7 @@ type SentMessage = ChildSpawnRequest | ChildRunCancel | ChildRunSend;
  * harness captures that single listener and exposes it as `emit`, standing
  * in for main relaying a ChildRunEvent over process.parentPort.
  */
-function harness(getPermissionMode: () => PermissionMode = () => "build") {
+function harness(getPermissionMode: () => PermissionMode = () => "build", getCurrentModel?: () => string | undefined) {
   const sent: SentMessage[] = [];
   let listener: ((event: ChildRunEvent) => void) | undefined;
   let unsubscribeCalls = 0;
@@ -48,6 +48,7 @@ function harness(getPermissionMode: () => PermissionMode = () => "build") {
   const port = createChildSessionPort({
     parentSessionId: PARENT_SESSION_ID,
     getPermissionMode,
+    getCurrentModel,
     send: (message) => sent.push(message),
     subscribe: (cb) => {
       listener = cb;
@@ -1903,7 +1904,7 @@ describe("detached approaching-turn-budget notice", () => {
     emit(terminalEvent(requestId, { childSessionId: "child-bud-3" }));
   });
 
-  it("a detached spawn with NO maxTurns warns near the child host's DEFAULT effective cap (100) — an unstamped budget is still a budget", async () => {
+  it("a detached spawn with NO maxTurns warns near the child host's DEFAULT effective cap (150) — an unstamped budget is still a budget", async () => {
     const { port, sent, emit, notices } = budgetHarness();
     const pending = port.run(
       { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-bud-4", detach: true },
@@ -1919,13 +1920,13 @@ describe("detached approaching-turn-budget notice", () => {
     }
     expect(notices).toHaveLength(0);
 
-    // DEFAULT_MAX_TURNS=100 minus the 10% margin (min 1) = warn from turn 90.
-    emit(progressEvent(requestId, 90));
+    // DEFAULT_SUBAGENT_MAX_TURNS=150 minus the 10% margin (min 1) = warn from turn 135.
+    emit(progressEvent(requestId, 135));
     expect(notices).toHaveLength(1);
-    expect(notices[0]!.info).toEqual({ turns: 90, maxTurns: 100 });
+    expect(notices[0]!.info).toEqual({ turns: 135, maxTurns: 150 });
 
     // Later progress never re-fires — once per run.
-    emit(progressEvent(requestId, 95));
+    emit(progressEvent(requestId, 145));
     expect(notices).toHaveLength(1);
 
     emit(terminalEvent(requestId, { childSessionId: "child-bud-4" }));
@@ -2110,7 +2111,7 @@ describe("createChildSessionPort — maxTurns", () => {
 
   it("an invalid budget fails immediately with an honest error and sends NOTHING", async () => {
     const { port, sent } = harness();
-    for (const maxTurns of [0, -1, 2.5, 201, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+    for (const maxTurns of [0, -1, 2.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
       const outcome = await port.run(
         { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-mt-bad", maxTurns },
         {},
@@ -3468,4 +3469,27 @@ describe("default Agent background sessions", () => {
     );
     expect(port.listBackgroundChildren()).toHaveLength(0);
   });
+});
+
+
+it("inherits the live core model only for fresh children on the same connection", async () => {
+  let model = "parent-one";
+  const { port, sent, emit } = harness(() => "build", () => model);
+  for (const [extra, expected] of [
+    [{}, "parent-one"], [{ model: "explicit" }, "explicit"],
+    [{ provider: "other" }, undefined], [{ connectionId: "other" }, undefined],
+    [{ engine: "codex" }, undefined], [{ resumeChildSessionId: "child" }, undefined],
+  ] as const) {
+    const promise = port.run({ agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: `call-${sent.length}`, ...extra }, {});
+    const request = spawns(sent).at(-1)!;
+    expect(request.model ?? request.inheritedModel).toBe(expected);
+    if (extra && "model" in extra) expect(request.inheritedModel).toBeUndefined();
+    emit(terminalEvent(request.requestId));
+    await promise;
+  }
+  model = "parent-two";
+  const promise = port.run({ agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "last" }, {});
+  expect(spawns(sent).at(-1)?.inheritedModel).toBe("parent-two");
+  emit(terminalEvent(spawns(sent).at(-1)!.requestId));
+  await promise;
 });

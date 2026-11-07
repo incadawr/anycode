@@ -41,9 +41,7 @@ export interface CeilingConfig {
    */
   maxGrantedTurns?: number;
   /**
-   * Overall turn ceiling INCLUDING grants (children only): the runner passes
-   * SUBAGENT_MAX_TURNS_CEILING so a child's total overrun stays under the same
-   * runaway guard that bounds its explicit budget.
+   * Optional overall turn ceiling INCLUDING grants.
    */
   maxTurnsCeiling?: number;
   /**
@@ -54,8 +52,8 @@ export interface CeilingConfig {
   outcomeDeadlineAt?: number;
   /**
    * Evaluated when the ceiling would trip: `true` = a human is supervising
-   * this root session, so no ceiling applies at all (owner rule
-   * 2026-08-22). Absent for children, which always keep the ladder. A LIVE
+   * this root session, so its turn limit and ladder are bypassed. A wall-clock
+   * deadline still applies. Absent for children. A LIVE
    * predicate rather than a snapshot: the supervision signal (e.g. the
    * desktop's unattended latch) can flip mid-session, so a value
    * captured at construction time would go stale within minutes.
@@ -171,8 +169,7 @@ export function adaptiveGrantForRound(round: number, maxTurns: number): number {
  * build site knows: whether adaptive mode is on and whether the loop is a
  * supervised root. The `adaptive` key is ABSENT when off, so the off path
  * stays byte-identical to the pre-4721 objects (`{}` / `{ supervisedRoot }`).
- * Callers spread the child-only clamps (maxTurnsCeiling, outcomeDeadlineAt)
- * on top.
+ * Callers may add an outcome deadline or an explicit overall ceiling.
  */
 export function buildCeilingConfig(parts: {
   adaptive?: boolean;

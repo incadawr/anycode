@@ -1484,3 +1484,28 @@ it("describes Git access and the command boundary in both Agent declarations", (
     expect(tool.metadata.description).toContain("general-purpose");
   }
 });
+
+
+it("rejects misspelled or unknown Agent fields instead of silently selecting a different persona", () => {
+  const invalid = agentInputSchema.safeParse({ description: "d", prompt: "p", subagent_type: "explore" });
+  expect(invalid.success).toBe(false);
+  if (!invalid.success) expect(invalid.error.message).toContain("subagent_type");
+  expect(agentInputSchema.safeParse({ description: "d", prompt: "p", agent_type: "explore" }).success).toBe(true);
+});
+
+
+it("charges only new child launches and reports the four-launch limit", async () => {
+  let attempts = 0;
+  const admitSubagent = () => ++attempts <= 4;
+  const tool = createAgentTool({ sessionTier: true });
+  const ctx = makeCtx({ subagents: throwingPort, admitSubagent });
+  const base = { description: "d", prompt: "p", agent_type: "explore" } as const;
+  for (let i = 0; i < 4; i++) {
+    await tool.handler(base, ctx).catch(() => {});
+  }
+  await tool.handler({ ...base, tier: "session", continue_session: "child" }, ctx).catch(() => {});
+  await tool.handler({ ...base, tier: "session", send_to: "child" }, ctx).catch(() => {});
+  expect(attempts).toBe(4);
+  const result = await tool.handler(base, ctx);
+  expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: "Agent: this turn already attempted four child launches. Use their results or continue in a later turn." });
+});

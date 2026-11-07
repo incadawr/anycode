@@ -56,6 +56,7 @@ import {
   CHILD_NETWORK_RETRY_BUDGET_MS,
   ConversationHistory,
   DEFAULT_RETRY_POLICY,
+  DEFAULT_SUBAGENT_MAX_TURNS,
   PERMISSION_MODES,
   SessionPermissionRules,
 } from "@anycode/core";
@@ -109,7 +110,7 @@ export interface HostChildArgs {
   /**
    * the creating spawn's turn budget (`--child-max-turns <n>`),
    * present only when the child was spawned from a profile with one. A
-   * decimal positive safe integer within 1..200 (SUBAGENT_MAX_TURNS_CEILING);
+   * decimal positive safe integer;
    * anything else is dropped, consistently with the child-mode drop rule.
    */
   maxTurns?: number;
@@ -234,8 +235,8 @@ export function parseHostArgs(argv: string[]): HostArgs {
       continue;
     }
     // the creating spawn's turn budget. Only a complete decimal
-    // positive safe integer within 1..200 is accepted — parseInt prefixes
-    // ("5x"), fractions, NaN, Infinity, zero, negatives and over-ceiling
+    // positive safe integer is accepted — parseInt prefixes
+    // ("5x"), fractions, NaN, Infinity, zero, negatives and unsafe
     // values are all DROPPED (never clamped), same fail-closed drop as an
     // unrecognized --child-mode above. Only present when the child linkage
     // triple is complete does it ride args.child.
@@ -273,15 +274,9 @@ function isPermissionMode(value: string): value is PermissionMode {
   return (PERMISSION_MODES as readonly string[]).includes(value);
 }
 
-/**
- * the child host's core AgentLoopConfig.maxTurns resolution — a
- * creating spawn's profile budget (args.child.maxTurns) overrides the env
- * default; an absent budget preserves it byte-identically. Extracted as a
- * pure helper so the precedence is unit-testable (host/index.ts wires it:
- * `resolveChildMaxTurns(args.child, envConfig.maxTurns)`).
- */
-export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined): number | undefined {
-  return child?.maxTurns ?? envMaxTurns;
+/** Resolve a child budget independently of the root loop's turn setting. */
+export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined, subagentMaxTurns?: number, isChild = child !== undefined): number | undefined {
+  return isChild ? (child?.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS) : envMaxTurns;
 }
 
 /**
@@ -307,16 +302,15 @@ export function resolveEngineDraftPresetId(
 }
 
 /**
- * a complete decimal positive integer within 1..200 — no sign, no
- * fraction, no exponent, no parseInt-prefix tolerance ("5x" fails). The
- * ceiling mirrors core's SUBAGENT_MAX_TURNS_CEILING.
+ * a complete decimal positive safe integer — no sign, no
+ * fraction, no exponent, no parseInt-prefix tolerance ("5x" fails).
  */
 function isChildMaxTurns(value: string): boolean {
   if (!/^[0-9]+$/.test(value)) {
     return false;
   }
   const n = Number(value);
-  return Number.isSafeInteger(n) && n >= 1 && n <= 200;
+  return Number.isSafeInteger(n) && n >= 1;
 }
 
 /**

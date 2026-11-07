@@ -22,7 +22,7 @@ import { ConversationHistory } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { ProfilePermissionEngine } from "../permissions/rules.js";
-import { ToolRegistry, createDefaultToolRegistry } from "../tools/registry.js";
+import { ToolRegistry, createDefaultToolRegistry, limitSubagentBashOutput } from "../tools/registry.js";
 import { createListConnectionsTool, type ConnectionTargets } from "../tools/list-connections.js";
 import { resolveInlineRoute } from "../routing/inline-route.js";
 import {
@@ -39,11 +39,11 @@ import { linkAbortSignal } from "../util/abort.js";
 import {
   DEFAULT_SUBAGENT_MAX_TURNS,
   DEFAULT_TOOL_CONCURRENCY,
-  SUBAGENT_MAX_TURNS_CEILING,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
   SUBAGENT_LOOP_DEADLINE_MS,
   SUBAGENT_OUTCOME_DEADLINE_MS,
   clampSubagentMaxOutputTokens,
+  subagentContextWindow,
   SUBAGENT_OUTPUT_MAX_BYTES,
   SUBAGENT_STALL_TIMEOUT_MS,
   SUBAGENT_WRAPUP_MIN_WINDOW_MS,
@@ -269,6 +269,11 @@ export interface SubagentRunnerOptions {
  */
 export const REQUEST_OPT_IN_TOOLS: readonly string[] = ["WebSearch"];
 
+function validateTurnBudget(budget: number): number {
+  if (!Number.isSafeInteger(budget) || budget < 1) throw new Error("Turn budget must be a positive safe integer");
+  return budget;
+}
+
 export function buildChildConfig(
   parent: AgentLoopConfig,
   persona: PersonaDefinition,
@@ -344,6 +349,7 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
+  limitSubagentBashOutput(registry);
   if (extras?.readConnectionTargets && effectivePersona.tools.some(name => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name))) {
     const readTargets = extras.readConnectionTargets;
     registry.register(createListConnectionsTool(() => {
@@ -423,24 +429,12 @@ export function buildChildConfig(
     // Budget resolution, most specific first: explicit request (a workflow step
     // — the Agent schema has no maxTurns and will not get one) > the role's own
     // budget (md-profile frontmatter) > host/settings default
-    // (parent.subagentMaxTurns) > built-in role budget > DEFAULT_SUBAGENT_MAX_TURNS. Only the runaway
-    // ceiling clamps — until 2026-08-16 the DEFAULT was the clamp, so a caller
-    // could lower the budget but nothing could raise it. Turns are the runaway
-    // guard, not the working budget: deadlineAt below is what usually ends a
-    // long run (§2.4, carried into).
-    maxTurns: Math.max(1, Math.min(
-      req.maxTurns ?? personaBudget ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS,
-      SUBAGENT_MAX_TURNS_CEILING,
-    )),
+    // (parent.subagentMaxTurns) > built-in role budget > default.
+    maxTurns: validateTurnBudget(req.maxTurns ?? personaBudget ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS),
     ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
-    // Ceiling ladder with the two clamps only a child needs (§1.12):
-    // maxTurnsCeiling keeps the budget PLUS every grant under the same runaway
-    // guard that bounds an explicit request, and outcomeDeadlineAt shrinks (and
-    // eventually cancels) the decision call as the dispatcher's wall approaches.
-    // The window/round/grant-sum defaults are the loop's own.
+    // The ladder grants at most the configured budget again and respects the deadline.
     ceiling: {
       ...buildCeilingConfig({ adaptive }),
-      maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING,
       ...(extras?.outcomeDeadlineAt !== undefined
         ? { outcomeDeadlineAt: extras.outcomeDeadlineAt }
         : {}),
@@ -473,10 +467,9 @@ export function buildChildConfig(
     // Only the window is re-resolved for the child's model; every other field
     // the parent's context object carries (budget knobs the resolver knows
     // nothing about) is preserved by the overlay.
-    context:
-      extras?.modelSettings !== undefined
-        ? { ...parent.context, contextWindowTokens: extras.modelSettings.contextWindowTokens }
-        : parent.context,
+    context: { ...parent.context, contextWindowTokens: subagentContextWindow(
+      extras?.modelSettings?.contextWindowTokens ?? parent.context?.contextWindowTokens,
+    ) },
     // Artifact store INHERITED — one of the few parent facilities a
     // child gets, because it is not a capability the child can act with: it
     // only decides whether the child's own oversized tool output is recoverable
@@ -717,7 +710,7 @@ export function createSubagentRunner(
       const builtin = isKnownPersona(agentType) ? getPersona(agentType) : undefined;
       const explicit = profile?.origin !== "settings" ? profile?.turnBudget : undefined;
       const budget = explicit ?? parent.subagentMaxTurns ?? profile?.turnBudget ?? (profile === undefined ? builtin?.turnBudget : undefined);
-      return budget === undefined ? undefined : Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING));
+      return budget === undefined ? undefined : validateTurnBudget(budget);
     },
     listAgentTypes(): string[] {
       // dedupe — an overridable role name (planner/executor/
@@ -756,7 +749,7 @@ export function createSubagentRunner(
         ...(persona.model !== undefined ? { model: persona.model } : {}),
         // persona.turnBudget rides through the same as model —
         // omitted entirely when absent, never a present-but-undefined key.
-        ...(budget !== undefined ? { turnBudget: Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING)) } : {}),
+        ...(budget !== undefined ? { turnBudget: validateTurnBudget(budget) } : {}),
         // persona.effort rides through the same as model — omitted entirely
         // when absent. The target model resolves compatibility for core children.
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
@@ -827,7 +820,7 @@ export function createSubagentRunner(
       const route = opts?.resolveRoleRoute?.(agentType) ?? null;
       if (route === null) return route;
       const budget = parent.subagentMaxTurns ?? route.turnBudget;
-      return budget === undefined ? route : { ...route, turnBudget: Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING)) };
+      return budget === undefined ? route : { ...route, turnBudget: validateTurnBudget(budget) };
     },
     // the owning AgentLoop registers its human-context thunk
     // here right after construction (the loop owns the live history the thunk

@@ -122,8 +122,8 @@ describe("createSubagentBudgetPort", () => {
     for (let i = 0; i < 5; i += 1) {
       port.record({ role: "explore", turns: 40 });
     }
-    // p90 40 * 1.25 = 50
-    expect(port.learned({ role: "explore" })).toBe(50);
+    // p90 40 * 1.25 = 50, raised to the minimum of 60
+    expect(port.learned({ role: "explore" })).toBe(60);
   });
 
   it("record() appends only what it is given and never throws on a bad path", () => {

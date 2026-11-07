@@ -8,7 +8,7 @@
 import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderConnection } from "../shared/settings.js";
 import {
   SECRETS_FILE_MODE,
@@ -53,6 +53,24 @@ function mode(path: string): Promise<number> {
 }
 
 describe("loadSettings (fail-soft)", () => {
+  it.each([
+    ["maxTurns", 0],
+    ["subagentMaxTurns", -5],
+    ["maxTurns", 2.5],
+  ] as const)("drops legacy invalid %s=%s without losing connections", async (field, value) => {
+    const settings = cloneDefaults();
+    settings.provider = providerV2({ id: "z-ai", model: "claude-x" });
+    const original = JSON.stringify({ ...settings, tools: { ...settings.tools, [field]: value } });
+    await writeFile(settingsPath(), original);
+    const warn = vi.fn();
+    const result = await loadSettings(settingsPath(), { warn });
+    expect(result.settings.tools[field]).toBeUndefined();
+    expect(result.settings.provider.connections).toEqual(settings.provider.connections);
+    expect(result.corruptBackupPath).toBeUndefined();
+    expect(await readFile(settingsPath(), "utf8")).toBe(original);
+    expect(await backupsFor("settings.json")).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(`settings: invalid tools.${field}; ignoring saved value`);
+  });
   it("removes unsupported Go inventory without clearing the selected model", async () => {
     const settings = cloneDefaults();
     settings.provider = providerV2Multi("go", [{ id: "go", providerId: "opencode", model: "gemini-4-argon", models: ["gemini-4-argon", "kimi-k3"], visibleModels: ["gemini-4-argon", "kimi-k3"] }]);

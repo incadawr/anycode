@@ -52,7 +52,6 @@ import {
   DEGENERATION_MIN_RUN_CHARS,
   MAX_CONCURRENT_SUBAGENTS,
   SUBAGENT_ACTIVITY_MAX_EVENTS,
-  SUBAGENT_MAX_TURNS_CEILING,
   SUBAGENT_LOOP_DEADLINE_MS,
   SUBAGENT_OUTCOME_DEADLINE_MS,
   SUBAGENT_STALL_TIMEOUT_MS,
@@ -298,6 +297,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     // `tools:`) or an md-profile's own `tools:` line, pinned below.
     expect(child.registry).not.toBe(parent.registry);
     expect(child.registry.has("Agent")).toBe(false);
+    expect(child.registry.get("Bash")?.metadata.resultBudget?.maxModelBytes).toBe(10_000);
     expect(child.registry.list().sort()).toEqual([...PERSONAS["general-purpose"].tools].sort());
 
     // subagents: UNSET (lock #2, defense in depth).
@@ -318,7 +318,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     // Slice 3.6: the persona body is embedded in the harness prelude, not used raw.
     expect(child.systemPrompt).toContain(PERSONAS["general-purpose"].systemPrompt);
     expect(child.tokenizer).toBe(tokenizer);
-    expect(child.context).toBe(context);
+    expect(child.context).toEqual(context);
     expect(child.maxOutputTokens).toBe(999);
     expect(child.reasoningEffort).toBe("medium");
 
@@ -408,39 +408,29 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(widened.registry.get("WebSearch")).toBe(webSearch);
   });
 
-  // Budget resolution: request > parent.subagentMaxTurns > DEFAULT, and ONLY
-  // the runaway ceiling clamps. The regression this guards: DEFAULT used to be
-  // the clamp too (`Math.min(req ?? 8, 8)`), so nothing could raise the budget
-  // above 8 — not the caller, not a setting, not an env var.
-  it("resolves maxTurns request-first and clamps only at SUBAGENT_MAX_TURNS_CEILING", () => {
+  // Explicit requests and settings preserve budgets above 200.
+  it("resolves maxTurns request-first without an upper ceiling", () => {
     const parent = makeParent();
-    expect(buildChildConfig(parent, getPersona("explore"), REQ).maxTurns).toBe(DEFAULT_SUBAGENT_MAX_TURNS);
-    // An explicit request ABOVE the default is honored, not clamped down to it.
-    expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 120 }).maxTurns).toBe(120);
-    // Below the default is honored too — a caller may still ask for less.
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).maxTurns).toBe(150);
     expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 3 }).maxTurns).toBe(3);
-    // The runaway ceiling is the only clamp.
-    expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 10_000 }).maxTurns).toBe(
-      SUBAGENT_MAX_TURNS_CEILING,
-    );
+    expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 10_000 }).maxTurns).toBe(10_000);
   });
 
   it("takes the host/settings default from parent.subagentMaxTurns, and lets an explicit request win", () => {
     const parent = { ...makeParent(), subagentMaxTurns: 75 };
     expect(buildChildConfig(parent, getPersona("explore"), REQ).maxTurns).toBe(75);
     expect(buildChildConfig(parent, getPersona("explore"), { ...REQ, maxTurns: 12 }).maxTurns).toBe(12);
-    // The settings default is bounded by the ceiling as well.
+    // A large settings default is preserved.
     expect(
       buildChildConfig({ ...makeParent(), subagentMaxTurns: 9_999 }, getPersona("explore"), REQ).maxTurns,
-    ).toBe(SUBAGENT_MAX_TURNS_CEILING);
+    ).toBe(9_999);
   });
 
   // The role's own budget (md-profile `maxTurns:` frontmatter) sits between the
   // request and the settings default: it is an author's statement about the
   // role, so it outranks the global default — but never an explicit request,
-  // and never the runaway ceiling. Built-in personas declare none ON PURPOSE
-  // (a hardcoded 24 would silently outrank the owner-visible setting).
-  it("takes a role's declared turnBudget over the default, under an explicit request and the ceiling", () => {
+  // and remains below an explicit request.
+  it("takes a role's declared turnBudget over the default, under an explicit request", () => {
     const parent = makeParent();
     const explore = getPersona("explore");
     expect(explore.turnBudget).toBeUndefined();
@@ -448,9 +438,9 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(buildChildConfig(parent, frugal, REQ).maxTurns).toBe(12);
     // An explicit request still wins over the role.
     expect(buildChildConfig(parent, frugal, { ...REQ, maxTurns: 30 }).maxTurns).toBe(30);
-    // And the role is bounded by the runaway ceiling like everything else.
+    // A large role budget is preserved.
     const overreaching: PersonaDefinition = { ...explore, turnBudget: 9_999 };
-    expect(buildChildConfig(parent, overreaching, REQ).maxTurns).toBe(SUBAGENT_MAX_TURNS_CEILING);
+    expect(buildChildConfig(parent, overreaching, REQ).maxTurns).toBe(9_999);
   });
 
   it("resolves role defaults below settings, explicit profiles and requests", () => {
@@ -463,7 +453,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
       expect(buildChildConfig(parent, { ...builtin, origin: "settings" }, REQ).maxTurns).toBe(150);
       expect(buildChildConfig(parent, { ...builtin, turnBudget: 22 }, REQ).maxTurns).toBe(22);
       expect(buildChildConfig(parent, { ...builtin, turnBudget: 22 }, { ...REQ, maxTurns: 33 }).maxTurns).toBe(33);
-      expect(buildChildConfig({ ...parent, subagentMaxTurns: 300 }, builtin, REQ).maxTurns).toBe(SUBAGENT_MAX_TURNS_CEILING);
+      expect(buildChildConfig({ ...parent, subagentMaxTurns: 300 }, builtin, REQ).maxTurns).toBe(300);
     }
   });
 
@@ -472,17 +462,17 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     const makeRunner = (budget?: number, profiles: PersonaDefinition[] = []) => createSubagentRunner(
       { ...makeParent(), subagentMaxTurns: budget }, { profiles, resolveRoleRoute: () => route },
     );
-    expect(makeRunner().sessionTurnBudget?.("executor")).toBe(80);
-    expect(makeRunner(300).sessionTurnBudget?.("executor")).toBe(200);
-    expect(makeRunner(0).sessionTurnBudget?.("executor")).toBe(1);
-    expect(makeRunner(-5).sessionTurnBudget?.("executor")).toBe(1);
+    expect(makeRunner().sessionTurnBudget?.("executor")).toBe(300);
+    expect(makeRunner(300).sessionTurnBudget?.("executor")).toBe(300);
+    expect(() => makeRunner(0).sessionTurnBudget?.("executor")).toThrow(/positive safe integer/);
+    expect(() => makeRunner(-5).sessionTurnBudget?.("executor")).toThrow(/positive safe integer/);
     expect(makeRunner(150).resolveRoleRoute?.("executor")?.turnBudget).toBe(150);
     expect(makeRunner(150, [{ ...getPersona("executor"), turnBudget: 25 }]).sessionTurnBudget?.("executor")).toBe(25);
     expect(makeRunner(150, [{ ...getPersona("executor"), origin: "settings" }]).sessionTurnBudget?.("executor")).toBe(150);
     for (const budget of [0, -5]) {
-      expect(buildChildConfig({ ...makeParent(), subagentMaxTurns: budget }, getPersona("executor"), REQ).maxTurns).toBe(1);
-      expect(makeRunner(budget).resolveRoleRoute?.("executor")?.turnBudget).toBe(1);
-      expect(makeRunner(budget, [{ ...getPersona("executor"), origin: "settings", engine: "codex" }]).engineProfile?.("executor")?.turnBudget).toBe(1);
+      expect(() => buildChildConfig({ ...makeParent(), subagentMaxTurns: budget }, getPersona("executor"), REQ)).toThrow(/positive safe integer/);
+      expect(() => makeRunner(budget).resolveRoleRoute?.("executor")).toThrow(/positive safe integer/);
+      expect(() => makeRunner(budget, [{ ...getPersona("executor"), origin: "settings", engine: "codex" }]).engineProfile?.("executor")).toThrow(/positive safe integer/);
     }
   });
 
@@ -495,20 +485,12 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect("deadlineAt" in buildChildConfig(parent, getPersona("explore"), REQ)).toBe(false);
   });
 
-  // The ceiling ladder applies to children too (§1.5/§1.7), but with
-  // the two clamps only a child needs: the total (budget + every grant) stays
-  // under SUBAGENT_MAX_TURNS_CEILING like an explicit request would, and the
-  // decision window is additionally bounded by what is left of the parent's
-  // wait so a late verdict cannot outlive the dispatcher's own timeout.
-  it("always sets ceiling.maxTurnsCeiling to SUBAGENT_MAX_TURNS_CEILING, and threads outcomeDeadlineAt only when given", () => {
+  // The ladder uses the loop budget and respects the parent's deadline.
+  it("threads outcomeDeadlineAt without an absolute turn ceiling", () => {
     const parent = makeParent();
-    expect(buildChildConfig(parent, getPersona("explore"), REQ).ceiling).toEqual({
-      maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING,
-    });
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).ceiling).toEqual({});
     const outcomeDeadlineAt = Date.now() + 5_678;
-    expect(
-      buildChildConfig(parent, getPersona("explore"), REQ, { outcomeDeadlineAt }).ceiling,
-    ).toEqual({ maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING, outcomeDeadlineAt });
+    expect(buildChildConfig(parent, getPersona("explore"), REQ, { outcomeDeadlineAt }).ceiling).toEqual({ outcomeDeadlineAt });
   });
 
   it("gives the child a fresh history that never reaches the parent's persistence sink (ephemeral, R5)", () => {
@@ -2810,8 +2792,6 @@ describe("subagent budget constants (§2.1)", () => {
     // never skip or always skip.
     expect(SUBAGENT_WRAPUP_MIN_WINDOW_MS).toBeGreaterThan(0);
     expect(SUBAGENT_WRAPUP_MIN_WINDOW_MS).toBeLessThan(SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS);
-    // The default budget must itself be reachable under the ceiling.
-    expect(DEFAULT_SUBAGENT_MAX_TURNS).toBeLessThanOrEqual(SUBAGENT_MAX_TURNS_CEILING);
   });
 });
 
@@ -3689,7 +3669,7 @@ describe("buildChildConfig — child-model settings (defect F6)", () => {
     // Only the window moved; every other budget knob the resolver knows
     // nothing about survives the overlay, and the parent's object is not
     // mutated.
-    expect(child.context).toEqual({ contextWindowTokens: 1_000_000, keepRecentMessages: 7 });
+    expect(child.context).toEqual({ contextWindowTokens: 128_000, keepRecentMessages: 7 });
     expect(child.context).not.toBe(parent.context);
     expect(parent.context).toEqual(PARENT_CONTEXT);
     expect(parent.maxOutputTokens).toBe(8_192);
@@ -3740,7 +3720,7 @@ describe("buildChildConfig — child-model settings (defect F6)", () => {
 
     expect(child.maxOutputTokens).toBe(8_192);
     expect(child.reasoningEffort).toBe("medium");
-    expect(child.context).toBe(parent.context);
+    expect(child.context).toEqual({ contextWindowTokens: 128_000, keepRecentMessages: 7 });
   });
 });
 
@@ -5256,7 +5236,7 @@ describe("role persona resolution flip (§3.1)", () => {
     const childSystem = model.requests[0]?.system ?? "";
     expect(childSystem).toContain("implement a written brief literally");
     // Built-in turn budget rides the persona (ROLE_TURN_BUDGETS).
-    expect(PERSONAS.executor.turnBudget).toBe(80);
+    expect(PERSONAS.executor.turnBudget).toBe(300);
   });
 
   it("(c) a settings-shaped profile (connection) on the inline tier keeps the honest 4269 error", async () => {
@@ -5660,7 +5640,7 @@ describe("adaptive turn budget — buildChildConfig", () => {
     const { port, learnedKeys } = makeBudgetPort(77);
     const parent = makeParent({ subagentBudget: port });
     const config = buildChildConfig(parent, getPersona("general-purpose"), REQ);
-    expect(config.ceiling).toEqual({ maxTurnsCeiling: SUBAGENT_MAX_TURNS_CEILING });
+    expect(config.ceiling).toEqual({});
     expect(config.maxTurns).toBe(DEFAULT_SUBAGENT_MAX_TURNS);
     // The store is not consulted at all when adaptive is off.
     expect(learnedKeys).toHaveLength(0);
@@ -5670,7 +5650,7 @@ describe("adaptive turn budget — buildChildConfig", () => {
     const parent = makeParent({ ceiling: { adaptive: true } });
     const config = buildChildConfig(parent, getPersona("general-purpose"), REQ);
     expect(config.ceiling?.adaptive).toBe(true);
-    expect(config.ceiling?.maxTurnsCeiling).toBe(SUBAGENT_MAX_TURNS_CEILING);
+    expect(config.ceiling?.maxTurnsCeiling).toBeUndefined();
   });
 
   it("adaptive ON: the learned value is used only when no explicit bound applies", () => {

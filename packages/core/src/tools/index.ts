@@ -1,4 +1,4 @@
-export { ToolRegistry, createDefaultToolRegistry } from "./registry.js";
+export { ToolRegistry, createDefaultToolRegistry, limitSubagentBashOutput } from "./registry.js";
 export type { CreateDefaultToolRegistryOptions } from "./registry.js";
 export { toToolDeclarations } from "./to-model-tools.js";
 export { gitTool } from "./git.js";

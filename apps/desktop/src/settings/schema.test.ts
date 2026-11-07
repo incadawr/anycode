@@ -2524,3 +2524,12 @@ describe("OpenCode Go quota cache", () => {
     expect(connections[2]?.id).toBe("c");
   });
 });
+
+
+it("accepts a subagent budget above 200 and rejects invalid budgets", () => {
+  const base = cloneDefaults();
+  const parse = (value: number) => settingsSchema.safeParse({ ...base, tools: { ...base.tools, subagentMaxTurns: value } });
+  const valid = parse(750);
+  expect(valid.success && valid.data.tools.subagentMaxTurns).toBe(750);
+  for (const value of [0, -1, 2.5, Number.MAX_SAFE_INTEGER + 1]) expect(parse(value).success).toBe(false);
+});

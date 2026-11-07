@@ -814,6 +814,16 @@ describe("handleClearSecret", () => {
 });
 
 describe("handleSet — merge + read-only", () => {
+  it("clears the root turn limit and persists the absence", async () => {
+    expect((await handleSet(makeDeps(), { tools: { maxTurns: 300 } })).ok).toBe(true);
+    expect((await handleSet(makeDeps(), { tools: { maxTurns: "" } })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.tools.maxTurns).toBeUndefined();
+    for (const maxTurns of [0, -1, 1.5]) {
+      expect(await handleSet(makeDeps(), { tools: { maxTurns } })).toEqual({ ok: false, reason: "invalid" });
+      expect(await handleSet(makeDeps(), { tools: { subagentMaxTurns: maxTurns } })).toEqual({ ok: false, reason: "invalid" });
+    }
+  });
+
   it("refuses account source bindings through the generic settings channel", async () => {
     expect(await handleSet(makeDeps(), { plugins: { accountSources: [] } })).toMatchObject({ ok: false, reason: "invalid" });
   });

@@ -163,8 +163,7 @@ way you read what comes back.
 
 - **inline** for short read/verify mechanics: a lookup, a grep
   across many files, running one focused check. The child runs in-process,
-  joins your turn, and typically has 40 turns (Settings can raise this to at
-  most 200). It has NO background Bash, NO MCP tools, and NO spawn tools (an
+  joins your turn, and typically has 150 turns (configurable in Settings). It has NO background Bash, NO MCP tools, and NO spawn tools (an
   inline child can never spawn grandchildren). Typically ${DEFAULT_TOOL_CONCURRENCY} inline
   children run at once (bounded by the tool-slot and subagent-concurrency
   settings, either of which can lower or raise it); issue independent calls

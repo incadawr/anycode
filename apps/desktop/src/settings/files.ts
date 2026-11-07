@@ -298,7 +298,7 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
     return { settings: cloneDefaults(), readOnly: false, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
   }
 
-  const result = parseSettings(json);
+  const result = parseSettings(json, (field) => logger?.warn(`settings: invalid tools.${field}; ignoring saved value`));
   if (result.status === "corrupt") {
     logger?.warn(`settings: schema-invalid at ${path}; using defaults`);
     const corruptBackupPath = await quarantine(path);

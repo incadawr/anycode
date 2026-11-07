@@ -1,5 +1,6 @@
 /** Tool registry: a Map<name, definition> with duplicate-name warning on register. */
 
+import { SUBAGENT_BASH_RESULT_MAX_BYTES } from "../types/config.js";
 import type { AnyToolDefinition, ToolDefinition, ToolMetadata } from "../types/tools.js";
 import type { WebSearchInput, WebSearchOutput } from "./schemas.js";
 import { gitTool } from "./git.js";
@@ -119,4 +120,15 @@ export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOption
     registry.register(archMapTool);
   }
   return registry;
+}
+
+/** Keep shell output small in child contexts while retaining artifact spill. */
+export function limitSubagentBashOutput(registry: ToolRegistry): void {
+  for (const name of ["Bash", "BashOutput"]) {
+    const tool = registry.get(name);
+    if (!tool) continue;
+    registry.register({ ...tool, metadata: { ...tool.metadata, resultBudget: {
+      ...tool.metadata.resultBudget, maxModelBytes: SUBAGENT_BASH_RESULT_MAX_BYTES,
+    } } }, { silentDuplicateWarning: true });
+  }
 }

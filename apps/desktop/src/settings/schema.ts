@@ -805,14 +805,14 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     tools: z.object({
       concurrency: z.number().optional(),
       stallTimeoutMs: z.number().optional(),
-      maxTurns: z.number().optional(),
+      maxTurns: z.number().int().safe().min(1).optional(),
       // provider retry knobs, mirrors of
       // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
       maxRetries: z.number().optional(),
       networkRetryBudgetMs: z.number().optional(),
       // mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings).
       networkWaitMaxMs: z.number().optional(),
-      subagentMaxTurns: z.number().optional(),
+      subagentMaxTurns: z.number().int().safe().min(1).optional(),
       // slice 1: subagent stall-detector silence threshold override
       // (ANYCODE_SUBAGENT_STALL_MS). Distinct from `stallTimeoutMs` above.
       subagentStallTimeoutMs: z.number().optional(),
@@ -1088,7 +1088,7 @@ export type SettingsParseResult =
  *  - version > CURRENT      -> read_only (salvage what validates, else defaults)
  *  - version in [.., CURRENT] -> run migrations, then schema-validate (fail -> corrupt)
  */
-export function parseSettings(raw: unknown): SettingsParseResult {
+export function parseSettings(raw: unknown, onInvalidTurnLimit?: (field: string) => void): SettingsParseResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { status: "corrupt", settings: cloneDefaults(), readOnly: false };
   }
@@ -1110,7 +1110,7 @@ export function parseSettings(raw: unknown): SettingsParseResult {
     // Newer file than this binary understands: salvage the fields that still
     // validate against the current shape, but surface readOnly so no write ever
     // clobbers the newer file with a downgraded copy.
-    const salvaged = settingsSchema.safeParse({ ...obj, version: CURRENT_SETTINGS_VERSION });
+    const salvaged = settingsSchema.safeParse(sanitizeLoadedTurnLimits({ ...obj, version: CURRENT_SETTINGS_VERSION }, onInvalidTurnLimit));
     return {
       status: "read_only",
       settings: salvaged.success ? salvaged.data : cloneDefaults(),
@@ -1125,11 +1125,25 @@ export function parseSettings(raw: unknown): SettingsParseResult {
     migrated = migrate(migrated);
   }
 
-  const parsed = settingsSchema.safeParse(migrated);
+  const parsed = settingsSchema.safeParse(sanitizeLoadedTurnLimits(migrated, onInvalidTurnLimit));
   if (!parsed.success) {
     return { status: "corrupt", settings: cloneDefaults(), readOnly: false };
   }
   return { status: "ok", settings: parsed.data, readOnly: false };
+}
+
+/** Older versions allowed arbitrary numbers here; repair only the loaded copy. */
+function sanitizeLoadedTurnLimits(raw: Record<string, unknown>, onInvalid?: (field: string) => void): Record<string, unknown> {
+  if (!isPlainObject(raw.tools)) return raw;
+  const tools = { ...raw.tools };
+  for (const field of ["maxTurns", "subagentMaxTurns"] as const) {
+    const value = tools[field];
+    if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1)) {
+      delete tools[field];
+      onInvalid?.(field);
+    }
+  }
+  return { ...raw, tools };
 }
 
 /**
@@ -1139,7 +1153,9 @@ export function parseSettings(raw: unknown): SettingsParseResult {
  * never mutates `base`.
  */
 export function mergeSettings(base: AnycodeSettings, patch: SettingsPatch): AnycodeSettings {
-  return deepMerge(base, patch) as AnycodeSettings;
+  const merged = deepMerge(base, patch) as AnycodeSettings;
+  if (patch.tools?.maxTurns === "") delete merged.tools.maxTurns;
+  return merged;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
