@@ -100,7 +100,7 @@ export function createStartTabRequest(
     engine: draft.engine,
     ...(draft.engine === "codex"
       ? (codexEngineModel !== null ? { engineModel: codexEngineModel } : {})
-      : { engineModel: resolveClaudeDraftModel(draft.model, claudeModels) }),
+      : draft.model === null ? {} : { engineModel: resolveClaudeDraftModel(draft.model, claudeModels) }),
     ...(draft.enginePreset !== undefined ? { enginePreset: draft.enginePreset } : {}),
     ...(draft.codexProfileId !== undefined ? { codexProfileId: draft.codexProfileId } : {}),
   };

@@ -1,3 +1,4 @@
+import { CLAUDE_DRAFT_MODELS } from "./claude-draft-models.js";
 /**
  * Root tab list + active-tab selection (design phase-2.md §2.4/§4.3). Deliberately
  * thin: one entry per open tab, keyed by tabId. Per-tab AGENT state (transcript,
@@ -151,6 +152,7 @@ export interface TabsState {
   draft: SessionDraft | null;
   /** Codex draft model catalog: [] = unloaded/invalidated; submit refuses rather than guess. */
   claudeModels: readonly EngineModelChoice[];
+  claudeCatalogConfirmedAt: number;
   setClaudeModels(models: readonly EngineModelChoice[]): void;
   codexModels: readonly EngineModelChoice[];
   /** Invariant: `draftActive` implies `draft !== null`. Whether the start screen is the thing currently shown. */
@@ -330,7 +332,8 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     selectionRevision: 0,
     draft: null,
     claudeModels: [],
-    setClaudeModels: (models) => set({ claudeModels: models }),
+    claudeCatalogConfirmedAt: 0,
+    setClaudeModels: (models) => set({ claudeModels: models, claudeCatalogConfirmedAt: models === CLAUDE_DRAFT_MODELS ? 0 : Date.now() }),
     codexModels: [],
     draftActive: false,
     hiddenWorkspaces: readHiddenWorkspaces(storage),

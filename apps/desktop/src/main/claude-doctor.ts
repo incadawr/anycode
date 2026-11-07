@@ -26,7 +26,7 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { proxyValueCarriesCredential } from "@anycode/core/child-env";
 import { StringDecoder } from "node:string_decoder";
-import { claudeCliIdentity, claudeCatalogKey, projectClaudeModels } from "./claude-model-cache.js";
+import { loadClaudeCatalogSalt, claudeCliIdentity, claudeCatalogKey, projectClaudeModels } from "./claude-model-cache.js";
 import { randomUUID } from "node:crypto";
 import { ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
 import { classifyClaudeBinaryPathTrust, type ClaudeBinaryTrustGateOutcome } from "./claude-binary.js";
@@ -605,6 +605,8 @@ export interface RunClaudeDoctorOptions {
    * pass an explicit path here instead.
    */
   profileDir?: string;
+  /** App settings directory, never the CLI auth directory. */
+  catalogCacheDir?: string;
   versionTimeoutMs?: number;
   initTimeoutMs?: number;
   /** Live per-path binary-trust consents, fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
@@ -688,7 +690,7 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
     }
     const status = isClaudeSignedIn(handshake.account) ? "ready" : "signed_out";
     const catalogIdentity = cliIdentity === claudeCliIdentity(binaryPath)
-      ? claudeCatalogKey(handshake.account, cliIdentity, version) : undefined;
+      ? claudeCatalogKey(handshake.account, cliIdentity, version, options.catalogCacheDir ? loadClaudeCatalogSalt(options.catalogCacheDir) : undefined) : undefined;
     return { status, version, ...(status === "ready" && catalogIdentity ? {
       catalogIdentity,
       ...(Array.isArray(handshake.models) ? { models: projectClaudeModels(handshake.models, maskCredentials) } : {}),

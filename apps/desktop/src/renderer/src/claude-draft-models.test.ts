@@ -18,7 +18,7 @@ describe("Claude draft fallback", () => {
     const opus = CLAUDE_DRAFT_MODELS.find(model => model.label?.startsWith("Opus"))!;
     expect(resolveClaudeDraftModel(opus.id, CLAUDE_DRAFT_MODELS)).toBe("claude-opus-5-5");
     expect(CLAUDE_DRAFT_MODELS.some(model => model.id.includes("[1m]"))).toBe(false);
-    expect(resolveClaudeDraftModel(null, CLAUDE_DRAFT_MODELS)).toBe("default");
+    expect(resolveClaudeDraftModel(null, CLAUDE_DRAFT_MODELS)).toBe("");
     expect(resolveClaudeDraftModel("opus[1m]", CLAUDE_DRAFT_MODELS)).toBe("default");
   });
 
@@ -30,4 +30,9 @@ describe("Claude draft fallback", () => {
 
 it("resolves a full fallback id to the confirmed wire alias before rendering", () => {
   expect(resolveClaudeDraftModel("claude-opus-5-5", [{ id: "default", resolvedId: "claude-opus-5-5" }, { id: "opus", resolvedId: "claude-opus-5-5" }])).toBe("opus");
+});
+
+it("prefers the ordinary alias when extended context precedes it", () => {
+  expect(resolveClaudeDraftModel("full-opus", [{ id: "opus[1m]", resolvedId: "full-opus" }, { id: "default", resolvedId: "full-opus" }, { id: "opus", resolvedId: "full-opus" }])).toBe("opus");
+  expect(resolveClaudeDraftModel(null, [{ id: "opus" }])).toBe("");
 });

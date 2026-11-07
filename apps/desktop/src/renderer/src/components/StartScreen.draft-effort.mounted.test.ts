@@ -287,3 +287,14 @@ it("renders the confirmed cached Claude model and its effort vocabulary before s
     expect(container.textContent).toContain("Effort");
   } finally { await act(async () => root.unmount()); }
 });
+
+it("shows CLI default for an untouched Claude draft even when the catalog starts with a model", async () => {
+  useTabsStore.getState().setClaudeModels([{ id: "opus", label: "Pinned Opus" }]);
+  useTabsStore.setState({ draft: { workspace: "/ws", prompt: "", engine: "claude", model: null, mode: "build" } });
+  const { container, root } = await mountStartScreen();
+  try {
+    const chip = container.querySelector<HTMLButtonElement>('button[aria-label="Engine model and effort"]');
+    expect(chip?.textContent).toContain("CLI default");
+    expect(chip?.textContent).not.toContain("Pinned Opus");
+  } finally { await act(async () => root.unmount()); }
+});

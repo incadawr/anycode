@@ -1823,10 +1823,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   onPick={(id) => useTabsStore.getState().setDraftEnginePreset(id)}
                 />
                 <EngineModelMenu
-                  model={{ current: claudeDraftModel, available: claudeDraftModels }}
+                  model={{ current: claudeDraftModel, available: [{ id: "", label: "CLI default" }, ...claudeDraftModels] }}
                   pendingModel={undefined}
                   disabled={false}
-                  onPick={(id) => useTabsStore.getState().setDraftModel(id)}
+                  onPick={(id) => useTabsStore.getState().setDraftModel(id || null)}
                   {...(claudeDraftEfforts.length > 0
                     ? {
                         effort: {

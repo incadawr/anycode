@@ -1,3 +1,4 @@
+import { CLAUDE_EFFORT_LEVELS } from "../shared/claude-effort.js";
 /**
  * zod schema + migration skeleton for ~/.anycode/settings.json (design
  * slice-2.2-cut.md §2, frozen by task 2.2.1). node-only (zod runs here); the TS
@@ -943,7 +944,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
             id: z.string().min(1).max(200),
             resolvedId: z.string().min(1).max(200).optional(),
             label: z.string().max(256).optional(),
-            efforts: z.array(z.enum(["low", "medium", "high", "xhigh", "max"])).max(5).optional(),
+            efforts: z.array(z.enum(CLAUDE_EFFORT_LEVELS)).max(CLAUDE_EFFORT_LEVELS.length).optional(),
           })).max(100),
         }).optional().catch(undefined),
         binaryPath: z.string().optional(),

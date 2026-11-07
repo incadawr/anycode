@@ -107,6 +107,7 @@ export interface ClaudeIpcDeps {
   readBinaryPathSetting: () => Promise<string | undefined>;
   /** reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
   readTrustedBinaries?: () => readonly TrustedBinaryConsent[];
+  catalogCacheDir?: string;
   readModelCatalog?: () => ClaudeModelCache | undefined;
   /** Persists a `settings.claude` patch (best-effort: a `read_only` refusal must not block the LIVE snapshot this session already computed from reaching the caller). Carries only status metadata and a catalog bound to an opaque identity digest. */
   writeClaudeSettings: (patch: {
@@ -330,20 +331,17 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
             // doctor diagnoses the SAME `~/.claude` the user's own terminal is
             // signed into.
             consents,
+            catalogCacheDir: deps.catalogCacheDir,
             ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
-    const { status, version, error, trustRefusal, catalogIdentity, models: liveModels } = rawReport;
-    const report: ClaudeDoctorReport = {
-      status,
-      ...(version !== undefined ? { version } : {}),
-      ...(error !== undefined ? { error } : {}),
-      ...(trustRefusal ? { trustRefusal } : {}),
-      ...(catalogIdentity && /^[a-f0-9]{64}$/.test(catalogIdentity)
-        ? { catalogIdentity, models: liveModels } : {}),
-    };
+    const report: ClaudeDoctorReport = { ...rawReport };
+    if (!report.catalogIdentity || !/^[a-f0-9]{64}$/.test(report.catalogIdentity)) {
+      delete report.catalogIdentity;
+      delete report.models;
+    }
     const models = selectClaudeCatalog(report, deps.readModelCatalog?.());
-    if (models.length || report.models !== undefined) report.models = models;
+    if (models.length || "models" in report) report.models = models;
     else delete report.models;
     const snapshot: ClaudeOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
     lastReport = report;

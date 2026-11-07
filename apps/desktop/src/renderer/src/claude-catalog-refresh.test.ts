@@ -44,3 +44,21 @@ it("prefers arriving confirmed choices and normalizes display and submit to the 
   expect(resolveClaudeDraftModel(draft.model, choices)).toBe("opus");
   stop();
 });
+
+it("keeps a fresh confirmed catalog across picker mounts without another probe", () => {
+  const models = [{ id: "opus", resolvedId: "claude-opus-5-5" }];
+  let probes = 0, writes = 0;
+  let push = (_snapshot: { report: ClaudeDoctorReport }) => {};
+  const stop = startClaudeCatalogRefresh({ recheck: async () => { probes++; return { report: { status: "ready" } }; }, onSnapshotChanged: fn => { push = fn; return () => {}; } }, () => { writes++; }, models, Date.now());
+  expect(probes).toBe(0);
+  expect(writes).toBe(0);
+  push({ report: { status: "signed_out" } });
+  expect(writes).toBe(1);
+  stop();
+});
+it("does not seed fallback over an existing stale catalog", () => {
+  const writes: unknown[] = [];
+  const stop = startClaudeCatalogRefresh({ recheck: () => new Promise(() => {}), onSnapshotChanged: () => () => {} }, value => writes.push(value), [{ id: "opus" }]);
+  expect(writes).toEqual([]);
+  stop();
+});

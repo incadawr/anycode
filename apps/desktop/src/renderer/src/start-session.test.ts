@@ -702,7 +702,7 @@ describe("submitStartDraft — codex draft-model agreement", () => {
     unset.tabsStore.getState().setDraftEngine("claude");
     await submitStartDraft(unset.deps);
     const req = (unset.createTab.mock.calls as unknown as [Record<string, unknown>[]])[0]![0]!;
-    expect(req.engineModel).toBe("default");
+    expect(req).not.toHaveProperty("engineModel");
   });
 });
 

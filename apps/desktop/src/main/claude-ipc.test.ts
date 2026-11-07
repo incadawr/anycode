@@ -264,9 +264,9 @@ describe("createClaudeOnboardingController — loginStart/loginCancel", () => {
     expect(runLogin.mock.calls[0]![1]).not.toHaveProperty("profileDir");
   });
 
-  it("custody: loginStart's resolved value is a closed field set, even against an adversarial runLogin/runDoctor", async () => {
+  it("preserves doctor report extensions while keeping login output closed", async () => {
     const runDoctor = vi.fn(
-      async () => ({ status: "ready", version: "2.1.212", account: { email: "leak@evil.example" } }) as unknown as ClaudeDoctorReport,
+      async () => ({ status: "ready", version: "2.1.212", diagnostic: "safe diagnostic" }) as unknown as ClaudeDoctorReport,
     );
     const runLogin = vi.fn(async (_binaryPath: string, options: RunClaudeLoginOptions) => {
       await options.probe();
@@ -279,7 +279,8 @@ describe("createClaudeOnboardingController — loginStart/loginCancel", () => {
     expect(Object.keys(result).sort()).toEqual(["ok", "snapshot"]);
     if (result.ok) {
       expect(Object.keys(result.snapshot).sort()).toEqual(["binaryPath", "checkedAt", "report", "source"]);
-      expect(JSON.stringify(result.snapshot)).not.toContain("leak@evil.example");
+      expect(result.snapshot.report).toMatchObject({ diagnostic: "safe diagnostic" });
+      expect(JSON.stringify(result.snapshot)).not.toContain("fake-not-a-token");
     }
   });
 

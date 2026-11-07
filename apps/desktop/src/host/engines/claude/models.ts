@@ -1,3 +1,4 @@
+import { CLAUDE_EFFORT_LEVELS } from "../../../shared/claude-effort.js";
 /**
  * Claude model catalog — built from the LIVE `initialize` response's `models[]`
  * (cut §1.4), never a static enum. This is a contract-level fact, not a
@@ -32,7 +33,7 @@ const DEFAULT_MODEL_ALIAS = "default";
  * of this — the CLI, not this list, is the authority on which levels a given
  * model actually accepts.
  */
-export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export { CLAUDE_EFFORT_LEVELS } from "../../../shared/claude-effort.js";
 
 export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 
