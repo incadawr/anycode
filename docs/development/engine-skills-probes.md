@@ -28,12 +28,14 @@ XDG, temp and cwd, and uses only initialize/initialized and skill RPCs. On macOS
 it verifies a `sandbox-exec` deny-network guard with a synthetic connection;
 without a working guard it runs offline help/schema only (handshake NOT RUN).
 Tests run synthetic Node children and the harness self-test, never a real CLI.
-The synthetic probe checks both parent and `skills` roots, process locality,
+The synthetic probe checks parent, `skills` and individual skill roots (including
+sibling omission), process locality,
 reset, duplicate coexistence and sealed bytes/modes. Codex 0.166.0 needed no
 experimentalApi for these RPCs; the product capability still follows agentBridge.
-Use `<snapshot>/skills` for the future adapter: it narrows the supplied root to
-skill content. Same-name native/app entries coexist; collision omission and
-reset/restart verification are still required before enabling host delivery.
-The process-owned preparation/post-initialize seam covers fresh, resume and
-orchestration replacement, but root host options do not enable Codex forwarding.
+The adapter supplies individual `<snapshot>/skills/<alias>` roots so a native
+same-name entry suppresses only its app copy without changing sealed files.
+Root host options enable delivery for fresh/resume and orchestration replacement.
+Before thread work, exact metadata is checked against the native catalog. A wrong
+readback requires verified reset; unknown set/reset state retires the process and
+restarts once without forwarding. No foreign metadata-path bodies are read.
 This proves neither model use nor compatibility with other CLI versions.

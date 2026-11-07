@@ -1,3 +1,5 @@
+import { installCodexBuiltins } from "./engines/codex/builtin-skills.js";
+import { buildEngineBuiltinSkills } from "./engine-builtin-skills.js";
 import { readBuiltinPolicy } from "./skills/builtin-policy.js";
 import { prepareBuiltinSnapshot } from "./skills/builtin-snapshot.js";
 import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
@@ -1640,6 +1642,7 @@ async function bootCodexSession(
       : {}),
   };
   const agentCardLog = new SqliteCodexAgentCardLog(persistence, bridgeRowId);
+  let codexBuiltinBrowser: Parameters<typeof prepareBuiltinSnapshot>[0]["browser"];
   let codexAgentBridge: CodexDynamicToolBridge | undefined;
   // The bridge's child port, kept so the Session below can surface its
   // detached-children registry (background_children) — without it a Codex
@@ -1693,6 +1696,7 @@ async function bootCodexSession(
       cwd: workspace,
       imageInputEnabled: () => codexParentEngine?.imageInputEnabled() ?? false,
     });
+    codexBuiltinBrowser = codexEngineBrowserBridge;
     let port: ChildSessionPort | undefined;
     if (catalog.length) {
       port = createChildSessionPort({
@@ -1752,7 +1756,19 @@ async function bootCodexSession(
     }
   }
 
-  const options = { bootstrap, ...buildCodexLaunchOptions({
+  const options = { bootstrap, ...(args.child ? {} : { prepareBuiltinSkills: async () => {
+    const home = hostProfileHome(), ids = ENGINE_BUILTIN_SKILLS.map(e => e.id);
+    const policy = await readBuiltinPolicy({ userConfigPath: join(home, ".anycode/config.json"),
+      projectConfigPath: join(workspace, ".anycode/config.json"), projectTrusted: hostWorkspaceTrust.projectTrusted, ids });
+    const failure = ids.map(id => policy[id]).find(p => !p.enabled && p.reason !== "disabled");
+    if (failure) throw new Error(failure.reason);
+    const disabled = ids.filter(id => !policy[id].enabled);
+    if (disabled.length === ids.length) return undefined;
+    const names = buildEngineBuiltinSkills({ engine: "codex", browser: codexBuiltinBrowser }).filter(d => !disabled.includes(d.id)).map(d => d.name);
+    const lease = prepareBuiltinSnapshot({ hostProfileHome: home, workspace, engine: "codex", browser: codexBuiltinBrowser, disabled,
+      excludedRoots: [codexProfile?.home, process.env.CODEX_HOME, join(homedir(), ".codex")].filter((p): p is string => !!p) });
+    return { lease, afterInitialize: (port: import("./engines/codex/builtin-skills.js").CodexBuiltinPort) => installCodexBuiltins(port, workspace, lease.root, names) };
+  } }), ...buildCodexLaunchOptions({
     broker: classifierBroker, workspace, binaryPath, rules, fs: new NodeFileSystemAdapter(), child: args.child,
     agentBridge: codexAgentBridge, agentCardLog, shadowLog, processOwnership, tempDir: codexChildTempDir,
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },

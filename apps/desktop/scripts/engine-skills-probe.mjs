@@ -114,6 +114,8 @@ async function codexProbe(binary, root, env) {
     return { base, file, body };
   };
   const a = skill('px-a'), b = skill('px-b');
+  fs.chmodSync(a.base, 0o700); const sibling = path.join(a.base, 'px-sibling'); fs.mkdirSync(sibling);
+  fs.writeFileSync(path.join(sibling, 'SKILL.md'), a.body.replaceAll('px-a', 'px-sibling'), { mode: 0o400 }); fs.chmodSync(sibling, 0o500); fs.chmodSync(a.base, 0o500);
   const init = async (c, experimentalApi = false) => { await c.request('initialize', { clientInfo: { name: 'offline-probe', version: '0' }, capabilities: { experimentalApi } }); c.notify(); };
   const list = async c => {
     const r = await c.request('skills/list', { cwds: [cwd], forceReload: true });
@@ -121,11 +123,12 @@ async function codexProbe(binary, root, env) {
   };
   const set = (c, roots) => c.request('skills/extraRoots/set', { extraRoots: roots });
   try {
-    const A = client(), B = client(); await init(A); await init(B);
+    const A = client(); await init(A); const B = client(); await init(B);
     assert(!(await list(A)).some(s => s.name.startsWith('px-')));
-    for (const rootCandidate of [path.dirname(a.base), a.base]) {
+    for (const rootCandidate of [path.dirname(a.base), a.base, path.dirname(a.file)]) {
       await set(A, [rootCandidate]); assert((await list(A)).some(s => s.name === 'px-a' && s.path === a.file && s.enabled === true));
     }
+    assert(!(await list(A)).some(s => s.name === 'px-sibling')); // Individual root excludes its sibling.
     await set(B, [b.base]);
     for (const [c, own, other] of [[A, a, b], [B, b, a]]) {
       const rows = await list(c); assert(rows.some(s => s.path === own.file)); assert(!rows.some(s => s.path === other.file));
@@ -136,7 +139,7 @@ async function codexProbe(binary, root, env) {
     const D = client(); await init(D, true); await set(D, [a.base]); const clash = (await list(D)).filter(s => s.name === 'px-a');
     assert(clash.some(s => s.path === a.file) && clash.some(s => s.path === path.join(native, 'SKILL.md')));
     for (const s of [a, b]) { assert.equal(fs.readFileSync(s.file, 'utf8'), s.body); assert.equal(fs.statSync(s.file).mode & 0o777, 0o400); assert.equal(fs.statSync(s.base).mode & 0o777, 0o500); }
-    console.log('Root shapes, nonexperimental RPC, locality, reset, duplicate coexistence, sealed bytes/modes PASS; model use NOT RUN');
+    console.log('Parent/skills/individual roots, sibling omission, nonexperimental RPC, locality, reset, duplicate coexistence, sealed bytes/modes PASS; model use NOT RUN');
   } finally {
     await Promise.all(children.map(child => new Promise(resolve => {
       if (child.exitCode !== null || child.signalCode !== null) return resolve();

@@ -62,10 +62,9 @@ file and the built-in returns.
   tool accepts only names from that list; an unknown name returns the available
   names.
 
-Filesystem skills apply to Native tabs only. Claude root tabs can also receive
-three app builtins through a separate session plugin; see below. Codex delivery
-is not implemented yet. Independently installed CLI skills follow that CLI's
-rules and are not controlled by this pane.
+Filesystem skills apply to Native tabs only. Claude and Codex root tabs can also receive
+three app builtins through their CLI skill mechanisms; see below. Independently
+installed CLI skills follow that CLI's rules and are not controlled by this pane.
 
 ## Disabling a skill
 
@@ -92,7 +91,7 @@ not fit are dropped, and the prompt says how many.
 ## Built-in skills
 
 Native ships the following in-memory skills. In Native, a same-name filesystem
-skill replaces the builtin. The separate app catalog in Claude is unaffected
+skill replaces the builtin. The separate app catalog in external tabs is unaffected
 by such files.
 
 | Skill | Available when | Purpose |
@@ -104,12 +103,12 @@ by such files.
 | `creating-subagents` | always | Writing `.anycode/agents/*.md` profiles. |
 | `anycode-setup` | always | Read-only help with configuring AnyCode. It reads your files and explains the fix; any edit needs your approval. It never prints secrets. |
 
-## Built into AnyCode in Claude tabs
+## Built into AnyCode in Claude and Codex tabs
 
-Three app-owned definitions are prepared for each new root Claude process,
+Three app-owned definitions are prepared for each new root Claude or Codex process,
 including a process started to resume a session:
 
-| Builtin ID in `skills.disabled` | Claude alias | Planned Codex alias (not delivered yet) |
+| Builtin ID in `skills.disabled` | Claude alias | Codex alias |
 |---|---|---|
 | `anycode-setup` | `anycode-app:anycode-setup` | `anycode-app-setup` |
 | `using-browser-preview` | `anycode-app:using-browser-preview` | `anycode-app-browser-preview` |
@@ -122,17 +121,24 @@ exported either. Browser definitions require the corresponding tools.
 
 Settings → Skills previews configuration for the next launch, not the state of
 a running process. A new process reads policy again; toggles do not hot reload
-or revoke a running snapshot. In an untrusted workspace, Claude ignores the
-workspace config; personal disabled settings still apply. Invalid/unreadable policy,
+or revoke a running snapshot. For this app catalog, an untrusted workspace
+config is ignored; personal disabled settings still apply. Invalid/unreadable policy,
 unsupported CLI or preparation failure can leave the adapter unavailable while
 ordinary chat continues. Windows forwarding is unavailable in this MVP.
 
-The concrete session reports **prepared** and **CLI-reported** notices with an
+Claude sessions report **prepared** and **CLI-reported** notices with an
 opaque generation ID, and **unavailable** warnings for preparation failures.
 The pane does not report a process generation or preparation/catalog success.
 A **prepared** snapshot means only that files were made; **CLI-reported**
 metadata means recognition, not proof that the model read or followed the
 body. Model-use acceptance is a separate check in a fresh profile.
+
+Codex uses process-local extra skill roots, including orchestration replacements.
+A native CLI skill with the same Codex alias suppresses that app copy. Catalog
+errors leave ordinary Codex available: changed roots must be removed and verified,
+or the process is restarted once without app roots. Claude uses a session plugin.
+Codex discovery has been checked with a synthetic catalog on CLI 0.166.0;
+real-template/model use and packaged compatibility still require acceptance.
 
 Snapshots are sealed and isolated per process. Normal cleanup waits for proof
 that the owned process group has exited. A crash or uncertain ownership retains

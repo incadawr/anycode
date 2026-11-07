@@ -50,3 +50,31 @@ it("propagates host policy failure to the client's unavailable-notice seam", asy
   await expect(client.start()).rejects.toThrow("stop-before-spawn");
   expect(notice).toHaveBeenCalledExactlyOnceWith("worker-error");
 });
+
+it("Codex root wiring uses fresh strict policy, trusted app names and registered browser specs", async () => {
+  const boot = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === "bootCodexSession")!;
+  let spread: ts.Expression | undefined;
+  const visit = (n: ts.Node) => { if (ts.isSpreadAssignment(n) && n.expression.getText(source).includes("prepareBuiltinSkills")) spread = n.expression; ts.forEachChild(n, visit); };
+  visit(boot); expect(spread).toBeDefined();
+  const read = vi.fn(async () => Object.fromEntries(ENGINE_BUILTIN_SKILLS.map(({ id }) => [id, { enabled: true, reason: "enabled" }])));
+  const snapshot = vi.fn(() => ({ root: "/sealed" })), install = vi.fn();
+  const deps = { args: { child: undefined as unknown }, hostProfileHome: () => "/profile", workspace: "/workspace", homedir: () => "/home",
+    hostWorkspaceTrust: { projectTrusted: false }, codexProfile: { home: "/cli" }, process: { env: {} }, codexBuiltinBrowser: { specs: [] },
+    ENGINE_BUILTIN_SKILLS, readBuiltinPolicy: read, prepareBuiltinSnapshot: snapshot, installCodexBuiltins: install,
+    buildEngineBuiltinSkills: vi.fn(() => ENGINE_BUILTIN_SKILLS.map(e => ({ id: e.id, name: e.codex }))), join: (...p: string[]) => p.join("/") };
+  const code = ts.transpileModule(`const result = ${spread!.getText(source)};`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const evaluate = () => new Function(...Object.keys(deps), `${code}; return result;`)(...Object.values(deps));
+  const prepared = await evaluate().prepareBuiltinSkills(); await prepared.afterInitialize({});
+  expect(read).toHaveBeenCalledWith(expect.objectContaining({ projectTrusted: false, userConfigPath: "/profile/.anycode/config.json" }));
+  expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({ engine: "codex", browser: deps.codexBuiltinBrowser, excludedRoots: expect.arrayContaining(["/cli"]) }));
+  expect(install).toHaveBeenCalledWith({}, "/workspace", "/sealed", ENGINE_BUILTIN_SKILLS.map(e => e.codex));
+  read.mockResolvedValueOnce(Object.fromEntries(ENGINE_BUILTIN_SKILLS.map(({ id }) => [id, { enabled: id !== "anycode-setup", reason: id === "anycode-setup" ? "disabled" : "enabled" }])));
+  await (await evaluate().prepareBuiltinSkills()).afterInitialize({});
+  expect(snapshot).toHaveBeenLastCalledWith(expect.objectContaining({ disabled: ["anycode-setup"] }));
+  expect(install).toHaveBeenLastCalledWith({}, "/workspace", "/sealed", ENGINE_BUILTIN_SKILLS.slice(1).map(e => e.codex));
+  read.mockResolvedValueOnce(Object.fromEntries(ENGINE_BUILTIN_SKILLS.map(({ id }) => [id, { enabled: false, reason: "disabled" }])));
+  expect(await evaluate().prepareBuiltinSkills()).toBeUndefined();
+  read.mockResolvedValueOnce(Object.fromEntries(ENGINE_BUILTIN_SKILLS.map(({ id }) => [id, { enabled: false, reason: "worker-error" }])));
+  await expect(evaluate().prepareBuiltinSkills()).rejects.toThrow("worker-error");
+  deps.args.child = {}; expect(evaluate().prepareBuiltinSkills).toBeUndefined();
+});

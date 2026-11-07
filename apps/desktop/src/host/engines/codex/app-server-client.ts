@@ -378,6 +378,9 @@ export class AppServerClient {
   private readonly queue: NotificationQueue;
   private readonly observers = new Set<(notification: JsonRpcNotification) => void>();
   private readonly builtinSkills = new CodexBuiltinSkills(() => !this.closing && !this.terminalError);
+  private stopRequested = false;
+  private replacement?: AppServerClient;
+  private initializeParams?: unknown;
   private child: ChildProcess | null = null;
   private nextRequestId = 1;
   private lineBuffer = "";
@@ -418,22 +421,23 @@ export class AppServerClient {
   }
 
   get pid(): number | null {
-    return this.child?.pid ?? null;
+    return this.replacement ? this.replacement.pid : this.child?.pid ?? null;
   }
 
   get stderrTail(): string {
-    return this.stderr;
+    return this.replacement?.stderrTail ?? this.stderr;
   }
 
   private versionWarningValue: string | null = null;
-  orchestrationVersionVerified = false;
+  private verifiedOrchestration = false;
+  get orchestrationVersionVerified(): boolean { return this.replacement?.orchestrationVersionVerified ?? this.verifiedOrchestration; }
   /** Soft-allow warning from the last preflight (null when the version was verified or no policy travelled). */
   get versionWarning(): string | null {
-    return this.versionWarningValue;
+    return this.replacement ? this.replacement.versionWarning : this.versionWarningValue;
   }
 
   notifications(): AsyncIterable<JsonRpcNotification> {
-    return this.queue;
+    return this.replacement?.notifications() ?? this.queue;
   }
 
   /**
@@ -474,22 +478,40 @@ export class AppServerClient {
       this.assertTrusted();
       child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...(this.options.configOverrides ?? []).flatMap((value) => ["-c", value]), "app-server", "--stdio"], spawnOptions);
     } catch (error) { this.builtinSkills.abortNeverSpawned(); throw error; }
-    this.builtinSkills.bind(child, spawnOptions.detached === true);
     this.child = child;
-    this.reportOwnedProcess(child);
-    child.once("close", () => this.reportOwnedProcess(child, true));
-    // Adopt immediately after spawn, before any JSON-RPC initialize/account/thread work.
-    this.options.bootstrap?.adopt(() => this.close());
-    this.bindChild(child);
-    await this.awaitSpawn(child);
+    try {
+      this.builtinSkills.bind(child, spawnOptions.detached === true);
+      this.reportOwnedProcess(child);
+      child.once("close", () => this.reportOwnedProcess(child, true));
+      // Adopt immediately after spawn, before any JSON-RPC initialize/account/thread work.
+      this.options.bootstrap?.adopt(() => this.close());
+      this.bindChild(child);
+      await this.awaitSpawn(child);
+    } catch (error) { await this.close(); throw error; }
   }
 
   /** Shared handshake seam; no roots are installed unless the process factory opts in. */
-  afterInitializeBuiltinSkills(timeoutMs: number): Promise<void> {
-    return this.builtinSkills.afterInitialize({ request: (method, params) => this.request(method, params, { timeoutMs }) }, timeoutMs);
+  async afterInitializeBuiltinSkills(timeoutMs: number): Promise<void> {
+    if (this.replacement) return this.replacement.afterInitializeBuiltinSkills(timeoutMs);
+    try { await this.builtinSkills.afterInitialize({ request: (method, params) => this.request(method, params, { timeoutMs }) }, timeoutMs); }
+    catch (error) {
+      if (this.closing || this.terminalError) throw error;
+      // A hook failure may leave a late set in flight. Retire that process;
+      // fresh process-local roots start empty. Never retry forwarding here.
+      await (this.closePromise ??= this.teardown(this.child!));
+      if (this.stopRequested) throw error;
+      const next = this.replacement = new AppServerClient({ ...this.options, prepareBuiltinSkills: undefined });
+      next.observeNotifications(n => { for (const observer of this.observers) { try { observer(n); } catch {} } });
+      try {
+        await next.start();
+        await next.request("initialize", this.initializeParams, { timeoutMs }); next.notify("initialized");
+      } catch (failure) { await next.close(); throw failure; }
+    }
   }
 
   request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
+    if (this.replacement) return this.replacement.request<T>(method, params, opts);
+    if (method === "initialize") this.initializeParams = params;
     if (this.terminalError) return Promise.reject(this.terminalError);
     if (this.child === null) return Promise.reject(new AppServerClientError("app-server client is not started"));
     if (this.pending.size >= this.maxPendingRequests) {
@@ -516,6 +538,7 @@ export class AppServerClient {
   }
 
   notify(method: string, params?: unknown): void {
+    if (this.replacement) return this.replacement.notify(method, params);
     this.write({ method, ...(params === undefined ? {} : { params }) });
   }
 
@@ -534,6 +557,8 @@ export class AppServerClient {
    * signal storm.
    */
   close(): Promise<void> {
+    this.stopRequested = true;
+    if (this.replacement) return this.replacement.close();
     this.closing = true;
     this.closePromise ??= this.child === null ? Promise.resolve() : this.teardown(this.child);
     return this.closePromise;
@@ -711,7 +736,7 @@ export class AppServerClient {
     this.versionWarningValue = policy.warningFor(version);
     const manifestPolicy = decodeCodexSupportPolicy(this.options.sourceEnv[ENV_CODEX_SUPPORT_POLICY]);
     const verdict = manifestPolicy && judgeCodexVersion(`${version.major}.${version.minor}.${version.patch}`, manifestPolicy);
-    this.orchestrationVersionVerified = !!verdict && verdict.allowed && !verdict.risk && !verdict.warning;
+    this.verifiedOrchestration = !!verdict && verdict.allowed && !verdict.risk && !verdict.warning;
   }
 
   /**
