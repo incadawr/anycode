@@ -9,10 +9,11 @@
  * pinned here through a direct SSR render with `defaultExpanded`.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { agentMessageStackLabel, agentMessageStackLayout, AgentMessageStack } from "./AgentMessageStack.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
+import { Button } from "../ui/index.js";
 import type { AgentMessageBlock } from "./MessageList.js";
 import { agentMessageText, type AgentEnvelope } from "../../../shared/communication.js";
 
@@ -157,9 +158,13 @@ describe("AgentMessageStack — collapsed (SSR)", () => {
     const tree = mount(three());
     const toggle = findByClass(tree, "agent-message-stack-toggle");
     expect(toggle).toBeDefined();
-    expect(toggle!.type).toBe("button");
+    expect(toggle!.type).toBe(Button);
+    const nativeToggle = Button(toggle!.props as ComponentProps<typeof Button>) as ReactElement<ComponentProps<"button">>;
+    expect(nativeToggle.type).toBe("button");
     expect(toggle!.props["aria-expanded"]).toBe(false);
     expect(toggle!.props["aria-controls"]).toEqual(expect.any(String));
+    expect(nativeToggle.props["aria-expanded"]).toBe(toggle!.props["aria-expanded"]);
+    expect(nativeToggle.props["aria-controls"]).toBe(toggle!.props["aria-controls"]);
   });
 });
 
