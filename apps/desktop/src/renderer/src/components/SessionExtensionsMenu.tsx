@@ -97,8 +97,11 @@ export function SessionExtensionsMenu() {
       panel.current.style.top = `${Math.max(8, Math.min(anchor.bottom + 4, window.innerHeight - rect.height - 8))}px`;
     };
     place();
+    // Drill-down grows when details or async reads arrive; columns stay fixed.
+    const observer = narrow ? new ResizeObserver(place) : null;
+    if (panel.current) observer?.observe(panel.current);
     window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", place); };
   }, [open, narrow]);
 
   useEffect(() => {

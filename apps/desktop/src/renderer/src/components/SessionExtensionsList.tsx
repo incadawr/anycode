@@ -12,7 +12,9 @@ const scopeLabel = { project: "Project", user: "User", compat: "Compatibility", 
 /** Problem strings may contain OS errors or config contents; show only recognized file labels. */
 function CatalogProblems({ problems, category }: { problems: string[]; category: "mcp" | "skills" }) {
   if (!problems.length) return null;
-  const labels = problems.flatMap(problem => {
+  const pluginProblems = category === "mcp" ? problems.filter(problem => /^(Could not read|Invalid JSON in|Invalid) plugin manifest /.test(problem)) : [];
+  const configProblems = problems.filter(problem => !pluginProblems.includes(problem));
+  const labels = configProblems.flatMap(problem => {
     if (category === "skills" && problem.startsWith("Skill discovery: ")) {
       const file = problem.match(/[\\/]([^\\/\r\n]+)[\\/]SKILL\.md(?=[:\s]|$)/)?.[1];
       if (!file) return [];
@@ -29,7 +31,8 @@ function CatalogProblems({ problems, category }: { problems: string[]; category:
     return [];
   });
   return <div role="status" className="session-extensions-problems">
-    <p>{problems.length} configuration {problems.length === 1 ? "issue" : "issues"}. Open Manage {category === "mcp" ? "MCP servers" : "skills"} for details.</p>
+    {configProblems.length > 0 && <p>{configProblems.length} configuration {configProblems.length === 1 ? "issue" : "issues"}. Open Manage {category === "mcp" ? "MCP servers" : "skills"} for details.</p>}
+    {pluginProblems.length > 0 && <p>{pluginProblems.length} plugin manifest {pluginProblems.length === 1 ? "issue" : "issues"}. Open Manage plugins for details.</p>}
     {labels.map((label, index) => <p key={index}>{label}</p>)}
   </div>;
 }
@@ -69,9 +72,11 @@ export function SessionExtensionsList({ category, reads, retry, mcpRows = [], mc
           onCheckedChange={() => mcpControls.setEnabled(row.key)} />}
         <span className="session-extensions-name" title={row.name}>{row.name}</span>
         <span className="session-extensions-source">{row.source}</span>
-        <Button type="button" className="session-extensions-manage" title={`Manage ${row.name}`} onClick={() => onManage?.(row.source === "Plugin" ? "plugins" : "mcp", row.source === "User" ? "user" : "project")}>Manage</Button>
+        <Button type="button" className="session-extensions-manage" aria-label={`Manage ${row.source}: ${row.name}`} title={`Manage ${row.name}`} onClick={() => onManage?.(row.source === "Plugin" ? "plugins" : "mcp", row.source === "User" ? "user" : "project")}>Manage</Button>
         </div>
         {!(row.saved && mcpControls) && <span className="session-extensions-note">{row.note}</span>}
+        {row.saved && mcpControls && row.note.includes("; this session keeps its startup configuration") &&
+          <span className="session-extensions-note">This session keeps its startup configuration.</span>}
         <span className="session-extensions-feedback" aria-live="polite">{mcpControls?.write.pendingKey === row.key ? "Saving…" :
           mcpControls?.write.savedKeys.includes(row.key) ? "Saved for new session starts" : ""}</span>
         <span className="session-extensions-status">
@@ -116,7 +121,7 @@ export function SessionExtensionsList({ category, reads, retry, mcpRows = [], mc
           onCheckedChange={() => controls.setEnabled(row.key!)} />}
         <span className="session-extensions-name" title={extensionDisplayName(row.name)}>{extensionDisplayName(row.name)}</span>
         <span className="session-extensions-source">{row.source}</span>
-        <Button type="button" className="session-extensions-manage" title={`Manage ${extensionDisplayName(row.name)}`} onClick={() => onManage?.(row.source === "Plugin" || category === "plugins" ? "plugins" : category === "lsp" ? "language-servers" : "skills", row.source === "User" ? "user" : "project")}>Manage</Button>
+        <Button type="button" className="session-extensions-manage" aria-label={`Manage ${row.source}: ${extensionDisplayName(row.name)}`} title={`Manage ${extensionDisplayName(row.name)}`} onClick={() => onManage?.(row.source === "Plugin" || category === "plugins" ? "plugins" : category === "lsp" ? "language-servers" : "skills", row.source === "User" ? "user" : "project")}>Manage</Button>
         </div>
         {row.note && <span className="session-extensions-note">{row.note}</span>}
         <span className="session-extensions-feedback" aria-live="polite">{controls && controls.write.pendingKey === row.key ? "Saving…" :

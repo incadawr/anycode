@@ -1512,8 +1512,9 @@ body {
   width: min(520px, calc(100vw - 16px));
   height: min(480px, calc(100vh - 16px));
 }
+.session-extensions-panel.has-details { width: min(520px, calc(100vw - 16px)); }
 .session-extensions-body { min-height: 0; flex: 1; overflow: hidden; }
-[data-layout="columns"] .session-extensions-body { display: grid; grid-template-columns: 160px minmax(0, 1fr); }
+[data-layout="columns"] .session-extensions-body { display: grid; grid-template-columns: 160px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 .session-extensions-categories, .session-extensions-details { min-width: 0; min-height: 0; }
 .session-extensions-details { overflow: auto; }
 .session-extensions-category > span:first-child { flex: 1; text-align: left; }

@@ -35,6 +35,12 @@ export function assertLayout(view) {
   assert(!view.overflow, "No horizontal overflow");
   assert(view.left >= 0 && view.right <= view.width && view.top >= 0 && view.bottom <= view.height, "Panel fits viewport");
 }
+export function assertDetailsScroll(view) {
+  assert(view.clientHeight > 0 && view.scrollHeight > view.clientHeight, "Long details really overflow");
+  assert(view.detailsHeight <= view.bodyHeight + 1, "Details stay within the grid row");
+  assert(view.scrollTop > 0 && view.lastVisible && view.footerVisible, "Scrolling reaches the last row and management footer");
+  assert(view.categoriesStable, "Scrolling details leaves categories in place");
+}
 export function assertConsentPending(view) {
   assert.equal(view.reason, true, "Consent-pending entry explains where approval is needed");
   assert.equal(view.switches, 0, "Consent-pending MCP entry has no write control");
@@ -162,9 +168,8 @@ async function main() {
     results.checks.push("keyboard-arrows-switch-left-escape-shift-tab", "hover-preserves-selection-and-focus");
   }
   async function layouts() {
-    // Electron does not expose Chrome's Browser.setWindowBounds. Exercise the
-    // renderer viewport at the supported minimum; never emulate below 720px.
-    results.layoutDriver = "CDP viewport emulation (720/1100); native window resize not checked";
+    // CDP also exercises drill-down below the native window's minimum width.
+    results.layoutDriver = "CDP viewport emulation (500/720/1100); native window resize not checked";
     const theme = await evaluate("document.documentElement.dataset.theme");
     try {
       for (const width of [1100, 720]) {
@@ -184,15 +189,41 @@ async function main() {
           const geometry = () => evaluate(`(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return {left:r.left, top:r.top, width:r.width}; })()`);
           const before = await geometry();
           await click(".session-extensions-category:nth-child(3)");
+          await poll(() => evaluate("document.querySelectorAll('.session-extensions-list li').length === 25"));
           assert.deepEqual(await geometry(), before, "Category selection keeps panel geometry");
+          const categoriesBefore = await evaluate("document.querySelector('.session-extensions-categories').getBoundingClientRect().top");
+          const point = await evaluate("(() => { const r=document.querySelector('.session-extensions-details').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()");
+          await cdp.call("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: 10000 });
+          await poll(() => evaluate("(() => { const d=document.querySelector('.session-extensions-details'); return d.scrollTop > 0 && d.scrollTop+d.clientHeight >= d.scrollHeight-1; })()"));
+          assertDetailsScroll(await evaluate(`(() => {
+            const d=document.querySelector('.session-extensions-details'), r=d.getBoundingClientRect();
+            const last=d.querySelector('li:last-child').getBoundingClientRect(), footer=d.querySelector('footer').getBoundingClientRect();
+            return { clientHeight:d.clientHeight, scrollHeight:d.scrollHeight, scrollTop:d.scrollTop,
+              detailsHeight:r.height, bodyHeight:document.querySelector('.session-extensions-body').getBoundingClientRect().height,
+              lastVisible:last.top>=r.top && last.bottom<=r.bottom, footerVisible:footer.top>=r.top && footer.bottom<=r.bottom,
+              categoriesStable:document.querySelector('.session-extensions-categories').getBoundingClientRect().top===${categoriesBefore} };
+          })()`));
+          if (width === 1100 && theme === "dark") await shot("skills-long-scrolled");
           await shot(`layout-${width}-${theme}`); await escape();
         }
+      }
+      for (const height of [600, 400]) {
+        await cdp.call("Emulation.setDeviceMetricsOverride", { width: 500, height, deviceScaleFactor: 1, mobile: false });
+        await poll(() => evaluate(`innerWidth === 500 && innerHeight === ${height}`));
+        await click(trigger);
+        assert.equal(await evaluate(`document.querySelector('${panel}').dataset.layout`), "drill-down");
+        await click('.session-extensions-category[data-extension-category="skills"]');
+        await poll(() => evaluate("document.querySelectorAll('.session-extensions-list li').length === 25"));
+        await poll(() => evaluate(`(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return r.top>=8 && r.bottom<=innerHeight-8; })()`));
+        assert.equal(await evaluate(`document.querySelector('${panel}').getBoundingClientRect().width`), 484, "Drill-down details use the available width");
+        await shot(`drill-down-${height}`);
+        await escape();
       }
     } finally {
       await cdp.call("Emulation.clearDeviceMetricsOverride");
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
     }
-    results.checks.push("720-and-1100-light-dark-layout");
+    results.checks.push("720-and-1100-light-dark-layout", "long-details-scroll-last-row-and-footer", "500-drill-down-fits-400-and-600-height");
   }
   async function shot(name) {
     const result = await cdp.call("Page.captureScreenshot", { format: "png" });
@@ -333,8 +364,10 @@ async function main() {
     json(join(profile, ".anycode/plugins/pending-user/.anycode-plugin/plugin.json"), {
       manifestVersion: 1, name: "pending-user", version: "0.1.0", mcpServers: { api: inert },
     });
-    mkdirSync(join(b, ".anycode/skills/b-skill"), { recursive: true });
-    writeFileSync(join(b, ".anycode/skills/b-skill/SKILL.md"), "---\nname: b-skill\ndescription: Local fixture skill\n---\nFixture instructions.\n");
+    for (const name of ["b-skill", ...Array.from({ length: 24 }, (_, i) => `long-skill-${String(i + 1).padStart(2, "0")}`)]) {
+      mkdirSync(join(b, ".anycode/skills", name), { recursive: true });
+      writeFileSync(join(b, ".anycode/skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: Local fixture skill\n---\nFixture instructions.\n`);
+    }
     const first = await create(a);
     const second = await create(b);
     phase = "empty header";
@@ -351,7 +384,7 @@ async function main() {
       const c = [...document.querySelectorAll('.session-extensions-category')].slice(0, 4).map(e => e.querySelector('[aria-live]').textContent);
       return c.length === 4 && c.every(v => /^\\d+$/.test(v)) ? c.map(Number) : null;
     })()`));
-    assertCounts(counts, [5, 2, 1, 1]);
+    assertCounts(counts, [5, 2, 25, 1]);
     const initial = await rows();
     assertMcpRow(initial, "healthy", "Project", true, statusConnected);
     assertMcpRow(initial, "healthy", "User", false, "Shadowed by another scope");
@@ -440,7 +473,7 @@ async function main() {
         assert(await evaluate("document.querySelector('.session-extensions-details').textContent.includes('Saved in AnyCode; this engine may not load these entries')"));
       }
       const counts = await evaluate("[...document.querySelectorAll('.session-extensions-category [aria-live]')].map(e=>Number(e.textContent))");
-      assertCounts(counts, [5, 2, 1, 1]);
+      assertCounts(counts, [5, 2, 25, 1]);
       assert.equal(readFileSync(configPath, "utf8"), unchanged, "Unsupported and consent-pending navigation cannot write config");
       await escape(); results.checks.push(`${engine}-catalog-unknown-readonly-unsupported`);
     }

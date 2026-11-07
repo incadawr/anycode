@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertCounts, assertLossless, assertMcpRow, observeToolCatalog, assertLayout, assertNativeUnavailable, assertConsentPending, assertPluginConsentRows } from "./extensions-ui-smoke.mjs";
+import { assertCounts, assertLossless, assertMcpRow, observeToolCatalog, assertLayout, assertDetailsScroll, assertNativeUnavailable, assertConsentPending, assertPluginConsentRows } from "./extensions-ui-smoke.mjs";
 
 const connected = "Connected in this session";
 const failed = "Connection failed";
@@ -94,6 +94,16 @@ test("layout assertion accepts both themes and rejects clipping, overflow and lo
 });
 
 const unavailable = () => ({ text: "These language servers are saved for Core sessions. This engine does not use AnyCode LSP.", switches: 0, details: false, restart: false });
+test("scroll assertion rejects expanded grid rows, clipping and unreachable management", () => {
+  const view = { clientHeight: 400, scrollHeight: 1000, scrollTop: 600, detailsHeight: 400, bodyHeight: 400,
+    lastVisible: true, footerVisible: true, categoriesStable: true };
+  assertDetailsScroll(view);
+  for (const mutation of [
+    { clientHeight: 0 }, { scrollHeight: 400 }, { detailsHeight: 1000 }, { scrollTop: 0 },
+    { lastVisible: false }, { footerVisible: false }, { categoriesStable: false },
+  ]) assert.throws(() => assertDetailsScroll({ ...view, ...mutation }));
+});
+
 test("native assertion rejects false capability, missing reason and actionable unsupported controls", () => {
   assertNativeUnavailable(unavailable());
   for (const mutation of [

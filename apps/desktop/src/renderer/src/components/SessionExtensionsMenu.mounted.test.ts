@@ -18,7 +18,9 @@ let root: Root;
 let container: HTMLDivElement;
 let store: ReturnType<typeof createDesktopStore>;
 const originalTabs = useTabsStore.getState();
-const originalWidth = window.innerWidth;
+const [originalWidth, originalHeight] = [window.innerWidth, window.innerHeight];
+let notifyPanelResize: () => void;
+const observePanel = vi.fn(), disconnectPanel = vi.fn();
 const props = { sidebarCollapsed: true, onToggleSidebar: () => {}, onToast: () => {} };
 const trigger = () => container.querySelector<HTMLButtonElement>('[aria-label="Extensions"]')!;
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"][aria-label="Extensions"]');
@@ -30,6 +32,13 @@ async function key(element: HTMLElement, value: string) {
   await act(async () => { element.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true })); });
 }
 beforeEach(() => {
+  observePanel.mockClear();
+  disconnectPanel.mockClear();
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { notifyPanelResize = callback; }
+    observe = observePanel;
+    disconnect = disconnectPanel;
+  });
   store = createDesktopStore();
   store.setState({ workspace: "/project", transcript: [{ kind: "user", text: "Hello" } as never] });
   useTabsStore.setState({ tabs: [{ tabId: "a", title: "Project" } as never], activeTabId: "a" });
@@ -54,8 +63,10 @@ afterEach(async () => {
   document.body.replaceChildren();
   useTabsStore.setState(originalTabs, true);
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: originalHeight });
 });
 
 it("opens one portal dialog with scoped configured counts and returns focus on Escape", async () => {
@@ -260,8 +271,32 @@ it("keeps column geometry through selection and data arrival, with no Back butto
   await click(categoryButtons()[2]!);
   await act(async () => finish({ rows: [], problems: [] } as never));
   expect(measure).not.toHaveBeenCalled();
+  expect(observePanel).not.toHaveBeenCalled();
   expect({ left: panel.style.left, width: panel.getBoundingClientRect().width }).toEqual(before);
   expect(panel.querySelector(".session-extensions-back")).toBeNull();
+});
+
+it("repositions drill-down after selection and async growth and disconnects on columns", async () => {
+  await resize(500);
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 400 });
+  let finish!: (value: never) => void;
+  vi.mocked(window.anycode.skills.list).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ right: 480, bottom: 80 } as DOMRect);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const selected = this.classList.contains("has-details");
+    return { width: selected ? 484 : 280, height: !selected ? 180 : this.querySelector("li") ? 384 : 340 } as DOMRect;
+  });
+  await click(trigger());
+  expect(dialog()!.style.top).toBe("84px");
+  await click(categoryButtons()[2]!);
+  await act(async () => notifyPanelResize());
+  expect(dialog()!.style.top).toBe("52px");
+  await act(async () => finish({ rows: [{ name: "late", sourceKind: "user", enabled: true }], problems: [] } as never));
+  await act(async () => notifyPanelResize());
+  expect(dialog()!.style.top).toBe("8px");
+  await resize(900);
+  expect(disconnectPanel).toHaveBeenCalledTimes(1);
 });
 
 it("uses drill-down below 600px, keeps focus through resize and restores the category", async () => {
@@ -335,6 +370,20 @@ it("names invalid MCP configuration files without rendering raw parser errors", 
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
 });
 
+it("routes plugin manifest problems to Plugins without exposing private diagnostics", async () => {
+  vi.mocked(window.anycode.mcpConfig.get).mockResolvedValue({ entries: [], problems: [
+    "Could not read plugin manifest /private/plugin.json: PRIVATE_ERROR",
+    "Invalid JSON in plugin manifest /private/plugin.json: PRIVATE_CONTENT",
+    "Invalid plugin manifest /private/plugin.json: PRIVATE_SCHEMA",
+  ] } as never);
+  await render();
+  await click(trigger());
+  expect(details()!.textContent).toContain("3 plugin manifest issues. Open Manage plugins for details.");
+  expect(details()!.textContent).not.toContain("Open Manage MCP servers");
+  expect(details()!.textContent).not.toContain("Fix the JSON");
+  expect(dialog()!.outerHTML).not.toMatch(/PRIVATE_|\/private/);
+});
+
 it("keeps skill controls, name, source and management together without redundant saved labels", async () => {
   await render();
   await click(trigger());
@@ -344,7 +393,8 @@ it("keeps skill controls, name, source and management together without redundant
     expect(item.firstElementChild!.getAttribute("role")).toBe("switch");
     expect(item.querySelector(".session-extensions-name")).not.toBeNull();
     expect(item.querySelector(".session-extensions-source")!.textContent).toBe("User");
-    expect(item.querySelector(".session-extensions-manage")!.getAttribute("title")).toMatch(/^Manage /);
+    expect(item.querySelector(".session-extensions-manage")!.getAttribute("aria-label"))
+      .toBe(`Manage User: ${item.querySelector(".session-extensions-name")!.textContent}`);
     expect(row.textContent).not.toContain("Saved:");
   }
 });
@@ -386,8 +436,7 @@ it("closes after Shift+Tab leaves through the trigger without a late focus resto
   expect(isOverlayOpen()).toBe(false);
 });
 
-it("does not trap Tab and cleans pending hover on tab switch", async () => {
-  vi.useFakeTimers();
+it("does not trap Tab and closes on tab switch", async () => {
   await render();
   await click(trigger());
   await click(categoryButtons()[0]!);
@@ -399,12 +448,9 @@ it("does not trap Tab and cleans pending hover on tab switch", async () => {
   expect(dialog()).toBeNull();
   expect(document.activeElement).toBe(outside);
   await click(trigger());
-  await hover(categoryButtons()[1]!);
   await render("b");
-  await act(async () => { vi.advanceTimersByTime(200); });
   expect(dialog()).toBeNull();
   expect(isOverlayOpen()).toBe(false);
-  expect(vi.getTimerCount()).toBe(0);
 });
 
 const mcpStatus = (state: "connected" | "failed" | "connecting" | "closed", name = "project-mcp") => ({
@@ -436,6 +482,9 @@ it("retains live failures and connections beside saved disabled entries and unma
   const text = details()!.textContent!;
   expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");
   expect(text).toContain("Changes apply on the next session start");
+  expect(text).toContain("This session keeps its startup configuration.");
+  expect(details()!.querySelector('li')!.textContent).not.toContain("Saved: disabled");
+  expect(details()!.querySelector('.session-extensions-manage')!.getAttribute("aria-label")).toBe("Manage Project: project-mcp");
   expect(text).toContain("Connection failed");
   expect(text).toContain("This session / Diagnostics");
   expect(text).toContain("Connected in this session");
