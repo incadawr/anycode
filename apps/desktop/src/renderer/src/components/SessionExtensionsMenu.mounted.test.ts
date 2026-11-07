@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionHeader } from "./SessionHeader.js";
 import { LspPanel } from "./LspPanel.js";
 import { tabRegistry } from "../tab-registry.js";
-import { formatEnvironmentLspDetail, EnvironmentMenu } from "./EnvironmentMenu.js";
+import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { TabContext } from "../tab-context.js";
 import { createDesktopStore } from "../store.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -33,6 +33,8 @@ beforeEach(() => {
   store.setState({ workspace: "/project", transcript: [{ kind: "user", text: "Hello" } as never] });
   useTabsStore.setState({ tabs: [{ tabId: "a", title: "Project" } as never], activeTabId: "a" });
   Object.defineProperty(window, "anycode", { configurable: true, value: {
+    sessionPeers: { get: vi.fn(async () => ({ ok: false })) },
+    communication: { get: vi.fn(async () => ({ ok: false })) },
     browserAccess: { get: vi.fn(async () => ({ ok: true, tabs: [] })), onChanged: () => () => {} },
     mcpConfig: { get: vi.fn(async () => ({ entries: [
       { name: "project-mcp", source: "project", enabled: false }, { name: "compat-mcp", source: "compat" },
@@ -491,13 +493,13 @@ it("updates open details on runtime events without reloading config or moving fo
 });
 
 
-const lspStatus = (state: "ready" | "crashed" | "not_started", name = "typescript") => ({
+const lspStatus = (state: "ready" | "crashed" | "not_started" | "initializing" | "disposed", name = "typescript") => ({
   name, state, extensions: [".ts"], stderrTail: "PRIVATE_STDERR", pid: 123,
 });
 const detailButton = (text: string) => [...details()!.querySelectorAll<HTMLButtonElement>("button")]
   .find((button) => button.textContent === text);
 
-it("shares the environment LSP summary and leaves all host requests to the existing drawer", async () => {
+it("shows live LSP states and leaves status requests to the existing drawer", async () => {
   const servers = [lspStatus("ready"), lspStatus("crashed", "python")];
   store.setState({ connection: "ready", lspServers: servers });
   const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
@@ -505,11 +507,12 @@ it("shares the environment LSP summary and leaves all host requests to the exist
   await render("b", createElement(Fragment, null, createElement(SessionHeader, props), createElement(LspPanel)));
   await click(trigger());
   await click(categoryButtons()[3]!);
-  expect(details()!.textContent).toContain(formatEnvironmentLspDetail(servers));
+  expect(details()!.textContent).toContain("typescript ready");
+  expect(details()!.textContent).toContain("python crashed");
   expect(details()!.textContent).toContain("A language server crashed");
   expect(details()!.querySelectorAll("li")).toHaveLength(2);
   expect(categoryButtons()[3]!.textContent).toContain("2");
-  expect(detailButton("Restart")).toBeUndefined();
+  expect(detailButton("Restart")).toBeDefined();
   expect(details()!.querySelector('[role="switch"]')).toBeNull();
   expect(send).not.toHaveBeenCalled();
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_STDERR");
@@ -571,6 +574,7 @@ it.each(["codex", "claude"])("keeps configured LSP and catalog counts with hones
   expect(details()!.querySelectorAll("li")).toHaveLength(2);
   expect(detailButton("Details")).toBeUndefined();
   expect(details()!.textContent).not.toContain("crashed");
+  expect(trigger().querySelector(".session-extensions-warning")).toBeNull();
   for (const index of [1, 2]) {
     await click(categoryButtons()[index]!);
     expect(details()!.textContent).toContain("AnyCode catalog. Availability in the current engine is not confirmed");
@@ -583,11 +587,11 @@ it("updates the shared LSP summary without equating an idle server to a crash", 
   await render();
   await click(trigger());
   await click(categoryButtons()[3]!);
-  expect(details()!.textContent).toContain("typescript —");
+  expect(details()!.textContent).toContain("typescript not started");
   expect(details()!.textContent).not.toContain("crashed");
   const focused = document.activeElement;
   await act(async () => store.setState({ lspServers: [lspStatus("ready")] }));
-  expect(details()!.textContent).toContain("typescript ✓");
+  expect(details()!.textContent).toContain("typescript ready");
   expect(document.activeElement).toBe(focused);
   await act(async () => store.setState({ lspServers: [lspStatus("crashed")] }));
   expect(details()!.textContent).toContain("A language server crashed");
@@ -629,7 +633,7 @@ it("sanitizes names in the shared LSP summary without exposing runtime metadata"
   await click(categoryButtons()[3]!);
   const summary = details()!.querySelector('[aria-label="Language server summary"]')!;
   expect(summary.textContent).toContain("<img src=x>");
-  expect(summary.textContent).toContain("… ✓");
+  expect(summary.textContent).toContain("… ready");
   expect(summary.querySelector("img")).toBeNull();
   expect(summary.textContent).not.toMatch(/[\u202e\n]/);
   expect(summary.outerHTML).not.toContain("PRIVATE_STDERR");
@@ -1084,5 +1088,68 @@ it.each(["codex", "claude"])("locks pending native configuration writes and refu
   await click(categoryButtons()[3]!);
   expect(details()!.textContent).toContain("LSP is unavailable in this engine");
   expect(details()!.querySelector('[role="switch"]')).toBeNull();
+  expect(send).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["ready", "ready", "success"], ["initializing", "initializing", "warning"],
+  ["not_started", "not started", "neutral"], ["crashed", "crashed", "danger"],
+  ["disposed", "disposed", "neutral"],
+] as const)("shows the %s LSP state and only offers Restart for a crash", async (state, label, tone) => {
+  store.setState({ connection: "ready", lspServers: [lspStatus(state)] });
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  await render("b");
+  expect(!!trigger().querySelector(".session-extensions-warning")).toBe(state === "crashed");
+  if (state === "crashed") expect(trigger().textContent).toContain("A language server crashed");
+  await click(trigger());
+  await click(categoryButtons()[3]!);
+  const summary = details()!.querySelector('[aria-label="Language server summary"]')!;
+  expect(summary.textContent).toContain(`typescript ${label}`);
+  expect(summary.querySelector(`.session-extensions-dot.tone-${tone}`)).not.toBeNull();
+  expect(!!detailButton("Restart")).toBe(state === "crashed");
+  expect(send).not.toHaveBeenCalled();
+  if (state === "crashed") {
+    await click(detailButton("Restart")!);
+    expect(send).toHaveBeenCalledExactlyOnceWith("b", { type: "lsp_restart_request" });
+    expect(dialog()).not.toBeNull();
+    await act(async () => store.setState({ lspServers: [lspStatus("ready")] }));
+    expect(trigger().querySelector(".session-extensions-warning")).toBeNull();
+    expect(detailButton("Restart")).toBeUndefined();
+  }
+});
+
+it("keeps last reported crashes visible but disables Restart without a host", async () => {
+  store.setState({ connection: "host_exited", lspServers: [lspStatus("crashed")] });
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  await render();
+  expect(trigger().textContent).toContain("Last reported status");
+  await click(trigger());
+  await click(categoryButtons()[3]!);
+  expect(detailButton("Restart")!.disabled).toBe(true);
+  await click(detailButton("Restart")!);
+  expect(send).not.toHaveBeenCalled();
+});
+
+it("keeps Hooks in Environment and removes its duplicate LSP row and actions", async () => {
+  store.setState({ connection: "ready", lspServers: [lspStatus("crashed")] });
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  await render("a", createElement(EnvironmentMenu, { placement: "header" }));
+  await click(container.querySelector<HTMLButtonElement>('[aria-label="Open environment menu"]')!);
+  expect(container.querySelector('[aria-label="Language servers"]')).toBeNull();
+  expect(container.querySelector('[data-environment-action^="lsp-"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Hooks"]')).not.toBeNull();
+  expect(send).not.toHaveBeenCalled();
+});
+
+it("offers Extensions and LSP setup in the new-session composer without host requests", async () => {
+  window.anycode.listSessions = vi.fn(async () => []);
+  const { Composer } = await import("./Composer.js");
+  store.setState({ transcript: [], connection: "ready" });
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  await render("a", createElement(Composer));
+  expect(trigger()).not.toBeNull();
+  await click(trigger());
+  await click(categoryButtons()[3]!);
+  expect(detailButton("Manage language servers")).toBeDefined();
   expect(send).not.toHaveBeenCalled();
 });

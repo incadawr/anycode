@@ -1548,6 +1548,9 @@ body {
 @container session-header (width < 720px) {
   .session-extensions-label { display: none; }
 }
+@container composer (width < 600px) {
+  .session-extensions-label { display: none; }
+}
 
 /* Custom titlebar (design/ui-track custom-titlebar §2): macOS-only traffic-
    light clearance when the sidebar cap is hidden (collapsed) — the header
@@ -4529,11 +4532,15 @@ body {
 
 /* New sessions keep their repository context next to the prompt where it is
    useful, then the strip naturally disappears once the conversation starts. */
-.environment-control-composer {
-  align-self: stretch;
+.composer-environment {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   padding-bottom: var(--sp-2);
   border-bottom: 1px solid var(--border);
 }
+
+.composer-environment .environment-control-composer { min-width: 0; }
 
 .environment-control-composer .environment-trigger {
   background: transparent;

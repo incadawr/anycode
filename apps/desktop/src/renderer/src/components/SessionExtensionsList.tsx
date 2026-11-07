@@ -1,7 +1,7 @@
 import type { SettingsPaneSelection } from "./settings-extensions-navigation.js";
 import { Button, Switch } from "../ui/index.js";
 import type { LspServerStatus } from "@anycode/core";
-import { formatEnvironmentLspDetail, hasCrashedLspServer } from "./EnvironmentMenu.js";
+import { hasCrashedLspServer } from "./EnvironmentMenu.js";
 import { extensionDisplayName, type McpExtensionRow } from "./extensions-model.js";
 import type { ExtensionToggleControls, ExtensionCategory, useSessionExtensions } from "./useSessionExtensions.js";
 
@@ -96,14 +96,20 @@ export function SessionExtensionsList({ category, reads, retry, mcpRows = [], mc
   </>;
 }
 
-/** Shares the Environment summary; live process details and refresh belong to the drawer. */
-export function SessionExtensionsLspSummary({ servers, core, ready, onDetails }: {
-  servers: readonly LspServerStatus[]; core: boolean; ready: boolean; onDetails: () => void;
+/** Store-backed runtime states; process details and refresh belong to the drawer. */
+export function SessionExtensionsLspSummary({ servers, core, ready, onDetails, onRestart }: {
+  servers: readonly LspServerStatus[]; core: boolean; ready: boolean; onDetails: () => void; onRestart: () => void;
 }) {
   if (!core) return <p>AnyCode LSP is unavailable in this engine. For new Core sessions.</p>;
-  const summary = formatEnvironmentLspDetail(servers.map((server) => ({ ...server, name: extensionDisplayName(server.name) })));
   return <section aria-label="Language server summary">
-    <p>{ready ? summary : `Host unavailable. Last reported status: ${summary}`}</p>
+    {!ready && <p>Host unavailable. Last reported status:</p>}
+    {servers.length === 0 && <p>Not configured</p>}
+    {servers.map((server, index) => <div key={index} className="session-extensions-status">
+      <span className={`session-extensions-dot tone-${server.state === "ready" ? "success" :
+        server.state === "crashed" ? "danger" : server.state === "initializing" ? "warning" : "neutral"}`} aria-hidden="true" />
+      <span>{extensionDisplayName(server.name)} {server.state === "not_started" ? "not started" : server.state}</span>
+    </div>)}
+    {hasCrashedLspServer(servers) && <Button type="button" disabled={!ready} onClick={onRestart}>Restart</Button>}
     {ready && hasCrashedLspServer(servers) && <p role="status">A language server crashed.</p>}
     {servers.length > 0 && <Button type="button" disabled={!ready} onClick={onDetails}>Details</Button>}
   </section>;

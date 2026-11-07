@@ -1,10 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent } from "react";
 import { flushSync } from "react-dom";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import { hasCrashedLspServer } from "./EnvironmentMenu.js";
 import { SessionExtensionsFooter } from "./SessionExtensionsFooter.js";
 import type { SettingsPaneSelection } from "./settings-extensions-navigation.js";
 import { createPortal } from "react-dom";
-import { useTabContextTabId, useTabStoreApi } from "../tab-context.js";
+import { useTabContextTabId, useTabStoreApi, useTabSend } from "../tab-context.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Button, useRovingTabindex } from "../ui/index.js";
 import { useSessionExtensions, type ExtensionCategory } from "./useSessionExtensions.js";
@@ -17,9 +18,12 @@ import {
 export function SessionExtensionsMenu() {
   const tabId = useTabContextTabId();
   const store = useTabStoreApi();
+  const send = useTabSend();
   const { open, setOpen, reads, retry, mcpRows, mcpFailed, connection, engine, lspServers, setMcpEnabled, mcpWrite, mcpBusy, mcpWritable, catalogControls } = useSessionExtensions({ tabId, store });
   const id = useId();
-  const warningId = `${id}-mcp-warning`;
+  const warningId = `${id}-warning`;
+  const lspCrashed = engine === null && hasCrashedLspServer(lspServers);
+  const failed = mcpFailed || lspCrashed;
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
@@ -126,7 +130,7 @@ export function SessionExtensionsMenu() {
   const categoryKeys: ExtensionCategory[] = ["mcp", "plugins", "skills", "lsp"];
   return <>
     <Button ref={trigger} type="button" className="session-extensions-trigger" title="Extensions"
-      aria-describedby={mcpFailed ? warningId : undefined}
+      aria-describedby={failed ? warningId : undefined}
       aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
       onBlur={exitOnBlur}
       onClick={() => { if (!open) roving.setActiveIndex(0); setOpen(!open); }}
@@ -142,8 +146,8 @@ export function SessionExtensionsMenu() {
         <rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" />
       </svg>
       <span className="session-extensions-label">Extensions</span>
-      {mcpFailed && <><span className="session-extensions-warning session-extensions-dot tone-danger" aria-hidden="true" />
-        <span id={warningId} className="session-extensions-sr">MCP connection failed. {connection !== "ready" ? "Last reported status; host unavailable." : ""}</span></>}
+      {failed && <><span className="session-extensions-warning session-extensions-dot tone-danger" aria-hidden="true" />
+        <span id={warningId} className="session-extensions-sr">{mcpFailed && "MCP connection failed. "}{lspCrashed && "A language server crashed. "}{connection !== "ready" ? "Last reported status; host unavailable." : ""}</span></>}
     </Button>
     {open && createPortal(<div ref={panel} id={id} role="dialog" aria-modal="false" aria-label="Extensions"
       className={`session-extensions-panel${selection ? " has-details" : ""}`} data-layout={narrow ? "drill-down" : "columns"}
@@ -177,7 +181,9 @@ export function SessionExtensionsMenu() {
         <Button type="button" className="session-extensions-back" onClick={back}>Back</Button>
         <h3>{categories[selection.index]![0]}</h3>
         {selection.index === 3 && <SessionExtensionsLspSummary servers={lspServers} core={engine === null}
-          ready={connection === "ready"} onDetails={() => {
+          ready={connection === "ready"} onRestart={() => {
+            if (engine === null && connection === "ready" && hasCrashedLspServer(lspServers)) send({ type: "lsp_restart_request" });
+          }} onDetails={() => {
             setOpen(false);
             useTabsStore.getState().setLspPanelOpen(tabId, true);
           }} />}

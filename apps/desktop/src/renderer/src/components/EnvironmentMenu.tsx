@@ -14,12 +14,9 @@ import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Ellipsis, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
+import { Ellipsis, Folder, GitBranch, HookIcon } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";
-// "Set up" routes through the same settings-open + pane-select
-// seam SkillsPane uses (slash-menu.ts owns both event names).
-import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 
 type EnvironmentPlacement = "header" | "composer";
 
@@ -82,10 +79,9 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const branches = useTabStore((state) => state.git.branches);
-  // LSP/hooks status rows (core engines only — `engine === null`
+  // Hooks status row (core engines only — `engine === null`
   // mirrors the old header-button gate and the panels' mount gate in App.tsx).
   const engine = useTabStore((state) => state.engine);
-  const lspServers = useTabStore((state) => state.lspServers);
   const hookDeclarations = useTabStore((state) => state.hookDeclarations);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
@@ -165,28 +161,9 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     setOpen(false);
   }
 
-  function openLspDetails(): void {
-    openPanel((id) => useTabsStore.getState().setLspPanelOpen(id, true));
-  }
-
-  // "Set up" (zero servers) lands on the Language servers
-  // SETTINGS pane now — the same settings.open + select-pane pair SkillsPane
-  // uses — instead of the drawer; "Details" above keeps opening the drawer.
-  function openLspSetup(): void {
-    window.dispatchEvent(new CustomEvent(RUN_ACTION_EVENT, { detail: "settings.open" }));
-    window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: "language-servers" }));
-    setOpen(false);
-  }
-
   function openHooksDetails(): void {
     openPanel((id) => useTabsStore.getState().setHooksPanelOpen(id, true));
   }
-
-  // Menu stays open: the row's status text updates via the next lsp_status.
-  function restartLsp(): void {
-    send({ type: "lsp_restart_request" });
-  }
-
 
   function switchBranch(name: string): void {
     if (!status || name === status.head.branch) {
@@ -296,23 +273,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
           )}
           {engine === null && (
             <>
-              <div className="environment-menu-row" role="group" aria-label="Language servers">
-                <ServerStack />
-                <span className="environment-menu-row-main">
-                  <span>Language servers</span>
-                  <span className="environment-menu-row-detail">{formatEnvironmentLspDetail(lspServers)}</span>
-                </span>
-                <span className="environment-menu-actions">
-                  {hasCrashedLspServer(lspServers) && (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-restart" onClick={restartLsp}>Restart</button>
-                  )}
-                  {lspServers.length > 0 ? (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-details" onClick={openLspDetails}>Details</button>
-                  ) : (
-                    <button type="button" className="environment-menu-open" data-environment-action="lsp-setup" onClick={openLspSetup}>Set up</button>
-                  )}
-                </span>
-              </div>
               <div className="environment-menu-row" role="group" aria-label="Hooks">
                 <HookIcon />
                 <span className="environment-menu-row-main">
