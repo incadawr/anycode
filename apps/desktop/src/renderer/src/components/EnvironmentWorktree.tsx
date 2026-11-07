@@ -30,7 +30,7 @@ export function worktreeExitControlState(
   }
   return {
     disabled: false,
-    title: "Exit worktree; clean AnyCode-owned worktrees are removed automatically",
+    title: "Exit worktree; AnyCode-owned worktrees with no changes, including ignored files, are removed automatically",
     ariaLabel: "Exit worktree",
   };
 }

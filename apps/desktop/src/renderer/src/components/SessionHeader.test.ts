@@ -89,7 +89,7 @@ describe("worktreeExitControlState", () => {
   it("enables Exit only for an idle turn on a ready connection", () => {
     expect(worktreeExitControlState("idle", "ready")).toEqual({
       disabled: false,
-      title: "Exit worktree; clean AnyCode-owned worktrees are removed automatically",
+      title: "Exit worktree; AnyCode-owned worktrees with no changes, including ignored files, are removed automatically",
       ariaLabel: "Exit worktree",
     });
   });
