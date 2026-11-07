@@ -7,21 +7,17 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Experimental native session peers let Core root sessions discover peers, exchange messages, open independent tabs, receive bounded replies and inspect file activity evidence, with per-project access controls and explicit folder grants. The native sessions flag is off by default; Claude/Codex peer mutations remain unavailable.
+
 ### Changed
 
-- Native Claude and Codex Agent calls can select an API connection for unpinned core children, with explicit refusals for ambiguous selectors and pinned routes.
-
-- Claude and Codex root sessions can list API connections and models, alongside their own native model route.
-
-- Connection listings limit oversized display text and filter unexpected nested data from tool responses.
-
-- Behind the experimental native sessions flag, Core root sessions can discover peers, exchange messages and open independent tabs under per-tab permissions, with bounded replies and file activity evidence. Claude/Codex peer mutations remain unavailable.
+- Claude and Codex roots can list safe API connection and model metadata alongside their native route, and select an API connection for unpinned Core children; ambiguous selectors and pinned routes are refused.
 
 ### Fixed
 
-- Sessions API reports the created session and tab ids when first-message delivery is interrupted.
-
-- Sessions API shows an unknown delivery status when a session cannot confirm receipt, keeping unexpected internal data out of the response.
+- Sessions API retains known session and tab ids after interrupted first-message delivery and reports unconfirmed receipt as unknown without exposing internal data.
 
 ## [0.0.86] - 2026-11-07
 
