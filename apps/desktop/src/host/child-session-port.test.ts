@@ -3482,13 +3482,14 @@ it("inherits the live core model only for fresh children on the same connection"
   ] as const) {
     const promise = port.run({ agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: `call-${sent.length}`, ...extra }, {});
     const request = spawns(sent).at(-1)!;
-    expect(request.model).toBe(expected);
+    expect(request.model ?? request.inheritedModel).toBe(expected);
+    if (extra && "model" in extra) expect(request.inheritedModel).toBeUndefined();
     emit(terminalEvent(request.requestId));
     await promise;
   }
   model = "parent-two";
   const promise = port.run({ agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "last" }, {});
-  expect(spawns(sent).at(-1)?.model).toBe("parent-two");
+  expect(spawns(sent).at(-1)?.inheritedModel).toBe("parent-two");
   emit(terminalEvent(spawns(sent).at(-1)!.requestId));
   await promise;
 });

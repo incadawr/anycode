@@ -1,3 +1,4 @@
+import { applySessionChildToolBudget, sessionChildCeiling, sessionContextWindow } from "./session-child-budget.js";
 import { installCodexBuiltins } from "./engines/codex/builtin-skills.js";
 import { buildEngineBuiltinSkills } from "./engine-builtin-skills.js";
 import { readBuiltinPolicy } from "./skills/builtin-policy.js";
@@ -310,8 +311,6 @@ import {
   // role-route chain plumbing (host-side resolver below).
   PERSONAS,
   ROLE_TURN_BUDGETS,
-  subagentContextWindow,
-  limitSubagentBashOutput,
   isRoleRouteName,
   // the one ceiling-object builder (adaptive key absent when off).
   buildCeilingConfig,
@@ -3650,8 +3649,7 @@ async function boot(): Promise<void> {
       : new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
-    const bootContextWindow: number | undefined = isChildSessionBoot(args, sessionMeta)
-      ? subagentContextWindow(bootContextInfo.tokens) : bootContextInfo.tokens;
+    const bootContextWindow: number | undefined = sessionContextWindow(isChildSessionBoot(args, sessionMeta), bootContextInfo.tokens);
     // a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
     const clampChildOutput = (resolved: number | undefined): number | undefined =>
@@ -4153,8 +4151,9 @@ async function boot(): Promise<void> {
     if (isChildSessionBoot(args, sessionMeta)) {
       for (const name of ["Agent", "Workflow"]) registry.unregister(name);
       restrictChildRegistry(registry, args.child?.restrictions);
-      limitSubagentBashOutput(registry);
     }
+
+    applySessionChildToolBudget(isChildSessionBoot(args, sessionMeta), registry);
 
     // Boot section components computed once (design P7.17/W2): renderRepoMap()'s
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
@@ -4199,7 +4198,7 @@ async function boot(): Promise<void> {
               supervisedRoot: () => broker.isUnattended !== true,
             }),
           }
-        : { ceiling: { enabled: false } }),
+        : { ceiling: sessionChildCeiling(true)! }),
       ports: {
         fs: fsAdapter,
         exec: execAdapter,
@@ -4568,8 +4567,7 @@ async function boot(): Promise<void> {
         // model A never leaks its window onto B, and an unknown id re-resolves
         // the assumed fallback rather than a stale previous model's window.
         const contextInfo = connectionModelSettings.contextFor(id);
-        const contextWindow = isChildSessionBoot(args, sessionMeta)
-          ? subagentContextWindow(contextInfo.tokens) : contextInfo.tokens;
+        const contextWindow = sessionContextWindow(isChildSessionBoot(args, sessionMeta), contextInfo.tokens);
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,

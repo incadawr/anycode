@@ -82,6 +82,8 @@ export interface ChildSpawnRequest {
    */
   connectionId?: string;
   model?: string;
+  /** Parent model suggested for an otherwise unrouted child. */
+  inheritedModel?: string;
   /**
    * Reasoning tier from the profile's `effort:` frontmatter. Core children:
    * main stamps it as the child host's ANYCODE_REASONING_EFFORT (mapping
@@ -554,6 +556,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "provider",
   "connectionId",
   "model",
+  "inheritedModel",
   "effort",
   "permissionMode",
   // CUT-S4 §3.1: additive key, authorized amendment (mirrors the
@@ -622,6 +625,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.model !== undefined && !isIdString(msg.model, CHILD_MODEL_MAX_CHARS)) {
     return null;
   }
+  if (msg.inheritedModel !== undefined && (!isIdString(msg.inheritedModel, CHILD_MODEL_MAX_CHARS) || msg.model !== undefined || msg.provider !== undefined || msg.connectionId !== undefined || msg.engine !== undefined || msg.resumeChildSessionId !== undefined)) return null;
   if (msg.effort !== undefined && !isChildEffort(msg.effort)) {
     return null;
   }
@@ -664,6 +668,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     ...(msg.provider !== undefined ? { provider: msg.provider as string } : {}),
     ...(msg.connectionId !== undefined ? { connectionId: msg.connectionId as string } : {}),
     ...(msg.model !== undefined ? { model: msg.model as string } : {}),
+    ...(msg.inheritedModel !== undefined ? { inheritedModel: msg.inheritedModel as string } : {}),
     ...(msg.effort !== undefined ? { effort: msg.effort } : {}),
     permissionMode: msg.permissionMode,
     ...(msg.restrictions !== undefined ? { restrictions: msg.restrictions } : {}),

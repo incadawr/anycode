@@ -1251,6 +1251,7 @@ describe("resolveChildMaxTurns", () => {
   const child = { parentSessionId: "p", spawnToolCallId: "c", initialMode: "build" as const };
   it("a child budget overrides the env default", () => {
     expect(resolveChildMaxTurns({ ...child, maxTurns: 15 }, 40)).toBe(15);
+    expect(resolveChildMaxTurns({ ...child, maxTurns: 500 }, 40)).toBe(200);
   });
   it("an absent budget preserves the env default", () => {
     expect(resolveChildMaxTurns(child, 300, 60)).toBe(60);

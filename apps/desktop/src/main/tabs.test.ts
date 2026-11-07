@@ -6337,7 +6337,18 @@ describe("TabHostManager — child turn budget argv", () => {
     expect(childArgs.slice(childArgs.indexOf("--child-max-turns"), childArgs.indexOf("--child-max-turns") + 2)).toEqual(["--child-max-turns", "40"]);
   });
 
-  it("a follow-up (resumed) child omits the budget even if the request carries one", async () => {
+  it("falls back to the connection default only for a rejected inherited model", () => {
+    const { forkSpy, hosts } = forkSpyRig();
+    const { window } = windowRig();
+    const manager = childManager(forkSpy, window, { validateChildModel: () => "unsupported", env: () => ({ PATH: "/base", ANYCODE_MODEL: "connection-default" }) });
+    manager.createTab({ workspace: "/ws", sessionId: "model-fallback", resume: false });
+    hosts[0]!.emit("message", spawnRequest({ requestId: "inherited", inheritedModel: "parent-model" }));
+    expect(childRunEvents(hosts[0]!).find(e => e.requestId === "inherited" && e.kind === "accepted")).toMatchObject({ model: "connection-default" });
+    hosts[0]!.emit("message", spawnRequest({ requestId: "explicit", model: "parent-model" }));
+    expect(childRunEvents(hosts[0]!).find(e => e.requestId === "explicit" && e.kind === "rejected")).toMatchObject({ reason: "not_ready" });
+  });
+
+  it("a follow-up retains the creating budget even if the request carries another", async () => {
     const { forkSpy, hosts } = forkSpyRig();
     const { window } = windowRig();
     const manager = childManager(forkSpy, window);
@@ -6355,13 +6366,13 @@ describe("TabHostManager — child turn budget argv", () => {
     // the follow-up admits synchronously rather than parking on `reaped`.
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    // Follow-up on the finished child: a NEW host forks, without the budget.
+    // Follow-up on the finished child: the creating budget rides the new host.
     const forksBefore = forkSpy.mock.calls.length;
     hosts[0]!.emit("message", spawnRequest({ requestId: "budget-second", resumeChildSessionId: childSessionId, maxTurns: 40 }));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(forkSpy.mock.calls.length).toBe(forksBefore + 1);
     const followUpArgs = forkSpy.mock.calls[forkSpy.mock.calls.length - 1]?.[1] ?? [];
-    expect(followUpArgs).not.toContain("--child-max-turns");
+    expect(followUpArgs.slice(followUpArgs.indexOf("--child-max-turns"), followUpArgs.indexOf("--child-max-turns") + 2)).toEqual(["--child-max-turns", "9"]);
   });
 });
 

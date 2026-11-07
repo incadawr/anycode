@@ -1288,7 +1288,8 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         prompt: req.prompt,
         ...(req.provider !== undefined ? { provider: req.provider } : {}),
         ...(req.connectionId !== undefined ? { connectionId: req.connectionId } : {}),
-        ...((req.model ?? inheritedModel) !== undefined ? { model: req.model ?? inheritedModel } : {}),
+        ...(req.model !== undefined ? { model: req.model } : {}),
+        ...(inheritedModel !== undefined ? { inheritedModel } : {}),
         ...(req.effort !== undefined ? { effort: req.effort } : {}),
         // CUT-S4 §3.1: verbatim passthrough, absent = core (the
         // wire's own byte-compatible default — shared/child-sessions.ts's

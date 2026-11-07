@@ -1,3 +1,4 @@
+import { clampChildMaxTurns } from "../shared/child-budget.js";
 import { sep } from "node:path";
 import { settleChildWorktree } from "./child-worktree-cleanup.js";
 import type { ChildWorktreeResources, ChildWorktreeReceipt } from "./child-worktree-resource.js";
@@ -34,7 +35,7 @@ import type { AgentDelivery, SessionActivityState } from "../shared/communicatio
 import { randomUUID } from "node:crypto";
 import { fstatSync, realpathSync, statSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
-import { DEFAULT_SUBAGENT_MAX_TURNS, SUBAGENT_MAX_TURNS_CEILING } from "@anycode/core";
+import { DEFAULT_SUBAGENT_MAX_TURNS } from "@anycode/core";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import type { AgentEnvelope } from "../shared/communication.js";
 import {
@@ -537,8 +538,8 @@ export interface TabHost {
     restrictions?: import("@anycode/core").SessionProfileRestrictions;
     /**
      * the CREATING spawn's turn budget (from the profile's
-     * frontmatter, req.maxTurns). Populated only for a FRESH child — a
-     * follow-up (resumed) child never carries one. Rides argv once, as
+     * frontmatter, req.maxTurns). A resumed child uses the saved creating
+     * budget. Rides argv on each host boot, as
      * `--child-max-turns <n>`, with the child linkage arguments.
      */
     maxTurns?: number;
@@ -577,6 +578,7 @@ interface ChildRunLedgerEntry {
  * so a follow-up can only ever reach a child this parent really had.
  */
 interface ResumableChild {
+  maxTurns?: number;
   restrictions?: import("@anycode/core").SessionProfileRestrictions;
   parentSessionId: string;
   connectionId?: string;
@@ -2805,14 +2807,18 @@ export class TabHostManager {
       connectionId = resolved;
     }
 
-    const requestedModel = req.model ?? resolvedProviderModel;
+    let requestedModel = req.model ?? resolvedProviderModel ?? req.inheritedModel;
     if (engine === "core" && requestedModel !== undefined) {
       let detail: string | void;
       try { detail = this.deps.validateChildModel?.(requestedModel, connectionId); }
       catch { detail = "Model validation failed."; }
       if (detail !== undefined) {
-        reject("not_ready", `Agent: this model is not available on the selected connection; select a matching provider/connection. ${detail}`);
-        return;
+        if (req.inheritedModel !== undefined && req.model === undefined && resolvedProviderModel === undefined) {
+          requestedModel = undefined;
+        } else {
+          reject("not_ready", `Agent: this model is not available on the selected connection; select a matching provider/connection. ${detail}`);
+          return;
+        }
       }
     }
 
@@ -3007,13 +3013,12 @@ export class TabHostManager {
     // never the ambient `~/.codex` one. A core parent carries no profile (core
     // owns no Codex account), so its codex child takes the DEFAULT account —
     // resolved before the readiness gate above, so gate and argv agree.
-    // + 4820 F1: the CREATING spawn's stamped budget (only a fresh
-    // child carries one) — minted once here, used both for the argv stamp
+    // The creating budget is saved and reused on resume, and used for the argv stamp
     // (childOf.maxTurns, below) and for the accepted event's effective-cap
     // carry (4820 F1, at admit).
     const stampedMaxTurns = resumable === undefined
       ? engine === "core" ? this.resolveAcceptedChildMaxTurns(req.maxTurns, this.env(connectionId)) : req.maxTurns
-      : undefined;
+      : resumable.maxTurns;
     const childTab: TabHost = {
       tabId: childTabId,
       workspace: receipt?.path ?? parentTab.workspace,
@@ -3047,8 +3052,7 @@ export class TabHostManager {
         permissionMode: req.permissionMode,
         ...((resumable !== undefined ? resumable.restrictions : req.restrictions) !== undefined
           ? { restrictions: resumable !== undefined ? resumable.restrictions : req.restrictions } : {}),
-        // only the CREATING spawn carries a budget; a follow-up
-        // (resumable) child keeps whatever its session started with.
+        // A follow-up reuses the budget saved from the creating run.
         ...(stampedMaxTurns !== undefined ? { maxTurns: stampedMaxTurns } : {}),
       },
     };
@@ -3302,11 +3306,11 @@ export class TabHostManager {
       // integer — main never acknowledges a malformed/out-of-range effective
       // cap (a non-conforming value is omitted, never allowed to suppress the
       // accepted acknowledgement itself).
-      return isValidEffectiveChildMaxTurns(stamped) ? stamped : undefined;
+      return isValidEffectiveChildMaxTurns(stamped) ? clampChildMaxTurns(stamped) : undefined;
     }
     const raw = env?.["ANYCODE_SUBAGENT_MAX_TURNS"];
     const parsed = raw === undefined || raw.trim() === "" ? DEFAULT_SUBAGENT_MAX_TURNS : Number(raw);
-    return Number.isSafeInteger(parsed) && parsed >= 1 ? Math.min(parsed, SUBAGENT_MAX_TURNS_CEILING) : DEFAULT_SUBAGENT_MAX_TURNS;
+    return Number.isSafeInteger(parsed) && parsed >= 1 ? clampChildMaxTurns(parsed) : DEFAULT_SUBAGENT_MAX_TURNS;
   }
 
   /** requestId -> its owning parent's cancel of a still-live run (Agent tool abort/timeout, cut §0.5's ctx.abortSignal). */
@@ -3685,6 +3689,7 @@ export class TabHostManager {
   private rememberResumableChild(entry: ChildRunLedgerEntry, childTab: TabHost, reaped: Promise<void>): void {
     const record: ResumableChild = {
       parentSessionId: entry.parentSessionId,
+      ...(childTab.childOf?.maxTurns !== undefined ? { maxTurns: childTab.childOf.maxTurns } : {}),
       ...(childTab.childOf?.restrictions !== undefined ? { restrictions: childTab.childOf.restrictions } : {}),
       ...(childTab.connectionId !== undefined ? { connectionId: childTab.connectionId } : {}),
       ...(childTab.modelOverride !== undefined ? { modelOverride: childTab.modelOverride } : {}),

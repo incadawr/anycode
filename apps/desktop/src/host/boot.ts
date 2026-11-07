@@ -1,3 +1,4 @@
+import { clampChildMaxTurns } from "../shared/child-budget.js";
 /**
 
  * pieces of the resume-aware bootstrap, split out of index.ts so they are
@@ -57,7 +58,6 @@ import {
   ConversationHistory,
   DEFAULT_RETRY_POLICY,
   DEFAULT_SUBAGENT_MAX_TURNS,
-  SUBAGENT_MAX_TURNS_CEILING,
   PERMISSION_MODES,
   SessionPermissionRules,
 } from "@anycode/core";
@@ -277,7 +277,7 @@ function isPermissionMode(value: string): value is PermissionMode {
 
 /** Resolve a child budget independently of the root loop's turn setting. */
 export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined, subagentMaxTurns?: number): number | undefined {
-  return child ? Math.min(child.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS, SUBAGENT_MAX_TURNS_CEILING) : envMaxTurns;
+  return child ? clampChildMaxTurns(child.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS) : envMaxTurns;
 }
 
 /**
