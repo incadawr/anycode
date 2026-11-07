@@ -123,7 +123,7 @@ function main() {
   }
 
   try { assertSmokeAbsentFromAsar(join(dirname(unpacked), "app.asar")); }
-  catch { fail("production archive missing, invalid, or contains development smoke fixtures"); }
+  catch (error) { fail(`production archive check failed: ${error.message}`); }
 
   const files = [];
   (function walk(dir) {
