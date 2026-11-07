@@ -63,13 +63,13 @@ test('launcher captures both streams, redacts split sensitive lines, and delays 
   app.stdout.emit('data',Buffer.from('vite ready\nAuthorization: Bea'));
   app.stdout.emit('data',Buffer.from('rer credential-value\n{"messages":["private body"]}\n'));
   app.stderr.emit('data',Buffer.from(`Error: Electron uninstall\n${root}/error delivery-nonce\n`));
-  app.stderr.emit('data',Buffer.from('payload=private-tail'));
+  app.stderr.emit('data',Buffer.from('at /arbitrary/repo/file.ts /private/var/build/file.ts C:\\build\\file.ts\npayload=private-tail'));
   assert.deepEqual(readdirSync(root),[],'Log must not trip the fresh-profile startup gate');
   const output = save();
   assert.equal(readFileSync(file,'utf8'),output);
   assert.match(output,/\[stdout\] vite ready/);
   assert.match(output,/\[stderr\] Error: Electron uninstall/);
-  for (const value of ['credential-value','private body','private-tail',root,'delivery-nonce']) assert(!output.includes(value));
+  for (const value of ['credential-value','private body','private-tail','/arbitrary/repo/file.ts','/private/var/build/file.ts','C:\\build\\file.ts',root,'delivery-nonce']) assert(!output.includes(value));
   assert.equal(save(),output,'Flushing twice must not duplicate trailing output');
 }));
 
@@ -119,4 +119,47 @@ test('fixture commands tolerate host plan/orchestrate reminders without bypassin
   }
   assert.equal(parsePeerCommand({role:'tool',content:'peer-command:{}'}),null);
   assert.throws(() => parsePeerCommand({role:'user',content:'peer-command:malformed'}));
+});
+
+const acceptance = await import(process.env.PEER_JUDGEMENT_MODULE ?? './session-peers-smoke.mjs');
+const card = text => ({id:'one',text:`${text} delivery-proof`,links:['Peer']});
+const observationCases = [
+  ['judgeCards',{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[card('Incoming')]},{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[{text:'Incoming',links:[]}]}],
+  ['judgeForgery',{before:[],after:[],bodySeen:true},{before:[],after:[card('forged')],bodySeen:true}],
+  ['judgeSockets',{records:'p12\nn127.0.0.1:4000\nn*:4001',pids:[12],allowed:[4000,4001]},{records:'p12\nn127.0.0.1:4000\nn*:9999',pids:[12],allowed:[4000,4001]}],
+  ['judgeRevoked',{result:'{"status":"refused"}',before:1,after:1},{result:'{"status":"refused"}',before:1,after:2}],
+  ['judgeCatalogue',{names:['SessionsList','WhoEdits','SessionSend','SessionOpen'],enabled:true},{names:['SessionsList'],enabled:true}],
+  ['judgeReply',{before:0,requests:[{input:'new-reply'}],nonce:'new-reply',originCompleted:true},{before:1,requests:[{input:'new-reply'}],nonce:'new-reply',originCompleted:true}],
+  ['judgeFileEvidence',{written:{status:'file_activity',records:[{sessionId:'a',evidence:'reported_write',toolName:'Write'}]},untouched:{status:'file_activity',records:[],candidates:[],limitations:'unknown writers'},sessionId:'a'},{written:{status:'file_activity',records:[]},untouched:{status:'unknown'},sessionId:'a'}],
+];
+for (const [name,good,bad] of observationCases) test(`${name}: real observations required`,() => {
+  acceptance[name](good);
+  assert.throws(() => acceptance[name](bad));
+});
+test('negative acceptance boundaries',() => {
+  assert.throws(() => acceptance.judgeCards({...observationCases[0][1],incoming:[{...card('Incoming'),id:'other'}]}));
+  assert.throws(() => acceptance.judgeForgery({before:[],after:[],bodySeen:false}));
+  assert.throws(() => acceptance.judgeRevoked({result:'{"status":"refused","reason":"loop_limited"}',before:1,after:1}));
+  assert.throws(() => acceptance.judgeReply({...observationCases[5][1],originCompleted:false}));
+  acceptance.judgeCatalogue({names:[],enabled:false});
+  assert.throws(() => acceptance.judgeCatalogue({names:['SessionSend'],enabled:false}));
+});
+test('loop refusal cannot prove plan authority',async () => {
+  await assert.rejects(checkAuthoritySteps(authorityDouble({planResult:'{"status":"refused","reason":"loop_limited"}'}),{},{engine:'codex'}));
+});
+// A no-op mutation of EACH judgement must make this test file red.
+if (!process.env.PEER_JUDGEMENT_MODULE) test('each judgement mutation is red',() => {
+  const source = readFileSync(new URL('./session-peers-smoke.mjs',import.meta.url),'utf8');
+  const mutant = new URL(`./.peer-judgement-mutant-${process.pid}.mjs`,import.meta.url);
+  try {
+    for (const [name] of observationCases) {
+      const changed = source.replace(new RegExp(`(export function ${name}\\([^\\n]+\\) \\{)`),'$1 return;');
+      assert.notEqual(changed,source);
+      writeFileSync(mutant,changed);
+      const childEnv = {...process.env,PEER_JUDGEMENT_MODULE:mutant.href}; delete childEnv.NODE_TEST_CONTEXT;
+      const child = spawnSync(process.execPath,['--test',new URL(import.meta.url).pathname],{env:childEnv,encoding:'utf8'});
+      assert.equal(child.status,1,`${name} mutant survived`);
+      assert.match(child.stdout,new RegExp(`not ok .*${name}: real observations required`));
+    }
+  } finally { rmSync(mutant,{force:true}); }
 });
