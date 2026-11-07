@@ -12,7 +12,7 @@ let scratch: string, root: string, resources: ChildWorktreeResources, receipt: C
 const appRunId = "current-run";
 function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8", env: {
-    ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+    ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
     GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.test",
     GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.test",
     GIT_TERMINAL_PROMPT: "0",

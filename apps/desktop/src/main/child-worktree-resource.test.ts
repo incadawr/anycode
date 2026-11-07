@@ -12,7 +12,7 @@ let scratch: string, root: string, userData: string;
 const appRunId = randomUUID();
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", env: {
-    ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+    ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
     GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.test",
     GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.test",
     GIT_TERMINAL_PROMPT: "0",
@@ -85,13 +85,21 @@ it("pins admission SHA even if source HEAD moves before add", async () => {
   expect(git(root, "rev-parse", "HEAD")).not.toBe(snapshot.baseSha);
 });
 
-it.each(["non-repo", "unborn", "subdirectory"])("refuses %s before add", async (kind) => {
+it.each(["non-repo", "unborn", "subdirectory", "valid"])("checks %s admission before add", async (kind) => {
   const source = path.join(scratch, "source"); await fs.mkdir(source);
   if (kind === "unborn") git(source, "init", "-b", "main");
   const cwd = kind === "subdirectory" ? path.join(root, "sub") : source;
   if (kind === "subdirectory") await fs.mkdir(cwd);
   const add = vi.spyOn(NodeGitAdapter.prototype, "worktreeAdd");
-  await expect(manager().snapshot(cwd, root)).rejects.toThrow(
+  const resources = manager();
+  const allocateFromSource = async () => resources.allocate(
+    await resources.snapshot(kind === "valid" ? root : cwd, root), sessions);
+  if (kind === "valid") {
+    await expect(allocateFromSource()).resolves.toMatchObject({ phase: "active" });
+    expect(add).toHaveBeenCalledTimes(1);
+    return;
+  }
+  await expect(allocateFromSource()).rejects.toThrow(
     kind === "non-repo" ? /Git repository/ : kind === "unborn" ? /unborn HEAD/ : /checkout root/);
   expect(add).not.toHaveBeenCalled();
 });
@@ -214,4 +222,41 @@ it("retains checkout when the post-add registration read fails", async () => {
   await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/retained/);
   const [receipt] = await receipts(); expect(receipt.phase).toBe("unknown");
   expect(git(receipt.path, "rev-parse", "HEAD")).toBe(snapshot.baseSha);
+});
+
+it("records nothing created when namespace exclusion fails before add", async () => {
+  vi.spyOn(NodeGitAdapter.prototype, "ensureWorktreeNamespaceIgnored")
+    .mockResolvedValue({ ok: false, reason: "sensitive external text" });
+  const add = vi.spyOn(NodeGitAdapter.prototype, "worktreeAdd");
+  const resources = manager(); const snapshot = await resources.snapshot(root, root);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow("checkout creation was not attempted");
+  expect(add).not.toHaveBeenCalled();
+  const [receipt] = await receipts();
+  expect(receipt).toMatchObject({ phase: "not-created", reason: "Allocation stopped before checkout creation" });
+  expect(await resources.read(receipt.id)).toEqual(receipt);
+  await expect(fs.stat(receipt.path)).rejects.toThrow();
+  expect(git(root, "branch", "--list", receipt.branch)).toBe("");
+  expect(JSON.stringify(receipt)).not.toContain("sensitive external text");
+});
+
+it("retains checkout and records uncertainty when directory fsync fails after replace", async () => {
+  let syncs = 0;
+  const resources = manager({ fs: { ...fs, open: async (...args: Parameters<typeof fs.open>) => {
+    const handle = await fs.open(...args);
+    if (args[1] === "r") {
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        if (++syncs === 3) throw new Error("directory fsync failed after rename");
+        await sync();
+      };
+    }
+    return handle;
+  } } });
+  const snapshot = await resources.snapshot(root, root);
+  await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/retained/);
+  expect(syncs).toBe(4);
+  const [receipt] = await receipts();
+  expect(receipt.phase).toBe("unknown");
+  expect(git(receipt.path, "rev-parse", "HEAD")).toBe(snapshot.baseSha);
+  expect(git(root, "rev-parse", receipt.branch)).toBe(snapshot.baseSha);
 });

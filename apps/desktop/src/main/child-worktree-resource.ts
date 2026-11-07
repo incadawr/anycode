@@ -25,7 +25,7 @@ export interface ChildWorktreeReceipt extends ChildWorktreeSnapshot {
   childSessionId: string;
   path: string;
   branch: string;
-  phase: "intent" | "active" | "unknown" | "retained" | "removed";
+  phase: "intent" | "active" | "unknown" | "retained" | "removed" | "not-created";
   reason: string | null;
 }
 
@@ -89,10 +89,12 @@ export class ChildWorktreeResources {
     } catch {
       throw new Error("Child worktree intent could not be persisted; allocation refused");
     }
+    let addAttempted = false;
     try {
       const git = this.gitForWorkspace(receipt.storageRoot);
       const excluded = await git.ensureWorktreeNamespaceIgnored();
       if (!excluded.ok) throw new Error("namespace exclude failed");
+      addAttempted = true;
       const added = await git.worktreeAdd({ path: receipt.path, branch: receipt.branch, baseRef: receipt.baseSha });
       if (!added.ok) throw new Error("worktree add failed");
       const canonical = await this.fs.realpath(receipt.path);
@@ -111,10 +113,14 @@ export class ChildWorktreeResources {
     } catch {
       // Do not persist Git stderr, prompts or credentials. Even a failed add may
       // leave files or refs; the original intent remains if this update fails.
-      receipt.phase = "unknown";
-      receipt.reason = "Allocation did not complete; checkout and branch require manual inspection";
+      receipt.phase = addAttempted ? "unknown" : "not-created";
+      receipt.reason = addAttempted
+        ? "Allocation did not complete; checkout and branch require manual inspection"
+        : "Allocation stopped before checkout creation";
       try { await this.replace(receipt); } catch { /* Durable intent remains authoritative. */ }
-      throw new Error(`Child worktree allocation failed; resource retained at ${receipt.path}`);
+      throw new Error(addAttempted
+        ? `Child worktree allocation failed; resource retained at ${receipt.path}`
+        : "Child worktree allocation failed; checkout creation was not attempted");
     }
   }
 
@@ -126,7 +132,7 @@ export class ChildWorktreeResources {
       "storageRoot", "projectRoot", "baseSha", "path", "branch"];
     if (!value || value.version !== 1 || value.id !== id ||
         strings.some((key) => typeof value[key] !== "string" || !value[key]) ||
-        !["intent", "active", "unknown", "retained", "removed"].includes(value.phase) ||
+        !["intent", "active", "unknown", "retained", "removed", "not-created"].includes(value.phase) ||
         !(value.reason === null || typeof value.reason === "string")) {
       throw new Error("Invalid receipt");
     }
