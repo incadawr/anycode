@@ -90,7 +90,7 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     for (const title of ["Workspace", "Session access", "Diagnostics"]) {
       expect(dialog.querySelector('section[aria-label="' + title + '"]')).not.toBeNull();
     }
-    expect(dialog.textContent).toContain("this session only");
+    expect(dialog.textContent).toContain("1 on");
     expect(dialog.querySelector('section[aria-label="Workspace"] .environment-menu-row-main > span')?.textContent).toBe("notes");
     expect(dialog.querySelector('section[aria-label="Diagnostics"]')?.textContent?.match(/Diagnostics/g)).toHaveLength(1);
     expect(dialog.querySelector('section[aria-label="Workspace"]')?.textContent).toContain("Git is not available for this workspace.");
@@ -99,6 +99,7 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("false");
     await click(access);
     expect(communication.setSessionAccess).toHaveBeenCalledWith("tab", true);
+    expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("2 on");
     expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector(".environment-menu-dependents input")).not.toBeNull();
     await click('[data-environment-action="sessions-api-approvals"]');
@@ -108,7 +109,13 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("true");
     await click(browser);
     expect(browserAccess.set).toHaveBeenCalledWith("tab", false);
+    expect(host.querySelector('[title="Full browser access"]')).toBeNull();
+    expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
+    expect(host.querySelector('.environment-menu-title .environment-menu-scope')?.textContent).toBe("1 on");
     expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("false");
+    await click(access);
+    expect(host.querySelector(".environment-risks")).toBeNull();
+    expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("this session only");
     await click(browser);
     expect(host.textContent).toContain("Allow full browser access?");
     expect(browserAccess.set).toHaveBeenCalledTimes(1);
@@ -635,4 +642,53 @@ it("palette activation reads current git availability and active tab", async () 
     store.setState({ git: { ...store.getState().git, status: null } });
     dispatch.mockClear(); action.run(); expect(dispatch).not.toHaveBeenCalled();
   } finally { getStore.mockRestore(); dispatch.mockRestore(); useTabsStore.setState({ activeTabId: previous }); }
+});
+
+
+it.each([true, false, undefined])("shows worktree context and guards owned branches (%s)", async owned => {
+  const { tabRegistry } = await import("../tab-registry.js");
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const previous = useTabsStore.getState().tabs;
+  const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
+  const worktree = owned === undefined ? undefined : { id: "child", path: "/fixture/checkout", branch: "topic", baseRef: "main", ownedByAnyCode: owned };
+  useTabsStore.setState({ tabs: [{ tabId: "tab", worktree }] as never });
+  const copy = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication: { get: async () => ({ ok: true, envControlled: false, view: { tabs: [{ tabId: "tab", enabled: true }] } }) },
+    browserAccess: { get: async () => ({ ok: true, tabs: [{ tabId: "tab", fullAccess: true }] }), onChanged: () => () => {} },
+    sessionPeers: { get: async () => ({ ok: false }) },
+  } });
+  const store = createDesktopStore();
+  store.setState({ connection: "ready", workspace: worktree?.path ?? "/fixture/repo", git: { ...store.getState().git, statusKnown: true,
+    status: { head: { branch: "topic", sha: "abcdef", detached: false, ahead: null, behind: null }, dirtyCount: 0, staged: [], unstaged: [], untracked: [], filesTruncated: false } } });
+  const host = document.createElement("div"), root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    expect(!!host.querySelector('.environment-worktree-label')).toBe(owned !== undefined);
+    expect(host.querySelector('[title="Full browser access"] svg')).not.toBeNull();
+    expect(host.querySelector('[title="Sessions API enabled"] svg')).not.toBeNull();
+    expect(host.querySelector('.environment-risk-summary')?.textContent).toBe("2");
+    await act(async () => host.querySelector<HTMLButtonElement>('.environment-trigger')!.click());
+    expect(host.querySelector('section[aria-label="Session access"] .environment-menu-title')?.textContent).toContain("2 on");
+    const branch = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.startsWith('Branch'))!;
+    expect(branch.disabled).toBe(owned === true);
+    if (worktree) {
+      expect(host.textContent).toContain("Base main");
+      expect(host.textContent).toContain(owned ? "Empty worktree is removed on exit; its merged branch may be removed." : "Checkout and branch are kept on exit.");
+      await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Copy path"]')!.click());
+      expect(copy).toHaveBeenCalledWith(worktree.path);
+      await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Exit worktree"]')!.click());
+      expect(send).toHaveBeenLastCalledWith("tab", { type: "exit_worktree", cleanup: "auto" });
+      await act(async () => store.setState({ turn: { ...store.getState().turn, status: "running" } }));
+      expect(host.querySelector<HTMLButtonElement>('[aria-label^="Exit worktree"]')!.disabled).toBe(true);
+      await act(async () => store.setState({ turn: { ...store.getState().turn, status: "idle" }, connection: "awaiting_host_ready" }));
+      expect(host.querySelector<HTMLButtonElement>('[aria-label^="Exit worktree"]')!.disabled).toBe(true);
+    }
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
+    expect(!!host.querySelector('.environment-branch-picker')).toBe(owned !== true);
+  } finally {
+    await act(async () => root.unmount()); send.mockRestore(); useTabsStore.setState({ tabs: previous });
+    if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode");
+  }
 });

@@ -1,3 +1,4 @@
+import { worktreeExitControlState } from "./EnvironmentWorktree.js";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -5,7 +6,6 @@ import {
   derivePreviewMenuItems,
   SESSION_HEADER_TITLE_LINE_LIMIT,
   sessionHeaderTitleClass,
-  worktreeExitControlState,
 } from "./SessionHeader.js";
 import type { PreviewChangedPayload, PreviewPanelInfo } from "../../../shared/preview-panel.js";
 

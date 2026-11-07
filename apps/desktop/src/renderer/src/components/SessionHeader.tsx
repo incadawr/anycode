@@ -32,11 +32,9 @@ import { ChildWorktreeControl } from "./ChildWorktreeControl.js";
 import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
-import type { ConnectionPhase, TurnState } from "../store.js";
 import { Collapse, Dot, Globe, Orchestrate, TaskList, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { SessionExtensionsMenu } from "./SessionExtensionsMenu.js";
-import { browserAccessChipVisible, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { usePreviewStore } from "../preview/preview-store.js";
 import { useDockStore } from "../dock/dock-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
@@ -80,38 +78,6 @@ function formatConnectionLabel(connection: string): string {
   return connection.replace(/_/g, " ");
 }
 
-export interface WorktreeExitControlState {
-  disabled: boolean;
-  title: string;
-  ariaLabel: string;
-}
-
-/** Pure projection shared by the real button and its node-environment tests. */
-export function worktreeExitControlState(
-  turnStatus: TurnState["status"],
-  connection: ConnectionPhase,
-): WorktreeExitControlState {
-  if (connection !== "ready") {
-    return {
-      disabled: true,
-      title: "Exit worktree is unavailable until the host connection is ready",
-      ariaLabel: "Exit worktree unavailable until the host connection is ready",
-    };
-  }
-  if (turnStatus === "running") {
-    return {
-      disabled: true,
-      title: "Exit worktree is unavailable while a turn is running",
-      ariaLabel: "Exit worktree unavailable while a turn is running",
-    };
-  }
-  return {
-    disabled: false,
-    title: "Exit worktree; clean AnyCode-owned worktrees are removed automatically",
-    ariaLabel: "Exit worktree",
-  };
-}
-
 /**
  * Audit D12: long titles were cut mid-word ("…outside.txt conta"). A title
  * with whitespace had a word boundary, but the one-line ellipsis still cut the
@@ -153,7 +119,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
 
   const workspace = useTabStore((state) => state.workspace);
   const connection = useTabStore((state) => state.connection);
-  const turnStatus = useTabStore((state) => state.turn.status);
   const engine = useTabStore((state) => state.engine);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
 
@@ -161,7 +126,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const terminalOpen = tab?.terminalOpen ?? false;
   const tasksPanelOpen = tab?.tasksPanelOpen ?? false;
   const title = tab?.title ?? (workspace ? basename(workspace) : "—");
-  const worktree = tab?.worktree;
   const openedByAgent = tab?.openedByAgent === true;
   const orchestrateActive = useTabStore((state) => state.orchestrateActive);
   const orchestrationPosture = useTabStore((state) => state.orchestration.posture);
@@ -174,9 +138,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   // any background task of this tab is still live.
   const backgroundTasks = useTabStore((state) => state.backgroundTasks);
   const tasksRunning = backgroundTasks.some((task) => task.status === "running");
-  const exitControl = worktreeExitControlState(turnStatus, connection);
-  // the chip shows while this tab's EFFECTIVE full browser access is on.
-  const [browserAccess] = useBrowserAccessState(tabId, window.anycode.browserAccess);
 
   // D15 (96-P3): the Previews menu — visible whenever the active tab has
   // >=1 preview of ANY container.
@@ -291,32 +252,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         </span>
       )}
 
-      {worktree && (
-        <span className="session-header-worktree" title={worktree.path} aria-label={`Worktree: ${worktree.branch}`}>
-          Worktree · {worktree.id} · {worktree.branch}
-          <button
-            type="button"
-            className="session-header-worktree-exit"
-            onClick={() => send({ type: "exit_worktree", cleanup: "auto" })}
-            disabled={exitControl.disabled}
-            title={exitControl.title}
-            aria-label={exitControl.ariaLabel}
-          >
-            Exit
-          </button>
-        </span>
-      )}
-
       {externalEngine && <span className="engine-identity session-header-engine">{engine.id === "codex" ? "Codex" : engine.id}</span>}
-      {browserAccessChipVisible(browserAccess) && (
-        <span
-          className="engine-identity session-header-browser-access"
-          data-testid="browser-full-access-chip"
-          title="The agent can open any website, click and type in the preview without asking; BrowserEval always asks"
-        >
-          Full browser access
-        </span>
-      )}
 
       <ChildWorktreeControl key={tabId} tabId={tabId} />
       {!isNewSession && <EnvironmentMenu placement="header" />}

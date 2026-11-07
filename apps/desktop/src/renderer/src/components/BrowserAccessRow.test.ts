@@ -11,7 +11,6 @@ import {
   BROWSER_ACCESS_TRUST_DETAIL,
   BrowserAccessRow,
   applyBrowserAccessChange,
-  browserAccessChipVisible,
   browserAccessRowModel,
   browserAccessToggleAction,
 } from "./BrowserAccessRow.js";
@@ -77,13 +76,13 @@ describe("BrowserAccessRow — test 50", () => {
   });
 });
 
-describe("browser access chip — test 51", () => {
+describe("effective browser access", () => {
   it("is visible iff the effective value is ON, and disappears on the push that turns it OFF", () => {
     const on = { tabId: "t", fullAccess: true };
-    expect(browserAccessChipVisible(on)).toBe(true);
+    expect(browserAccessRowModel(on, true).checked).toBe(true);
     const afterPush = applyBrowserAccessChange(on, "t", { tabId: "t", fullAccess: false });
-    expect(browserAccessChipVisible(afterPush)).toBe(false);
-    expect(browserAccessChipVisible(undefined)).toBe(false);
-    expect(browserAccessChipVisible({ tabId: "t", fullAccess: false, reason: "trust" })).toBe(false);
+    expect(browserAccessRowModel(afterPush, true).checked).toBe(false);
+    expect(browserAccessRowModel(undefined, true).checked).toBe(false);
+    expect(browserAccessRowModel({ tabId: "t", fullAccess: false, reason: "trust" }, true).checked).toBe(false);
   });
 });

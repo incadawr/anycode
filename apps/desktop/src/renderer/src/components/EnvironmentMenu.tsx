@@ -4,18 +4,21 @@
  * rare, detailed work into the existing Git inspector drawer.
  */
 import { NativeSessionAccess } from "./NativeSessionAccess.js";
-import { SessionAccessRow } from "./SessionAccessRow.js";
+import { SessionAccessRow, type SessionAccessBridge } from "./SessionAccessRow.js";
 import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
-import { BrowserAccessRow } from "./BrowserAccessRow.js";
+import { BrowserAccessRow, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
 import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Copy, Folder, GitBranch } from "./icons.js";
+import { Copy, Folder, GitBranch, Globe, Robot, Warning } from "./icons.js";
 import { Button, IconButton } from "../ui/index.js";
 import { EnvironmentBranchPicker } from "./EnvironmentBranchPicker.js";
 import { gitAheadBehindLabel, gitPillLabel } from "./GitPill.js";
+
+import { useTabsStore } from "../tabs-store.js";
+import { EnvironmentWorktree } from "./EnvironmentWorktree.js";
 
 type EnvironmentPlacement = "header" | "composer";
 
@@ -55,11 +58,24 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const tabStore = useTabStoreApi();
   const send = useTabSend();
   const tabId = useContext(TabContext)?.tabId;
+  const worktree = useTabsStore(s => s.tabs.find(t => t.tabId === tabId)?.worktree);
+  const ownedWorktree = worktree?.ownedByAnyCode === true;
+  const [browserAccess, setBrowserAccess] = useBrowserAccessState(tabId, window.anycode.browserAccess);
+  const [sessionsEnabled, setSessionsEnabled] = useState(false);
+  const accessCount = Number(browserAccess?.fullAccess === true) + Number(sessionsEnabled);
   const workspace = useTabStore((state) => state.workspace);
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setSessionsEnabled(false);
+    void (window.anycode.communication as SessionAccessBridge).get().then(result => {
+      if (!cancelled && result.ok) setSessionsEnabled(result.view.tabs.find(t => t.tabId === tabId)?.enabled ?? false);
+    });
+    return () => { cancelled = true; };
+  }, [tabId, open]);
   // D8 overlay wiring: the preview WebContentsView must hide while this
   // header dropdown is up.
   useOverlayFlag(open);
@@ -133,14 +149,14 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
 
   useEffect(() => {
     function openBranches(event: Event) {
-      if ((event as CustomEvent<string>).detail !== tabId || !workspace || !gitAvailable) return;
+      if ((event as CustomEvent<string>).detail !== tabId || !workspace || !gitAvailable || ownedWorktree) return;
       setBranchesOpen(true);
       setOpen(true);
       rootRef.current?.querySelector<HTMLInputElement>(".environment-branch-picker input")?.focus();
     }
     window.addEventListener("anycode:switch-branch", openBranches);
     return () => window.removeEventListener("anycode:switch-branch", openBranches);
-  }, [tabId, workspace, gitAvailable]);
+  }, [tabId, workspace, gitAvailable, ownedWorktree]);
 
   if (!workspace) {
     return null;
@@ -187,10 +203,11 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         className={`environment-trigger${branch ? " environment-trigger-has-branch" : ""}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`Environment: ${label}`}
+        aria-label={`Environment: ${label}${worktree ? ", Worktree" : ""}${accessCount ? `, ${accessCount} accesses enabled` : ""}`}
         onClick={toggle}
       >
         <Folder />
+        {worktree && <span className="environment-worktree-label" title="Worktree">worktree</span>}
         <span className="environment-workspace" title={workspacePath}>{workspaceLabel(workspacePath)}</span>
         {branch && (
           <>
@@ -201,6 +218,13 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         )}
         {statusKnown && dirtyCount > 0 && <span className="environment-git-count" aria-label={changesLabel(dirtyCount)}>●{dirtyCount}</span>}
         {statusKnown && status && gitAheadBehindLabel(status.head) && <span className="environment-git-count">{gitAheadBehindLabel(status.head)}</span>}
+        {accessCount > 0 && <span className="environment-risks" aria-label={`${accessCount} accesses enabled`}>
+          <span className="environment-risk-icons">
+            {browserAccess?.fullAccess && <span title="Full browser access"><Globe /></span>}
+            {sessionsEnabled && <span title="Sessions API enabled"><Robot /></span>}
+          </span>
+          <span className="environment-risk-summary" title={`${accessCount} accesses enabled`}><Warning />{accessCount}</span>
+        </span>}
         <span aria-hidden="true">⌄</span>
       </button>
 
@@ -218,7 +242,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
               (event.shiftKey ? last : first)?.focus();
             }
           }}>
-          {branchesOpen ? <EnvironmentBranchPicker back={() => { returning.current = true; setBranchesOpen(false); }}
+          {branchesOpen && !ownedWorktree ? <EnvironmentBranchPicker back={() => { returning.current = true; setBranchesOpen(false); }}
             pendingChanged={setSwitchPending}
             retry={() => dispatch({ op: "branches" }, { kind: "branches", label: "branches" })}
             switched={close} /> : <>
@@ -234,6 +258,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
               <IconButton label="Copy path" icon={<Copy />} onClick={copyWorkspace} />
             </div>
 
+            {worktree && <EnvironmentWorktree worktree={worktree} known={statusKnown} dirtyCount={dirtyCount} />}
             {statusKnown && status && (
               <>
                 <Button
@@ -241,6 +266,8 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   type="button"
                   className="environment-menu-row"
                   ref={branchRef}
+                  disabled={ownedWorktree}
+                  title={ownedWorktree ? "Managed worktree branch; switch from the parent checkout" : undefined}
                   aria-haspopup="listbox"
                   onClick={() => setBranchesOpen(true)}
                 >
@@ -248,6 +275,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                   <span className="environment-menu-row-main">
                     <span>Branch</span>
                     <span className="environment-menu-row-detail">{branch}</span>
+                    {ownedWorktree && <span className="environment-menu-row-detail environment-menu-row-detail-prose">Managed worktree branch; switch from the parent checkout</span>}
                   </span>
                   <span aria-hidden="true">›</span>
                 </Button>
@@ -265,12 +293,12 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             {!statusKnown && <div className="environment-menu-note">Checking repository…</div>}
           </section>
           <section className="environment-menu-section environment-menu-group" aria-label="Session access">
-            <div className="environment-menu-title">Session access <span className="environment-menu-scope">this session only</span></div>
+            <div className="environment-menu-title">Session access <span className="environment-menu-scope">{accessCount ? `${accessCount} on` : "this session only"}</span></div>
             {/* the per-session Sessions API switch (any engine; main owns the state). */}
-            <SessionAccessRow />
+            <SessionAccessRow onEnabledChange={setSessionsEnabled} />
             {tabId && <NativeSessionAccess key={tabId} tabId={tabId} />}
             {/* the per-session "Full browser access" switch (asks before turning ON). */}
-            <BrowserAccessRow />
+            <BrowserAccessRow onStateChange={setBrowserAccess} />
           </section>
           <section className="environment-menu-section environment-menu-group" aria-label="Diagnostics">
             <div className="environment-menu-title">Diagnostics</div>

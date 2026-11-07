@@ -47,11 +47,6 @@ export function browserAccessRowModel(state: BrowserAccessTabState | undefined, 
   return { checked: state.fullAccess, disabled: false, detail: state.fullAccess ? BROWSER_ACCESS_ON_DETAIL : null };
 }
 
-/** The header chip shows while the tab's EFFECTIVE value is on (a trust-pending folder never shows it). */
-export function browserAccessChipVisible(state: BrowserAccessTabState | undefined): boolean {
-  return state?.fullAccess === true;
-}
-
 /** Turning ON from OFF asks for confirmation first; every other change is sent at once. */
 export function browserAccessToggleAction(current: boolean, next: boolean): "confirm" | "set" {
   return next && !current ? "confirm" : "set";
@@ -93,9 +88,10 @@ export function useBrowserAccessState(
   return [state, setState];
 }
 
-export function BrowserAccessRow({ bridge = window.anycode.browserAccess }: { bridge?: BrowserAccessBridge }) {
+export function BrowserAccessRow({ bridge = window.anycode.browserAccess, onStateChange }: { bridge?: BrowserAccessBridge; onStateChange?: (state: BrowserAccessTabState) => void }) {
   const tabId = useContext(TabContext)?.tabId;
   const [state, setState] = useBrowserAccessState(tabId, bridge);
+  useEffect(() => { if (state) onStateChange?.(state); }, [state, onStateChange]);
   const [confirming, setConfirming] = useState(false);
   const view = browserAccessRowModel(state, tabId !== undefined);
 

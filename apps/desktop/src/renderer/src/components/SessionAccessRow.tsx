@@ -99,7 +99,7 @@ export function commitSessionHandle(bridge: Pick<SessionAccessBridge, "setSessio
   return bridge.setSessionHandle(tabId, trimmed === "" ? null : trimmed);
 }
 
-export function SessionAccessRow({ bridge = window.anycode.communication }: { bridge?: SessionAccessBridge }) {
+export function SessionAccessRow({ bridge = window.anycode.communication, onEnabledChange }: { bridge?: SessionAccessBridge; onEnabledChange?: (enabled: boolean) => void }) {
   const tabId = useContext(TabContext)?.tabId;
   const [enabled, setEnabled] = useState(false);
   const [approvals, setApprovals] = useState(false);
@@ -123,6 +123,8 @@ export function SessionAccessRow({ bridge = window.anycode.communication }: { br
       cancelled = true;
     };
   }, [bridge, tabId]);
+
+  useEffect(() => { if (known) onEnabledChange?.(enabled); }, [enabled, known, onEnabledChange]);
 
   const reason = sessionSwitchDisabledReason(envControlled, tabId !== undefined && known);
 
