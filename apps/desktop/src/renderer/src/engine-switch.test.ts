@@ -99,3 +99,9 @@ describe("correlated engine selection", () => {
     expect(ENGINE_SWITCH_CONSEQUENCE).toContain("context will not be transferred");
   });
 });
+
+it("uses the confirmed Claude draft catalog in the engine switch picker", () => {
+  expect(engineSwitchChoices("core", ["claude"], null, [], [{ id: "account-model", label: "Account model 6.0" }])).toEqual([
+    { label: "Claude · Account model 6.0", target: { engine: "claude", model: "account-model" } },
+  ]);
+});

@@ -19,6 +19,8 @@ import { resolveProfileRoles } from "../../shared/role-profiles.js";
 import { handleCreateTabResult } from "./components/SessionPicker.js";
 import { tabRegistry, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
+import { resolveClaudeDraftModel } from "./claude-draft-models.js";
+import type { EngineModelChoice } from "../../shared/protocol.js";
 import { decideCodexDraftModel } from "./codex-draft-model.js";
 import { needsRolePicker, resolveStartOrchestrate } from "./orchestrate-start.js";
 import { useSettingsStore } from "./settings-store.js";
@@ -68,16 +70,18 @@ function settingsHaveRoles(projectRoot: string): boolean {
 
 /**
  * Keeps the historical Core create payload byte-for-byte additive apart from
- * the cut-1 stage A `connectionId` pick below. For a non-core
- * (Codex) draft, also forwards the draft's own model/preset/profile picks
- * (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers both
- * already existed — this is the missing wire between them). All are opaque
+ * the cut-1 stage A `connectionId` pick below. For a non-core draft (Claude or
+ * Codex), also forwards the draft's own model/preset/profile picks; a Claude
+ * model is first resolved against the live `claudeModels` catalog. (W3 join:
+ * main/tabs.ts's argv forwarding and the StartScreen pickers both already
+ * existed — this is the missing wire between them). All are opaque
  * ids; omitted entirely when never explicitly picked, so the host (or main's
  * registry) applies its own default rather than receiving a stale/invalid id.
  */
 export function createStartTabRequest(
   draft: Pick<SessionDraft, "workspace" | "engine" | "model" | "enginePreset" | "codexProfileId" | "connectionId">,
   codexEngineModel: string | null,
+  claudeModels: readonly EngineModelChoice[] = [],
 ): CreateTabRequest {
   if (draft.workspace === null) {
     throw new Error("A workspace is required to create a tab");
@@ -91,15 +95,14 @@ export function createStartTabRequest(
       ...(draft.connectionId !== undefined ? { connectionId: draft.connectionId } : {}),
     };
   }
+  const claudeModel = resolveClaudeDraftModel(draft.model, claudeModels);
   return {
     kind: "new",
     workspace: draft.workspace,
     engine: draft.engine,
     ...(draft.engine === "codex"
       ? (codexEngineModel !== null ? { engineModel: codexEngineModel } : {})
-      : draft.model !== null
-        ? { engineModel: draft.model }
-        : {}),
+      : claudeModel ? { engineModel: claudeModel } : {}),
     ...(draft.enginePreset !== undefined ? { enginePreset: draft.enginePreset } : {}),
     ...(draft.codexProfileId !== undefined ? { codexProfileId: draft.codexProfileId } : {}),
   };
@@ -161,7 +164,7 @@ export async function submitStartDraft(
 
   let result: CreateTabResult;
   try {
-    result = await deps.createTab(createStartTabRequest(draft, codexDecision?.kind === "send" ? codexDecision.id : null));
+    result = await deps.createTab(createStartTabRequest(draft, codexDecision?.kind === "send" ? codexDecision.id : null, deps.tabsStore.getState().claudeModels));
   } catch (error: unknown) {
     console.warn("[start-session] createTab rejected", error);
     return { ok: false, message: "Failed to create the task." };

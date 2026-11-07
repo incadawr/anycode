@@ -7,6 +7,7 @@ import type { SettingsSnapshot } from "../../../shared/settings.js";
 import { useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useSettingsStore } from "../settings-store.js";
 import { watchExternalEngines } from "../engine-availability.js";
+import { useClaudeDraftModels } from "../use-claude-draft-models.js";
 import { CLAUDE_DRAFT_MODELS } from "../claude-draft-models.js";
 import { buildStartModelGroups } from "./start-model-picker.js";
 import { connectionCredentialKey } from "./ConnectionTile.js";
@@ -14,7 +15,7 @@ import { connectionCredentialKey } from "./ConnectionTile.js";
 export const ENGINE_SWITCH_CONSEQUENCE = "Conversation text will be imported. Native engine context will not be transferred.";
 export interface EngineSwitchChoice { label: string; target: EngineSwitchTarget }
 
-export function engineSwitchChoices(current: EngineId, ready: readonly EngineId[], snapshot: SettingsSnapshot | null, codexModels: readonly EngineModelChoice[]): EngineSwitchChoice[] {
+export function engineSwitchChoices(current: EngineId, ready: readonly EngineId[], snapshot: SettingsSnapshot | null, codexModels: readonly EngineModelChoice[], claudeModels: readonly EngineModelChoice[] = CLAUDE_DRAFT_MODELS): EngineSwitchChoice[] {
   const choices: EngineSwitchChoice[] = [];
   if (current !== "core" && ready.includes("core") && snapshot) {
     const connections = snapshot.settings.provider.connections.filter(connection => {
@@ -27,13 +28,14 @@ export function engineSwitchChoices(current: EngineId, ready: readonly EngineId[
     }
   }
   if (current !== "codex" && ready.includes("codex")) for (const model of codexModels) choices.push({ label: `Codex · ${model.label}`, target: { engine: "codex", model: model.id } });
-  if (current !== "claude" && ready.includes("claude")) for (const model of CLAUDE_DRAFT_MODELS) choices.push({ label: `Claude · ${model.label}`, target: { engine: "claude", model: model.id } });
+  if (current !== "claude" && ready.includes("claude")) for (const model of claudeModels) choices.push({ label: `Claude · ${model.label}`, target: { engine: "claude", model: model.id } });
   return choices;
 }
 
 /** Shared across all running engines; the active chip changes only on correlated success. */
 export function EngineSwitchPicker() {
   const enabled = useTabStore(state => state.engineSwitch?.enabled === true);
+  const claudeModels = useClaudeDraftModels(enabled);
   const current = useTabStore(state => state.engine?.id ?? "core");
   const pending = useTabStore(state => state.pendingEngineSwitch);
   const idle = useTabStore(state => state.connection === "ready" && state.turn.status === "idle" && !state.queueInFlight && !state.permission && !state.childSurface && state.backgroundChildren.length === 0);
@@ -67,7 +69,7 @@ export function EngineSwitchPicker() {
     return () => window.removeEventListener("keydown", close);
   }, [open]);
   if (!enabled) return null;
-  const choices = engineSwitchChoices(current, ready, snapshot, models);
+  const choices = engineSwitchChoices(current, ready, snapshot, models, claudeModels);
   const rect = trigger.current?.getBoundingClientRect();
   return <>
     <span ref={trigger}><Button type="button" variant="ghost" size="sm" className="model-pill-chip" aria-label="Switch engine" aria-expanded={open} disabled={!idle || pending !== null} onClick={() => setOpen(value => !value)}>{current}{pending ? " · switching…" : " ▾"}</Button></span>

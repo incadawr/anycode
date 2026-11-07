@@ -59,6 +59,21 @@ describe("createClaudeOnboardingController — recheck", () => {
     expect(runDoctor).not.toHaveBeenCalled();
   });
 
+  it("retains the confirmed catalog on errors and clears it on an account verdict", async () => {
+    let report: ClaudeDoctorReport = { status: "ready", catalogIdentity: "a".repeat(64), models: [{ id: "opus" }] };
+    const controller = createClaudeOnboardingController(baseDeps({
+      readBinaryPathSetting: async () => "/opt/claude", fs: fakeExecutableFs("/opt/claude"),
+      runDoctor: async () => report,
+    }));
+    await controller.recheck();
+    report = { status: "error", error: "timeout" };
+    expect((await controller.recheck()).report.models).toEqual([{ id: "opus" }]);
+    report = { status: "ready", catalogIdentity: "b".repeat(64) };
+    expect((await controller.recheck()).report.models ?? []).toEqual([]);
+    report = { status: "signed_out" };
+    expect((await controller.recheck()).report.models ?? []).toEqual([]);
+  });
+
   it("runs the doctor with no CLAUDE_CONFIG_DIR override when a binary IS discovered, and reports ready (owner pivot: ambient default)", async () => {
     const report: ClaudeDoctorReport = { status: "ready", version: "2.1.212" };
     const runDoctor = vi.fn(async (_binaryPath: string, _options: RunClaudeDoctorOptions) => report);
@@ -264,9 +279,9 @@ describe("createClaudeOnboardingController — loginStart/loginCancel", () => {
     expect(runLogin.mock.calls[0]![1]).not.toHaveProperty("profileDir");
   });
 
-  it("custody: loginStart's resolved value is a closed field set, even against an adversarial runLogin/runDoctor", async () => {
+  it("preserves doctor report extensions while keeping login output closed", async () => {
     const runDoctor = vi.fn(
-      async () => ({ status: "ready", version: "2.1.212", account: { email: "leak@evil.example" } }) as unknown as ClaudeDoctorReport,
+      async () => ({ status: "ready", version: "2.1.212", diagnostic: "safe diagnostic" }) as unknown as ClaudeDoctorReport,
     );
     const runLogin = vi.fn(async (_binaryPath: string, options: RunClaudeLoginOptions) => {
       await options.probe();
@@ -279,6 +294,8 @@ describe("createClaudeOnboardingController — loginStart/loginCancel", () => {
     expect(Object.keys(result).sort()).toEqual(["ok", "snapshot"]);
     if (result.ok) {
       expect(Object.keys(result.snapshot).sort()).toEqual(["binaryPath", "checkedAt", "report", "source"]);
+      expect(result.snapshot.report).toMatchObject({ diagnostic: "safe diagnostic" });
+      expect(JSON.stringify(result.snapshot)).not.toContain("fake-not-a-token");
     }
   });
 
@@ -602,4 +619,23 @@ describe("doctor source env — engine-proxy carrier custody", () => {
     });
     expect(env).toEqual({ ANYCODE_CLAUDE_BIN: "/env/claude", HTTPS_PROXY: SHELL_PROXY, https_proxy: SHELL_PROXY });
   });
+});
+
+
+it("publishes a matching persisted Claude catalog and remembers fresh initialize choices", async () => {
+  const identity = "a".repeat(64);
+  let cache = { identity, models: [{ id: "remembered", label: "Remembered 6.0" }] };
+  let report: ClaudeDoctorReport = { status: "ready", catalogIdentity: identity };
+  const writeClaudeSettings = fakeWriteClaudeSettings();
+  const controller = createClaudeOnboardingController(baseDeps({
+    readBinaryPathSetting: async () => "/opt/claude", fs: fakeExecutableFs("/opt/claude"),
+    runDoctor: async () => ({ ...report }), readModelCatalog: () => cache, writeClaudeSettings,
+  }));
+  expect((await controller.recheck()).report.models).toEqual(cache.models);
+  expect(writeClaudeSettings.mock.calls[0]![0].modelCatalog).toEqual(cache);
+  report = { status: "ready", catalogIdentity: "b".repeat(64) };
+  expect((await controller.recheck()).report.models).toBeUndefined();
+  report = { ...report, models: [{ id: "fresh", label: "Fresh 7.0" }] };
+  expect((await controller.recheck()).report.models).toEqual(report.models);
+  expect(writeClaudeSettings.mock.calls.at(-1)![0].modelCatalog).toEqual({ identity: report.catalogIdentity, models: report.models });
 });

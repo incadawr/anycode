@@ -12,10 +12,16 @@
  * `initialize` control-response carries `account.email`/`account.organization`/
  * `account.subscriptionType` live, un-gated by `--setting-sources` (W0 probe
  * #2, `w0-13-authprobe-signedin.jsonl`) — NONE of that may ever reach this
- * type. `ClaudeDoctorReport` carries only `status`/`version`/`error`; the
- * doctor reads the account object in memory only long enough to decide
- * signed-in vs signed-out and then discards it.
+ * type. `ClaudeDoctorReport` adds only an opaque identity digest and sanitized model
+ * choices to status/version/error. Raw account fields remain in main memory.
  */
+
+import type { EngineModelChoice } from "./protocol.js";
+
+export interface ClaudeModelCache {
+  identity: string;
+  models: EngineModelChoice[];
+}
 
 /**
  * Status-machine states for the Settings Claude card. `not_installed`/
@@ -36,6 +42,9 @@ export type ClaudeDoctorStatus = "not_installed" | "update_required" | "signed_o
  * e-mail addresses are masked too; the text is then bounded.
  */
 export interface ClaudeDoctorReport {
+  /** Opaque account + trusted CLI/version digest; never raw account fields. */
+  catalogIdentity?: string;
+  models?: EngineModelChoice[];
   status: ClaudeDoctorStatus;
   version?: string;
   error?: string;

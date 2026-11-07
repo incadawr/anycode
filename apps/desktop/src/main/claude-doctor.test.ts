@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -318,6 +318,32 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
       profileDir: freshProfileDir(),
     });
     expect(report).toEqual({ status: "ready", version: "2.1.212" });
+  });
+
+  it("returns only an opaque catalog key and sanitized names from a fake initialize", async () => {
+    // process.execPath is only the stat target; fakeSpawn always launches the test double.
+    const report = await runClaudeDoctor(process.execPath, {
+      trust: TRUSTED, spawnImpl: fakeSpawn(), profileDir: freshProfileDir(), catalogCacheDir: scratchDir,
+    });
+    expect(report.catalogIdentity).toMatch(/^[a-f0-9]{64}$/);
+    expect(report.models).toEqual([{ id: "test-model", label: "Test model 6.0" }]);
+    expect(JSON.stringify(report)).not.toMatch(/sentinel-custody|Sentinel Org|subscriptionType|tokenSource/);
+  });
+
+  it("discards catalog identity if the executable changes during initialize", async () => {
+    const path = join(scratchDir, "changing-cli");
+    writeFileSync(path, "before");
+    const spawnDouble = fakeSpawn();
+    const report = await runClaudeDoctor(path, {
+      trust: TRUSTED, profileDir: freshProfileDir(), catalogCacheDir: scratchDir,
+      spawnImpl: (command, args, options) => {
+        if (args.includes("--input-format")) writeFileSync(path, "after replacement");
+        return spawnDouble(command, args, options);
+      },
+    });
+    expect(report.status).toBe("ready");
+    expect(report.catalogIdentity).toBeUndefined();
+    expect(report.models).toBeUndefined();
   });
 
   it("signed_out: tokenSource:none -> status signed_out, from the SAME fake binary/version", async () => {

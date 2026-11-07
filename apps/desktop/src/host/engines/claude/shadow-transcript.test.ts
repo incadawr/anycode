@@ -117,7 +117,7 @@ describe("projectClaudeTurn (cut §1.5, shadow-transcript write side)", () => {
       type: "system",
       subtype: "init",
       session_id: "s1",
-      model: "claude-opus-4-8",
+      model: "claude-opus-5-5",
       permissionMode: "default",
       cwd: "/Users/testuser/projects/app",
       tools: [],

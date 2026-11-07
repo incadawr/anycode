@@ -1,14 +1,15 @@
 /**
- * Model-catalog tests on the LIVE `initialize` response captured in
+ * Model-catalog tests on the synthetic `initialize` response in
  * `w0-16-setmodel.jsonl` (cut §1.4). The load-bearing discriminator is the
- * `value` / `resolvedModel` split: `claude-fable-5[1m]` is what you SEND,
- * `claude-fable-5` is what the CLI REPORTS back, and a round-trip assert
+ * `value` / `resolvedModel` split: `fable` is what you SEND,
+ * `claude-fable-5-1` is the simulated read-back, and a round-trip assert
  * against the requested id would fire a false mismatch on every switch.
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CLAUDE_DRAFT_MODELS } from "../../../renderer/src/claude-draft-models.js";
 import { CLAUDE_ENGINE_CAPABILITIES } from "./claude-engine.js";
 import { CLAUDE_EFFORT_LEVELS, ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
@@ -23,11 +24,11 @@ const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "f
 
 /** The id a caller SENDS to select Fable — deliberately read through a function so it is not a literal type at the comparison site. */
 function fableRequestedId(): string {
-  return "claude-fable-5[1m]";
+  return "fable";
 }
 
-/** The live `initialize` response's `models[]`. */
-function liveModels(): unknown {
+/** The synthetic `initialize` response's `models[]`. */
+function fixtureModels(): unknown {
   const lines = readFileSync(join(FIXTURES_DIR, "w0-16-setmodel.jsonl"), "utf8")
     .split("\n")
     .filter((line) => line.trim() !== "")
@@ -41,40 +42,48 @@ function liveModels(): unknown {
   return (init.raw.response as { response: { models: unknown } }).response.models;
 }
 
-describe("ClaudeModelCatalog — built from the live initialize models[], never a static enum", () => {
-  const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
+describe("ClaudeModelCatalog — built from synthetic initialize models[]", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
 
-  it("decodes the live catalog", () => {
+  it("decodes the synthetic catalog", () => {
     expect(catalog.available).toBe(true);
     const ids = catalog.choices().map((choice) => choice.id);
-    // The observed live set (cut §1.4 / contract §2.1).
-    expect(ids).toEqual(["default", "opus[1m]", "claude-fable-5[1m]", "sonnet", "haiku"]);
+    // The synthetic catalog set; this is not evidence of CLI availability.
+    expect(ids).toEqual(["default", "opus", "fable", "sonnet", "haiku"]);
     expect(catalog.defaultValue()).toBe("default");
   });
 
-  it("keeps `value` and `resolvedModel` distinct — they genuinely differ live", () => {
-    const fable = catalog.get("claude-fable-5[1m]")!;
-    expect(fable.value).toBe("claude-fable-5[1m]");
-    expect(fable.resolvedModel).toBe("claude-fable-5");
+  it("projects versioned display names and resolves ordinary Opus without extended context", () => {
+    expect(catalog.choices().map(choice => choice.label)).toEqual([
+      "Default (recommended)", "Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5",
+    ]);
+    expect(catalog.resolveId("claude-opus-5-5")).toBe("opus");
+    expect(catalog.get(catalog.defaultValue()!)!.resolvedModel).toBe("claude-opus-5-5");
+  });
+
+  it("keeps `value` and `resolvedModel` distinct — wire alias and resolved id differ", () => {
+    const fable = catalog.get("fable")!;
+    expect(fable.value).toBe("fable");
+    expect(fable.resolvedModel).toBe("claude-fable-5-1");
     expect(fable.value).not.toBe(fable.resolvedModel);
-    expect(catalog.get("opus[1m]")!.resolvedModel).toBe("claude-opus-4-8[1m]");
+    expect(catalog.get("opus")!.resolvedModel).toBe("claude-opus-5-5");
   });
 
   it("read-back compares against resolvedModel, so a get_context_usage echo matches (NOT a round-trip assert)", () => {
-    // What `get_context_usage.model` actually reports after selecting fable.
-    expect(catalog.readBackMatches("claude-fable-5[1m]", "claude-fable-5")).toBe(true);
+    // Simulated get_context_usage read-back after selecting fable.
+    expect(catalog.readBackMatches("fable", "claude-fable-5-1")).toBe(true);
     // A naive requested-vs-reported string comparison would have failed here:
     const requested: string = fableRequestedId();
-    expect(requested).not.toBe("claude-fable-5");
+    expect(requested).not.toBe("claude-fable-5-1");
     // The sent id also matches (both directions of the split resolve).
-    expect(catalog.readBackMatches("claude-fable-5[1m]", "claude-fable-5[1m]")).toBe(true);
+    expect(catalog.readBackMatches("fable", "fable")).toBe(true);
     // A genuinely different model still fails the check.
-    expect(catalog.readBackMatches("claude-fable-5[1m]", "claude-haiku-4-5-20251001")).toBe(false);
+    expect(catalog.readBackMatches("fable", "claude-haiku-5-5")).toBe(false);
   });
 
   it("findByResolved maps a CLI-reported id back to its catalog entry", () => {
-    expect(catalog.findByResolved("claude-opus-4-8[1m]")!.value).toBe("default");
-    expect(catalog.findByResolved("claude-sonnet-5")!.value).toBe("sonnet");
+    expect(catalog.findByResolved("claude-opus-5-5")!.value).toBe("default");
+    expect(catalog.findByResolved("claude-sonnet-5-5")!.value).toBe("sonnet");
     expect(catalog.findByResolved("no-such-model")).toBeUndefined();
   });
 
@@ -127,7 +136,7 @@ describe("CLAUDE_EFFORT_LEVELS / isClaudeEffortLevel — the fixed pre-spawn voc
 });
 
 describe("ClaudeModelCatalog.resolveEffort — per-model memory normalization", () => {
-  const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
+  const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
 
   it("keeps a preferred effort the model still supports", () => {
     expect(catalog.resolveEffort("sonnet", "high")).toBe("high");
@@ -190,7 +199,7 @@ describe("Claude permission presets — frozen table (cut §1.4)", () => {
 });
 
 describe("ClaudeModelCatalog.resolveId — a wire alias and a full CLI id both name the same model", () => {
-  const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
+  const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
 
   it("accepts the catalog `value` (what the picker sends) unchanged", () => {
     expect(catalog.resolveId("haiku")).toBe("haiku");
@@ -201,18 +210,18 @@ describe("ClaudeModelCatalog.resolveId — a wire alias and a full CLI id both n
     // The reported defect: `create_session {model: "claude-haiku-…"}` was
     // matched only against `value`, so every full-id request looked unknown to
     // the engine and was silently replaced by the default.
-    expect(catalog.resolveId("claude-haiku-4-5-20251001")).toBe("haiku");
-    expect(catalog.resolveId("claude-sonnet-5")).toBe("sonnet");
-    expect(catalog.resolveId("claude-fable-5")).toBe("claude-fable-5[1m]");
+    expect(catalog.resolveId("claude-haiku-5-5")).toBe("haiku");
+    expect(catalog.resolveId("claude-sonnet-5-5")).toBe("sonnet");
+    expect(catalog.resolveId("claude-fable-5-1")).toBe("fable");
   });
 
   it("prefers a concrete alias over `default` for an id both resolve to", () => {
-    expect(catalog.resolveId("claude-opus-4-8[1m]")).toBe("opus[1m]");
+    expect(catalog.resolveId("claude-opus-5-5")).toBe("opus");
   });
 
   it("resolves the exact reported shape: value `haiku`, resolvedModel `claude-haiku-5-5`", () => {
     const synthetic = ClaudeModelCatalog.fromInitialize([
-      { value: "default", resolvedModel: "claude-opus-5", displayName: "Default" },
+      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default" },
       { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku" },
     ]);
     expect(synthetic.resolveId("claude-haiku-5-5")).toBe("haiku");
@@ -231,24 +240,64 @@ describe("ClaudeModelCatalog.resolveId — a wire alias and a full CLI id both n
 });
 
 describe("ClaudeModelCatalog.selectableForResolved — the ambiguous read-back (cut §1.5 hazard (б))", () => {
-  const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
+  const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
 
   it("prefers a CONCRETE alias over `default` when both resolve to the same model", () => {
-    // Live fact: `default` and `opus[1m]` share `claude-opus-4-8[1m]`, and
+    // Synthetic ambiguity case: `default` and `opus` share `claude-opus-5-5`, and
     // `default` is listed first — so plain `findByResolved` answers `default`.
-    expect(catalog.findByResolved("claude-opus-4-8[1m]")!.value).toBe("default");
+    expect(catalog.findByResolved("claude-opus-5-5")!.value).toBe("default");
     // Persisting `default` for a session actually pinned to opus would silently
     // re-point it the day the account's default model changes.
-    expect(catalog.selectableForResolved("claude-opus-4-8[1m]")!.value).toBe("opus[1m]");
+    expect(catalog.selectableForResolved("claude-opus-5-5")!.value).toBe("opus");
   });
 
   it("answers the unambiguous cases identically to findByResolved", () => {
-    expect(catalog.selectableForResolved("claude-sonnet-5")!.value).toBe("sonnet");
-    expect(catalog.selectableForResolved("claude-haiku-4-5-20251001")!.value).toBe("haiku");
+    expect(catalog.selectableForResolved("claude-sonnet-5-5")!.value).toBe("sonnet");
+    expect(catalog.selectableForResolved("claude-haiku-5-5")!.value).toBe("haiku");
     expect(catalog.selectableForResolved("no-such-model")).toBeUndefined();
   });
 
   it("an exact `value` hit wins outright (the CLI reporting a selectable id verbatim)", () => {
     expect(catalog.selectableForResolved("sonnet")!.value).toBe("sonnet");
   });
+});
+
+it("resolves every fallback id through the synthetic initialize catalog", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize(fixtureModels());
+  expect(CLAUDE_DRAFT_MODELS.map(model => catalog.resolveId(model.id))).toEqual(["default", "fable", "opus", "sonnet", "haiku"]);
+});
+
+it("labels an extended-context entry apart from its ordinary sibling in the in-session picker", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize([
+    { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-5-5", displayName: "Opus" },
+  ]);
+  expect(catalog.choices().map((choice) => choice.label)).toEqual(["Opus", "Opus (1M)"]);
+});
+
+it("resumes a bracketed live id onto the extended alias, and reads it back against the shared plain id", () => {
+  // Resume-safety: a bracketed id names the extended alias, never the ordinary one.
+  const bracketed = ClaudeModelCatalog.fromInitialize([
+    { value: "opus", resolvedModel: "claude-opus-4-8", displayName: "Opus" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-4-8[1m]", displayName: "Opus" },
+  ]);
+  expect(bracketed.resolveId("claude-opus-4-8[1m]")).toBe("opus[1m]");
+  expect(bracketed.resolveId("claude-opus-4-8")).toBe("opus");
+  // Read-back: the plain id the CLI reports for the shared resolved model matches the extended alias.
+  const shared = ClaudeModelCatalog.fromInitialize([
+    { value: "opus", resolvedModel: "claude-opus-4-8" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-4-8" },
+  ]);
+  expect(shared.readBackMatches("opus[1m]", "claude-opus-4-8")).toBe(true);
+});
+
+it("prefers ordinary Opus when the extended alias has the same resolved id", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize([
+    { value: "default", resolvedModel: "claude-opus-5-5" },
+    { value: "opus[1m]", resolvedModel: "claude-opus-5-5" },
+    { value: "opus", resolvedModel: "claude-opus-5-5" },
+  ]);
+  expect(catalog.resolveId("claude-opus-5-5")).toBe("opus");
+  expect(catalog.selectableForResolved("claude-opus-5-5")?.value).toBe("opus");
+  expect(catalog.resolveId("opus[1m]")).toBe("opus[1m]");
 });

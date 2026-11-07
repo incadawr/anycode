@@ -2309,11 +2309,11 @@ export class ClaudeEngine implements SessionEngine {
    * that already spawned under exactly this posture.
    *
    * The model comparison is deliberately RESOLVED-vs-RESOLVED. `init.model` is
-   * a resolved id (`claude-opus-4-8[1m]`) while the catalog value we hold is
-   * the selectable alias (`opus[1m]`), and several aliases DO share one
-   * resolved id live (`default` and `opus[1m]` both resolve to
-   * `claude-opus-4-8[1m]`) — so adopting on every init would flip a perfectly
-   * correct `opus[1m]` selection to whichever alias is listed first. The
+   * a resolved id (`claude-opus-5-5`) while the catalog value we hold is
+   * the selectable alias (`opus`), and several aliases DO share one
+   * resolved id (for example `default` and `opus` can both resolve to
+   * `claude-opus-5-5`) — so adopting on every init would flip a perfectly
+   * correct `opus` selection to whichever alias is listed first. The
    * current selection is therefore kept whenever it already resolves to what
    * the CLI reports; only a genuine divergence adopts a new entry, and
    * `selectableForResolved` then picks a concrete alias over `default`.

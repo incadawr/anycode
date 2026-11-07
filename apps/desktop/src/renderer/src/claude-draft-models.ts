@@ -1,30 +1,28 @@
 import type { EngineModelChoice } from "../../shared/protocol.js";
 
 /**
- * The Claude draft's model list. Unlike the preset table this is NOT a mirror
- * of a frozen host table — `host/engines/claude/models.ts` is explicit that the
- * real catalog is per-ACCOUNT and read live from the `initialize` response, and
- * a static enum was disproven by the live payload. Two facts make a draft-time
- * list nonetheless correct here:
- *
- *  1. There is no Claude catalog channel at draft time. The Claude doctor
- *     (`ClaudeDoctorReport`) reports status/version only — it never runs an
- *     `initialize`, so unlike `codexModels` there is nothing to fetch. Offering
- *     the "Default (recommended)" entry alone would silently remove the user's
- *     ability to pick a model on a new session.
- *  2. A wrong pick is HARMLESS and visible. `startClaudeEngine`'s `resolveModel`
- *     accepts an id only if the live catalog positively contains it, and
- *     otherwise boots on the CLI default AND queues a warning
- *     `engine_notice` that names the model — so an entry this account does not
- *     have degrades loudly, never silently mis-runs.
- *
- * The values are the `value` (send) ids captured live in
- * `w0-16-setmodel.jsonl`, never the `resolvedModel` (read-back) ids — sending a
- * resolved id is the exact conflation models.ts exists to prevent.
+ * Fallback when no account/CLI-confirmed initialize catalog is available.
+ * Drafts prefer the cached doctor catalog; running sessions use their own
+ * live initialize catalog instead of this table.
+ * Full model ids avoid assuming which aliases an account's CLI advertises.
+ * The host resolves these through the live catalog before sending set_model;
+ * an unavailable model falls back to the CLI default with a warning.
+ * Ordinary Opus deliberately omits the extended-context [1m] suffix.
  */
 export const CLAUDE_DRAFT_MODELS: readonly EngineModelChoice[] = [
   { id: "default", label: "Default (recommended)" },
-  { id: "opus[1m]", label: "Opus" },
-  { id: "sonnet", label: "Sonnet" },
-  { id: "haiku", label: "Haiku" },
+  { id: "claude-fable-5-1", label: "Fable 5.1" },
+  { id: "claude-opus-5-5", label: "Opus 5.5" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+  { id: "claude-haiku-5-5", label: "Haiku 5.5" },
 ];
+
+/** One model decision for both the draft chip and submission. Exact wire ids win. */
+export function resolveClaudeDraftModel(draftModel: string | null, available: readonly EngineModelChoice[]): string {
+  if (draftModel === null) return "";
+  const models = available.length ? available : CLAUDE_DRAFT_MODELS;
+  const exact = models.find(model => model.id === draftModel);
+  const resolved = models.find(model => model.resolvedId === draftModel && model.id !== "default" && !model.id.endsWith("[1m]"))
+    ?? models.find(model => model.resolvedId === draftModel);
+  return exact?.id ?? resolved?.id ?? "";
+}

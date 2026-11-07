@@ -58,7 +58,7 @@ describe("role model review regressions", () => {
   it("offers only the empty default for engine routes, while preserving a connection's literal default id", () => {
     const models = resolveRoleModels(toDraftEntry({ engine: "claude" }), { ...sources, engineModels: { claude: CLAUDE_DRAFT_MODELS } });
     expect(models.some((model) => model.id === "default")).toBe(false);
-    expect(models.some((model) => model.id === "sonnet")).toBe(true);
+    expect(models.some((model) => model.id === "claude-sonnet-5-5")).toBe(true);
     expect(roleModelSelection("default", models, "claude")).toBe("default");
     expect(roleModelSelection("default", [{ id: "default" }], "")).toBe("model:0");
     expect(fromDraftEntry(toDraftEntry({ engine: "claude", model: "default" }))).toEqual({ engine: "claude" });

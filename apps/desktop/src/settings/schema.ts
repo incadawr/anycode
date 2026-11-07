@@ -1,3 +1,4 @@
+import { CLAUDE_EFFORT_LEVELS } from "../shared/claude-effort.js";
 /**
  * zod schema + migration skeleton for ~/.anycode/settings.json (design
  * slice-2.2-cut.md §2, frozen by task 2.2.1). node-only (zod runs here); the TS
@@ -937,6 +938,15 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // as on `codex` — the failure direction is "no proxy emitted".
     claude: z
       .object({
+        modelCatalog: z.object({
+          identity: z.string().regex(/^[a-f0-9]{64}$/),
+          models: z.array(z.object({
+            id: z.string().min(1).max(200),
+            resolvedId: z.string().min(1).max(200).optional(),
+            label: z.string().max(256).optional(),
+            efforts: z.array(z.enum(CLAUDE_EFFORT_LEVELS)).max(CLAUDE_EFFORT_LEVELS.length).optional(),
+          })).max(100),
+        }).optional().catch(undefined),
         binaryPath: z.string().optional(),
         lastCheck: z
           .object({

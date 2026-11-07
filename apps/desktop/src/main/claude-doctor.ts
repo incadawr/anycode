@@ -19,13 +19,14 @@
  *
  * CUSTODY (cut §0.2 invariant 2): the `initialize` response's `account` object
  * (email/organization/subscriptionType — live, un-gated by `--setting-sources`,
- * W0 probe #2) is read ONLY long enough to compute the ready/signed_out
- * discriminator below and is then discarded — `ClaudeDoctorReport`
+ * W0 probe #2) is read only to compute readiness and an opaque catalog key
+ * and is then discarded — `ClaudeDoctorReport`
  * (shared/claude-doctor.ts) never carries it, and this file never logs it.
  */
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { proxyValueCarriesCredential } from "@anycode/core/child-env";
 import { StringDecoder } from "node:string_decoder";
+import { loadClaudeCatalogSalt, claudeCliIdentity, claudeCatalogKey, projectClaudeModels } from "./claude-model-cache.js";
 import { randomUUID } from "node:crypto";
 import { ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../shared/engines.js";
 import { classifyClaudeBinaryPathTrust, type ClaudeBinaryTrustGateOutcome } from "./claude-binary.js";
@@ -415,7 +416,7 @@ function preflightVersion(
   });
 }
 
-type HandshakeResult = { ok: true; account: unknown } | { ok: false; error: string };
+type HandshakeResult = { ok: true; account: unknown; models?: unknown } | { ok: false; error: string };
 
 /**
  * The auth-probe itself: spawn -> ONE `control_request{subtype:"initialize"}`
@@ -486,7 +487,7 @@ async function runInitializeHandshake(
         if (envelope.type === "control_response" && envelope.response?.request_id === requestId) {
           if (envelope.response.subtype === "success") {
             const account = (envelope.response.response as { account?: unknown } | undefined)?.account;
-            settle({ ok: true, account });
+            settle({ ok: true, account, models: (envelope.response.response as { models?: unknown } | undefined)?.models });
           } else {
             const errorText = typeof envelope.response.error === "string" ? envelope.response.error : "unknown control error";
             settle({ ok: false, error: `Claude control-protocol initialize failed: ${errorText}` });
@@ -604,6 +605,8 @@ export interface RunClaudeDoctorOptions {
    * pass an explicit path here instead.
    */
   profileDir?: string;
+  /** App settings directory, never the CLI auth directory. */
+  catalogCacheDir?: string;
   versionTimeoutMs?: number;
   initTimeoutMs?: number;
   /** Live per-path binary-trust consents, fed to the default `trust` closure; ignored when `trust` is explicitly injected. Absent/default `[]` keeps today's wall byte-for-byte. */
@@ -680,14 +683,18 @@ export async function runClaudeDoctor(binaryPath: string, options: RunClaudeDoct
       };
     }
 
+    const cliIdentity = claudeCliIdentity(binaryPath);
     const handshake = await runInitializeHandshake(binaryPath, childEnv, spawnImpl, initTimeoutMs, cancellation);
     if (!handshake.ok) {
       return { status: "error", version, error: handshake.error };
     }
-    // Custody: `handshake.account` is read exactly once, right here, to
-    // decide signed-in vs signed-out — never stored, never logged, and never
-    // reaches the returned report (cut §0.2 invariant 2).
-    return { status: isClaudeSignedIn(handshake.account) ? "ready" : "signed_out", version };
+    const status = isClaudeSignedIn(handshake.account) ? "ready" : "signed_out";
+    const catalogIdentity = cliIdentity === claudeCliIdentity(binaryPath)
+      ? claudeCatalogKey(handshake.account, cliIdentity, version, options.catalogCacheDir ? loadClaudeCatalogSalt(options.catalogCacheDir) : undefined) : undefined;
+    return { status, version, ...(status === "ready" && catalogIdentity ? {
+      catalogIdentity,
+      ...(Array.isArray(handshake.models) ? { models: projectClaudeModels(handshake.models, maskCredentials) } : {}),
+    } : {}) };
   };
 
   // The watchdog and the abort signal both CANCEL rather than race: whichever
