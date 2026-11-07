@@ -70,8 +70,8 @@ does not start until you save that secret; saving it starts the service.
 ## Safety
 
 - Only a **private** chat from an id in `TELEGRAM_ALLOWED_USERS` reaches a session.
-  Groups, channels, edited messages, buttons and bot senders are dropped before any
-  reply or parsing. A stranger gets no reply. The log shows at most one
+  Groups, channels, edited messages, bot senders and button presses from anyone
+  else are dropped before any reply or parsing. A stranger gets no reply. The log shows at most one
   `[ignored]` line per minute per id, never the text.
 - The bridge only sees sessions you switched on in the Sessions API, and it names
   them by handle, state and folder name (not the full path).
@@ -87,7 +87,8 @@ does not start until you save that secret; saving it starts the service.
 
 ## Limits
 
-- One bot, one computer, one private chat. No groups, no media, no inline buttons.
+- One bot, one computer, one private chat. No groups, no media; the only buttons
+  are Allow and Deny on approvals.
 - Text only, up to 32000 characters per message to a session.
 - Results are long-polled, so an answer can take as long as the session's turn.
 - Messages are delivered at least once across a crash. A repeated delivery is not
