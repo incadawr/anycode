@@ -203,8 +203,8 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
     },
     async openPeers(tab) {
       assert((await api(`/tabs/${tab.tabId}/select`,{})).ok);
-      const opened = await evaluate(`(() => { const trigger = document.querySelector('.session-header .environment-trigger'); if (!trigger) return false; trigger.click(); return true; })()`);
-      if (!opened) throw new Error('Environment menu trigger (.session-header .environment-trigger) not found; cannot open session peers');
+      const opened = await evaluate(`(() => { const trigger = document.querySelector('.session-header .environment-trigger') ?? document.querySelector('.environment-trigger'); if (!trigger) return false; trigger.click(); return true; })()`);
+      if (!opened) throw new Error('Environment menu trigger not found in header or composer; cannot open session peers');
       return invoke('sessionPeers.get',tab.tabId);
     },
     async grant(source,target,enabled) {

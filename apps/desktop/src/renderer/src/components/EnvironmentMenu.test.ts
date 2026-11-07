@@ -126,7 +126,7 @@ async function branchMenu(run: (host: HTMLDivElement, store: ReturnType<typeof c
   const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
   Object.defineProperty(window, "anycode", { configurable: true, value: { communication: { get: async () => ({ ok: false }) }, browserAccess: { get: async () => ({ ok: false }), onChanged: () => () => {} }, sessionPeers: { get: async () => ({ ok: false }) } } });
   const store = createDesktopStore();
-  store.setState({ workspace: "/fixture/repo", git: { ...store.getState().git, statusKnown: true,
+  store.setState({ connection: "ready", workspace: "/fixture/repo", git: { ...store.getState().git, statusKnown: true,
     status: { head: { branch: "main", sha: "abcdef123", detached: false, ahead: null, behind: null }, staged: [], unstaged: [], untracked: [], dirtyCount: 0, filesTruncated: false } } });
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
@@ -387,6 +387,7 @@ it.each(["bad name", "-flag", "a..b", "a@{b", "a.lock", "a/.hidden", "a//b", "a?
     await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Invalid branch name");
     expect(send.mock.calls).toHaveLength(count);
+    expect(host.querySelector('[role="alert"] button')).toBeNull();
   });
 });
 it("opens the branch screen directly from a tab-scoped command and focuses its filter", async () => {
@@ -552,4 +553,68 @@ it("connects App's shortcut and palette command to the active tab panel and disa
       expect(branchSwitchAction(null).enabled).toBe(false);
     } finally { getStore.mockRestore(); useTabsStore.setState({ activeTabId: previous }); }
   });
+});
+
+it.each(["awaiting_port", "awaiting_host_ready", "host_exited"] as const)("does not send after disconnect: %s", async connection => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await act(async () => store.setState({ connection }));
+    const count = send.mock.calls.length;
+    await pickTopic(host);
+    expect(send.mock.calls).toHaveLength(count);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(connection === "host_exited" ? "Host process exited" : connection === "awaiting_port" ? "Host connection is unavailable" : "Waiting for host readiness");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+it.each(["exit", "respawn", "timeout"])("unlocks an unanswered switch after %s", async event => {
+  vi.useFakeTimers();
+  try { await branchMenu(async (host, store, send) => {
+    await readyBranches(store); await pickTopic(host);
+    const request = switchRequest(send);
+    await act(async () => {
+      if (event === "exit") store.getState().setHostExited(false, { code: "spawn_refused", message: "Host stopped unexpectedly" });
+      else if (event === "respawn") store.getState().reset();
+      else vi.advanceTimersByTime(30_000);
+    });
+    expect(store.getState().git.pending[request.requestId]).toBeUndefined();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(event === "exit" ? "Host stopped unexpectedly" : event === "respawn" ? "interrupted" : "timed out");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    await act(async () => document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  }); } finally { vi.useRealTimers(); }
+});
+it.each([false, true])("Enter creates a partial match unless an arrow selects it: %s", async arrow => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store, 1);
+    const input = await filterBranches(host, "topic");
+    if (arrow) await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("1 uncommitted change");
+    expect(host.querySelector('[role="alert"]')?.textContent).not.toContain("1 uncommitted changes");
+    if (arrow) expect(host.querySelector('[role="alert"]')?.textContent).toContain("target branch");
+    expect(switchRequest(send)).toBeUndefined();
+    await clickText(host, arrow ? "Switch anyway" : "Create and switch");
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: arrow ? { op: "switch_branch", name: "topic/a" } : { op: "create_branch", name: "topic", switch: true } }));
+  });
+});
+it("palette activation reads current git availability and active tab", async () => {
+  const { tabRegistry } = await import("../tab-registry.js");
+  const store = createDesktopStore();
+  const previous = useTabsStore.getState().activeTabId;
+  const getStore = vi.spyOn(tabRegistry, "getStore").mockReturnValue(store);
+  const dispatch = vi.spyOn(window, "dispatchEvent");
+  try {
+    useTabsStore.setState({ activeTabId: "first" });
+    const action = branchSwitchAction(null);
+    expect(action.enabled).toBe(false);
+    store.setState({ git: { ...store.getState().git, status: { head: { branch: "main" } } as never } });
+    useTabsStore.setState({ activeTabId: "second" });
+    expect(action.enabled).toBe(true);
+    action.run();
+    expect(dispatch.mock.calls.at(-1)?.[0]).toMatchObject({ detail: "second" });
+    store.setState({ git: { ...store.getState().git, status: null } });
+    dispatch.mockClear(); action.run(); expect(dispatch).not.toHaveBeenCalled();
+  } finally { getStore.mockRestore(); dispatch.mockRestore(); useTabsStore.setState({ activeTabId: previous }); }
 });

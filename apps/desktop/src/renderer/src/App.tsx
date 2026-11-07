@@ -116,11 +116,13 @@ const EMPTY_IDS: readonly string[] = [];
 
 /** Shared branch command for the global shortcut and command palette. */
 export function branchSwitchAction(hint: string | null): PaletteAction {
-  const tabId = useTabsStore.getState().activeTabId;
-  const enabled = !!tabId && tabRegistry.getStore(tabId)?.getState().git.status != null;
+  const current = () => {
+    const tabId = useTabsStore.getState().activeTabId;
+    return { tabId, enabled: !!tabId && tabRegistry.getStore(tabId)?.getState().git.status != null };
+  };
   return {
-    id: "branch.switch", label: "Switch branch…", hint, enabled,
-    run: () => { if (enabled) window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: tabId })); },
+    id: "branch.switch", label: "Switch branch…", hint, get enabled() { return current().enabled; },
+    run: () => { const { tabId, enabled } = current(); if (enabled) window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: tabId })); },
   };
 }
 

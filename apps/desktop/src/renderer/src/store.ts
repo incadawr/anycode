@@ -6472,6 +6472,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       setHostExited(missingWorkspace = false, failure): void {
+        for (const requestId of Object.keys(get().git.pending)) {
+          applyGitResult(requestId, { ok: false, reason: failure?.message ?? "Host process exited" });
+        }
         // Slice P7.14: the host dying is an anomalous end — hold a non-empty
         // queue paused so nothing drains silently once a new host connects.
         // The connection flip AWAY from "ready" already disables the drainer,

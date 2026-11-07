@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Branch search and creation are available in the environment menu with ⇧⌘B; language servers and hooks moved to the Extensions panel.
+
 ## [0.0.87] - 2026-11-07
 
 ### Added

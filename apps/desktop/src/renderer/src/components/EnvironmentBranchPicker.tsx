@@ -19,24 +19,42 @@ export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged 
   const [switchError, setSwitchError] = useState("");
   const locked = phase === "pending";
   const pending = useTabStore(s => s.git.pending);
+  const connection = useTabStore(s => s.connection);
+  const [localError, setLocalError] = useState(false);
   const filterRef = useRef<HTMLElement>(null);
   useEffect(() => { pendingChanged(locked); return () => pendingChanged(false); }, [locked, pendingChanged]);
   useEffect(() => {
     if (inFlight.current && request.current && !pending[request.current]) {
       inFlight.current = false;
       request.current = null;
-      setPhase("idle");
-      setTarget(null);
+      setSwitchError("Branch operation interrupted by a host reset. Check the current branch before retrying.");
+      setPhase("error");
     }
   }, [pending]);
+  useEffect(() => {
+    const requestId = request.current;
+    if (!locked || !requestId) return;
+    const fail = (reason: string) => store.getState().applyHostMessage({ type: "git_result", requestId, outcome: { ok: false, reason } });
+    if (connection !== "ready") { fail(connectionReason()); return; }
+    const timer = window.setTimeout(() => fail("Branch operation timed out. Check the current branch before retrying."), 30_000);
+    return () => window.clearTimeout(timer);
+  }, [locked, connection, store]);
+  function connectionReason() {
+    const state = store.getState();
+    return state.hostFailure?.message ?? (state.connection === "host_exited" ? "Host process exited" : state.connection === "awaiting_port" ? "Host connection is unavailable" : "Waiting for host readiness");
+  }
   useEffect(() => { if (!locked) filterRef.current?.querySelector<HTMLInputElement>("input")?.focus(); }, [locked]);
   function performSwitch(name: string, create = creating.current) {
     if (inFlight.current) return;
     creating.current = create;
+    setLocalError(false);
+    if (store.getState().connection !== "ready") {
+      setTarget(name); setSwitchError(connectionReason()); setPhase("error"); return;
+    }
     if (create && (!name || name.length > 512 || name === "@" || name === "HEAD" || name.startsWith("-") ||
       /[\x00-\x20\x7f~^:?*\[\\]/.test(name) || name.includes("..") || name.includes("@{") || name.endsWith(".") ||
       name.split("/").some(part => !part || part.startsWith(".") || part.endsWith(".lock")))) {
-      setTarget(name); setSwitchError("Invalid branch name"); setPhase("error"); return;
+      setLocalError(true); setTarget(name); setSwitchError("Invalid branch name"); setPhase("error"); return;
     }
     inFlight.current = true;
     setTarget(name);
@@ -64,7 +82,7 @@ export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged 
   const error = useTabStore(s => s.git.branchesError);
   const loading = useTabStore(s => Object.values(s.git.pending).some(p => p.kind === "branches"));
   const [filter, setFilter] = useState("");
-  const [active, setActive] = useState(0);
+  const [active, setActive] = useState<number | null>(null);
   const id = useId();
   const list = useRef<HTMLDivElement>(null);
   const query = filter.trim().toLowerCase();
@@ -72,7 +90,9 @@ export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged 
   const createName = filter.trim();
   const offerCreate = !!status && !!createName && branches !== null && !loading && !error && !(branches.some(b => b.name.toLowerCase() === query) || status?.head.branch?.toLowerCase() === query);
   const names = [status ? gitPillLabel(status) : null, ...(!loading && !error ? matching.map(b => b.name) : []), ...(offerCreate ? [createName] : [])].filter((n): n is string => n !== null);
-  const index = Math.min(active, Math.max(0, names.length - 1));
+  const exact = matching.findIndex(b => b.name.toLowerCase() === query);
+  const defaultIndex = query ? (exact >= 0 ? exact + 1 : offerCreate ? names.length - 1 : 0) : 0;
+  const index = Math.min(active ?? defaultIndex, Math.max(0, names.length - 1));
   useEffect(() => { list.current?.querySelector('[data-active="true"]')?.scrollIntoView?.({ block: "nearest" }); }, [index, filter]);
   function choose(i: number) { if (!locked && i > 0 && names[i]) select(names[i]!, offerCreate && i === names.length - 1); }
   function option(name: string, i: number, create = false) {
@@ -88,10 +108,10 @@ export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged 
       <h3>Switch branch</h3><span className="environment-branch-count">{branches?.length ?? "…"} branches</span>
     </div>
     {phase === "warning" && <div role="alert" className="environment-switch-warning">
-      <strong>{status?.dirtyCount} uncommitted changes</strong>
+      <strong>{status?.dirtyCount} uncommitted {status?.dirtyCount === 1 ? "change" : "changes"}</strong>
       <div>{creating.current
         ? `Create and switch to ${target}? Your uncommitted changes will stay in the working tree on the new branch.`
-        : `Switch to ${target}? Changes may move to the new branch. If they would be overwritten, Git will refuse the switch.`}</div>
+        : `Switch to ${target}? Changes may move to the target branch. If they would be overwritten, Git will refuse the switch.`}</div>
       <div className="environment-menu-actions">
         <Button variant="ghost" size="sm" onClick={() => performSwitch(target!)}>{creating.current ? "Create and switch" : "Switch anyway"}</Button>
         <Button variant="secondary" size="sm" onClick={() => { setPhase("idle"); setTarget(null); }}>Cancel</Button>
@@ -100,12 +120,12 @@ export function EnvironmentBranchPicker({ back, retry, switched, pendingChanged 
     {phase === "error" && <div role="alert" className="environment-switch-error">
       <strong>Couldn't {creating.current ? "create" : "switch to"} {target}</strong>
       <div>{switchError}</div>
-      <Button variant="secondary" size="sm" onClick={() => performSwitch(target!)}>Retry</Button>
+      {!localError && <Button variant="secondary" size="sm" onClick={() => performSwitch(target!)}>Retry</Button>}
     </div>}
     <SearchInput autoFocus label="Filter branches" disabled={locked} aria-label="Filter branches" placeholder="Filter branches"
       role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={id}
       aria-describedby={`${id}-hint`} aria-activedescendant={names.length ? `${id}-${index}` : undefined} value={filter}
-      onValueChange={value => { setFilter(value); setActive(value.trim() ? 1 : 0); }}
+      onValueChange={value => { setFilter(value); setActive(null); }}
       onKeyDown={e => {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault(); setActive(Math.max(0, Math.min(names.length - 1, index + (e.key === "ArrowDown" ? 1 : -1))));
