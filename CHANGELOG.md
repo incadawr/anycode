@@ -10,15 +10,21 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Connection icons in the model picker and the composer model chip, with an editable monogram and color for each connection.
+- A complete user guide with a getting-started page, an index and references for connections, permissions, extensions, workflows and sessions. The built-in setup skill shares it with Native and engine tabs; external tools can read it through `skills/anycode-setup/SKILL.md` and `llms.txt`.
 
 ### Changed
 
-- Removed the turn limit for top-level sessions and the 200-turn ceiling for agents; raised the default agent turn budgets.
+- Top-level interactive sessions no longer have a turn limit unless `tools.maxTurns` is set, and the 200-turn ceiling for agents is gone: any positive turn limit is applied as configured.
+- Default agent turn budgets are higher: 150 for subagents; 100 for planners, 300 for executors and 150 for reviewers; learned budgets range from 60 to 400.
+- Subagents work within a 128k-token context window and 10 KB of Bash output per call, and one turn can start at most four new subagents.
+- The Extensions panel keeps its position when you hover rows, switches categories only on click, and shows compact rows with clearer saved-configuration notes.
 
 ### Fixed
 
-- Fixed child agent model inheritance, turn and context budgets, and excessive delegation within a turn.
-- Keep open settings and connection edits when a newly available engine moves the app past the welcome screen.
+- Subagents without an explicit model use the parent's model, and a continued subagent keeps its turn budget.
+- Open settings and connection edits stay open when a newly available engine moves the app past the welcome screen.
+- A sent message no longer stays in the queue, and the queue no longer reports a false "turn was cancelled/failed" pause; a message that returns to the queue says why.
+- A saved turn limit of zero or another invalid value is ignored on load instead of resetting all settings.
 
 ## [0.0.90] - 2026-11-07
 
