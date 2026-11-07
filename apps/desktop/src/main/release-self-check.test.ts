@@ -13,7 +13,7 @@ describe.skipIf(process.platform === "win32")("release self-check launcher", () 
     try {
       writeFileSync(binary, `#!/usr/bin/env node
 console.error('[self-check] welcome.png unavailable: UnknownVizError');
-console.log('ANYCODE_SELF_CHECK ' + JSON.stringify({ ok: true, packaged: true, args: process.argv.slice(2) }));
+console.log('ANYCODE_SELF_CHECK ' + JSON.stringify({ ok: true, packaged: true, checks: ["builtin-policy-worker"], args: process.argv.slice(2) }));
 `);
       chmodSync(binary, 0o755);
       const script = fileURLToPath(new URL("../../scripts/release-self-check.mjs", import.meta.url));
@@ -21,6 +21,12 @@ console.log('ANYCODE_SELF_CHECK ' + JSON.stringify({ ok: true, packaged: true, a
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout).args).toEqual(["--self-check", "--self-check-allow-unavailable-capture"]);
       expect(result.stderr).toContain("welcome.png unavailable: UnknownVizError");
+      writeFileSync(binary, `#!/usr/bin/env node
+console.log('ANYCODE_SELF_CHECK ' + JSON.stringify({ ok: true, packaged: true, checks: [] }));
+`);
+      const missing = spawnSync(process.execPath, [script, binary], { encoding: "utf8" });
+      expect(missing.status).not.toBe(0);
+      expect(missing.stderr).toContain("builtin-policy-worker");
       const bad = spawnSync(process.execPath, [script, binary, "--no-sandbox"], { encoding: "utf8" });
       expect(bad.status).not.toBe(0);
       expect(bad.stderr).toContain("Only --self-check-allow-unavailable-capture");

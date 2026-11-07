@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ts from "typescript";
 import { builtinSettings, NodeSkillsFs } from "./skills-ipc.js";
-const harness = vi.hoisted(() => ({ entry: "", stall: false }));
+vi.mock("electron", () => ({}));
+const harness = vi.hoisted(() => ({ entry: "", stall: false, starts: 0 }));
 vi.mock("node:worker_threads", async () => {
   const { Worker } = await vi.importActual<typeof import("node:worker_threads")>("node:worker_threads");
   return { Worker: class extends Worker {
     constructor(_url: URL, options: import("node:worker_threads").WorkerOptions) {
+      harness.starts++;
       super(harness.stall ? "setInterval(() => {}, 1000)" : harness.entry, { ...options, ...(harness.stall ? { eval: true } : {}) });
     }
   } };
@@ -28,7 +30,7 @@ async function fixture() {
   await mkdir(join(home, ".anycode"));
   const fs = new NodeSkillsFs();
   fs.readFile = async () => { throw new Error("unbounded preview read forbidden"); };
-  return { config, read: () => builtinSettings({ home: () => home, workspaceForTab: () => undefined, fs, reveal() {} }) };
+  return { home, config, read: () => builtinSettings({ home: () => home, workspaceForTab: () => undefined, fs, reveal() {} }) };
 }
 it("previews disabled IDs through the strict bounded worker, without the unbounded fs port", async () => {
   const f = await fixture();
@@ -48,6 +50,16 @@ it.each(["directory", "symlink"])("refuses a %s config", async kind => {
 it("bounds preview worker latency", async () => {
   const f = await fixture(); harness.stall = true;
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const pending = f.read(); await vi.advanceTimersByTimeAsync(5001);
+  await writeFile(f.config, "{}");
+  const starts = harness.starts; const pending = f.read();
+  await vi.waitFor(() => expect(harness.starts).toBeGreaterThan(starts));
+  await vi.advanceTimersByTimeAsync(5001);
   expect((await pending).builtinNotice).toContain("availability cannot be previewed");
+});
+
+it("does not start preview workers when both configs are absent", async () => {
+  const f = await fixture(); const starts = harness.starts;
+  const snapshot = await builtinSettings({ home: () => f.home, workspaceForTab: () => join(f.home, "workspace"), fs: new NodeSkillsFs(), reveal() {} }, "preview");
+  expect(snapshot.builtins?.every(s => !s.userDisabled && !s.projectDisabled)).toBe(true);
+  expect(harness.starts).toBe(starts);
 });

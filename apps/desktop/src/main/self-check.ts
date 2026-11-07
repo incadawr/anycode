@@ -3,6 +3,9 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { Worker } from "node:worker_threads";
+import { builtinPolicyWorkerUrl } from "../host/skills/builtin-policy.js";
+import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
 import type { KeyboardInputEvent } from "electron";
 
 export function createSelfCheckProfile(argv: readonly string[]): string | undefined {
@@ -25,6 +28,33 @@ export function selfCheckEnvironment(env: NodeJS.ProcessEnv, root: string): Node
     ANYCODE_CODEX_BIN: join(root, "absent-codex"), ANYCODE_CLAUDE_BIN: join(root, "absent-claude"),
     CODEX_HOME: join(root, ".codex"), CLAUDE_CONFIG_DIR: join(root, ".claude"),
   };
+}
+
+/** Exercise packaged worker loading even on Windows, where forwarding is disabled.
+ * An absent synthetic config is the empty configuration; no ambient home is read. */
+export async function checkBuiltinPolicyWorker(root: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let worker: Worker | undefined;
+    let finished = false;
+    const finish = (ok: boolean) => {
+      if (finished) return;
+      finished = true; clearTimeout(timer);
+      void worker?.terminate().catch(() => {});
+      if (ok) resolve(); else reject(new Error("Self-check builtin-policy-worker failed"));
+    };
+    const timer = setTimeout(() => finish(false), 5000);
+    try {
+      worker = new Worker(builtinPolicyWorkerUrl(), {
+        workerData: { paths: [join(root, "builtin-policy", ".anycode", "config.json")], ids: ENGINE_BUILTIN_SKILLS.map(s => s.id) },
+        stdout: true, stderr: true,
+      });
+      worker.stdout?.resume(); worker.stderr?.resume();
+      worker.once("error", () => finish(false));
+      worker.once("exit", () => finish(false));
+      worker.once("message", message => finish(message !== null && typeof message === "object" &&
+        !Object.hasOwn(message, "error") && Array.isArray(message.disabled) && message.disabled.length === 0));
+    } catch { finish(false); }
+  });
 }
 
 interface CheckWindow {

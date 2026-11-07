@@ -366,7 +366,10 @@ export async function builtinSettings(deps: SkillsIpcDeps, tabId?: string): Prom
   const disabled = async (base?: string): Promise<string[]> => {
     if (!base) return [];
     const path = anycodeConfigPath(base);
+    try { await deps.fs.lstat(path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; }
     const ids = ENGINE_BUILTIN_SKILLS.map(({ id }) => id);
+    // Preview intentionally reads workspace config without the trust gate; preview is not authority.
     const policy = await readBuiltinPolicy({ userConfigPath: path, projectConfigPath: path, projectTrusted: false, ids });
     if (ids.some(id => !["enabled", "disabled"].includes(policy[id].reason))) readable = false;
     return ids.filter(id => policy[id].reason === "disabled");

@@ -14,8 +14,10 @@ whether this child's control catalog mentions the app namespace. The preview
 browser is not involved. Catalog visibility does not prove SKILL.md body use,
 full namespace/layout compatibility, or that the CLI never attempts writes.
 Disabled omission and native synthetic clash have not been run.
-No writable fallback is permitted. Runtime help gates the flag; preparation or
-plugin boot failure disables the adapter and ordinary chat remains available.
+No writable fallback is permitted. Runtime help gates the flag; preparation failure disables the adapter. An unknown boot failure with
+`--plugin-dir` retries once without the adapter so ordinary chat can open.
+Known non-plugin failures (sign-in, binary trust/version, post-initialize
+verification, cancellation) retain their original error without retry.
 
 `anycode-app` supplies a separate app builtin catalog. Filesystem skills do not
 replace app definitions. The CLI's native registry follows CLI rules; AnyCode's
