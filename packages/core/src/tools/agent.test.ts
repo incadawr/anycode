@@ -1484,3 +1484,9 @@ it("describes Git access and the command boundary in both Agent declarations", (
     expect(tool.metadata.description).toContain("general-purpose");
   }
 });
+
+
+it("rejects misspelled or unknown Agent fields instead of silently selecting a different persona", () => {
+  expect(agentInputSchema.safeParse({ description: "d", prompt: "p", subagent_type: "explore" }).success).toBe(false);
+  expect(agentInputSchema.safeParse({ description: "d", prompt: "p", agent_type: "explore" }).success).toBe(true);
+});

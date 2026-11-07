@@ -22,7 +22,7 @@ import { ConversationHistory } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { ProfilePermissionEngine } from "../permissions/rules.js";
-import { ToolRegistry, createDefaultToolRegistry } from "../tools/registry.js";
+import { ToolRegistry, createDefaultToolRegistry, limitSubagentBashOutput } from "../tools/registry.js";
 import { createListConnectionsTool, type ConnectionTargets } from "../tools/list-connections.js";
 import { resolveInlineRoute } from "../routing/inline-route.js";
 import {
@@ -44,6 +44,7 @@ import {
   SUBAGENT_LOOP_DEADLINE_MS,
   SUBAGENT_OUTCOME_DEADLINE_MS,
   clampSubagentMaxOutputTokens,
+  subagentContextWindow,
   SUBAGENT_OUTPUT_MAX_BYTES,
   SUBAGENT_STALL_TIMEOUT_MS,
   SUBAGENT_WRAPUP_MIN_WINDOW_MS,
@@ -344,6 +345,7 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
+  limitSubagentBashOutput(registry);
   if (extras?.readConnectionTargets && effectivePersona.tools.some(name => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name))) {
     const readTargets = extras.readConnectionTargets;
     registry.register(createListConnectionsTool(() => {
@@ -473,10 +475,9 @@ export function buildChildConfig(
     // Only the window is re-resolved for the child's model; every other field
     // the parent's context object carries (budget knobs the resolver knows
     // nothing about) is preserved by the overlay.
-    context:
-      extras?.modelSettings !== undefined
-        ? { ...parent.context, contextWindowTokens: extras.modelSettings.contextWindowTokens }
-        : parent.context,
+    context: { ...parent.context, contextWindowTokens: subagentContextWindow(
+      extras?.modelSettings?.contextWindowTokens ?? parent.context?.contextWindowTokens,
+    ) },
     // Artifact store INHERITED — one of the few parent facilities a
     // child gets, because it is not a capability the child can act with: it
     // only decides whether the child's own oversized tool output is recoverable

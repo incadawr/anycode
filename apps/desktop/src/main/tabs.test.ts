@@ -4234,7 +4234,7 @@ describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup 
     rootHost.emit("message", spawnRequest({ requestId: "r2", spawnToolCallId: "call-dup" }));
 
     expect(childRunEvents(rootHost)).toEqual([
-      { type: CHILD_RUN_EVENT_TYPE, requestId: "r1", kind: "accepted", childSessionId: expect.any(String), childTabId: expect.any(String), model: expect.any(String) },
+      { type: CHILD_RUN_EVENT_TYPE, requestId: "r1", kind: "accepted", maxTurns: 40, childSessionId: expect.any(String), childTabId: expect.any(String), model: expect.any(String) },
       { type: CHILD_RUN_EVENT_TYPE, requestId: "r2", kind: "rejected", reason: "spawn_failed", message: DUPLICATE_SPAWN_MESSAGE },
     ]);
     // No second child process was ever forked for the duplicate.
@@ -6324,7 +6324,7 @@ describe("TabHostManager — child turn budget argv", () => {
     expect(childArgs[childArgs.indexOf("--child-max-turns") + 1]).toBe("5");
   });
 
-  it("a child request WITHOUT a budget leaves the argv unchanged (no flag)", () => {
+  it("a child request without a budget receives the default budget", () => {
     const { forkSpy, hosts } = forkSpyRig();
     const { window } = windowRig();
     const manager = childManager(forkSpy, window);
@@ -6334,7 +6334,7 @@ describe("TabHostManager — child turn budget argv", () => {
     hosts[0]!.emit("message", spawnRequest({ requestId: "budget-none" }));
 
     const childArgs = forkSpy.mock.calls[1]?.[1] ?? [];
-    expect(childArgs).not.toContain("--child-max-turns");
+    expect(childArgs.slice(childArgs.indexOf("--child-max-turns"), childArgs.indexOf("--child-max-turns") + 2)).toEqual(["--child-max-turns", "40"]);
   });
 
   it("a follow-up (resumed) child omits the budget even if the request carries one", async () => {
@@ -8001,15 +8001,15 @@ describe("TabHostManager — GitHub #17 slice A accepted acknowledgement", () =>
     );
   }
 
-  it("a forked child's accepted event survives the real parser with ANYCODE_MAX_TURNS=300, and a stamped request budget outranks the env", () => {
+  it("a child uses its subagent budget rather than the root budget", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
-    const manager = childManager(fork, window, { env: () => ({ PATH: "/base", [ENV_MAX_TURNS]: "300" }) });
+    const manager = childManager(fork, window, { env: () => ({ PATH: "/base", [ENV_MAX_TURNS]: "300", ANYCODE_SUBAGENT_MAX_TURNS: "60" }) });
     manager.createTab({ workspace: "/ws", sessionId: "root-mt300", resume: false });
     const rootHost = hosts[0]!;
 
     rootHost.emit("message", spawnRequest({ requestId: "mt-300" }));
-    expect(parseChildRunEvent(rawAccepted(rootHost, "mt-300"))).toMatchObject({ kind: "accepted", maxTurns: 300 });
+    expect(parseChildRunEvent(rawAccepted(rootHost, "mt-300"))).toMatchObject({ kind: "accepted", maxTurns: 60 });
 
     // Stamped request budget (17) keeps its request > env precedence and is
     // carried verbatim, not replaced by the env's 300.
@@ -8017,18 +8017,18 @@ describe("TabHostManager — GitHub #17 slice A accepted acknowledgement", () =>
     expect(parseChildRunEvent(rawAccepted(rootHost, "mt-17"))).toMatchObject({ kind: "accepted", maxTurns: 17 });
   });
 
-  it("absent, malformed, zero and negative ANYCODE_MAX_TURNS are omitted from accepted (never invalidate the acknowledgement)", () => {
+  it("invalid or absent subagent budgets use the default", () => {
     for (const envMax of [undefined, "", "0", "-5", "abc", "2.5"]) {
       const { fork, hosts } = shutdownableForkRig();
       const { window } = windowRig();
-      const env = envMax === undefined ? { PATH: "/base" } : { PATH: "/base", [ENV_MAX_TURNS]: envMax };
+      const env = envMax === undefined ? { PATH: "/base" } : { PATH: "/base", ANYCODE_SUBAGENT_MAX_TURNS: envMax };
       const manager = childManager(fork, window, { env: () => env });
       manager.createTab({ workspace: "/ws", sessionId: `root-mt-${envMax ?? "undef"}`, resume: false });
       const rootHost = hosts[0]!;
       rootHost.emit("message", spawnRequest({ requestId: "mt-invalid" }));
       const parsed = parseChildRunEvent(rawAccepted(rootHost, "mt-invalid"));
       expect(parsed).toMatchObject({ kind: "accepted" });
-      expect((parsed as { maxTurns?: number } | null)?.maxTurns).toBeUndefined();
+      expect((parsed as { maxTurns?: number } | null)?.maxTurns).toBe(40);
     }
   });
 

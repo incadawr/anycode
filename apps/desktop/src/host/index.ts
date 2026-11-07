@@ -310,6 +310,8 @@ import {
   // role-route chain plumbing (host-side resolver below).
   PERSONAS,
   ROLE_TURN_BUDGETS,
+  subagentContextWindow,
+  limitSubagentBashOutput,
   isRoleRouteName,
   // the one ceiling-object builder (adaptive key absent when off).
   buildCeilingConfig,
@@ -3648,7 +3650,8 @@ async function boot(): Promise<void> {
       : new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
-    const bootContextWindow: number | undefined = bootContextInfo.tokens;
+    const bootContextWindow: number | undefined = isChildSessionBoot(args, sessionMeta)
+      ? subagentContextWindow(bootContextInfo.tokens) : bootContextInfo.tokens;
     // a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
     const clampChildOutput = (resolved: number | undefined): number | undefined =>
@@ -4150,6 +4153,7 @@ async function boot(): Promise<void> {
     if (isChildSessionBoot(args, sessionMeta)) {
       for (const name of ["Agent", "Workflow"]) registry.unregister(name);
       restrictChildRegistry(registry, args.child?.restrictions);
+      limitSubagentBashOutput(registry);
     }
 
     // Boot section components computed once (design P7.17/W2): renderRepoMap()'s
@@ -4186,20 +4190,8 @@ async function boot(): Promise<void> {
       // Stage 1 / 4730: optional; absent = byte-identical to pre-4702.
       ...(effectiveAskClassifierBoot !== undefined ? { askClassifier: effectiveAskClassifierBoot } : {}),
       mode,
-      // remainder (owner rule 2026-08-22): "supervision present ⇒ the root
-      // session has no ceiling at all" — a supervised interactive ROOT has no turn
-      // ceiling at all; a child session (session-tier subagent) ALWAYS keeps
-      // the ladder regardless. `isChildSessionBoot` — lock #2's own
-      // discriminator, the OR of the argv authority (`args.child`) and the
-      // durable authority (`sessionMeta.parentSessionId`) — is used here
-      // rather than the narrower `args.child` alone (lock #1, above): it is
-      // the MORE INCLUSIVE "is this a child" test, so it can never mistake a
-      // genuine child for a root and hand it the no-ceiling predicate — the
-      // one mistake this wiring must never make (a false "root" verdict only
-      // ever costs a root session its exemption, never the reverse).
-      // `broker.isUnattended` is the latch, read LIVE on every call
-      // (never snapshotted): a run that starts supervised and goes quiet
-      // mid-session falls under the ladder from that point on.
+      // Supervised roots retain their existing policy; session children stop at
+      // their own budget instead of granting themselves additional turns.
       ...(!isChildSessionBoot(args, sessionMeta)
         ? {
             ceiling: buildCeilingConfig({
@@ -4207,9 +4199,7 @@ async function boot(): Promise<void> {
               supervisedRoot: () => broker.isUnattended !== true,
             }),
           }
-        : adaptiveTurnBudget
-          ? { ceiling: buildCeilingConfig({ adaptive: true }) }
-          : {}),
+        : { ceiling: { enabled: false } }),
       ports: {
         fs: fsAdapter,
         exec: execAdapter,
@@ -4222,7 +4212,7 @@ async function boot(): Promise<void> {
       ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
       ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
-      maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns),
+      maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns, envConfig.subagentMaxTurns),
       subagentMaxTurns: envConfig.subagentMaxTurns,
       // learned base-budget port (adaptive only; see above).
       ...(subagentBudget !== undefined ? { subagentBudget } : {}),
@@ -4373,6 +4363,7 @@ async function boot(): Promise<void> {
         // the child inherits the parent's mode at the moment Agent was
         // invoked, cut §0.8).
         getPermissionMode: () => spawnModeCell.read(),
+        getCurrentModel: () => currentModel,
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
         // slice 1: the detach-delivery seam. Fires strictly AFTER
@@ -4577,7 +4568,8 @@ async function boot(): Promise<void> {
         // model A never leaks its window onto B, and an unknown id re-resolves
         // the assumed fallback rather than a stale previous model's window.
         const contextInfo = connectionModelSettings.contextFor(id);
-        const contextWindow = contextInfo.tokens;
+        const contextWindow = isChildSessionBoot(args, sessionMeta)
+          ? subagentContextWindow(contextInfo.tokens) : contextInfo.tokens;
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,

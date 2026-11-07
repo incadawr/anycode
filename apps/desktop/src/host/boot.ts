@@ -56,6 +56,8 @@ import {
   CHILD_NETWORK_RETRY_BUDGET_MS,
   ConversationHistory,
   DEFAULT_RETRY_POLICY,
+  DEFAULT_SUBAGENT_MAX_TURNS,
+  SUBAGENT_MAX_TURNS_CEILING,
   PERMISSION_MODES,
   SessionPermissionRules,
 } from "@anycode/core";
@@ -273,15 +275,9 @@ function isPermissionMode(value: string): value is PermissionMode {
   return (PERMISSION_MODES as readonly string[]).includes(value);
 }
 
-/**
- * the child host's core AgentLoopConfig.maxTurns resolution — a
- * creating spawn's profile budget (args.child.maxTurns) overrides the env
- * default; an absent budget preserves it byte-identically. Extracted as a
- * pure helper so the precedence is unit-testable (host/index.ts wires it:
- * `resolveChildMaxTurns(args.child, envConfig.maxTurns)`).
- */
-export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined): number | undefined {
-  return child?.maxTurns ?? envMaxTurns;
+/** Resolve a child budget independently of the root loop's turn setting. */
+export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTurns: number | undefined, subagentMaxTurns?: number): number | undefined {
+  return child ? Math.min(child.maxTurns ?? subagentMaxTurns ?? DEFAULT_SUBAGENT_MAX_TURNS, SUBAGENT_MAX_TURNS_CEILING) : envMaxTurns;
 }
 
 /**

@@ -298,6 +298,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     // `tools:`) or an md-profile's own `tools:` line, pinned below.
     expect(child.registry).not.toBe(parent.registry);
     expect(child.registry.has("Agent")).toBe(false);
+    expect(child.registry.get("Bash")?.metadata.resultBudget?.maxModelBytes).toBe(10_000);
     expect(child.registry.list().sort()).toEqual([...PERSONAS["general-purpose"].tools].sort());
 
     // subagents: UNSET (lock #2, defense in depth).
@@ -318,7 +319,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     // Slice 3.6: the persona body is embedded in the harness prelude, not used raw.
     expect(child.systemPrompt).toContain(PERSONAS["general-purpose"].systemPrompt);
     expect(child.tokenizer).toBe(tokenizer);
-    expect(child.context).toBe(context);
+    expect(child.context).toEqual(context);
     expect(child.maxOutputTokens).toBe(999);
     expect(child.reasoningEffort).toBe("medium");
 
@@ -3689,7 +3690,7 @@ describe("buildChildConfig — child-model settings (defect F6)", () => {
     // Only the window moved; every other budget knob the resolver knows
     // nothing about survives the overlay, and the parent's object is not
     // mutated.
-    expect(child.context).toEqual({ contextWindowTokens: 1_000_000, keepRecentMessages: 7 });
+    expect(child.context).toEqual({ contextWindowTokens: 128_000, keepRecentMessages: 7 });
     expect(child.context).not.toBe(parent.context);
     expect(parent.context).toEqual(PARENT_CONTEXT);
     expect(parent.maxOutputTokens).toBe(8_192);
@@ -3740,7 +3741,7 @@ describe("buildChildConfig — child-model settings (defect F6)", () => {
 
     expect(child.maxOutputTokens).toBe(8_192);
     expect(child.reasoningEffort).toBe("medium");
-    expect(child.context).toBe(parent.context);
+    expect(child.context).toEqual({ contextWindowTokens: 128_000, keepRecentMessages: 7 });
   });
 });
 

@@ -1253,7 +1253,9 @@ describe("resolveChildMaxTurns", () => {
     expect(resolveChildMaxTurns({ ...child, maxTurns: 15 }, 40)).toBe(15);
   });
   it("an absent budget preserves the env default", () => {
-    expect(resolveChildMaxTurns(child, 40)).toBe(40);
+    expect(resolveChildMaxTurns(child, 300, 60)).toBe(60);
+    expect(resolveChildMaxTurns(child, 300)).toBe(40);
+    expect(resolveChildMaxTurns(child, 300, 500)).toBe(200);
   });
   it("a non-child boot (no args.child) preserves the env default", () => {
     expect(resolveChildMaxTurns(undefined, 40)).toBe(40);

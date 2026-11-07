@@ -377,6 +377,8 @@ export interface CreateChildSessionPortOptions {
    * here rather than on `SessionSubagentRequest`.
    */
   getPermissionMode: () => PermissionMode;
+  /** Live core parent model, used only for fresh children on the same connection. */
+  getCurrentModel?: () => string | undefined;
   /** Sends a ChildSpawnRequest/ChildRunCancel/ChildRunSend to main (host/index.ts: process.parentPort.postMessage). */
   send: (message: ChildSpawnRequest | ChildRunCancel | ChildRunSend) => void;
   /**
@@ -1274,6 +1276,9 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       // executor runs, and nothing async separates the two checks).
       opts.signal?.addEventListener("abort", onAbort, { once: true });
 
+      const inheritedModel = req.resumeChildSessionId === undefined && req.engine === undefined &&
+        req.provider === undefined && req.connectionId === undefined && req.model === undefined
+        ? options.getCurrentModel?.() : undefined;
       const spawnRequest: ChildSpawnRequest = {
         type: CHILD_SPAWN_REQUEST_TYPE,
         requestId,
@@ -1283,7 +1288,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         prompt: req.prompt,
         ...(req.provider !== undefined ? { provider: req.provider } : {}),
         ...(req.connectionId !== undefined ? { connectionId: req.connectionId } : {}),
-        ...(req.model !== undefined ? { model: req.model } : {}),
+        ...((req.model ?? inheritedModel) !== undefined ? { model: req.model ?? inheritedModel } : {}),
         ...(req.effort !== undefined ? { effort: req.effort } : {}),
         // CUT-S4 §3.1: verbatim passthrough, absent = core (the
         // wire's own byte-compatible default — shared/child-sessions.ts's
