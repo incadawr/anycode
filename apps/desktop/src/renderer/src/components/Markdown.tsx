@@ -1,6 +1,5 @@
 /**
- * Assistant-message markdown renderer (design
- * /working-docs/ui-track/design/slice-R1-cut.md §4). Walks marked's block-token
+ * Assistant-message markdown renderer. Walks marked's block-token
  * array (lexer-only — no HTML string, no `dangerouslySetInnerHTML`, guardrail
  * §6.5) and emits React nodes. Every switch has a safe `default:` arm that
  * renders raw text and never throws, so an unknown/future token kind degrades

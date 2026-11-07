@@ -7,8 +7,7 @@ import {
 } from "./quota.js";
 
 /**
- * The LIVE W0-R1 probe shape, verbatim structure (working-docs/references/
- * codex-rate-limits-probe/rate-limits-response.json, real plus account):
+ * The LIVE W0-R1 probe shape, verbatim structure:
  * ONE populated window, `secondary` present-but-null, `byLimitId.codex`
  * byte-duplicating the top level, `rateLimitResetCredits` present (dropped),
  * `resetsAt` in epoch SECONDS. Amendment §A3.2 requires tests to use THIS

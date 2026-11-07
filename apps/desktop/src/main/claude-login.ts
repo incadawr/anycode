@@ -8,7 +8,7 @@
  * controller — see that file's own header), never by a second codepath that
  * reads Claude account state.
  *
- * P0 probe verdict (working-docs/build/evidence/cc-login-P0.md): the cut's
+ * P0 probe verdict: the cut's
  * assumed `claude /login` CLI arg-form does not exist (`/login` is a
  * REPL-only slash-command); the live-evidenced, CLI-documented command is
  * `claude auth login` (default `--claudeai`, prints "Opening browser to sign

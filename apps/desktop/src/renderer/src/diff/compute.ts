@@ -1,6 +1,5 @@
 /**
- * Pure diff computation for Write/Edit tool-call snapshots (design
- * /working-docs/build/design/phase-mvp.md §5): turns a before/after pair of
+ * Pure diff computation for Write/Edit tool-call snapshots: turns a before/after pair of
  * file snapshots into unified-diff hunks ready for rendering. Deliberately
  * has zero dependency on React, Shiki, or the zustand store — highlighting
  * (diff/highlight.ts) is a separate concern layered on top by DiffView, and

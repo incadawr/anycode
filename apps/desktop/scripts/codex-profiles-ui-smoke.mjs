@@ -1,6 +1,5 @@
 /**
- * Live GUI smoke for codex-profiles W4-S1 (working-docs/build/design/
- * w4-plan-fable-iter8.md, chunk W4-S1; cut §13.2 gates A-S/E-S/F-S + pin F1):
+ * Live GUI smoke for codex-profiles W4-S1:
  * drives a REAL Electron dev instance over the automation HTTP channel
  * (`main/automation/*`) and exercises the profile registry + per-profile
  * doctor + Settings Codex pane + StartScreen account chip against the REAL

@@ -1,6 +1,5 @@
 /**
- * Renders a git unified diff (design /working-docs/build/design/
- * slice-5.8-cut.md §2.6): parses `GitDiffState.text` via diff/parse-unified.ts
+ * Renders a git unified diff: parses `GitDiffState.text` via diff/parse-unified.ts
  * and renders per-file headers + hunk lines reusing DiffView's `diff-line-*`/
  * `diff-hunk-*` visual language (components/DiffView.tsx :62-82) so the two
  * diff surfaces read as one system. Props-only — `{ diff: GitDiffState }`, no

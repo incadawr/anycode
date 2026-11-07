@@ -1,6 +1,5 @@
 /**
- * Behavior pins for markdown/lex.ts (design
- * /working-docs/ui-track/design/slice-R1-cut.md §3.3). These double as pins on
+ * Behavior pins for markdown/lex.ts. These double as pins on
  * marked@18.0.5's token shapes: if a future bump shifts the shapes assumed by
  * the Markdown component's token→element map, these fail loudly at that point
  * rather than silently mis-rendering. Node environment, no jsdom — same

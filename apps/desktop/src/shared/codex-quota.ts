@@ -3,9 +3,8 @@
  * amended §A3). VALUE-ONLY module, zero runtime imports — safe from host/**,
  * main/**, and the renderer, same discipline as shared/codex-doctor.ts.
  *
- * Source of truth is the live 0.144.5 `account/rateLimits/read` wire probe
- * (`working-docs/references/codex-rate-limits-probe/rate-limits-response.json`,
- * amendment §A3): a real `plus` account reports exactly ONE populated window
+ * Source of truth is the live 0.144.5 `account/rateLimits/read` wire probe:
+ * a real `plus` account reports exactly ONE populated window
  * (`primary`, `windowDurationMins: 10080`) with `secondary` present-but-null —
  * there is no hardcoded "5h"/"weekly" pair; the label is ALWAYS derived from
  * `windowDurationMins` at render time (cut §6.2), never stored here.

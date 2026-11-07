@@ -1,7 +1,5 @@
 /**
- * Live GUI smoke for codex-profiles W4-S3 (working-docs/build/design/
- * w4-plan-fable-iter8.md row W4-S3 + w4-remainder-ruling-fable-iter9.md §1d
- * row 6): ctx meter + subscription quotas on ONE real live turn, plus the
+ * Live GUI smoke for codex-profiles W4-S3: ctx meter + subscription quotas on ONE real live turn, plus the
  * S1b-transferred read-only-after-start assert and the E-S quota-block.
  *
  * Setup (all product-created, nothing pre-planted inside the lever root):

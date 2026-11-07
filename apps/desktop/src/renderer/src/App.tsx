@@ -16,8 +16,7 @@
  * new-session button + resumable rows; `closeTab` is wired to the Sidebar's
  * per-row close (with this component's running-turn confirm).
  *
- * Slice 2.2 (ruling reviews/slice-2.2-forks-ruling.md §2, design
- * /working-docs/build/design/slice-2.2-cut.md §6) adds the Welcome-screen
+ * Slice 2.2 adds the Welcome-screen
  * gate: `shouldShowWelcome` below decides, off the settings-store's
  * `SettingsSnapshot` + the tabs-store's own tab count, whether to render
  * `WelcomeScreen` instead of the normal tab UI. Once a provider becomes ready,

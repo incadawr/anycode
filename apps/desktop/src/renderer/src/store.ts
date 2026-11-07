@@ -10,8 +10,7 @@ import type { AgentDelivery } from "../../shared/communication.js";
  * state shape and the four MVP.1 actions (`applyHostMessage`,
  * `setAwaitingPort`, `setHostExited`, `reset`) are unchanged.
  *
- * Wave-1 revision (architect, additive — see
- * working-docs/build/reviews/mvp-wave1-forks.md): adds the `error`
+ * Wave-1 revision: adds the `error`
  * transcript block (mid-stream provider errors keep their detail visible),
  * the one-slot `notice` channel + `setNotice` (turn_rejected /
  * mode_change_rejected / non-ui permission_settled feed it; the toast

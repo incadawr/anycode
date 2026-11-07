@@ -1,7 +1,5 @@
 /**
- * Pure-logic tests for SettingsScreen's helpers (slice 2.2, design
- * /working-docs/build/design/slice-2.2-cut.md §2/§3; provider-section v2 +
- * OAuth-UX, slice 2.5, design/slice-2.5-cut.md §5). Deliberately `.test.ts`
+ * Pure-logic tests for SettingsScreen's helpers. Deliberately `.test.ts`
  * (not `.test.tsx`), same rationale as SessionPicker.test.ts: this package's
  * vitest config runs in `environment: "node"` with no jsdom/
  * @testing-library, so a real `<dialog>`/form DOM-rendering test isn't

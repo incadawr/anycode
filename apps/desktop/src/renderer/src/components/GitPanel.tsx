@@ -1,5 +1,5 @@
 /**
- * Git Review panel (design /working-docs/build/design/slice-5.8-cut.md §2.6):
+ * Git Review panel:
  * self-connecting (`useTabStore`/`useTabSend`/`useTabStoreApi`, the
  * `ConnectedPermissionModal` idiom), mounted unconditionally in
  * `ActiveTabBody` and rendering `null` while `git.panelOpen` is false. Three

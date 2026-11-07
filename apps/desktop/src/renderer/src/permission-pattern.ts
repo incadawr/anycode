@@ -1,6 +1,5 @@
 /**
- * Pure CREATE-time sanitizer for Bash always-allow patterns
- * (working-docs/build/design/slice-P7.16-cut.md §4.2). Root-cause fix: the
+ * Pure CREATE-time sanitizer for Bash always-allow patterns. Root-cause fix: the
  * naive `command.trim().split(/\s+/)[0]` used to pick the "first token" of a
  * Bash command mistakes a leading `NAME=value` env-assignment (or a bare
  * `env` prefix) for the binary — `OUT="/tmp/o" node x.mjs` produced the

@@ -1,6 +1,5 @@
 /**
- * Pure-logic tests for DiffView's R13 diff-review-affordance helpers (design
- * /working-docs/ui-track/design/slice-R13-cut.md §6/§10). Same `.test.ts`-only
+ * Pure-logic tests for DiffView's R13 diff-review-affordance helpers. Same `.test.ts`-only
  * rationale as ToolCallCard.test.ts/PermissionModal.test.ts: no jsdom in this
  * package's vitest config, so the exported pure functions are covered
  * directly rather than through DOM rendering. Fixtures build literal

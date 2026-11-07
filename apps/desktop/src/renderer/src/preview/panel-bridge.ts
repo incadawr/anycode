@@ -1,6 +1,6 @@
 /**
  * Composes the panel-gating triple {activeTabId, panelMounted, overlayOpen}
- * (working-docs/panel-track/CUT.md §2.4/D7) into microtask-coalesced
+ * into microtask-coalesced
  * `previewPanel.setState` invoke calls, and owns the rAF-coalesced
  * `previewPanel.setBounds` one-way send (D9). Pure factories
  * `createStateCoalescer`/`createBoundsCoalescer` are exported for the unit

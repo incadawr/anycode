@@ -21,8 +21,7 @@ import type { AgentDelivery, AgentDisplayCard } from "./communication.js";
  * `verbatimModuleSyntax` guarantees are erased — the zod schemas (and this
  * value import) are only ever pulled in at runtime by the host (MVP.3).
  *
- * Wave-1 revision (architect, see working-docs/build/reviews/
- * mvp-wave1-forks.md): NO wire message shapes changed. The control-plane
+ * Wave-1 revision: NO wire message shapes changed. The control-plane
  * window-message envelopes (`anycode:port` / `anycode:host-exited`) are
  * fixed in the sibling value-only module shared/envelopes.ts — they must
  * NOT live here, precisely because of the runtime imports above (a value

@@ -1,6 +1,5 @@
 /**
- * Renderer-side mirror of main's preview-panel authority (working-docs/
- * panel-track/CUT.md §2.4): module-level zustand store (tabs-store.ts
+ * Renderer-side mirror of main's preview-panel authority: module-level zustand store (tabs-store.ts
  * precedent), fed exclusively by `previewPanel.onChanged` pushes +
  * `previewPanel.list` hydration reads — this store is a passive projection,
  * never a write path (every mutation — select/close — goes straight to main

@@ -1,6 +1,5 @@
 /**
- * Pure parser for `git diff`-style unified-diff text (design
- * /working-docs/build/design/slice-5.8-cut.md §2.6). Turns the raw text a
+ * Pure parser for `git diff`-style unified-diff text. Turns the raw text a
  * `git diff` wire message carries (GitDiffState.text) into per-file hunks
  * using the SAME `DiffHunk`/`DiffLine` shapes diff/compute.ts already
  * established for the Write/Edit tool-call diff view (line-numbering

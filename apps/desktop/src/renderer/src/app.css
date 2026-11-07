@@ -297,8 +297,7 @@ body {
   background: var(--text-3);
 }
 
-/* ── preview panel (working-docs/panel-track/CUT.md §2.4/D12,
-   stages 2+3) ── Slim REAL header above a measured body div; the
+/* ── preview panel ── Slim REAL header above a measured body div; the
    WebContentsView paints over the body's screen rect main-side (D9) — this
    file only ever draws the chrome AROUND the preview, never its content. */
 .preview-panel {
@@ -7076,7 +7075,7 @@ button.environment-menu-row:hover,
   color: var(--danger);
 }
 
-/* ── GUI-git (design /working-docs/build/design/slice-5.8-cut.md §2.6) ──
+/* ── GUI-git ──
    Quiet environment context + right Review panel (changes/history/diff) + confirm
    dialog. Reuses the `diff-line-*`/`diff-hunk-*` classes above verbatim
    (GitDiffPane.tsx renders the same recipe as DiffView.tsx) — only the

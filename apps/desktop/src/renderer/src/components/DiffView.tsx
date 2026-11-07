@@ -1,5 +1,5 @@
 /**
- * Write/Edit diff view (design /working-docs/build/design/phase-mvp.md §5):
+ * Write/Edit diff view:
  * renders the hunks from diff/compute.ts, with syntax highlighting from
  * diff/highlight.ts layered on top (before/after are each tokenized once;
  * this component slices the resulting per-line token arrays by the hunk

@@ -1,6 +1,5 @@
 /**
- * Renderer-wide "is any overlay open" flag (working-docs/panel-track/CUT.md
- * §2.4/D8): a single module-singleton `Set<string>` of open overlay keys, not
+ * Renderer-wide "is any overlay open" flag: a single module-singleton `Set<string>` of open overlay keys, not
  * React context — every overlay component (dialogs, right-side drawers, the
  * four composer dropdowns) independently registers/deregisters its own key
  * via `useOverlayFlag(open)`, and panel-bridge.ts subscribes to the 0<->non-0

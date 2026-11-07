@@ -1,6 +1,5 @@
 /**
- * Preview-panel contract between main and renderer (working-docs/panel-track/
- * CUT.md §2.1, stages 2+3: right-side preview panel). Same value-only
+ * Preview-panel contract between main and renderer. Same value-only
  * shape as shared/window.ts / shared/tabs.ts: channel-name constants + wire
  * types only, ZERO runtime imports, so it is safe to import from preload
  * (sandboxed CJS), the renderer web bundle, AND main alike without dragging

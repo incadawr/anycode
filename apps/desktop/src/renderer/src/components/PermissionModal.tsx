@@ -1,6 +1,5 @@
 /**
- * Permission-request modal (design /working-docs/build/design/phase-mvp.md
- * §4/§5): a native `<dialog>` (no Radix — design §5 keeps the MVP to plain
+ * Permission-request modal: a native `<dialog>` (no Radix — design §5 keeps the MVP to plain
  * CSS/native elements), shown whenever `request` is non-null. Fully
  * controlled: this component never touches the store itself, it only calls
  * `onAllow`/`onDeny` — the caller (MVP.6's App.tsx, or the `Connected*`
@@ -18,8 +17,7 @@
  * source of truth for visibility. The close ("×") button calls the same
  * `onDeny()`.
  *
- * Slice 2.2 (ruling reviews/slice-2.2-forks-ruling.md §2/design
- * /working-docs/build/design/slice-2.2-cut.md §5) adds an "Always allow"
+ * Slice 2.2 adds an "Always allow"
  * checkbox: checking it and clicking Allow carries `remember: {pattern?}` on
  * the outgoing `permission_response` (protocol.ts's frozen additive field —
  * the host adds the rule to the CURRENT session immediately, toolName taken

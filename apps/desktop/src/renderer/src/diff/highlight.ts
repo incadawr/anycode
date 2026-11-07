@@ -1,6 +1,5 @@
 /**
- * Shiki syntax highlighting for the diff view (design
- * /working-docs/build/design/phase-mvp.md §5): a single lazy highlighter
+ * Shiki syntax highlighting for the diff view: a single lazy highlighter
  * singleton built on the JS regex engine (`shiki/engine/javascript` — no
  * WASM, so no renderer CSP fuss), with the github-dark/github-light themes
  * loaded up front and languages loaded lazily, per file extension, the first

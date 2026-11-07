@@ -3,7 +3,7 @@ import { GLM_QUOTA_SOURCE, parseGlmQuota } from "./glm-quota-adapter.js";
 
 describe("GLM coding-plan quota", () => {
   const now = 1_800_000_000_000;
-  // Live shape (verified 04.11 via working-docs/tools/glm-quota/glm-quota.sh):
+  // Live shape (verified 04.11 against the z.ai quota endpoint):
   // data.level + data.limits[]; CREDIT_LIMIT entries carry unit/number,
   // usage (limit), currentValue (used), percentage, nextResetTime (epoch ms).
   const entry = (fields: object) => ({ type: "CREDIT_LIMIT", ...fields });

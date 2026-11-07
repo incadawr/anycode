@@ -1,8 +1,5 @@
 /**
- * W4-S5 — custom provider live smoke (W5-S + пины F2/F-E), plan
- * `working-docs/build/design/w4-plan-fable-iter8.md` row W4-S5 + ruling
- * iter-9 §1c (S5 goes FIRST on BASE=e49aa85, no codex automation infra
- * needed).
+ * Custom provider live smoke (no codex automation infra needed).
  *
  * WHAT THIS PROVES, live on a REAL Electron dev instance against a REAL
  * LM Studio endpoint (`http://localhost:1234/v1`, localhost-http legal per

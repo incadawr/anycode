@@ -1,6 +1,5 @@
 /**
- * Confirm dialog for destructive git operations (design /working-docs/build/
-
+ * Confirm dialog for destructive git operations
  * (`PermissionModal.tsx` `:187`-precedent), mounted whenever `git.confirm` is
  * non-null. Self-connecting like `GitPanel.tsx`/`EnvironmentMenu.tsx` — there is no
  * separate presentational/connected split here (unlike PermissionModal) since

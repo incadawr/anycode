@@ -1,6 +1,5 @@
 /**
- * Markdown lexing helpers (design /working-docs/ui-track/design/slice-R1-cut.md
- * §3.1). Lexer-only: we never invoke marked's parser or HTML renderer — the
+ * Markdown lexing helpers. Lexer-only: we never invoke marked's parser or HTML renderer — the
  * renderer walks the block-token array itself (components/Markdown.tsx) and
  * emits React nodes, so no HTML string is ever produced and
  * `dangerouslySetInnerHTML` is never needed (guardrail §6.5). A fresh `Lexer`
