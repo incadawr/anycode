@@ -21,3 +21,19 @@ plugin boot failure disables the adapter and ordinary chat remains available.
 replace app definitions. The CLI's native registry follows CLI rules; AnyCode's
 builtin disabled IDs apply on the next new process, including resume. Model-use
 acceptance is performed separately by the owner in a fresh authenticated profile.
+
+For Codex, run `node apps/desktop/scripts/engine-skills-probe.mjs codex /absolute/native/codex`.
+This mode requires a direct native executable, constructs fresh HOME/CODEX_HOME,
+XDG, temp and cwd, and uses only initialize/initialized and skill RPCs. On macOS
+it verifies a `sandbox-exec` deny-network guard with a synthetic connection;
+without a working guard it runs offline help/schema only (handshake NOT RUN).
+Tests run synthetic Node children and the harness self-test, never a real CLI.
+The synthetic probe checks both parent and `skills` roots, process locality,
+reset, duplicate coexistence and sealed bytes/modes. Codex 0.166.0 needed no
+experimentalApi for these RPCs; the product capability still follows agentBridge.
+Use `<snapshot>/skills` for the future adapter: it narrows the supplied root to
+skill content. Same-name native/app entries coexist; collision omission and
+reset/restart verification are still required before enabling host delivery.
+The process-owned preparation/post-initialize seam covers fresh, resume and
+orchestration replacement, but root host options do not enable Codex forwarding.
+This proves neither model use nor compatibility with other CLI versions.

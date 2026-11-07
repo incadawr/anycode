@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import assert from 'node:assert/strict';
 const frame = { type: 'control_request', request_id: 'catalog', request: { subtype: 'initialize' } };
 function isolated(root) {
@@ -47,6 +48,102 @@ async function run(binary, args, root, env, payload) {
     child.stdin.on('error', () => {});
   });
 }
+// Fixed control-only RPC allowlist, independent of any user-provided frames.
+function codexFrame(method, params, root) {
+  assert(['initialize', 'initialized', 'skills/list', 'skills/extraRoots/set'].includes(method));
+  if (method === 'skills/list' || method === 'skills/extraRoots/set') {
+    const paths = method === 'skills/list' ? params.cwds : params.extraRoots;
+    assert(Array.isArray(paths) && paths.every(p => typeof p === 'string' && path.isAbsolute(p))); guarded(paths, undefined, root);
+  }
+  return { jsonrpc: '2.0', method, ...(params === undefined ? {} : { params }) };
+}
+async function codexProbe(binary, root, env) {
+  assert(binary && path.isAbsolute(binary), 'Supply the absolute trusted native executable');
+  assert(fs.lstatSync(binary).isFile(), 'Use the native executable, not a symlink/wrapper');
+  const magic = fs.readFileSync(binary).subarray(0, 4).toString('hex');
+  assert(['cffaedfe', 'feedfacf', '7f454c46', 'cafebabe'].includes(magic), 'Native executable required');
+  for (const key of ['CODEX_HOME', 'XDG_DATA_HOME']) { env[key] = path.join(root, key); fs.mkdirSync(env[key], { mode: 0o700 }); }
+  const cwd = path.join(root, 'cwd'); fs.mkdirSync(cwd, { mode: 0o700 });
+  const sandbox = ['-p', '(version 1)(allow default)(deny network*)'];
+  const denial = process.platform === 'darwin' ? spawnSync('/usr/bin/sandbox-exec', [...sandbox, '/usr/bin/nc', '-vz', '127.0.0.1', '9'], { env, cwd, encoding: 'utf8', timeout: 3000 }) : null;
+  const guardedNetwork = denial?.stderr?.includes('Operation not permitted') === true;
+  const command = guardedNetwork ? '/usr/bin/sandbox-exec' : binary;
+  const prefix = guardedNetwork ? [...sandbox, binary] : [];
+  const offline = args => {
+    guarded(args, undefined, root);
+    const r = spawnSync(command, [...prefix, ...args], { env, cwd, encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024 });
+    assert.equal(r.status, 0, 'Offline command failed'); return r.stdout;
+  };
+  const version = offline(['--version']).trim(); assert(/^codex-cli \d+\.\d+\.\d+$/.test(version));
+  console.log(JSON.stringify({ executable: binary, version, sha256: crypto.createHash('sha256').update(fs.readFileSync(binary)).digest('hex'), os: os.release(), arch: os.arch() }));
+  const schema = path.join(root, 'schema'); fs.mkdirSync(schema);
+  offline(['app-server', '--help']); offline(['app-server', 'generate-json-schema', '--out', schema]);
+  for (const [file, field] of [['SkillsExtraRootsSetParams', 'extraRoots'], ['SkillsListParams', 'forceReload']]) {
+    assert(JSON.parse(fs.readFileSync(path.join(schema, 'v2', file + '.json'), 'utf8')).properties[field]);
+  }
+  console.log('Offline schema PASS');
+  if (!guardedNetwork) { console.log('Egress guard unavailable; handshake NOT RUN'); return; }
+  console.log('Egress denial sentinel PASS');
+  const children = [];
+  function client() {
+    const child = spawn(command, [...prefix, 'app-server', '--stdio'], { env, cwd, detached: true, stdio: ['pipe', 'pipe', 'pipe'] }); children.push(child);
+    let nextId = 0, buffer = '', bytes = 0; const pending = new Map();
+    const fail = () => { for (const p of pending.values()) p.reject(new Error('Control transport unavailable')); pending.clear(); };
+    child.stderr.resume(); child.stdin.on('error', fail); child.on('error', fail); child.on('close', fail);
+    child.stdout.on('data', chunk => {
+      bytes += chunk.length; if (bytes > 1024 * 1024) { fail(); child.stdout.destroy(); return; }
+      buffer += chunk; let i;
+      while ((i = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, i); buffer = buffer.slice(i + 1);
+        try { const m = JSON.parse(line), p = pending.get(m.id); if (p) { pending.delete(m.id); m.error ? p.reject(new Error('Control RPC refused')) : p.resolve(m.result); } } catch { fail(); }
+      }
+    });
+    return { request(method, params) {
+      const frame = codexFrame(method, params, root), id = ++nextId;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error('Control RPC timeout: ' + method)); }, 15000);
+        pending.set(id, { resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } });
+        child.stdin.write(JSON.stringify({ ...frame, id }) + '\n');
+      });
+    }, notify() { child.stdin.write(JSON.stringify(codexFrame('initialized', undefined, root)) + '\n'); } };
+  }
+  const skill = name => {
+    const base = path.join(root, name, 'skills'), dir = path.join(base, name); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, 'SKILL.md'), body = `---\nname: ${name}\ndescription: Synthetic offline sentinel.\n---\nNever request a model turn.\n`;
+    fs.writeFileSync(file, body, { mode: 0o400 }); fs.chmodSync(dir, 0o500); fs.chmodSync(base, 0o500);
+    return { base, file, body };
+  };
+  const a = skill('px-a'), b = skill('px-b');
+  const init = async (c, experimentalApi = false) => { await c.request('initialize', { clientInfo: { name: 'offline-probe', version: '0' }, capabilities: { experimentalApi } }); c.notify(); };
+  const list = async c => {
+    const r = await c.request('skills/list', { cwds: [cwd], forceReload: true });
+    assert(r.data?.length === 1 && r.data[0].errors?.length === 0 && Array.isArray(r.data[0].skills)); return r.data[0].skills;
+  };
+  const set = (c, roots) => c.request('skills/extraRoots/set', { extraRoots: roots });
+  try {
+    const A = client(), B = client(); await init(A); await init(B);
+    assert(!(await list(A)).some(s => s.name.startsWith('px-')));
+    for (const rootCandidate of [path.dirname(a.base), a.base]) {
+      await set(A, [rootCandidate]); assert((await list(A)).some(s => s.name === 'px-a' && s.path === a.file && s.enabled === true));
+    }
+    await set(B, [b.base]);
+    for (const [c, own, other] of [[A, a, b], [B, b, a]]) {
+      const rows = await list(c); assert(rows.some(s => s.path === own.file)); assert(!rows.some(s => s.path === other.file));
+    }
+    const C = client(); await init(C); assert(!(await list(C)).some(s => s.name.startsWith('px-')));
+    await set(A, []); assert(!(await list(A)).some(s => s.path === a.file));
+    const native = path.join(env.CODEX_HOME, 'skills/px-a'); fs.mkdirSync(native, { recursive: true }); fs.writeFileSync(path.join(native, 'SKILL.md'), a.body);
+    const D = client(); await init(D, true); await set(D, [a.base]); const clash = (await list(D)).filter(s => s.name === 'px-a');
+    assert(clash.some(s => s.path === a.file) && clash.some(s => s.path === path.join(native, 'SKILL.md')));
+    for (const s of [a, b]) { assert.equal(fs.readFileSync(s.file, 'utf8'), s.body); assert.equal(fs.statSync(s.file).mode & 0o777, 0o400); assert.equal(fs.statSync(s.base).mode & 0o777, 0o500); }
+    console.log('Root shapes, nonexperimental RPC, locality, reset, duplicate coexistence, sealed bytes/modes PASS; model use NOT RUN');
+  } finally {
+    await Promise.all(children.map(child => new Promise(resolve => {
+      if (child.exitCode !== null || child.signalCode !== null) return resolve();
+      child.once('close', resolve); try { process.kill(-child.pid, 'SIGKILL'); } catch { resolve(); }
+    })));
+  }
+}
 const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'engine-skills-probe-'));
 try {
   const env = isolated(root);
@@ -57,7 +154,13 @@ try {
     for (const flag of ['--resume', 'login', 'auth']) assert.throws(() => guarded([flag], undefined, root));
     for (const arg of [os.homedir(), path.join(os.homedir(), '.claude'), '--plugin-dir=' + path.join(os.homedir(), '.claude'), '/outside/plugin']) assert.throws(() => guarded([arg], undefined, root));
     guarded(['--plugin-dir', path.join(root, 'plugin')], undefined, root);
+    for (const method of ['turn/start', 'thread/start', 'account/read']) assert.throws(() => codexFrame(method, {}, root));
+    assert.throws(() => codexFrame('skills/extraRoots/set', { extraRoots: [os.homedir()] }, root));
+    codexFrame('skills/list', { cwds: [root], forceReload: true }, root);
     guarded(['--help'], undefined, root); guarded([], frame, root); console.log('Isolation self-test PASS');
+  } else if (process.argv[2] === 'codex') {
+    try { await codexProbe(process.argv[3], root, env); }
+    catch (error) { console.log(JSON.stringify({ status: 'FAIL', reason: error?.message?.startsWith('Control RPC') ? error.message : 'Probe assertion or offline failure', modelUse: 'NOT RUN' })); process.exitCode = 1; }
   } else {
     assert.equal(process.argv[2], 'claude');
     const binary = process.argv[3]; assert(binary && path.isAbsolute(binary), 'Supply an absolute installed CLI executable');

@@ -4,6 +4,7 @@
  * its direct child and makes no group-reaping claim.
  */
 
+import { CodexBuiltinSkills, type CodexBuiltinPreparation } from "./builtin-skills.js";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -47,6 +48,8 @@ export interface ServerRequestResponder {
 export interface AppServerClientOptions {
   /** Absolute path to the reviewed user-installed binary. */
   binaryPath: string;
+  /** Host factory supplies fresh policy and lease for this concrete process only. */
+  prepareBuiltinSkills?: () => Promise<CodexBuiltinPreparation | undefined>;
   cwd: string;
   /** Source only; buildCodexChildEnv selects an explicit allowlist. */
   sourceEnv: NodeJS.ProcessEnv;
@@ -374,6 +377,7 @@ export class AppServerClient {
   private readonly maxPendingRequests: number;
   private readonly queue: NotificationQueue;
   private readonly observers = new Set<(notification: JsonRpcNotification) => void>();
+  private readonly builtinSkills = new CodexBuiltinSkills(() => !this.closing && !this.terminalError);
   private child: ChildProcess | null = null;
   private nextRequestId = 1;
   private lineBuffer = "";
@@ -463,8 +467,14 @@ export class AppServerClient {
     // interval between that preflight and this long-lived spawn; checking
     // once before preflight and executing unchecked afterward leaves exactly
     // that interval open. See `assertTrusted`.
-    this.assertTrusted();
-    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...(this.options.configOverrides ?? []).flatMap((value) => ["-c", value]), "app-server", "--stdio"], this.spawnOptions(true));
+    await this.builtinSkills.prepare(this.options.prepareBuiltinSkills);
+    let child: ChildProcess;
+    const spawnOptions = this.spawnOptions(true);
+    try {
+      this.assertTrusted();
+      child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...(this.options.configOverrides ?? []).flatMap((value) => ["-c", value]), "app-server", "--stdio"], spawnOptions);
+    } catch (error) { this.builtinSkills.abortNeverSpawned(); throw error; }
+    this.builtinSkills.bind(child, spawnOptions.detached === true);
     this.child = child;
     this.reportOwnedProcess(child);
     child.once("close", () => this.reportOwnedProcess(child, true));
@@ -472,6 +482,11 @@ export class AppServerClient {
     this.options.bootstrap?.adopt(() => this.close());
     this.bindChild(child);
     await this.awaitSpawn(child);
+  }
+
+  /** Shared handshake seam; no roots are installed unless the process factory opts in. */
+  afterInitializeBuiltinSkills(timeoutMs: number): Promise<void> {
+    return this.builtinSkills.afterInitialize({ request: (method, params) => this.request(method, params, { timeoutMs }) }, timeoutMs);
   }
 
   request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
