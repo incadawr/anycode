@@ -93,13 +93,14 @@ async function main() {
       }
     });
   });
-  async function poll(fn, timeout = 30000) {
+  async function poll(fn, timeout = 30000, condition = "phase completion") {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
       if (results.rendererFailure) throw new Error("Renderer acceptance failure");
       if (app && app.exitCode !== null) throw new Error("Disposable launcher exited");
       const value = await fn(); if (value) return value; await sleep(100); }
-    throw new Error(`Timed out: ${phase}`);
+    results.timeout = { phase, condition };
+    throw new Error(`Timed out: ${phase}: ${condition}`);
   }
   async function evaluate(expression) {
     const result = await cdp.call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
@@ -111,7 +112,7 @@ async function main() {
       const e = document.querySelector(${JSON.stringify(selector)});
       if (!e || e.disabled) return null;
       const r = e.getBoundingClientRect(); return r.width && r.height ? {x:r.x+r.width/2,y:r.y+r.height/2} : null;
-    })()`));
+    })()`), 30000, `click target: ${selector}`);
     await cdp.call("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
     await cdp.call("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
   }
@@ -171,10 +172,19 @@ async function main() {
     // CDP also exercises drill-down below the native window's minimum width.
     results.layoutDriver = "CDP viewport emulation (500/720/1100); native window resize not checked";
     const theme = await evaluate("document.documentElement.dataset.theme");
+    const waitLayout = (condition, expression) => poll(() => evaluate(expression), 30000, condition);
+    // Only geometry and fixed layout enums enter acceptance diagnostics.
+    const layoutGeometry = () => evaluate(`(() => {
+      const p=document.querySelector('${panel}'), d=document.querySelector('.session-extensions-details');
+      const rect=e=>{ if(!e) return null; const r=e.getBoundingClientRect(); return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}; };
+      return { viewport:{width:innerWidth,height:innerHeight}, layout:['columns','drill-down'].includes(p?.dataset.layout)?p.dataset.layout:null,
+        panel:rect(p), details:rect(d), body:rect(document.querySelector('.session-extensions-body')), trigger:rect(document.querySelector('${trigger}')),
+        rows:d?.querySelectorAll('li').length??0, scrollTop:d?.scrollTop??null, clientHeight:d?.clientHeight??null, scrollHeight:d?.scrollHeight??null };
+    })()`);
     try {
       for (const width of [1100, 720]) {
         await cdp.call("Emulation.setDeviceMetricsOverride", { width, height: 850, deviceScaleFactor: 1, mobile: false });
-        await poll(() => evaluate(`window.innerWidth === ${width}`));
+        await waitLayout(`columns viewport width ${width}`, `window.innerWidth === ${width}`);
         for (const theme of ["dark", "light"]) {
           await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
           await openMcp();
@@ -189,12 +199,12 @@ async function main() {
           const geometry = () => evaluate(`(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return {left:r.left, top:r.top, width:r.width}; })()`);
           const before = await geometry();
           await click(".session-extensions-category:nth-child(3)");
-          await poll(() => evaluate("document.querySelectorAll('.session-extensions-list li').length === 25"));
+          await waitLayout("columns Skills has 25 rows", "document.querySelectorAll('.session-extensions-list li').length === 25");
           assert.deepEqual(await geometry(), before, "Category selection keeps panel geometry");
           const categoriesBefore = await evaluate("document.querySelector('.session-extensions-categories').getBoundingClientRect().top");
           const point = await evaluate("(() => { const r=document.querySelector('.session-extensions-details').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()");
           await cdp.call("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: 10000 });
-          await poll(() => evaluate("(() => { const d=document.querySelector('.session-extensions-details'); return d.scrollTop > 0 && d.scrollTop+d.clientHeight >= d.scrollHeight-1; })()"));
+          await waitLayout("columns scroll reaches bottom", "(() => { const d=document.querySelector('.session-extensions-details'); return d.scrollTop > 0 && d.scrollTop+d.clientHeight >= d.scrollHeight-1; })()");
           assertDetailsScroll(await evaluate(`(() => {
             const d=document.querySelector('.session-extensions-details'), r=d.getBoundingClientRect();
             const last=d.querySelector('li:last-child').getBoundingClientRect(), footer=d.querySelector('footer').getBoundingClientRect();
@@ -208,17 +218,29 @@ async function main() {
         }
       }
       for (const height of [600, 400]) {
+        // innerWidth can change before React handles resize. Observe the rendered
+        // transition with an open panel, then reopen in the settled narrow layout.
+        await click(trigger);
         await cdp.call("Emulation.setDeviceMetricsOverride", { width: 500, height, deviceScaleFactor: 1, mobile: false });
-        await poll(() => evaluate(`innerWidth === 500 && innerHeight === ${height}`));
+        await waitLayout(`drill-down viewport 500x${height}`, `innerWidth === 500 && innerHeight === ${height}`);
+        await waitLayout("renderer has handled drill-down resize", `document.querySelector('${panel}')?.dataset.layout === 'drill-down'`);
+        await escape();
+        await waitLayout("panel closed before narrow reopen", `!document.querySelector('${panel}')`);
         await click(trigger);
         assert.equal(await evaluate(`document.querySelector('${panel}').dataset.layout`), "drill-down");
         await click('.session-extensions-category[data-extension-category="skills"]');
-        await poll(() => evaluate("document.querySelectorAll('.session-extensions-list li').length === 25"));
-        await poll(() => evaluate(`(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return r.top>=8 && r.bottom<=innerHeight-8; })()`));
+        await waitLayout("drill-down Skills has 25 rows", "document.querySelectorAll('.session-extensions-list li').length === 25");
+        await waitLayout("drill-down panel fits 8px viewport insets", `(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return r.top>=8 && r.bottom<=innerHeight-8; })()`);
         assert.equal(await evaluate(`document.querySelector('${panel}').getBoundingClientRect().width`), 484, "Drill-down details use the available width");
+        (results.drillDownLayouts ??= []).push(await layoutGeometry());
         await shot(`drill-down-${height}`);
         await escape();
       }
+    } catch (error) {
+      results.layoutFailure = await layoutGeometry().catch(() => null);
+      json(join(profile, "result.json"), results);
+      await shot("layout-failure-before-reset").catch(() => {});
+      throw error;
     } finally {
       await cdp.call("Emulation.clearDeviceMetricsOverride");
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
@@ -250,7 +272,7 @@ async function main() {
   async function openMcp() {
     await click(trigger);
     await click(".session-extensions-category:first-child");
-    await poll(() => evaluate("/^\\d+$/.test(document.querySelector('.session-extensions-category:first-child [aria-live]')?.textContent ?? '') && !!document.querySelector('.session-extensions-list')"));
+    await poll(() => evaluate("/^\\d+$/.test(document.querySelector('.session-extensions-category:first-child [aria-live]')?.textContent ?? '') && !!document.querySelector('.session-extensions-list')"), 30000, "MCP configured count and list ready");
   }
   async function trustIfNeeded() {
     // A disposable project's declarations go through the normal trust decision.
