@@ -459,6 +459,8 @@ export type UiToHostMessage =
       images?: ImageAttachment[];
       /** Reserved atomic orchestration intent; currently unavailable. */
       orchestrate?: "enable";
+      /** Composer FIFO dispatch: retain at the host if a next-turn delivery wins admission. */
+      fromQueue?: true;
       connectionId?: string;
       // slices 2+3 (merged): set ONLY when the renderer is draining a
       // queued detached-child report (tab-registry.ts's dispatchQueuedPrompt,
@@ -722,7 +724,7 @@ export type HostToUiMessage =
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
   | { type: "user_message_accepted"; requestId: string; turnId: string }
   /** runtimeRecoveryTurnId links an unsent request to its durable pending input. */
-  | { type: "turn_rejected"; requestId: string; runtimeRecoveryTurnId?: string; reason: "busy" | "not_ready" | "unsupported_images" | "input_not_sent" }
+  | { type: "turn_rejected"; requestId: string; runtimeRecoveryTurnId?: string; queuePauseReason?: "cancelled" | "error" | "max_turns"; reason: "busy" | "not_ready" | "unsupported_images" | "input_not_sent" }
   | { type: "runtime_input_recovery"; turnId: string; text: string; status: "pending" | "uncertain" }
   | { type: "user_message_invalid"; requestId: string }
   /** Diagnostic for this frame only; requestId may already name an accepted turn. */
@@ -1200,6 +1202,7 @@ export const userMessageSchema = z
     requestId: z.string(),
     text: z.string(),
     orchestrate: z.literal("enable").optional(),
+    fromQueue: z.literal(true).optional(),
     connectionId: z.string().min(1).max(128).optional(),
     images: z
       .array(

@@ -5491,6 +5491,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           case "turn_rejected": {
+            // A busy response cannot revoke a request already owning a turn.
+            // Claude still has a pending native echo here; keep it for its
+            // acceptance/unsent outcome instead of restoring a duplicate.
+            if (message.reason === "busy" && get().turn.status === "running" && get().turn.requestId === message.requestId) return;
             // Slice P7.14: if the host rejected the very drain we just sent (the
             // race in §0/§2.3 — busy/unsupported_images), return the item to the
             // HEAD of the queue and pause so it isn't re-sent silently. The
@@ -5531,6 +5535,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     : "Message rejected: the host is not ready yet.",
               },
               ...(restore ?? restoreDirect ?? {}),
+              ...((restore || restoreDirect || rejectedSystem) ? {
+                transcript: get().transcript.filter(block => block.kind !== "user_text" || block.id !== message.requestId),
+              } : {}),
+              ...(message.queuePauseReason && (restore || restoreDirect) ? { queuePauseReason: message.queuePauseReason } : {}),
               ...reconciled,
               ...(message.reason === "input_not_sent" ? {
                 queuePaused: true, queuePauseReason: "rejected" as const,
