@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertCounts, assertLossless, assertMcpRow, observeToolCatalog, assertLayout, assertNativeUnavailable, assertConsentPending } from "./extensions-ui-smoke.mjs";
+import { assertCounts, assertLossless, assertMcpRow, observeToolCatalog, assertLayout, assertDetailsScroll, assertNativeUnavailable, assertConsentPending, assertPluginConsentRows } from "./extensions-ui-smoke.mjs";
 
 const connected = "Connected in this session";
 const failed = "Connection failed";
@@ -93,7 +93,17 @@ test("layout assertion accepts both themes and rejects clipping, overflow and lo
   ]) assert.throws(() => assertLayout({ ...layout(), ...mutation }));
 });
 
-const unavailable = () => ({ text: "AnyCode LSP is unavailable in this engine. For new Core sessions.", switches: 0, details: false, restart: false });
+const unavailable = () => ({ text: "These language servers are saved for Core sessions. This engine does not use AnyCode LSP.", switches: 0, details: false, restart: false });
+test("scroll assertion rejects expanded grid rows, clipping and unreachable management", () => {
+  const view = { clientHeight: 400, scrollHeight: 1000, scrollTop: 600, detailsHeight: 400, bodyHeight: 400,
+    lastVisible: true, footerVisible: true, categoriesStable: true };
+  assertDetailsScroll(view);
+  for (const mutation of [
+    { clientHeight: 0 }, { scrollHeight: 400 }, { detailsHeight: 1000 }, { scrollTop: 0 },
+    { lastVisible: false }, { footerVisible: false }, { categoriesStable: false },
+  ]) assert.throws(() => assertDetailsScroll({ ...view, ...mutation }));
+});
+
 test("native assertion rejects false capability, missing reason and actionable unsupported controls", () => {
   assertNativeUnavailable(unavailable());
   for (const mutation of [
@@ -108,4 +118,18 @@ test("consent-pending assertion rejects an absent row, missing reason and writab
     {}, { reason: false, switches: 0 }, { reason: true, switches: 1 },
     { reason: true }, { switches: 0 },
   ]) assert.throws(() => assertConsentPending(state));
+});
+
+
+test("plugin consent assertions distinguish workspace trust from missing user MCP consent", () => {
+  const rows = [
+    { name: "plugin_b-plugin_api", source: "Plugin", note: "Read-only; manage in Plugins", switches: 0 },
+    { name: "plugin_pending-user_api", source: "Plugin", note: "Needs approval in Plugins", switches: 0 },
+  ];
+  assertPluginConsentRows(rows);
+  for (const index of [0, 1]) {
+    assert.throws(() => assertPluginConsentRows(rows.filter((_, i) => i !== index)));
+    assert.throws(() => assertPluginConsentRows(rows.map((row, i) => i === index ? { ...row, switches: 1 } : row)));
+    assert.throws(() => assertPluginConsentRows(rows.map((row, i) => ({ ...row, note: rows[1 - i].note }))));
+  }
 });

@@ -18,7 +18,9 @@ let root: Root;
 let container: HTMLDivElement;
 let store: ReturnType<typeof createDesktopStore>;
 const originalTabs = useTabsStore.getState();
-const originalWidth = window.innerWidth;
+const [originalWidth, originalHeight] = [window.innerWidth, window.innerHeight];
+let notifyPanelResize: () => void;
+const observePanel = vi.fn(), disconnectPanel = vi.fn();
 const props = { sidebarCollapsed: true, onToggleSidebar: () => {}, onToast: () => {} };
 const trigger = () => container.querySelector<HTMLButtonElement>('[aria-label="Extensions"]')!;
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"][aria-label="Extensions"]');
@@ -30,6 +32,13 @@ async function key(element: HTMLElement, value: string) {
   await act(async () => { element.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true })); });
 }
 beforeEach(() => {
+  observePanel.mockClear();
+  disconnectPanel.mockClear();
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { notifyPanelResize = callback; }
+    observe = observePanel;
+    disconnect = disconnectPanel;
+  });
   store = createDesktopStore();
   store.setState({ workspace: "/project", transcript: [{ kind: "user", text: "Hello" } as never] });
   useTabsStore.setState({ tabs: [{ tabId: "a", title: "Project" } as never], activeTabId: "a" });
@@ -54,8 +63,10 @@ afterEach(async () => {
   document.body.replaceChildren();
   useTabsStore.setState(originalTabs, true);
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   Object.defineProperty(window, "innerWidth", { configurable: true, value: originalWidth });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: originalHeight });
 });
 
 it("opens one portal dialog with scoped configured counts and returns focus on Escape", async () => {
@@ -68,7 +79,7 @@ it("opens one portal dialog with scoped configured counts and returns focus on E
   expect(panel.getAttribute("aria-modal")).toBe("false");
   expect(trigger().getAttribute("aria-controls")).toBe(panel.id);
   expect(isOverlayOpen()).toBe(true);
-  const rows = [...panel.querySelectorAll("button")];
+  const rows = [...panel.querySelectorAll<HTMLButtonElement>(".session-extensions-category")];
   expect(rows.map((row) => row.textContent)).toEqual(["MCP2›", "Plugins1›", "Skills3›", "LSP2›", "HooksNone›"]);
   expect(document.activeElement).toBe(rows[0]);
   expect(panel.querySelector("button button, button input")).toBeNull();
@@ -171,14 +182,14 @@ it("does not mount Extensions in the child breadcrumb view", async () => {
 
 it("clamps the portal to viewport edges and recalculates on resize", async () => {
   await render();
-  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ left: 900, bottom: 750 } as DOMRect);
+  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ left: 900, right: 1180, bottom: 750 } as DOMRect);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     return { width: 280, height: 180 } as DOMRect;
   });
   await click(trigger());
   expect(dialog()!.style.left).toBe(`${window.innerWidth - 288}px`);
   expect(dialog()!.style.top).toBe(`${window.innerHeight - 188}px`);
-  vi.mocked(trigger().getBoundingClientRect).mockReturnValue({ left: -20, bottom: 10 } as DOMRect);
+  vi.mocked(trigger().getBoundingClientRect).mockReturnValue({ left: -20, right: 60, bottom: 10 } as DOMRect);
   await act(async () => { window.dispatchEvent(new Event("resize")); });
   expect(dialog()!.style.left).toBe("8px");
   expect(dialog()!.style.top).toBe("14px");
@@ -207,47 +218,85 @@ it("opens read-only lists with click, Enter, Space and Right, and returns with L
     expect(categories[index]!.getAttribute("aria-controls")).toBe(details()!.id);
     expect(details()!.querySelectorAll("li").length).toBe([4, 1, 3, 2][index]);
     await key(details()!, "ArrowLeft");
-    expect(details()).toBeNull();
+    expect(details()!.getAttribute("aria-label")).toBe(name);
     expect(document.activeElement).toBe(categories[index]);
   }
   await click(categories[0]!);
   expect(details()!.textContent).toContain("compat-mcp");
   expect(details()!.textContent).toContain("Shadowed");
-  expect(details()!.textContent).toContain("Saved: disabled");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");
   expect(dialog()!.querySelector('input, button button')).toBeNull();
   expect(dialog()!.querySelectorAll('[role="switch"]')).toHaveLength(2);
-  await click(details()!.querySelector("button")!);
+  expect(details()!.querySelector(".session-extensions-back")).toBeNull();
+  await key(details()!, "ArrowLeft");
   expect(document.activeElement).toBe(categories[0]);
   expect(document.querySelectorAll('[role="dialog"][aria-label="Extensions"]').length).toBe(1);
 });
 
-it("delays hover, cancels on leave, and never steals focus or replaces focused details", async () => {
+it("keeps the category during diagonal hover regardless of focus", async () => {
   vi.useFakeTimers();
   await render();
   await click(trigger());
   const categories = categoryButtons();
-  await hover(categories[1]!);
-  await act(async () => { vi.advanceTimersByTime(149); });
-  expect(details()).toBeNull();
-  await act(async () => { vi.advanceTimersByTime(1); });
-  expect(details()!.getAttribute("aria-label")).toBe("Plugins");
-  expect(document.activeElement).toBe(categories[0]);
-  await hover(categories[2]!);
-  await hover(categories[2]!, false);
-  await act(async () => { vi.advanceTimersByTime(200); });
-  expect(details()!.getAttribute("aria-label")).toBe("Plugins");
-  await click(categories[1]!);
-  const back = details()!.querySelector("button")!;
-  await act(async () => back.focus());
-  await hover(categories[2]!);
-  await act(async () => { vi.advanceTimersByTime(200); });
-  expect(details()!.getAttribute("aria-label")).toBe("Plugins");
-  expect(document.activeElement).toBe(back);
-  await key(back, "Escape");
-  expect(document.activeElement).toBe(trigger());
-  expect(isOverlayOpen()).toBe(false);
-  await act(async () => { vi.advanceTimersByTime(0); });
-  expect(vi.getTimerCount()).toBe(0);
+  expect(details()!.getAttribute("aria-label")).toBe("MCP");
+  for (const focus of [categories[0]!, details()!]) {
+    await act(async () => focus.focus());
+    for (const [index, x, y] of [[1, 100, 40], [2, 140, 60], [3, 180, 80]]) {
+      await act(async () => categories[index!]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y })));
+      await hover(categories[index!]!);
+      await act(async () => vi.advanceTimersByTime(200));
+      expect(details()!.getAttribute("aria-label")).toBe("MCP");
+      expect(document.activeElement).toBe(focus);
+    }
+  }
+  await click(categories[2]!);
+  expect(details()!.getAttribute("aria-label")).toBe("Skills");
+  await key(details()!, "Escape");
+  await click(trigger());
+  expect(details()!.getAttribute("aria-label")).toBe("Skills");
+  expect(document.activeElement).toBe(categoryButtons()[2]);
+});
+
+it("keeps column geometry through selection and data arrival, with no Back button", async () => {
+  let finish!: (value: never) => void;
+  vi.mocked(window.anycode.skills.list).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ left: 900, right: 1000, bottom: 50 } as DOMRect);
+  const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 520, height: 480 } as DOMRect);
+  await click(trigger());
+  const panel = dialog()!;
+  const before = { left: panel.style.left, width: panel.getBoundingClientRect().width };
+  expect(before).toEqual({ left: "480px", width: 520 });
+  measure.mockClear();
+  await click(categoryButtons()[2]!);
+  await act(async () => finish({ rows: [], problems: [] } as never));
+  expect(measure).not.toHaveBeenCalled();
+  expect(observePanel).not.toHaveBeenCalled();
+  expect({ left: panel.style.left, width: panel.getBoundingClientRect().width }).toEqual(before);
+  expect(panel.querySelector(".session-extensions-back")).toBeNull();
+});
+
+it("repositions drill-down after selection and async growth and disconnects on columns", async () => {
+  await resize(500);
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: 400 });
+  let finish!: (value: never) => void;
+  vi.mocked(window.anycode.skills.list).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ right: 480, bottom: 80 } as DOMRect);
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    const selected = this.classList.contains("has-details");
+    return { width: selected ? 484 : 280, height: !selected ? 180 : this.querySelector("li") ? 384 : 340 } as DOMRect;
+  });
+  await click(trigger());
+  expect(dialog()!.style.top).toBe("84px");
+  await click(categoryButtons()[2]!);
+  await act(async () => notifyPanelResize());
+  expect(dialog()!.style.top).toBe("52px");
+  await act(async () => finish({ rows: [{ name: "late", sourceKind: "user", enabled: true }], problems: [] } as never));
+  await act(async () => notifyPanelResize());
+  expect(dialog()!.style.top).toBe("8px");
+  await resize(900);
+  expect(disconnectPanel).toHaveBeenCalledTimes(1);
 });
 
 it("uses drill-down below 600px, keeps focus through resize and restores the category", async () => {
@@ -272,7 +321,7 @@ it("uses drill-down below 600px, keeps focus through resize and restores the cat
   expect(dialog()!.querySelector<HTMLElement>(".session-extensions-categories")!.hidden).toBe(false);
   expect(document.activeElement).toBe(details());
   await key(details()!, "ArrowLeft");
-  expect(document.activeElement).toBe(categoryButtons()[1]);
+  expect(document.activeElement).toBe(categoryButtons()[2]);
 });
 
 it("renders sanitized names as plain text and excludes private DTO fields", async () => {
@@ -292,7 +341,62 @@ it("renders sanitized names as plain text and excludes private DTO fields", asyn
   expect(text.endsWith("…")).toBe(true);
   expect(details()!.querySelector("img")).toBeNull();
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
-  expect(details()!.textContent).toContain("Some entries could not be loaded.");
+  expect(details()!.textContent).toContain("1 configuration issue.");
+});
+
+it("names broken skill files with actionable hints and counts unstructured problems", async () => {
+  vi.mocked(window.anycode.skills.list).mockResolvedValue({ rows: [], problems: [
+    "Skill discovery: invalid frontmatter in /private/project/.anycode/skills/broken/SKILL.md: PRIVATE_CONTENT",
+    'Skill discovery: skipping /private/project/.anycode/skills/missing/SKILL.md — a "description" is required',
+    "PRIVATE_UNKNOWN_ERROR",
+  ] } as never);
+  await render();
+  await click(trigger());
+  await click(categoryButtons()[2]!);
+  expect(details()!.textContent).toContain("3 configuration issues. Open Manage skills for details.");
+  expect(details()!.textContent).toContain("broken/SKILL.md: Fix the frontmatter.");
+  expect(details()!.textContent).toContain("missing/SKILL.md: Add a description to the frontmatter.");
+  expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
+  expect(dialog()!.outerHTML).not.toContain("/private/project");
+});
+
+it("names invalid MCP configuration files without rendering raw parser errors", async () => {
+  vi.mocked(window.anycode.mcpConfig.get).mockResolvedValue({ entries: [], problems: [
+    "Invalid JSON in /private/project/.mcp.json: PRIVATE_CONFIG_CONTENT",
+  ] } as never);
+  await render();
+  await click(trigger());
+  expect(details()!.textContent).toContain(".mcp.json: Fix the JSON.");
+  expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
+});
+
+it("routes plugin manifest problems to Plugins without exposing private diagnostics", async () => {
+  vi.mocked(window.anycode.mcpConfig.get).mockResolvedValue({ entries: [], problems: [
+    "Could not read plugin manifest /private/plugin.json: PRIVATE_ERROR",
+    "Invalid JSON in plugin manifest /private/plugin.json: PRIVATE_CONTENT",
+    "Invalid plugin manifest /private/plugin.json: PRIVATE_SCHEMA",
+  ] } as never);
+  await render();
+  await click(trigger());
+  expect(details()!.textContent).toContain("3 plugin manifest issues. Open Manage plugins for details.");
+  expect(details()!.textContent).not.toContain("Open Manage MCP servers");
+  expect(details()!.textContent).not.toContain("Fix the JSON");
+  expect(dialog()!.outerHTML).not.toMatch(/PRIVATE_|\/private/);
+});
+
+it("keeps skill controls, name, source and management together without redundant saved labels", async () => {
+  await render();
+  await click(trigger());
+  await click(categoryButtons()[2]!);
+  for (const row of details()!.querySelectorAll("li")) {
+    const item = row.querySelector(".session-extensions-item")!;
+    expect(item.firstElementChild!.getAttribute("role")).toBe("switch");
+    expect(item.querySelector(".session-extensions-name")).not.toBeNull();
+    expect(item.querySelector(".session-extensions-source")!.textContent).toBe("User");
+    expect(item.querySelector(".session-extensions-manage")!.getAttribute("aria-label"))
+      .toBe(`Manage User: ${item.querySelector(".session-extensions-name")!.textContent}`);
+    expect(row.textContent).not.toContain("Saved:");
+  }
 });
 
 it("shows loading, unavailable, retry and empty detail states", async () => {
@@ -332,8 +436,7 @@ it("closes after Shift+Tab leaves through the trigger without a late focus resto
   expect(isOverlayOpen()).toBe(false);
 });
 
-it("does not trap Tab and cleans pending hover on tab switch", async () => {
-  vi.useFakeTimers();
+it("does not trap Tab and closes on tab switch", async () => {
   await render();
   await click(trigger());
   await click(categoryButtons()[0]!);
@@ -345,12 +448,9 @@ it("does not trap Tab and cleans pending hover on tab switch", async () => {
   expect(dialog()).toBeNull();
   expect(document.activeElement).toBe(outside);
   await click(trigger());
-  await hover(categoryButtons()[1]!);
   await render("b");
-  await act(async () => { vi.advanceTimersByTime(200); });
   expect(dialog()).toBeNull();
   expect(isOverlayOpen()).toBe(false);
-  expect(vi.getTimerCount()).toBe(0);
 });
 
 const mcpStatus = (state: "connected" | "failed" | "connecting" | "closed", name = "project-mcp") => ({
@@ -380,7 +480,11 @@ it("retains live failures and connections beside saved disabled entries and unma
   await click(trigger());
   await click(categoryButtons()[0]!);
   const text = details()!.textContent!;
-  expect(text).toContain("Saved: disabled for new session starts; this session keeps its startup configuration");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");
+  expect(text).toContain("Changes apply on the next session start");
+  expect(text).toContain("This session keeps its startup configuration.");
+  expect(details()!.querySelector('li')!.textContent).not.toContain("Saved: disabled");
+  expect(details()!.querySelector('.session-extensions-manage')!.getAttribute("aria-label")).toBe("Manage Project: project-mcp");
   expect(text).toContain("Connection failed");
   expect(text).toContain("This session / Diagnostics");
   expect(text).toContain("Connected in this session");
@@ -447,12 +551,12 @@ it("refreshes saved config without clearing a current failure, then retains it a
   await render();
   await click(trigger());
   await click(categoryButtons()[0]!);
-  expect(details()!.textContent).toContain("Saved: enabled");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("true");
   expect(details()!.textContent).toContain("Connection failed");
   await key(details()!, "Escape");
   await click(trigger());
   await click(categoryButtons()[0]!);
-  expect(details()!.textContent).toContain("Saved: disabled");
+  expect(details()!.querySelector('[role="switch"]')!.getAttribute("aria-checked")).toBe("false");
   expect(warning()).not.toBeNull();
   await key(details()!, "Escape");
   vi.mocked(window.anycode.mcpConfig.get).mockResolvedValue({ entries: [], problems: [] } as never);
@@ -470,7 +574,7 @@ it("keeps parse problems separate from runtime failures and offers retry without
   await render();
   await click(trigger());
   await click(categoryButtons()[0]!);
-  expect(details()!.textContent).toContain("Some entries could not be loaded");
+  expect(details()!.textContent).toContain("1 configuration issue");
   expect(details()!.textContent).not.toContain("Connection failed");
   expect(warning()).toBeNull();
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_PARSE_ERROR");
@@ -570,15 +674,15 @@ it.each(["codex", "claude"])("keeps configured LSP and catalog counts with hones
   await click(trigger());
   await click(categoryButtons()[3]!);
   expect(categoryButtons()[3]!.textContent).toContain("2");
-  expect(details()!.textContent).toContain("AnyCode LSP is unavailable in this engine");
-  expect(details()!.textContent).toContain("For new Core sessions");
+  expect(details()!.textContent).toContain("This engine does not use AnyCode LSP");
+  expect(details()!.textContent).toContain("saved for Core sessions");
   expect(details()!.querySelectorAll("li")).toHaveLength(2);
   expect(detailButton("Details")).toBeUndefined();
   expect(details()!.textContent).not.toContain("crashed");
   expect(trigger().querySelector(".session-extensions-warning")).toBeNull();
   for (const index of [1, 2]) {
     await click(categoryButtons()[index]!);
-    expect(details()!.textContent).toContain("AnyCode catalog. Availability in the current engine is not confirmed");
+    expect(details()!.textContent).toContain("Saved in AnyCode; this engine may not load these entries");
   }
   expect(send).not.toHaveBeenCalled();
 });
@@ -614,17 +718,17 @@ it("shows plugin tier, saved status and consent hints without exposing diagnosti
   await click(trigger());
   await click(categoryButtons()[1]!);
   const rows = details()!.querySelectorAll("li");
-  expect(rows[0]!.textContent).toContain("local · disabled · Saved: disabled");
+  expect(rows[0]!.textContent).toContain("local · disabled");
   expect(rows[0]!.textContent).toContain("Needs attention in Plugins");
   expect(rows[0]!.textContent).toContain("MCP needs approval in Plugins");
   expect(rows[0]!.textContent).toContain("Services need approval in Plugins");
-  expect(rows[1]!.textContent).toContain("official · active · Saved: enabled");
+  expect(rows[1]!.textContent).toContain("official · active");
   expect(rows[1]!.textContent).not.toContain("needs approval");
   expect(details()!.textContent).toContain("All projects; background services and account sources may change immediately");
   expect(dialog()!.outerHTML).not.toContain("PRIVATE_");
   expect(switches().every((control) => control.disabled)).toBe(true);
   await click(categoryButtons()[2]!);
-  expect(details()!.textContent).toContain("Plugin · Saved: enabled · Read-only; manage in Plugins");
+  expect(details()!.textContent).toContain("Saved: enabled · Read-only; manage in Plugins");
 });
 
 it("sanitizes names in the shared LSP summary without exposing runtime metadata", async () => {
@@ -792,7 +896,7 @@ it("writes own skills by raw name and tab, serializes writes and leaves contribu
   await openCatalog(2);
   expect(switches()).toHaveLength(2);
   expect(details()!.textContent).toContain("Read-only; manage in Plugins");
-  expect(details()!.textContent).toContain("This session keeps its startup configuration");
+  expect(details()!.textContent).toContain("Changes apply on the next session start");
   const control = switches()[0]!;
   await act(async () => control.focus());
   await click(control);
@@ -900,7 +1004,7 @@ it("keeps native catalog guidance beside active switches and never adds an LSP s
   prepareCatalogs();
   store.setState({ connection: "host_exited", engine: { id: "claude", capabilities: { supportsTasks: false } } as never });
   await openCatalog(2);
-  expect(details()!.textContent).toContain("Availability in the current engine is not confirmed");
+  expect(details()!.textContent).toContain("Saved in AnyCode; this engine may not load these entries");
   expect(switches()[0]!.disabled).toBe(false);
   await click(categoryButtons()[1]!);
   expect(details()!.textContent).toContain("background services and account sources may change immediately");
@@ -1087,7 +1191,7 @@ it.each(["codex", "claude"])("locks pending native configuration writes and refu
   expect(details()!.textContent).toContain("Could not write the configuration");
   expect(details()!.textContent).not.toContain("Saved for new session starts");
   await click(categoryButtons()[3]!);
-  expect(details()!.textContent).toContain("LSP is unavailable in this engine");
+  expect(details()!.textContent).toContain("This engine does not use AnyCode LSP");
   expect(details()!.querySelector('[role="switch"]')).toBeNull();
   expect(send).not.toHaveBeenCalled();
 });

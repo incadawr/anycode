@@ -35,12 +35,27 @@ export function assertLayout(view) {
   assert(!view.overflow, "No horizontal overflow");
   assert(view.left >= 0 && view.right <= view.width && view.top >= 0 && view.bottom <= view.height, "Panel fits viewport");
 }
+export function assertDetailsScroll(view) {
+  assert(view.clientHeight > 0 && view.scrollHeight > view.clientHeight, "Long details really overflow");
+  assert(view.detailsHeight <= view.bodyHeight + 1, "Details stay within the grid row");
+  assert(view.scrollTop > 0 && view.lastVisible && view.footerVisible, "Scrolling reaches the last row and management footer");
+  assert(view.categoriesStable, "Scrolling details leaves categories in place");
+}
 export function assertConsentPending(view) {
   assert.equal(view.reason, true, "Consent-pending entry explains where approval is needed");
   assert.equal(view.switches, 0, "Consent-pending MCP entry has no write control");
 }
+export function assertPluginConsentRows(rows) {
+  const trusted = rows.find(row => row.name === "plugin_b-plugin_api");
+  assert.equal(trusted?.source, "Plugin", "Trusted project plugin is listed");
+  assert.equal(trusted.note, "Read-only; manage in Plugins", "Workspace trust covers the project plugin");
+  assert.equal(trusted.switches, 0, "Project plugin MCP stays read-only");
+  const pending = rows.find(row => row.name === "plugin_pending-user_api");
+  assert.equal(pending?.source, "Plugin", "User plugin without MCP consent is listed");
+  assertConsentPending({ reason: pending.note === "Needs approval in Plugins", switches: pending.switches });
+}
 export function assertNativeUnavailable(view) {
-  assert(view.text.includes("AnyCode LSP is unavailable in this engine. For new Core sessions."), "Honest native capability reason");
+  assert(view.text.includes("These language servers are saved for Core sessions. This engine does not use AnyCode LSP."), "Honest native capability reason");
   assert.equal(view.switches, 0, "Unsupported LSP has no write control");
   assert.equal(view.details, false, "Unsupported LSP has no live status action");
   assert.equal(view.restart, false, "Unsupported LSP has no restart action");
@@ -78,13 +93,14 @@ async function main() {
       }
     });
   });
-  async function poll(fn, timeout = 30000) {
+  async function poll(fn, timeout = 30000, condition = "phase completion") {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
       if (results.rendererFailure) throw new Error("Renderer acceptance failure");
       if (app && app.exitCode !== null) throw new Error("Disposable launcher exited");
       const value = await fn(); if (value) return value; await sleep(100); }
-    throw new Error(`Timed out: ${phase}`);
+    results.timeout = { phase, condition };
+    throw new Error(`Timed out: ${phase}: ${condition}`);
   }
   async function evaluate(expression) {
     const result = await cdp.call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
@@ -96,7 +112,7 @@ async function main() {
       const e = document.querySelector(${JSON.stringify(selector)});
       if (!e || e.disabled) return null;
       const r = e.getBoundingClientRect(); return r.width && r.height ? {x:r.x+r.width/2,y:r.y+r.height/2} : null;
-    })()`));
+    })()`), 30000, `click target: ${selector}`);
     await cdp.call("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point });
     await cdp.call("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point });
   }
@@ -121,14 +137,16 @@ async function main() {
     await key("ArrowDown"); await focused(".session-extensions-category:first-child");
     await key("ArrowDown"); await focused(".session-extensions-category:nth-child(2)");
     await key("ArrowUp"); await key("ArrowRight"); await focused(".session-extensions-details");
-    await key("Tab"); await focused(".session-extensions-back");
+    assert.equal(await evaluate("!!document.querySelector('.session-extensions-back')"), false, "Columns have no Back button");
     await key("Tab"); await focused('[role="switch"]');
-    await key("Tab", true); await focused(".session-extensions-back");
+    await key("Tab", true); await focused(".session-extensions-category:first-child");
+    await key("ArrowRight"); await focused(".session-extensions-details");
     await key("ArrowLeft"); await focused(".session-extensions-category:first-child");
-    // Pointer hover may change selection, but must preserve keyboard focus.
+    // Hover only highlights; selection and focus remain stable.
     const rect = await evaluate(`(() => {const r=document.querySelector('.session-extensions-category:nth-child(2)').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await cdp.call("Input.dispatchMouseEvent", { type: "mouseMoved", ...rect });
     await sleep(250); await focused(".session-extensions-category:first-child");
+    assert.equal(await evaluate("document.querySelector('.session-extensions-details').getAttribute('aria-label')"), "MCP");
     await escape(); await focused(trigger);
     await key("ArrowDown");
     await key("Tab", true);
@@ -148,17 +166,25 @@ async function main() {
     }
     assert.equal(await evaluate(`!!document.querySelector('${panel}')`), false, "Forward Tab exits menu");
     assert.equal(await evaluate(`document.activeElement?.matches('${trigger}')`), false, "Forward exit preserves focus");
-    results.checks.push("keyboard-arrows-switch-back-escape-shift-tab", "hover-preserves-focus");
+    results.checks.push("keyboard-arrows-switch-left-escape-shift-tab", "hover-preserves-selection-and-focus");
   }
   async function layouts() {
-    // Electron does not expose Chrome's Browser.setWindowBounds. Exercise the
-    // renderer viewport at the supported minimum; never emulate below 720px.
-    results.layoutDriver = "CDP viewport emulation (720/1100); native window resize not checked";
+    // CDP also exercises drill-down below the native window's minimum width.
+    results.layoutDriver = "CDP viewport emulation (500/720/1100); native window resize not checked";
     const theme = await evaluate("document.documentElement.dataset.theme");
+    const waitLayout = (condition, expression) => poll(() => evaluate(expression), 30000, condition);
+    // Only geometry and fixed layout enums enter acceptance diagnostics.
+    const layoutGeometry = () => evaluate(`(() => {
+      const p=document.querySelector('${panel}'), d=document.querySelector('.session-extensions-details');
+      const rect=e=>{ if(!e) return null; const r=e.getBoundingClientRect(); return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}; };
+      return { viewport:{width:innerWidth,height:innerHeight}, layout:['columns','drill-down'].includes(p?.dataset.layout)?p.dataset.layout:null,
+        panel:rect(p), details:rect(d), body:rect(document.querySelector('.session-extensions-body')), trigger:rect(document.querySelector('${trigger}')),
+        rows:d?.querySelectorAll('li').length??0, scrollTop:d?.scrollTop??null, clientHeight:d?.clientHeight??null, scrollHeight:d?.scrollHeight??null };
+    })()`);
     try {
       for (const width of [1100, 720]) {
         await cdp.call("Emulation.setDeviceMetricsOverride", { width, height: 850, deviceScaleFactor: 1, mobile: false });
-        await poll(() => evaluate(`window.innerWidth === ${width}`));
+        await waitLayout(`columns viewport width ${width}`, `window.innerWidth === ${width}`);
         for (const theme of ["dark", "light"]) {
           await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
           await openMcp();
@@ -170,14 +196,56 @@ async function main() {
               triggerVisible:a.width>0 && a.left>=0 && a.right<=innerWidth,
               warning:!!t.querySelector('.session-extensions-warning') };
           })()`));
+          const geometry = () => evaluate(`(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return {left:r.left, top:r.top, width:r.width}; })()`);
+          const before = await geometry();
+          await click(".session-extensions-category:nth-child(3)");
+          await waitLayout("columns Skills has 25 rows", "document.querySelectorAll('.session-extensions-list li').length === 25");
+          assert.deepEqual(await geometry(), before, "Category selection keeps panel geometry");
+          const categoriesBefore = await evaluate("document.querySelector('.session-extensions-categories').getBoundingClientRect().top");
+          const point = await evaluate("(() => { const r=document.querySelector('.session-extensions-details').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()");
+          await cdp.call("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX: 0, deltaY: 10000 });
+          await waitLayout("columns scroll reaches bottom", "(() => { const d=document.querySelector('.session-extensions-details'); return d.scrollTop > 0 && d.scrollTop+d.clientHeight >= d.scrollHeight-1; })()");
+          assertDetailsScroll(await evaluate(`(() => {
+            const d=document.querySelector('.session-extensions-details'), r=d.getBoundingClientRect();
+            const last=d.querySelector('li:last-child').getBoundingClientRect(), footer=d.querySelector('footer').getBoundingClientRect();
+            return { clientHeight:d.clientHeight, scrollHeight:d.scrollHeight, scrollTop:d.scrollTop,
+              detailsHeight:r.height, bodyHeight:document.querySelector('.session-extensions-body').getBoundingClientRect().height,
+              lastVisible:last.top>=r.top && last.bottom<=r.bottom, footerVisible:footer.top>=r.top && footer.bottom<=r.bottom,
+              categoriesStable:document.querySelector('.session-extensions-categories').getBoundingClientRect().top===${categoriesBefore} };
+          })()`));
+          if (width === 1100 && theme === "dark") await shot("skills-long-scrolled");
           await shot(`layout-${width}-${theme}`); await escape();
         }
       }
+      for (const height of [600, 400]) {
+        // innerWidth can change before React handles resize. Observe the rendered
+        // transition with an open panel, then reopen in the settled narrow layout.
+        await click(trigger);
+        await cdp.call("Emulation.setDeviceMetricsOverride", { width: 500, height, deviceScaleFactor: 1, mobile: false });
+        await waitLayout(`drill-down viewport 500x${height}`, `innerWidth === 500 && innerHeight === ${height}`);
+        await waitLayout("renderer has handled drill-down resize", `document.querySelector('${panel}')?.dataset.layout === 'drill-down'`);
+        await escape();
+        await waitLayout("panel closed before narrow reopen", `!document.querySelector('${panel}')`);
+        await click(trigger);
+        assert.equal(await evaluate(`document.querySelector('${panel}').dataset.layout`), "drill-down");
+        await click('.session-extensions-category[data-extension-category="skills"]');
+        await waitLayout("drill-down Skills has 25 rows", "document.querySelectorAll('.session-extensions-list li').length === 25");
+        await waitLayout("drill-down panel fits 8px viewport insets", `(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return r.top>=8 && r.bottom<=innerHeight-8; })()`);
+        assert.equal(await evaluate(`document.querySelector('${panel}').getBoundingClientRect().width`), 484, "Drill-down details use the available width");
+        (results.drillDownLayouts ??= []).push(await layoutGeometry());
+        await shot(`drill-down-${height}`);
+        await escape();
+      }
+    } catch (error) {
+      results.layoutFailure = await layoutGeometry().catch(() => null);
+      json(join(profile, "result.json"), results);
+      await shot("layout-failure-before-reset").catch(() => {});
+      throw error;
     } finally {
       await cdp.call("Emulation.clearDeviceMetricsOverride");
       await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
     }
-    results.checks.push("720-and-1100-light-dark-layout");
+    results.checks.push("720-and-1100-light-dark-layout", "long-details-scroll-last-row-and-footer", "500-drill-down-fits-400-and-600-height");
   }
   async function shot(name) {
     const result = await cdp.call("Page.captureScreenshot", { format: "png" });
@@ -195,6 +263,8 @@ async function main() {
     return evaluate(`Array.from(document.querySelectorAll('.session-extensions-list li')).map(e => ({
       name:e.querySelector('.session-extensions-name').textContent,
       source:e.querySelector('.session-extensions-source').textContent,
+      note:e.querySelector('.session-extensions-note')?.textContent,
+      switches:e.querySelectorAll('[role=switch]').length,
       enabled:e.querySelector('[role=switch]')?.getAttribute('aria-checked') === 'true',
       status:e.querySelector('.session-extensions-status')?.textContent
     }))`);
@@ -202,7 +272,7 @@ async function main() {
   async function openMcp() {
     await click(trigger);
     await click(".session-extensions-category:first-child");
-    await poll(() => evaluate("/^\\d+$/.test(document.querySelector('.session-extensions-category:first-child [aria-live]')?.textContent ?? '') && !!document.querySelector('.session-extensions-list')"));
+    await poll(() => evaluate("/^\\d+$/.test(document.querySelector('.session-extensions-category:first-child [aria-live]')?.textContent ?? '') && !!document.querySelector('.session-extensions-list')"), 30000, "MCP configured count and list ready");
   }
   async function trustIfNeeded() {
     // A disposable project's declarations go through the normal trust decision.
@@ -312,13 +382,19 @@ async function main() {
     json(join(b, ".anycode/plugins/b-plugin/.anycode-plugin/plugin.json"), {
       manifestVersion: 1, name: "b-plugin", version: "0.1.0", mcpServers: { api: inert },
     });
-    mkdirSync(join(b, ".anycode/skills/b-skill"), { recursive: true });
-    writeFileSync(join(b, ".anycode/skills/b-skill/SKILL.md"), "---\nname: b-skill\ndescription: Local fixture skill\n---\nFixture instructions.\n");
+    // A user plugin has no implicit workspace trust and receives no saved MCP consent.
+    json(join(profile, ".anycode/plugins/pending-user/.anycode-plugin/plugin.json"), {
+      manifestVersion: 1, name: "pending-user", version: "0.1.0", mcpServers: { api: inert },
+    });
+    for (const name of ["b-skill", ...Array.from({ length: 24 }, (_, i) => `long-skill-${String(i + 1).padStart(2, "0")}`)]) {
+      mkdirSync(join(b, ".anycode/skills", name), { recursive: true });
+      writeFileSync(join(b, ".anycode/skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: Local fixture skill\n---\nFixture instructions.\n`);
+    }
     const first = await create(a);
     const second = await create(b);
     phase = "empty header";
     assert.equal(await evaluate(`document.querySelectorAll('.session-header ${trigger}').length`), 0);
-    assert.equal(await evaluate("document.querySelectorAll('.session-header .environment-trigger').length"), 0);
+    assert.equal(await evaluate("document.querySelectorAll('.session-header .environment-control-header .environment-trigger').length"), 0);
     results.checks.push("empty-header");
     phase = "Core startup";
     await turn(second, "Start local extensions fixture", true);
@@ -327,21 +403,25 @@ async function main() {
     await openMcp();
     await poll(async () => (await rows()).some(row => row.name === "healthy" && row.status === statusConnected));
     const counts = await poll(() => evaluate(`(() => {
-      const c = [...document.querySelectorAll('.session-extensions-category')].map(e => e.querySelector('[aria-live]').textContent);
+      const c = [...document.querySelectorAll('.session-extensions-category')].slice(0, 4).map(e => e.querySelector('[aria-live]').textContent);
       return c.length === 4 && c.every(v => /^\\d+$/.test(v)) ? c.map(Number) : null;
     })()`));
-    assertCounts(counts, [4, 1, 1, 1]);
+    assertCounts(counts, [5, 2, 25, 1]);
     const initial = await rows();
     assertMcpRow(initial, "healthy", "Project", true, statusConnected);
     assertMcpRow(initial, "healthy", "User", false, "Shadowed by another scope");
     assertMcpRow(initial, "broken", "Project", true, "Connection failed");
     assertMcpRow(initial, "off", "Project", false, statusUnknown);
-    assert(initial.some(row => row.source.startsWith("Plugin") && row.source.includes("Needs approval")));
+    assertPluginConsentRows(initial);
     assert(initial.some(row => row.name === "compat-only" && row.source.startsWith("Compatibility")));
     const display = await evaluate(`document.querySelector('${panel}').outerHTML`);
     for (const sentinel of ["env-value-private-sentinel", "missing-command-sentinel", "fixture-server.mjs"])
       assert(!display.includes(sentinel), "Private fixture fields must not enter menu DOM");
     await shot("startup-failure");
+    await click('.session-extensions-category[data-extension-category="skills"]');
+    await poll(() => evaluate("document.querySelector('.session-extensions-details')?.getAttribute('aria-label') === 'Skills' && document.querySelector('.session-extensions-name')?.textContent === 'b-skill'"));
+    await shot("skills-final");
+    await click('.session-extensions-category[data-extension-category="mcp"]');
     results.checks.push("counts-scopes-statuses", "closed-menu-failure", "display-redaction");
     await escape();
     phase = "keyboard navigation"; await keyboard();
@@ -368,7 +448,9 @@ async function main() {
     assert((await rows()).some(row => row.name === "a-only"));
     assert(!(await rows()).some(row => row.name === "broken"));
     await click(".session-extensions-category:nth-child(2)");
-    await poll(() => evaluate("document.querySelector('.session-extensions-details')?.textContent.includes('No configured entries.')"));
+    await poll(() => evaluate("document.querySelector('.session-extensions-details .session-extensions-name')?.textContent === 'pending-user'"));
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.session-extensions-details .session-extensions-name')].map(e => e.textContent)"),
+      ["pending-user"], "Project A sees only the global plugin, not project B's plugin");
     await shot("project-a-isolation");
     await escape();
     await api(`/tabs/${second.tabId}/select`, "POST", {});
@@ -400,11 +482,7 @@ async function main() {
       await openMcp();
       assertMcpRow(await rows(), "healthy", "Project", false, statusUnknown);
       assert.equal(await evaluate(`document.querySelectorAll('${panel} .tone-success').length`), 0);
-      const readonly = await evaluate(`(() => {
-        const row=[...document.querySelectorAll('.session-extensions-list li')].find(e=>e.querySelector('.session-extensions-source')?.textContent.startsWith('Plugin'));
-        return { reason:row?.textContent.includes('Needs approval in Plugins'), switches:row?.querySelectorAll('[role=switch]').length };
-      })()`);
-      assertConsentPending(readonly);
+      assertPluginConsentRows(await rows());
       await shot(`${engine}-consent-pending`);
       await click(".session-extensions-category:nth-child(4)");
       assertNativeUnavailable(await evaluate(`({ text:document.querySelector('.session-extensions-details').textContent,
@@ -414,10 +492,10 @@ async function main() {
       await shot(`${engine}-lsp-unavailable`);
       for (const index of [2, 3]) {
         await click(`.session-extensions-category:nth-child(${index})`);
-        assert(await evaluate("document.querySelector('.session-extensions-details').textContent.includes('Availability in the current engine is not confirmed')"));
+        assert(await evaluate("document.querySelector('.session-extensions-details').textContent.includes('Saved in AnyCode; this engine may not load these entries')"));
       }
       const counts = await evaluate("[...document.querySelectorAll('.session-extensions-category [aria-live]')].map(e=>Number(e.textContent))");
-      assertCounts(counts, [4, 1, 1, 1]);
+      assertCounts(counts, [5, 2, 25, 1]);
       assert.equal(readFileSync(configPath, "utf8"), unchanged, "Unsupported and consent-pending navigation cannot write config");
       await escape(); results.checks.push(`${engine}-catalog-unknown-readonly-unsupported`);
     }
