@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import { Button } from "../ui/components/Button.js";
+import { Button, SearchInput } from "../ui/index.js";
 import { GitBranch, Spinner } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 
@@ -44,7 +44,8 @@ export function EnvironmentBranchPicker({ back, retry, switched }: {
   const [active, setActive] = useState(0);
   const id = useId();
   const list = useRef<HTMLDivElement>(null);
-  const matching = (branches ?? []).filter(b => !b.current && b.name !== status?.head.branch && b.name.toLowerCase().includes(filter.toLowerCase()));
+  const query = filter.trim().toLowerCase();
+  const matching = (branches ?? []).filter(b => !b.current && b.name !== status?.head.branch && b.name.toLowerCase().includes(query));
   const names = [status ? gitPillLabel(status) : null, ...(!loading && !error ? matching.map(b => b.name) : [])].filter((n): n is string => n !== null);
   const index = Math.min(active, Math.max(0, names.length - 1));
   useEffect(() => { list.current?.querySelector('[data-active="true"]')?.scrollIntoView?.({ block: "nearest" }); }, [index, filter]);
@@ -59,7 +60,7 @@ export function EnvironmentBranchPicker({ back, retry, switched }: {
   return <section className="environment-branch-picker" aria-label="Switch branch">
     <div className="environment-menu-actions">
       <Button variant="ghost" size="sm" aria-label="Back" disabled={phase === "pending"} onClick={back}>‹</Button>
-      <span>Switch branch</span>
+      <h3>Switch branch · {branches?.length ?? "…"}</h3>
     </div>
     {phase === "warning" && <div role="alert" className="environment-switch-warning">
       <strong>{status?.dirtyCount} uncommitted changes</strong>
@@ -74,10 +75,10 @@ export function EnvironmentBranchPicker({ back, retry, switched }: {
       <div>{switchError}</div>
       <Button variant="secondary" size="sm" onClick={() => performSwitch(target!)}>Retry</Button>
     </div>}
-    <input disabled={locked} className="environment-menu-text-input" aria-label="Filter branches" placeholder="Filter branches"
+    <SearchInput label="Filter branches" disabled={locked} className="environment-menu-text-input" aria-label="Filter branches" placeholder="Filter branches"
       role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls={id}
-      aria-activedescendant={names.length ? `${id}-${index}` : undefined} value={filter}
-      onChange={e => { setFilter(e.target.value); setActive(0); }}
+      aria-describedby={`${id}-hint`} aria-activedescendant={names.length ? `${id}-${index}` : undefined} value={filter}
+      onValueChange={value => { setFilter(value); setActive(value.trim() ? 1 : 0); }}
       onKeyDown={e => {
         if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault(); setActive(Math.max(0, Math.min(names.length - 1, index + (e.key === "ArrowDown" ? 1 : -1))));
@@ -92,6 +93,7 @@ export function EnvironmentBranchPicker({ back, retry, switched }: {
     </div>
     {loading || (!error && branches === null) ? <div role="status" className="environment-menu-note">Loading branches…</div>
       : error ? <div role="alert" className="environment-menu-note">Couldn't list branches: {error} <Button variant="ghost" size="sm" disabled={locked} onClick={retry}>Retry</Button></div>
-      : !matching.length && <div className="environment-menu-note">No branches match</div>}
+      : !matching.length && <div className="environment-menu-note">{query ? "No branches match" : "No other branches"}</div>}
+    <div id={`${id}-hint`} className="environment-menu-note">↑↓ · Enter · Esc</div>
   </section>;
 }

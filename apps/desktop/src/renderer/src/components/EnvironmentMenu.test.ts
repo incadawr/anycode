@@ -283,7 +283,7 @@ it("shows loading, list error and Retry, then empty results", async () => {
     expect(host.textContent).toContain("Loading branches…");
     const retry = Object.entries(store.getState().git.pending).find(([, p]) => p.kind === "branches")![0];
     await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: retry, outcome: { ok: true, kind: "branches", branches: [] } }));
-    expect(host.textContent).toContain("No branches match");
+    expect(host.textContent).toContain("No other branches");
   });
 });
 
@@ -404,5 +404,51 @@ it.each([true, false])("ignores a stale switch result after close/reopen (succes
     expect(host.querySelector('[role="option"][aria-busy="true"]')).not.toBeNull();
     await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: current.requestId, outcome: { ok: true, kind: "unit" } }));
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+async function filterBranches(host: HTMLElement, value: string) {
+  const input = host.querySelector("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  return input;
+}
+it("trims the filter and Enter switches the first match without an arrow key", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    expect(host.querySelector('h3')?.textContent).toBe("Switch branch · 3");
+    expect(host.textContent).toContain("↑↓ · Enter · Esc");
+    const input = await filterBranches(host, "  TOPIC/A  ");
+    expect(host.querySelector('[aria-label="Matching"]')?.textContent).toBe("Matching · 1topic/a");
+    expect(document.getElementById(input.getAttribute("aria-activedescendant")!)?.textContent).toBe("topic/a");
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(switchRequest(send).command).toEqual({ op: "switch_branch", name: "topic/a" });
+  });
+});
+it("distinguishes empty branches from a filter with no matches and treats spaces as empty", async () => {
+  await branchMenu(async (host, store) => {
+    await readyBranches(store);
+    await filterBranches(host, "   ");
+    expect(host.querySelectorAll('[aria-label="Matching"] [role="option"]')).toHaveLength(2);
+    await filterBranches(host, "absent");
+    expect(host.textContent).toContain("No branches match");
+    await filterBranches(host, "");
+    await act(async () => store.setState({ git: { ...store.getState().git, branches: [branchItems[1]!] } }));
+    expect(host.textContent).toContain("No other branches");
+  });
+});
+it("clears a branch-list error when reopening the menu", async () => {
+  await branchMenu(async (host, store) => {
+    const requestId = Object.entries(store.getState().git.pending).find(([, p]) => p.kind === "branches")![0];
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId, outcome: { ok: false, reason: "Old list failure" } }));
+    expect(host.textContent).toContain("Old list failure");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
+    expect(store.getState().git.branchesError).toBeNull();
+    expect(host.textContent).not.toContain("Old list failure");
+    expect(host.textContent).toContain("Loading branches…");
   });
 });

@@ -14,7 +14,7 @@ import { TabContext } from "../tab-context.js";
 import { handleErrorText, sessionApprovalsLabel, sessionSwitchDetail, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
-import { Switch } from "../ui/components/Switch.js";
+import { Switch } from "../ui/index.js";
 import { Robot } from "./icons.js";
 
 export interface SessionAccessBridge {

@@ -15,7 +15,7 @@ import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-cont
 import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
-import { Button } from "../ui/components/Button.js";
+import { Button } from "../ui/index.js";
 import { EnvironmentBranchPicker } from "./EnvironmentBranchPicker.js";
 import { gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";

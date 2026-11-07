@@ -10,7 +10,7 @@
  * "Export" -> review -> "Save bundle…".
  */
 
-import { Button } from "../ui/components/Button.js";
+import { Button } from "../ui/index.js";
 import { useContext, useState } from "react";
 import { TabContext } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";

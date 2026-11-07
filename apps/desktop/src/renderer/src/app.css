@@ -1906,7 +1906,6 @@ button.environment-menu-row:hover,
   white-space: nowrap;
 }
 
-.environment-menu-chevron,
 .environment-menu-open {
   flex-shrink: 0;
   color: var(--text-3);
@@ -1996,14 +1995,6 @@ button.environment-menu-row:hover,
   outline: none;
 }
 
-.environment-menu-chevron {
-  transition: transform var(--dur-1) var(--ease-out);
-}
-
-.environment-menu-chevron-open {
-  transform: rotate(180deg);
-}
-
 .environment-branches {
   display: flex;
   flex-direction: column;
@@ -2020,6 +2011,7 @@ button.environment-menu-row:hover,
 }
 
 .environment-branch-row-current {
+  cursor: default;
   color: var(--text-1);
 }
 
@@ -2032,6 +2024,12 @@ button.environment-menu-row:hover,
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+}
+
+.environment-branch-picker h3 {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
 }
 
 .environment-branch-picker .environment-menu-actions {

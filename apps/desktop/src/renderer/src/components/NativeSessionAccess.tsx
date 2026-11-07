@@ -2,8 +2,7 @@ import { useEffect, useState } from "react";
 import type { SessionPeerBridge, SessionPeerChange, SessionPeerView } from "../../../shared/session-peer-view.js";
 import { nativeAccessText as text } from "./session-peer-model.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
-import { Button } from "../ui/components/Button.js";
-import { Switch } from "../ui/components/Switch.js";
+import { Button, Switch } from "../ui/index.js";
 import { Robot } from "./icons.js";
 
 export function NativeSessionAccess({ tabId, bridge = window.anycode.sessionPeers }: { tabId: string; bridge?: SessionPeerBridge }) {

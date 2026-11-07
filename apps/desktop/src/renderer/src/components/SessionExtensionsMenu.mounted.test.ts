@@ -120,16 +120,16 @@ it("cleans overlay on tab switch and unmount without stealing focus", async () =
 it("matches header environment visibility and preserves the new-session composer environment", async () => {
   await render();
   expect(trigger()).not.toBeNull();
-  expect(container.querySelector('[aria-label="Open environment menu"]')).not.toBeNull();
+  expect(container.querySelectorAll('.environment-trigger')).toHaveLength(1);
   await act(async () => store.setState({ transcript: [] }));
   expect(trigger()).toBeNull();
-  expect(container.querySelector('[aria-label="Open environment menu"]')).toBeNull();
+  expect(container.querySelector('.environment-trigger')).toBeNull();
   await render("a", createElement(EnvironmentMenu, { placement: "composer" }));
-  expect(container.querySelector('[aria-label="Open environment menu"]')).not.toBeNull();
+  expect(container.querySelectorAll('.environment-trigger')).toHaveLength(1);
   await act(async () => store.setState({ workspace: null }));
   await render();
   expect(trigger()).toBeNull();
-  expect(container.querySelector('[aria-label="Open environment menu"]')).toBeNull();
+  expect(container.querySelector('.environment-trigger')).toBeNull();
   await act(async () => store.setState({ transcript: [{ kind: "user", text: "Hello" } as never] }));
   expect(trigger()).toBeNull();
 });

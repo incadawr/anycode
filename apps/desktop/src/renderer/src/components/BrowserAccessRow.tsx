@@ -14,7 +14,7 @@ import type {
 } from "../../../shared/browser-access.js";
 import { ConfirmDialog, type ConfirmDialogRequest } from "./ConfirmDialog.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
-import { Switch } from "../ui/components/Switch.js";
+import { Switch } from "../ui/index.js";
 import { Globe } from "./icons.js";
 
 export interface BrowserAccessBridge {
