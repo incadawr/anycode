@@ -78,6 +78,7 @@ import { ConfirmDialog } from "./ConfirmDialog.js";
 // layers (rows + verbs). None of it is re-derived here — this file only wires
 // the running tab's own axes (its pin, its live model/effort) into them.
 import { connectionDisplayName } from "./ConnectionTile.js";
+import { ConnectionIcon } from "./ConnectionIcon.js";
 import { ModelDrillMenu } from "./model-drill-menu.js";
 import {
   buildSessionDrillRows,
@@ -1164,6 +1165,7 @@ export function ModelPill() {
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onChipKeyDown}
       >
+        <ConnectionIcon connection={targetConnection} providerName={snapshot?.catalog?.find(p => p.id === targetConnection?.providerId)?.name ?? "Custom"} />
         <span className="model-pill-label">{label}</span>
         {/* Audit C6: plainly says WHEN a pick lands — and only once there IS a
             pick waiting for the turn boundary. A bare running turn renders no
@@ -1200,6 +1202,8 @@ export function ModelPill() {
               available above the chip, a MAX never a height, so a short level
               renders with no scrollbar at all (DoD 5). */}
           <ModelDrillMenu
+            connections={snapshot?.settings.provider.connections}
+            providerCatalog={snapshot?.catalog}
             catalogs={accountCatalogs}
             bindings={snapshot?.settings.plugins?.accountSources}
             rows={drill.rows}

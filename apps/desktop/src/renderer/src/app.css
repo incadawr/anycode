@@ -9066,3 +9066,12 @@ dialog.role-picker-dialog {
   justify-content: space-between;
 }
 .environment-diagnostics-link > :first-child { text-decoration: underline; text-underline-offset: 3px; }
+
+.connection-icon {
+  width: 16px; height: 16px; flex: 0 0 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 5px; font-size: 8.5px; font-weight: 600; line-height: 1;
+  color: color-mix(in srgb, var(--connection-icon-color) 82%, var(--text-1));
+  background: color-mix(in srgb, var(--connection-icon-color) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--connection-icon-color) 28%, transparent);
+}

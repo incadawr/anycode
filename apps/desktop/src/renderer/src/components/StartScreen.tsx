@@ -89,6 +89,7 @@ import {
 // component both pickers render (this screen and a running session's chip) —
 // the rows, the level and the placement are still decided here, since which
 // pair a DRAFT means is this screen's business alone.
+import { ConnectionIcon } from "./ConnectionIcon.js";
 import { ModelDrillMenu } from "./model-drill-menu.js";
 import type { ModelDrillPage, ModelDrillRow } from "./model-drill-rows.js";
 import { ModeMenu, nextRovingIndex } from "./ModeMenu.js";
@@ -1856,6 +1857,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                 onClick={() => setModelMenuOpen((open) => !open)}
                 onKeyDown={onModelChipKeyDown}
               >
+                <ConnectionIcon connection={chipConnection} providerName={snapshot?.catalog?.find(p => p.id === chipConnection?.providerId)?.name ?? "Custom"} />
                 <span className="model-pill-label">{modelChipLabel}</span>
                 <Chevron className="model-pill-chevron" />
               </button>
@@ -1866,6 +1868,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   renders too, so neither picker can drift from the other. */}
               {modelMenuOpen && (
                 <ModelDrillMenu
+                  connections={snapshot?.settings.provider.connections}
+                  providerCatalog={snapshot?.catalog}
             catalogs={accountCatalogs}
             bindings={snapshot?.settings.plugins?.accountSources}
                   rows={modelMenuRows}

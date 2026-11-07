@@ -20,11 +20,12 @@
  * environment that renders nothing.
  */
 import { Fragment } from "react";
+import { ConnectionIcon } from "./ConnectionIcon.js";
 import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactElement } from "react";
 import { Check, Chevron } from "./icons.js";
 import { modelDrillEffortLabel, type ModelDrillPage, type ModelDrillRow } from "./model-drill-rows.js";
 import type { AccountSourcesSnapshot } from "../../../shared/account-sources.js";
-import type { AnycodeSettings } from "../../../shared/settings.js";
+import type { ProviderConnection, CatalogSummary, AnycodeSettings } from "../../../shared/settings.js";
 
 function dollarsPerMillion(micros: string): string {
   const n = BigInt(micros);
@@ -36,6 +37,8 @@ export interface ModelDrillMenuProps {
   /** The rows of the level currently on screen — a flat list, one roving-focus index across all of them. */
   catalogs?: AccountSourcesSnapshot["catalogs"];
   bindings?: NonNullable<AnycodeSettings["plugins"]>["accountSources"];
+  connections?: readonly ProviderConnection[];
+  providerCatalog?: CatalogSummary;
   rows: readonly ModelDrillRow[];
   /** Which level those rows belong to; also the popover's `data-level` attribute. */
   page: ModelDrillPage;
@@ -86,6 +89,12 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
    * DRILL-IN (`.start-model-row` — name, value, chevron), the same two shapes
    * ModelPill's own popover has always used.
    */
+  function iconFor(connectionId: string): ReactElement {
+    const connection = props.connections?.find(c => c.id === connectionId);
+    const providerName = props.providerCatalog?.find(p => p.id === connection?.providerId)?.name ?? "Custom";
+    return <ConnectionIcon connection={connection} providerName={providerName} />;
+  }
+
   function renderRow(row: ModelDrillRow, index: number): ReactElement {
     const attach = (el: HTMLButtonElement | null): void => {
       itemRefs.current[index] = el;
@@ -104,6 +113,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
           data-model-count={row.count}
           onClick={() => props.onActivateRow(row)}
         >
+          {iconFor(row.connectionId)}
           <span className="start-model-row-name">{row.label}</span>
           {/* D2: the baseUrl host, shown only when two connections' auto-labels collide. */}
           {row.subtitle !== undefined && <span className="start-model-row-sub">{row.subtitle}</span>}
@@ -150,6 +160,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
         <span className="start-model-item-check" aria-hidden="true">
           {current ? <Check /> : null}
         </span>
+        {row.kind !== "effort" && iconFor(row.connectionId)}
         <span className="start-model-item-name">
           {row.kind === "effort" ? modelDrillEffortLabel(row.value) : row.name}
         </span>
@@ -178,6 +189,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
       {page.kind !== "root" && (
         <button type="button" className="start-model-back" onClick={props.onBack}>
           <Chevron className="start-model-back-chevron" />
+          {page.kind === "group" && iconFor(page.connectionId)}
           {backLabel ?? "Models"}
         </button>
       )}
