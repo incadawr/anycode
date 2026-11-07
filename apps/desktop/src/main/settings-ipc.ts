@@ -1,3 +1,4 @@
+import { CONNECTION_ICON_COLORS } from "../shared/connection-icon.js";
 import { automaticGoBootRoute } from "./go-route.js";
 import { homedir } from "node:os";
 import { resolveWriteMask } from "@anycode/core/permissions/write-mask-node";
@@ -437,7 +438,7 @@ const connectionCreateSchema = z
     pricing: connectionPricingSchema.optional(),
     label: z.string().optional(),
     iconText: z.string().max(8).refine(value => Array.from(value.trim()).length <= 2).optional(),
-    iconColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+    iconColor: z.enum(CONNECTION_ICON_COLORS).optional(),
     model: z.string().optional(),
     transport: transportEnum.optional(),
     baseUrl: z.string().optional(),
@@ -490,7 +491,7 @@ const connectionUpdateSchema = z
     id: z.string().min(1),
     label: z.string().optional(),
     iconText: z.string().max(8).refine(value => Array.from(value.trim()).length <= 2).optional(),
-    iconColor: z.union([z.string().regex(/^#[0-9a-fA-F]{6}$/), z.literal("")]).optional(),
+    iconColor: z.union([z.enum(CONNECTION_ICON_COLORS), z.literal("")]).optional(),
     model: z.string().optional(),
     // `""` sentinel (§3): clears an explicit transport back to catalog
     // default. `connectionCreateSchema` deliberately does NOT get this union
@@ -2078,8 +2079,14 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         ? { lastHealth: { status: "unchecked" as const, at: (deps.now ?? defaultNowIso)() } }
         : {}),
     };
-    if (req.iconText !== undefined) { if (req.iconText.trim()) updatedConnection.iconText = req.iconText.trim(); else delete updatedConnection.iconText; }
-    if (req.iconColor !== undefined) { if (req.iconColor) updatedConnection.iconColor = req.iconColor; else delete updatedConnection.iconColor; }
+    if (req.iconText !== undefined) {
+      if (req.iconText.trim()) updatedConnection.iconText = req.iconText.trim();
+      else delete updatedConnection.iconText;
+    }
+    if (req.iconColor !== undefined) {
+      if (req.iconColor) updatedConnection.iconColor = req.iconColor;
+      else delete updatedConnection.iconColor;
+    }
     if (req.visibleModels !== undefined) {
       if (req.visibleModels === "") delete updatedConnection.visibleModels;
       else updatedConnection.visibleModels = [...new Set(req.visibleModels)];

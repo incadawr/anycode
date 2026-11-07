@@ -1870,8 +1870,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
                 <ModelDrillMenu
                   connections={snapshot?.settings.provider.connections}
                   providerCatalog={snapshot?.catalog}
-            catalogs={accountCatalogs}
-            bindings={snapshot?.settings.plugins?.accountSources}
+                  catalogs={accountCatalogs}
+                  bindings={snapshot?.settings.plugins?.accountSources}
                   rows={modelMenuRows}
                   page={modelMenuPage}
                   placement={modelMenuPlacement}

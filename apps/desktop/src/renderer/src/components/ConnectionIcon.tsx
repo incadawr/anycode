@@ -1,7 +1,8 @@
 import type { CSSProperties, ReactElement } from "react";
 import type { ProviderConnection } from "../../../shared/settings.js";
 
-export const CONNECTION_ICON_COLORS = ["#8B90A0", "#5B8DEF", "#2FA8C9", "#5E9E6E", "#D2A044", "#E0743C", "#C4584F", "#8B7CF6"] as const;
+import { CONNECTION_ICON_COLORS } from "../../../shared/connection-icon.js";
+export { CONNECTION_ICON_COLORS } from "../../../shared/connection-icon.js";
 
 export function connectionIconDefaults(connection: ProviderConnection, providerName: string): { text: string; color: string } {
   const name = connection.label?.trim() || providerName.trim() || "Custom";

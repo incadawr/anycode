@@ -221,12 +221,13 @@ describe("StartScreen — Claude draft effort menu", () => {
 it("shows no selected effort for an untouched core draft with a custom vocabulary", async () => {
   const settings = cloneDefaults();
   settings.provider.activeConnectionId = "c";
-  settings.provider.connections = [{ id:"c", providerId:"custom:test", model:"unknown", modelOverrides:{unknown:{effortLevels:["low", "high"]}} }];
+  settings.provider.connections = [{ id:"c", providerId:"custom:test", iconText:"XY", model:"unknown", modelOverrides:{unknown:{effortLevels:["low", "high"]}} }];
   useSettingsStore.setState({ snapshot: {settings, readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[]} });
   useTabsStore.setState({ draft: {workspace:"/ws", prompt:"", engine:"core", model:null, mode:"build"} });
   const { container, root } = await mountStartScreen();
   try {
     const chip = container.querySelector<HTMLButtonElement>("button.model-pill-chip")!;
+    expect(chip.querySelector(".connection-icon")?.textContent).toBe("XY");
     expect(chip.textContent).not.toMatch(/low|high/i);
     await act(async () => chip.click());
     const effort = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Effort"))!;

@@ -5528,4 +5528,7 @@ it("persists and clears connection icon overrides", async () => {
   expect(cleared.iconText).toBeUndefined();
   expect(cleared.iconColor).toBeUndefined();
   expect((await handleConnectionUpdate(deps, {id:"conn-1", iconText:"ABC"})).ok).toBe(false);
+  expect((await handleConnectionUpdate(deps, {id:"conn-1", iconColor:"#123456"})).ok).toBe(false);
+  expect((await handleConnectionCreate(deps, {providerId:"z-ai", iconText:"ABC"})).ok).toBe(false);
+  expect((await handleConnectionCreate(deps, {providerId:"z-ai", iconColor:"#123456"})).ok).toBe(false);
 });

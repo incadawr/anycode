@@ -1,3 +1,4 @@
+import { CONNECTION_ICON_COLORS } from "../shared/connection-icon.js";
 import { CLAUDE_EFFORT_LEVELS } from "../shared/claude-effort.js";
 /**
  * zod schema + migration skeleton for ~/.anycode/settings.json (design
@@ -239,7 +240,7 @@ const connectionSchema = z.object({
   providerId: z.string(),
   label: z.string().optional(),
   iconText: z.string().max(8).refine(value => Array.from(value.trim()).length <= 2).optional().catch(undefined),
-  iconColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().catch(undefined),
+  iconColor: z.enum(CONNECTION_ICON_COLORS).optional().catch(undefined),
   model: z.string().optional(),
   transport: transportSchema.optional(),
   baseUrl: z.string().optional(),

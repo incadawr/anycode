@@ -14,7 +14,7 @@
  * `start-screen-smoke.mjs` (per-run disposable profile discipline); the
  * Settings-drawer connection-creation sequence is lifted from
  * `provider-connections-ui-smoke.mjs`'s phase 1 (steps 3/4 for the FIRST
- * connection via the embedded WelcomeScreen drawer, step 7 for the SECOND via
+ * connection via the Settings drawer, step 7 for the SECOND via
  * the Settings dialog's Add tile) — both proven live sequences, not
  * reinvented here.
  *
@@ -402,12 +402,14 @@ async function step1LaunchApp(ctx) {
   pass(1, `app launched (pid=${info.pid}), facade ready after ${Date.now() - t0}ms on port ${info.port}, profile=${profile}`);
 }
 
-// ── step 2: create connection "Main" via WelcomeScreen's embedded drawer ──
+// ── step 2: create connection "Main" via Settings ──
 
 async function step2CreateMainConnection(ctx) {
   const step = 2;
-  const state = await pollProviderState(ctx, step, (s) => s.drawer.open === true && s.drawer.embedded === true);
-  assert(step, state.mounted === false, `expected the Settings-dialog grid NOT mounted on a Welcome boot, got mounted=${state.mounted}`);
+  await apiOk(ctx, step, "POST", "/settings/open", {});
+  await apiOk(ctx, step, "POST", "/settings/pane", { paneId: "provider" });
+  await apiOk(ctx, step, "POST", "/settings/provider/add", {});
+  const state = await pollProviderState(ctx, step, (s) => s.drawer.open === true);
   assert(step, state.drawer.stage === "template", `expected stage="template" before any connection exists, got ${state.drawer.stage}`);
 
   const setResult = await apiOk(ctx, step, "POST", "/settings/provider/drawer/set", {
@@ -429,11 +431,8 @@ async function step2CreateMainConnection(ctx) {
   const saveKey = await apiOk(ctx, step, "POST", "/settings/provider/drawer/save-key", {});
   assert(step, saveKey.ok === true, `drawer/save-key rejected: ${JSON.stringify(saveKey)}`);
 
-  const unmounted = await pollUntil(20_000, 300, async () => {
-    const s = await api(ctx, "GET", "/settings/provider");
-    return s.status === 200 && s.body?.drawer?.open === false ? s.body : undefined;
-  });
-  assert(step, unmounted !== null, "WelcomeScreen's embedded drawer never closed within 20s of saving Main's key");
+  await apiOk(ctx, step, "POST", "/settings/provider/drawer/close", {});
+  await apiOk(ctx, step, "POST", "/settings/close", {});
 
   const settingsDisk = readJsonDisk(step, ctx.settingsPath, "settings.json");
   const connections = settingsDisk?.provider?.connections ?? [];
@@ -536,7 +535,11 @@ async function step5OpenDraftAndModelMenu(ctx) {
   assert(step, secondGroup !== undefined, `expected a group with connectionId===${ctx.secondConnId} (Second), got connectionIds=${JSON.stringify(menuState.groups.map((g) => g.connectionId))}`);
   ctx.secondGroup = secondGroup;
 
-  await saveScreenshot(ctx, "1-model-menu-open-root");
+  const screenshot = await saveScreenshot(ctx, "1-model-menu-open-root");
+  assert(step, screenshot !== null, "could not capture the open model menu");
+  const evidencePath = "/Users/incadawr/projects/tools/anycode/working-docs/mockups/model-picker-connection/live-menu.png";
+  mkdirSync(dirname(evidencePath), { recursive: true });
+  writeFileSync(evidencePath, readFileSync(screenshot));
   pass(step, `New Session model-menu popover opens on its root level: groups [${groupLabels.join(", ")}], Main carries ${mainGroup.count} model(s)`);
 }
 

@@ -923,5 +923,13 @@ it("mounts connection icons for model and group rows", async () => {
     await act(async () => root.render(createElement(ModelDrillMenu, {connections:[connection], rows:[{kind:"popular",connectionId:"icon",modelId:"m",name:"Model",groupLabel:"Work",current:true},{kind:"group",connectionId:"icon",label:"Work",subtitle:undefined,count:1}], page:{kind:"root"}, placement:null, backLabel:null, focusIndex:0, emptyText:"Empty", itemRefs:{current:[]}, onKeyDown:()=>{}, onActivateRow:()=>{}, onBack:()=>{}, onAddConnection:()=>{}, isCurrentConnection:()=>true})));
     expect([...container.querySelectorAll(".connection-icon")].map(el => el.textContent)).toEqual(["WX", "WX"]);
     expect(container.querySelector('[data-model-id="m"] .start-model-item-sub')).toBeNull();
+    const props = {connections:[connection], rows:[{kind:"popular" as const,connectionId:"icon",modelId:"m",name:"Model",groupLabel:"Work",current:false}], page:{kind:"root" as const}, placement:null, backLabel:null, focusIndex:0, emptyText:"Empty", itemRefs:{current:[]}, onKeyDown:()=>{}, onActivateRow:()=>{}, onBack:()=>{}, onAddConnection:()=>{}, isCurrentConnection:()=>false};
+    await act(async () => root.render(createElement(ModelDrillMenu, props)));
+    expect(container.querySelector('[data-model-id="m"] .start-model-item-sub')?.textContent).toBe("Work");
+    await act(async () => root.render(createElement(ModelDrillMenu, {...props, page:{kind:"group",connectionId:"icon"}, rows:[{kind:"model",connectionId:"icon",modelId:"m",name:"Model",current:false}]})));
+    expect(container.querySelector('.start-model-back .connection-icon')?.textContent).toBe("WX");
+    expect(container.querySelector('[data-model-id="m"] .connection-icon')?.textContent).toBe("WX");
+    const { connectionIconDefaults } = await import("./ConnectionIcon.js");
+    expect(connectionIconDefaults({id:"x",providerId:"z-ai"}, "Zed AI").text).toBe("ZA");
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
