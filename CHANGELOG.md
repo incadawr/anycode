@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Connection icons in the model picker and the composer model chip, with an editable monogram and color for each connection.
+
 ### Fixed
 
 - Keep open settings and connection edits when a newly available engine moves the app past the welcome screen.
