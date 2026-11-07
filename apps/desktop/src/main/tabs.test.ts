@@ -1,3 +1,4 @@
+import type { ChildWorktreeReceipt, ChildWorktreeSnapshot } from "./child-worktree-resource.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
 /**
@@ -9285,5 +9286,166 @@ describe("peer host permission authority", () => {
     expect(hosts[2]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "send", result: { status: "refused" } });
     expect(send).toHaveBeenCalledTimes(1);
     await manager.shutdownAllTabHosts();
+  });
+});
+
+
+describe("Agent managed worktree admission", () => {
+  function rig(engine: EngineId = "core", overrides: Partial<TabHostManagerDeps> = {}) {
+    const live = shutdownableForkRig();
+    const fork = vi.fn(live.fork);
+    const snapshot: ChildWorktreeSnapshot = { sourceRoot: "/ws", storageRoot: "/ws", projectRoot: "/project", baseSha: "a".repeat(40) };
+    const receipt: ChildWorktreeReceipt = { ...snapshot, version: 1, id: "resource", appRunId: "run",
+      parentSessionId: "parent", childSessionId: "child", path: "/ws/.anycode/worktrees/child-resource",
+      branch: "anycode-wt/child-resource", phase: "active", reason: null };
+    const resources = { snapshot: vi.fn(async () => snapshot), allocate: vi.fn(async () => receipt),
+      update: vi.fn(async (_r: ChildWorktreeReceipt, phase: ChildWorktreeReceipt["phase"], reason: string) => ({ ...receipt, phase, reason })) };
+    const manager = childManager(fork, windowRig().window, { childWorktrees: resources, engineReady: () => true, ...overrides });
+    const root = manager.createTab({ workspace: "/ws", projectRoot: "/project", sessionId: "parent", engine, resume: false });
+    if (!root.ok) throw new Error("fixture root refused");
+    root.tab.childWorktreePolicy = true;
+    return { manager, tab: root.tab, host: live.hosts[0]!, fork, resources, receipt };
+  }
+
+  it.each(["core", "claude", "codex"] as const)("%s parent forks Core in allocated cwd, preserving projectRoot and stamping marker", async engine => {
+    const r = rig(engine);
+    r.host.emit("message", spawnRequest());
+    await flush();
+    expect(r.resources.snapshot).toHaveBeenCalledWith("/ws", "/project");
+    expect(r.fork.mock.calls[1]?.[2]).toMatchObject({ cwd: r.receipt.path, env: { ANYCODE_MANAGED_CHILD_WORKTREE: "1" } });
+    const accepted = childRunEvents(r.host).find(e => e.kind === "accepted");
+    expect(accepted?.kind === "accepted" && r.manager.getTab(accepted.childTabId)).toMatchObject({
+      workspace: r.receipt.path, projectRoot: "/project", childWorktree: r.receipt });
+  });
+
+  it("OFF keeps the old cwd and clears an inherited marker", async () => {
+    const r = rig("core", { env: () => ({ ANYCODE_MANAGED_CHILD_WORKTREE: "1" }) });
+    delete r.tab.childWorktreePolicy;
+    r.host.emit("message", spawnRequest());
+    await flush();
+    expect(r.resources.snapshot).not.toHaveBeenCalled();
+    expect(r.fork.mock.calls[1]?.[2]).toMatchObject({ cwd: "/ws", env: { ANYCODE_MANAGED_CHILD_WORKTREE: "" } });
+  });
+
+  it.each(["claude", "codex"] as const)("refuses %s child before allocation", async engine => {
+    const r = rig();
+    r.host.emit("message", spawnRequest({ engine }));
+    await flush();
+    expect(r.resources.allocate).not.toHaveBeenCalled();
+    expect(r.fork).toHaveBeenCalledTimes(1);
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "rejected", reason: "not_ready" }));
+  });
+
+  it.each(["helper", "non-git", "add"])("refuses %s failure without shared cwd fallback or reservation leak", async failure => {
+    const r = rig("core", failure === "helper" ? { childWorktrees: undefined } : {});
+    if (failure === "non-git") r.resources.snapshot.mockRejectedValue(new Error("requires Git"));
+    if (failure === "add") r.resources.allocate.mockRejectedValue(new Error("allocation retained in receipt"));
+    r.host.emit("message", spawnRequest());
+    await flush();
+    expect(r.fork).toHaveBeenCalledTimes(1);
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "rejected", reason: "not_ready" }));
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+  });
+
+  it.each(["cancel", "close", "generation"])("late add after %s never forks and retains the receipt", async action => {
+    const r = rig();
+    let resolve!: (value: ChildWorktreeReceipt) => void;
+    r.resources.allocate.mockReturnValue(new Promise(res => { resolve = res; }));
+    const req = spawnRequest();
+    r.host.emit("message", req);
+    await flush();
+    expect(r.manager.listChildRuns()).toHaveLength(1);
+    if (action === "cancel") r.host.emit("message", runCancel(req.requestId));
+    if (action === "close") {
+      r.manager.createTab({ workspace: "/other", sessionId: "other", resume: false });
+      expect(await r.manager.closeTab(r.tab.tabId)).toMatchObject({ ok: true });
+    }
+    if (action === "generation") r.tab.hostGeneration += 1;
+    const beforeLateAdd = r.fork.mock.calls.length;
+    resolve(r.receipt);
+    await flush();
+    expect(r.fork).toHaveBeenCalledTimes(beforeLateAdd);
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+    expect(r.resources.update).toHaveBeenCalledWith(r.receipt, "retained", expect.any(String));
+  });
+
+  it.each(["fork", "prepare"])("%s failure keeps receipt and releases the reservation", async failure => {
+    const r = rig("core", { resolveChildConnection: id => id, prepareChildConnection: async () => ({ ok: false }) });
+    if (failure === "fork") r.fork.mockImplementationOnce(() => { throw new Error("fork failed"); });
+    r.host.emit("message", spawnRequest(failure === "prepare" ? { connectionId: "other" } : {}));
+    await flush();
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+    expect(r.resources.update).toHaveBeenCalledWith(r.receipt, "retained", expect.any(String));
+    expect(r.fork).toHaveBeenCalledTimes(failure === "fork" ? 2 : 1);
+  });
+
+  it("cancel during snapshot stops before add and releases the dedup reservation", async () => {
+    const r = rig();
+    let finish!: (s: ChildWorktreeSnapshot) => void;
+    r.resources.snapshot.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const req = spawnRequest();
+    r.host.emit("message", req);
+    r.host.emit("message", runCancel(req.requestId));
+    finish(r.receipt);
+    await flush();
+    expect(r.resources.allocate).not.toHaveBeenCalled();
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+    r.tab.childWorktreePolicy = false;
+    r.host.emit("message", req);
+    expect(r.manager.listChildRuns()).toHaveLength(1);
+    expect(r.fork).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancel during connection preparation retains allocation and releases a late pin once", async () => {
+    let finish!: (value: { ok: true; release: () => void }) => void;
+    const release = vi.fn();
+    const r = rig("core", { resolveChildConnection: id => id,
+      prepareChildConnection: () => new Promise(resolve => { finish = resolve; }) });
+    const req = spawnRequest({ connectionId: "other" });
+    r.host.emit("message", req);
+    await flush();
+    r.host.emit("message", runCancel(req.requestId));
+    finish({ ok: true, release });
+    await flush();
+    expect(release).toHaveBeenCalledOnce();
+    expect(r.fork).toHaveBeenCalledTimes(1);
+    expect(r.manager.listChildRuns()).toHaveLength(0);
+    expect(r.resources.update).toHaveBeenCalledOnce();
+  });
+
+  it("managed resource forbids relocation and engine switch before preparation", async () => {
+    const prepare = vi.fn();
+    const r = rig("core", { engineSwitchEnabled: () => true, prepareEngineSwitch: prepare });
+    const created = r.manager.createTab({ workspace: r.receipt.path, projectRoot: "/project",
+      sessionId: "managed-root", resume: false, childWorktree: r.receipt });
+    if (!created.ok) throw new Error("managed root refused");
+    const host = r.fork.mock.results[1]!.value as unknown as FakeHost;
+    host.emit("message", { type: WORKTREE_TRANSITION_MESSAGE_TYPE, sessionId: "managed-root",
+      fromWorkspace: r.receipt.path, toWorkspace: "/project", projectRoot: "/project" });
+    host.emit("message", { type: "anycode:engine-switch", generation: 1, phase: "prepare", requestId: "switch",
+      target: { engine: "claude", model: "model" } });
+    await flush();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(host.postMessage).toHaveBeenCalledWith(expect.objectContaining({ requestId: "switch", ok: false }));
+    expect(created.tab.workspace).toBe(r.receipt.path);
+    expect(r.fork).toHaveBeenCalledTimes(2);
+  });
+
+  it("queue captures ON; over-cap fallback gets not_ready", async () => {
+    const r = rig("core", { childRunsPerParentMax: () => 1 });
+    r.host.emit("message", spawnRequest());
+    await flush();
+    const queued = spawnRequest();
+    r.host.emit("message", queued);
+    r.host.emit("message", spawnRequest({ fallbackAtCapacity: true }));
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ kind: "rejected", reason: "not_ready" }));
+    r.tab.childWorktreePolicy = false;
+    const first = childRunEvents(r.host).find(e => e.kind === "accepted");
+    if (first?.kind !== "accepted") throw new Error("child missing");
+    r.host.emit("message", runCancel(first.requestId));
+    await flush();
+    await flush();
+    expect(r.resources.allocate).toHaveBeenCalledTimes(2);
+    expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ requestId: queued.requestId, kind: "accepted" }));
   });
 });

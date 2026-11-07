@@ -1,3 +1,4 @@
+import { ChildWorktreeResources } from "./child-worktree-resource.js";
 import { recordReasoningReplayRejection } from "./reasoning-replay.js";
 import { registerSettingsIpcWithProbe } from "./connection-probe.js";
 import { registerAgentMessageLinks } from "./agent-message-links.js";
@@ -2777,6 +2778,7 @@ void app.whenReady().then(async () => {
     access: peerAccess!,
   }) : undefined;
   manager = new TabHostManager({
+    childWorktrees: new ChildWorktreeResources({ userData: app.getPath("userData"), appRunId: randomUUID() }),
     onFileActivity: fileActivity?.accept,
     onFileActivityLifecycle: fileActivity?.sync,
     onSessionPeerRequest: peerHandler,

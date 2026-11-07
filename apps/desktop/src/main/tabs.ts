@@ -1,3 +1,4 @@
+import type { ChildWorktreeResources, ChildWorktreeReceipt } from "./child-worktree-resource.js";
 import { REASONING_REPLAY_REJECTED } from "../shared/reasoning-replay.js";
 import { createSessionPeerTurns } from "./session-peer-turns.js";
 import type { PeerHost } from "./session-peers.js";
@@ -412,6 +413,10 @@ export interface TabHost {
   /** Stable project grouping identity while workspace may relocate. */
   projectRoot: string;
   worktree?: WorktreeIdentity;
+  /** Main-only, app-run policy for future session children. Absent means OFF. */
+  childWorktreePolicy?: boolean;
+  childWorktreeRefusal?: string;
+  childWorktree?: ChildWorktreeReceipt;
   /** Delivered once to the first host booted after an exit transition. */
   pendingWorktreeCleanup?: WorktreeCleanupIntent;
   /* */
@@ -588,6 +593,7 @@ interface ResumableChild {
  * captured `TabHost` reference, which a respawn would make stale).
  */
 interface ChildSpawnWaiter {
+  managedWorktree: boolean;
   requestId: string;
   parentTabId: string;
   spawnKey: string;
@@ -737,6 +743,8 @@ export interface TabHostManagerDeps {
    * generation instead of being forgotten. Absent in legacy tests.
    */
   onTabPortDelivered?: (tab: { tabId: string; sessionId: string; workspace: string }) => void;
+  /** Main-owned resource journal, absent when allocation is unavailable. */
+  childWorktrees?: Pick<ChildWorktreeResources, "snapshot" | "allocate" | "update">;
   /** utilityProcess.fork (or a fake). */
   fork: HostForkFn;
   /**
@@ -987,6 +995,7 @@ export interface CreateTabParams {
   workspace: string;
   projectRoot?: string;
   worktree?: WorktreeIdentity;
+  childWorktree?: ChildWorktreeReceipt;
   sessionId: string;
   resume: boolean;
   historyOnly?: boolean;
@@ -1509,6 +1518,7 @@ export class TabHostManager {
       workspace,
       projectRoot,
       ...(worktree !== undefined ? { worktree } : {}),
+      ...(params.childWorktree ? { childWorktree: params.childWorktree } : {}),
       sessionId: params.sessionId,
       ...(params.connectionId !== undefined ? { connectionId: params.connectionId } : {}),
       ...(params.modelOverride !== undefined ? { modelOverride: params.modelOverride } : {}),
@@ -1988,6 +1998,9 @@ export class TabHostManager {
           // AFTER baseEnv/engineEnvOverlay so no inherited value overrides it, and
           // per fork so a respawn carries the same pair. Empty values are omitted.
           ...sessionToolEnv(tab.sessionId, tab.workspace),
+          ...(tab.childWorktree || baseEnv.ANYCODE_MANAGED_CHILD_WORKTREE !== undefined ||
+              engineEnvOverlay.ANYCODE_MANAGED_CHILD_WORKTREE !== undefined
+            ? { ANYCODE_MANAGED_CHILD_WORKTREE: tab.childWorktree ? "1" : "" } : {}),
           // The referenced MCP secret values for this workspace.
           // Consumed and deleted by the host right after its MCP config load.
           ...mcpSecretsFork(this.deps.mcpSecretsEnv?.(tab.workspace)),
@@ -2132,7 +2145,7 @@ export class TabHostManager {
       tab.switchCoordinator ??= new EngineSwitchCoordinator({
         generation,
         current: () => tab.proc === child && tab.hostGeneration === generation && tab.state === "running",
-        admissible: () => !tab.childOf && !this.rebindings.has(tab.tabId) && !this.drainingParents.has(tab.tabId) && this.runningChildCount(tab.tabId) === 0,
+        admissible: () => !tab.childWorktree && !tab.childOf && !this.rebindings.has(tab.tabId) && !this.drainingParents.has(tab.tabId) && this.runningChildCount(tab.tabId) === 0,
         prepare: async target => {
           if (!this.deps.prepareEngineSwitch) throw new Error("Engine switching is unavailable");
           const prepared = await this.deps.prepareEngineSwitch(target, tab);
@@ -2346,7 +2359,9 @@ export class TabHostManager {
    * than forked immediately.
    */
   private spawnChild(parentTab: TabHost, sender: UtilityProcess, req: ChildSpawnRequest): void {
+    const managedWorktree = parentTab.childWorktreePolicy === true;
     const reject = (reason: ChildRunRejectReason, message: string): void => {
+      if (managedWorktree) parentTab.childWorktreeRefusal = message;
       this.replyChildRunEvent(parentTab, {
         type: CHILD_RUN_EVENT_TYPE,
         requestId: req.requestId,
@@ -2419,7 +2434,7 @@ export class TabHostManager {
       // detach flag exists to avoid). The existing FIFO queue stays for
       // explicitly synchronous callers only.
       if (req.detach === true || req.fallbackAtCapacity === true) {
-        reject(capBlock.reason, capBlock.message);
+        reject(managedWorktree ? "not_ready" : capBlock.reason, capBlock.message);
         return;
       }
       // срез 1: the cap itself is unchanged (`childSpawnCapBlock`
@@ -2435,7 +2450,7 @@ export class TabHostManager {
       // immediate, under-cap path is deliberately NOT gated on draining —
       // that behaviour stays byte-identical.
       if (this.childSpawnQueue.length >= CHILD_SPAWN_QUEUE_MAX || this.drainingParents.has(parentTab.tabId)) {
-        reject(capBlock.reason, capBlock.message);
+        reject(managedWorktree ? "not_ready" : capBlock.reason, capBlock.message);
         return;
       }
       this.childSpawnKeys.set(spawnKey, req.requestId);
@@ -2445,6 +2460,7 @@ export class TabHostManager {
         spawnKey,
         req,
         sender,
+        managedWorktree,
       });
       this.childSpawnQueue.push(req.requestId);
       // No reply yet: this request has been neither accepted nor rejected —
@@ -2454,7 +2470,7 @@ export class TabHostManager {
     }
 
     this.childSpawnKeys.set(spawnKey, req.requestId);
-    void this.admitChildSpawn(parentTab, sender, req, spawnKey);
+    void this.admitChildSpawn(parentTab, sender, req, spawnKey, managedWorktree);
   }
 
   /**
@@ -2502,9 +2518,15 @@ export class TabHostManager {
     sender: UtilityProcess,
     req: ChildSpawnRequest,
     spawnKey: string,
+    managedWorktree: boolean,
   ): Promise<void> {
+    const generation = parentTab.hostGeneration;
+    let receipt: ChildWorktreeReceipt | undefined;
     const reject = (reason: ChildRunRejectReason, message: string): void => {
       this.childSpawnKeys.delete(spawnKey);
+      if (receipt) message += ` Worktree retained: ${receipt.path} (${receipt.branch}).`;
+      if (managedWorktree && (parentTab.proc !== sender || parentTab.hostGeneration !== generation)) return;
+      if (managedWorktree) parentTab.childWorktreeRefusal = message;
       this.replyChildRunEvent(parentTab, {
         type: CHILD_RUN_EVENT_TYPE,
         requestId: req.requestId,
@@ -2533,6 +2555,12 @@ export class TabHostManager {
     // `createTab` consults, never a second authority. Absent = core, byte-
     // compatible with every S2 producer.
     const engine: EngineId = req.engine ?? "core";
+    if (managedWorktree && (engine !== "core" || req.resumeChildSessionId !== undefined || !this.deps.childWorktrees)) {
+      reject("not_ready", engine !== "core"
+        ? "Agent: worktree session children require Core; choose a Core child."
+        : "Agent: worktree allocation requires a new child and an available allocator.");
+      return;
+    }
     // A Codex child's account, resolved ONCE: the parent tab's own profile
     // verbatim — a tab on the System account keeps System, default profile or
     // not — or, for a parent that has no Codex account at all (core/claude),
@@ -2554,7 +2582,7 @@ export class TabHostManager {
         if (this.childSpawnKeys.get(spawnKey) !== req.requestId) return;
         if (
           this.tabs.get(parentTab.tabId) !== parentTab ||
-          parentTab.proc !== sender ||
+          parentTab.proc !== sender || parentTab.hostGeneration !== generation ||
           parentTab.state !== "running" ||
           this.quitting
         ) {
@@ -2689,7 +2717,17 @@ export class TabHostManager {
       this.childrenByParentTab.set(parentTab.tabId, siblings);
     }
     siblings.add(childTabId);
+    let residueRecorded = false;
+    const retainResource = (): void => {
+      if (!receipt || residueRecorded) return;
+      residueRecorded = true;
+      // Allocation already durably journaled the resource. Keep that receipt
+      // even if recording the failed admission's disposition fails.
+      void this.deps.childWorktrees!.update(receipt, "retained", "Child admission did not complete; worktree retained")
+        .catch(() => {});
+    };
     const rollback = (): void => {
+      retainResource();
       this.childRuns.delete(req.requestId);
       this.childSpawnKeys.delete(spawnKey);
       // a previously captured `siblings` set may have been
@@ -2704,6 +2742,34 @@ export class TabHostManager {
         }
       }
     };
+
+    if (managedWorktree) {
+      const source = parentTab.workspace, projectRoot = parentTab.projectRoot;
+      const current = (): boolean => {
+        if (this.childRuns.get(req.requestId) !== entry) { retainResource(); return false; }
+        if (this.tabs.get(parentTab.tabId) === parentTab && parentTab.proc === sender &&
+            parentTab.hostGeneration === generation && parentTab.workspace === source &&
+            parentTab.projectRoot === projectRoot && parentTab.state === "running" &&
+            !this.quitting && !this.drainingParents.has(parentTab.tabId) && entry.state === "starting") return true;
+        rollback();
+        reject("closing", CHILD_CLOSING_MESSAGE);
+        this.pumpChildSpawnQueue();
+        return false;
+      };
+      try {
+        const resources = this.deps.childWorktrees!;
+        const snapshot = await resources.snapshot(source, projectRoot);
+        if (!current()) return;
+        receipt = await resources.allocate(snapshot, { parentSessionId: parentTab.sessionId, childSessionId });
+        if (!current()) return;
+      } catch (error) {
+        if (!current()) return;
+        rollback();
+        reject("not_ready", error instanceof Error ? error.message : "Agent: worktree allocation failed.");
+        this.pumpChildSpawnQueue();
+        return;
+      }
+    }
 
     // ── Preparation ──
     // A child that selects its own connection (an explicit provider/connectionId,
@@ -2749,13 +2815,14 @@ export class TabHostManager {
         // handling): another funnel may have finalized this entry, or the parent
         // generation may have gone, while we awaited.
         if (this.childRuns.get(req.requestId) !== entry) {
+          retainResource();
           // Tombstoned by another funnel — release any pin we took and return;
           // never rollback or emit a second outcome for a gone entry.
           return;
         }
         if (
           this.tabs.get(parentTab.tabId) !== parentTab ||
-          parentTab.proc !== sender ||
+          parentTab.proc !== sender || parentTab.hostGeneration !== generation ||
           parentTab.state !== "running" ||
           this.quitting ||
           this.drainingParents.has(parentTab.tabId)
@@ -2766,6 +2833,7 @@ export class TabHostManager {
           return;
         }
         if (entry.state !== "starting") {
+          retainResource();
           // Another funnel owns this entry's outcome now.
           return;
         }
@@ -2793,8 +2861,8 @@ export class TabHostManager {
 
     // Main NEVER trusts payload identity (cut §2.3's own header): workspace,
     // projectRoot and the parent linkage below all come from the ACTUAL
-    // parentTab record, never from `req`. A child never has a worktree and
-    // never respawns (cut §0.6); the one exception to "never resumes" is a
+    // parentTab record, never from `req`. Managed checkouts have a separate
+    // receipt. Children never respawn; the one exception to "never resumes" is a
     // follow-up run (`resumable`), which boots a NEW host once on the finished
     // child's own session, connection and model — still one spawn per run. CUT-S4 §3.2 п.4: a
     // CORE child keeps every S2 field byte-identical (modelOverride,
@@ -2817,7 +2885,8 @@ export class TabHostManager {
     const stampedMaxTurns = resumable === undefined ? req.maxTurns : undefined;
     const childTab: TabHost = {
       tabId: childTabId,
-      workspace: parentTab.workspace,
+      workspace: receipt?.path ?? parentTab.workspace,
+      ...(receipt ? { childWorktree: receipt } : {}),
       projectRoot: parentTab.projectRoot,
       sessionId: childSessionId,
       ...(engine === "core" && connectionId !== undefined ? { connectionId } : {}),
@@ -2863,14 +2932,14 @@ export class TabHostManager {
         const pending = this.deps.waitForHostEnv?.(childTab.connectionId);
         if (pending) {
           try { await pending; } catch {
-            if (this.childRuns.get(req.requestId) !== entry) return;
+            if (this.childRuns.get(req.requestId) !== entry) { retainResource(); return; }
             rollback();
             reject("spawn_failed", CHILD_SPAWN_FAILED_MESSAGE);
             this.pumpChildSpawnQueue();
             return;
           }
-          if (this.childRuns.get(req.requestId) !== entry) return;
-          if (this.tabs.get(parentTab.tabId) !== parentTab || parentTab.proc !== sender || parentTab.state !== "running" || this.quitting || this.drainingParents.has(parentTab.tabId) || entry.state !== "starting") {
+          if (this.childRuns.get(req.requestId) !== entry) { retainResource(); return; }
+          if (this.tabs.get(parentTab.tabId) !== parentTab || parentTab.proc !== sender || parentTab.hostGeneration !== generation || parentTab.state !== "running" || this.quitting || this.drainingParents.has(parentTab.tabId) || entry.state !== "starting") {
             rollback();
             reject("closing", CHILD_CLOSING_MESSAGE);
             this.pumpChildSpawnQueue();
@@ -3020,7 +3089,7 @@ export class TabHostManager {
       }
       this.childSpawnQueue.splice(i, 1);
       this.childSpawnWaiters.delete(requestId);
-      void this.admitChildSpawn(parentTab, waiter.sender, waiter.req, waiter.spawnKey);
+      void this.admitChildSpawn(parentTab, waiter.sender, waiter.req, waiter.spawnKey, waiter.managedWorktree);
       // Do not advance `i` — the next element has shifted into this index.
     }
   }
@@ -3844,7 +3913,7 @@ export class TabHostManager {
       : message.toWorkspace === message.projectRoot &&
         cleanupShapeValid;
     const valid =
-      current &&
+      current && !tab.childWorktree &&
       !tab.switchCoordinator?.pending &&
       tab.state === "running" &&
       message.sessionId === tab.sessionId &&

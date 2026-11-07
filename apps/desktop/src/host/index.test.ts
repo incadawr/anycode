@@ -3309,3 +3309,19 @@ it("peer drain transport takes the current main host generation", async () => {
     expect(create.mock.calls[0]?.[1]).toEqual({ recipientSessionId: "recipient", generation });
   }
 });
+
+
+it("main-stamped managed sessions disable worktree tools before the Git probe", async () => {
+  const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+  const expression = source.match(/const worktreeAvailable =\s*([\s\S]*?);/)![1];
+  const available = new Function("process", "execAdapter", "fsAdapter", "join", "projectRoot",
+    `return (async () => (${expression}))()`);
+  const exists = vi.fn(async () => true);
+  const probe = (marker?: string) => available({ env: { ANYCODE_MANAGED_CHILD_WORKTREE: marker } },
+    { runBinary() {} }, { exists }, join, "/project");
+  expect(await probe("1")).toBe(false);
+  expect(exists).not.toHaveBeenCalled();
+  expect(await probe()).toBe(true);
+  expect(exists).toHaveBeenCalledOnce();
+  expect(source).toContain("...(worktreeAvailable ? { worktrees: worktreeControl } : {})");
+});
