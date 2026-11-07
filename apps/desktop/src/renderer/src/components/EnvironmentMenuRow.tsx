@@ -17,6 +17,7 @@ export interface EnvironmentMenuRowProps {
   detail?: string | null;
   /** Tooltip for the secondary line when the visible text is a short form of it. */
   detailTitle?: string;
+  detailTone?: "warning" | undefined;
   /** Control rendered on the right side of the row. */
   control?: ReactNode;
   /** Accessible name of the row (its inputs keep their own labels). */
@@ -25,14 +26,14 @@ export interface EnvironmentMenuRowProps {
   error?: string | null;
 }
 
-export function EnvironmentMenuRow({ icon, title, detail, detailTitle, control, ariaLabel, error }: EnvironmentMenuRowProps) {
+export function EnvironmentMenuRow({ icon, title, detail, detailTitle, detailTone, control, ariaLabel, error }: EnvironmentMenuRowProps) {
   return (
     <div className="environment-menu-row" role="group" aria-label={ariaLabel}>
       {icon}
       <span className="environment-menu-row-main">
         <span className="environment-menu-row-title">{title}</span>
         {detail !== undefined && detail !== null && detail !== "" && (
-          <span className="environment-menu-row-detail environment-menu-row-detail-prose" title={detailTitle}>
+          <span className={`environment-menu-row-detail environment-menu-row-detail-prose${detailTone === "warning" ? " environment-menu-row-detail-warning" : ""}`} title={detailTitle}>
             {detail}
           </span>
         )}

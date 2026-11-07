@@ -114,6 +114,24 @@ const EMPTY_PREVIEWS: readonly PreviewPanelInfo[] = [];
 const EMPTY_CHILD_SPLIT_ROWS: readonly ChildSplitRow[] = [];
 const EMPTY_IDS: readonly string[] = [];
 
+/** Shared branch command for the global shortcut and command palette. */
+export function branchSwitchAction(hint: string | null): PaletteAction {
+  const current = () => {
+    const tabId = useTabsStore.getState().activeTabId;
+    return { tabId, enabled: !!tabId && tabRegistry.getStore(tabId)?.getState().git.status != null };
+  };
+  return {
+    id: "branch.switch", label: "Switch branch…", hint, get enabled() { return current().enabled; },
+    run: () => { const { tabId, enabled } = current(); if (enabled) window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: tabId })); },
+  };
+}
+
+export function runBranchSwitchAction(action: ActionId): boolean {
+  if (action !== "branch.switch") return false;
+  branchSwitchAction(null).run();
+  return true;
+}
+
 /**
  * Welcome-gate decision (ruling §2 step 5/7): show Welcome only once the
  * FIRST settings snapshot has actually loaded (`snapshot !== null` — avoids
@@ -1519,6 +1537,7 @@ export function App() {
         return;
       }
       event.preventDefault();
+      if (runBranchSwitchAction(match.action)) return;
       switch (match.action) {
         case "palette.toggle":
           openPalette("actions");
@@ -1806,6 +1825,7 @@ export function App() {
       enabled: true,
       run: () => handleToggleSidebarCollapsed(),
     },
+    branchSwitchAction(hintFor("branch.switch")),
     {
       id: "mode.focus",
       label: "Change permission mode…",

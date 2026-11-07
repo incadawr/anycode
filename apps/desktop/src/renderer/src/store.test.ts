@@ -6201,6 +6201,30 @@ describe("git slice — git_status / git_result reducer", () => {
     expect(store.getState().git.lastError).toBeNull();
   });
 
+  it("a host exit retires read-only pending requests without setting lastError (only branches keeps its list error)", () => {
+    const store = newGitStore();
+    store.getState().gitRequestStarted("r-refresh", { kind: "refresh", label: "refresh" });
+    store.getState().gitRequestStarted("r-branches", { kind: "branches", label: "branches" });
+    store.getState().gitRequestStarted("r-log", { kind: "log", label: "history" });
+    store.getState().gitRequestStarted("r-diff", { kind: "diff", diff: { path: "a.ts", target: "worktree" }, label: "diff" });
+
+    store.getState().setHostExited(false, { code: "spawn_refused", message: "Host stopped unexpectedly" });
+
+    expect(store.getState().git.pending).toEqual({});
+    expect(store.getState().git.lastError).toBeNull();
+    expect(store.getState().git.branchesError).toBe("Host stopped unexpectedly");
+  });
+
+  it("a host exit still fails a pending mutation into lastError and retires it (picker onResult path)", () => {
+    const store = newGitStore();
+    store.getState().gitRequestStarted("r-switch", { kind: "mutation", label: "switch branch" });
+
+    store.getState().setHostExited();
+
+    expect(store.getState().git.pending).toEqual({});
+    expect(store.getState().git.lastError).toEqual({ label: "switch branch", reason: "Host process exited" });
+  });
+
   it("applies a diff result that matches the current request and drops a stale/superseded one (§6#6)", () => {
     const store = newGitStore();
     // Requesting a diff stamps git.diff with the desired {path,target} (loading).
@@ -6257,6 +6281,7 @@ describe("git slice — panel state + reset semantics (ruling R9)", () => {
       panelOpen: false,
       view: "changes",
       branches: null,
+      branchesError: null,
       log: null,
       diff: null,
       confirm: null,
@@ -9691,4 +9716,16 @@ describe("Claude ordinary pending echoes", () => {
     expect(store.getState().pendingSteers).toEqual([]);
     expect(store.getState().orchestrationDeliveries).toEqual([]);
   });
+});
+
+it("notifies a git result observer exactly once for its own request", () => {
+  const store = createDesktopStore();
+  const observer = vi.fn();
+  store.getState().gitRequestStarted("own", { kind: "mutation", label: "switch branch", onResult: observer });
+  store.getState().applyHostMessage({ type: "git_result", requestId: "foreign", outcome: { ok: true, kind: "unit" } });
+  expect(observer).not.toHaveBeenCalled();
+  const outcome = { ok: false as const, reason: "refused" };
+  store.getState().applyHostMessage({ type: "git_result", requestId: "own", outcome });
+  store.getState().applyHostMessage({ type: "git_result", requestId: "own", outcome });
+  expect(observer).toHaveBeenCalledExactlyOnceWith(outcome);
 });

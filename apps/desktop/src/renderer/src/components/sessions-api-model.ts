@@ -148,7 +148,7 @@ export function sessionApprovalsLabel(enabled: boolean): string {
 }
 
 export const SESSION_HANDLE_LABEL = "Handle (optional)";
-export const SESSION_HANDLE_PLACEHOLDER = "Name for agents (optional)";
+export const SESSION_HANDLE_PLACEHOLDER = "Agent name";
 /** The row's secondary line; the full explanation stays on the field's tooltip. */
 export const SESSION_HANDLE_DETAIL = "Name external agents see in list_sessions";
 /** Tooltip on the handle field: what the name is for. */

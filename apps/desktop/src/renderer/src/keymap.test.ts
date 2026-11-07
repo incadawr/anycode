@@ -186,6 +186,7 @@ describe("ACTION_CATALOG (§1.4)", () => {
       "session.new",
       "terminal.toggle",
       "settings.open",
+      "branch.switch",
       "sidebar.toggle",
       "sidebar.search",
       "tab.activate",
@@ -199,7 +200,7 @@ describe("ACTION_CATALOG (§1.4)", () => {
   it("marks only tab.activate and turn.interrupt non-editable", () => {
     const nonEditable = ACTION_CATALOG.filter((m) => !m.editable).map((m) => m.action);
     expect(nonEditable).toEqual(["tab.activate", "turn.interrupt"]);
-    expect(ACTION_CATALOG.filter((m) => m.editable)).toHaveLength(9);
+    expect(ACTION_CATALOG.filter((m) => m.editable)).toHaveLength(10);
   });
 
   it("dock.toggle: default ⌘\\ / Ctrl+\\, editable, in the sweep", () => {
@@ -438,4 +439,15 @@ describe("normalizeOverrides / resolveKeymap — F3/F5 single canonicalization a
     expect(normalizeOverrides()).toEqual([]);
     expect(normalizeOverrides([])).toEqual([]);
   });
+});
+
+it("registers a rebindable branch shortcut on every platform", () => {
+  expect(ACTION_CATALOG.find(a => a.action === "branch.switch")).toMatchObject({ name: "Switch branch", editable: true });
+  for (const platform of ["darwin", "win32", "linux"] as const) {
+    const base = stroke({ key: "b", shiftKey: true, metaKey: platform === "darwin", ctrlKey: platform !== "darwin" });
+    expect(matchKeymap(base, platform)).toEqual({ action: "branch.switch" });
+    const table = resolveKeymap([{ action: "branch.switch", bindings: ["mod+shift+y"] }]);
+    expect(matchKeymap(base, platform, table)).toBeNull();
+    expect(matchKeymap({ ...base, key: "y" }, platform, table)).toEqual({ action: "branch.switch" });
+  }
 });

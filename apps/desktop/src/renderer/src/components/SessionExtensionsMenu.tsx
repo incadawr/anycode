@@ -1,10 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent } from "react";
 import { flushSync } from "react-dom";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import { formatEnvironmentHooksDetail } from "../hooks-status.js";
+import { hasCrashedLspServer } from "../lsp-status.js";
 import { SessionExtensionsFooter } from "./SessionExtensionsFooter.js";
 import type { SettingsPaneSelection } from "./settings-extensions-navigation.js";
 import { createPortal } from "react-dom";
-import { useTabContextTabId, useTabStoreApi } from "../tab-context.js";
+import { useTabContextTabId, useTabStoreApi, useTabStore, useTabSend } from "../tab-context.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Button, useRovingTabindex } from "../ui/index.js";
 import { useSessionExtensions, type ExtensionCategory } from "./useSessionExtensions.js";
@@ -17,9 +19,15 @@ import {
 export function SessionExtensionsMenu() {
   const tabId = useTabContextTabId();
   const store = useTabStoreApi();
+  const send = useTabSend();
   const { open, setOpen, reads, retry, mcpRows, mcpFailed, connection, engine, lspServers, setMcpEnabled, mcpWrite, mcpBusy, mcpWritable, catalogControls } = useSessionExtensions({ tabId, store });
+  const hooks = useTabStore((state) => state.hookDeclarations);
+  const hookConfigError = useTabStore((state) => state.hookConfigError);
+  const core = engine === null;
   const id = useId();
-  const warningId = `${id}-mcp-warning`;
+  const warningId = `${id}-warning`;
+  const lspCrashed = engine === null && hasCrashedLspServer(lspServers);
+  const failed = mcpFailed || lspCrashed;
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
@@ -30,7 +38,7 @@ export function SessionExtensionsMenu() {
   const tabExit = useRef(false);
   const [selection, setSelection] = useState<{ index: number; focus: boolean } | null>(null);
   const [narrow, setNarrow] = useState(window.innerWidth < 600);
-  const roving = useRovingTabindex({ count: 4, onActiveIndexChange: (index) => rows.current[index]?.focus() });
+  const roving = useRovingTabindex({ count: core ? 5 : 4, onActiveIndexChange: (index) => rows.current[index]?.focus() });
   useOverlayFlag(open);
   const cancelHover = () => { clearTimeout(hoverTimer.current); hoverTimer.current = undefined; };
   const select = (index: number, focus = true) => { cancelHover(); setSelection({ index, focus }); };
@@ -122,11 +130,12 @@ export function SessionExtensionsMenu() {
     ["Plugins", extensionCountText(reads.plugins, countConfiguredPlugins)],
     ["Skills", extensionCountText(reads.skills, countConfiguredSkills)],
     ["LSP", extensionCountText(reads.lsp, countConfiguredLsp)],
+    ...(core ? [["Hooks", formatEnvironmentHooksDetail(hooks)]] : []),
   ];
   const categoryKeys: ExtensionCategory[] = ["mcp", "plugins", "skills", "lsp"];
   return <>
     <Button ref={trigger} type="button" className="session-extensions-trigger" title="Extensions"
-      aria-describedby={mcpFailed ? warningId : undefined}
+      aria-describedby={failed ? warningId : undefined}
       aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
       onBlur={exitOnBlur}
       onClick={() => { if (!open) roving.setActiveIndex(0); setOpen(!open); }}
@@ -142,8 +151,8 @@ export function SessionExtensionsMenu() {
         <rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" />
       </svg>
       <span className="session-extensions-label">Extensions</span>
-      {mcpFailed && <><span className="session-extensions-warning session-extensions-dot tone-danger" aria-hidden="true" />
-        <span id={warningId} className="session-extensions-sr">MCP connection failed. {connection !== "ready" ? "Last reported status; host unavailable." : ""}</span></>}
+      {failed && <><span className="session-extensions-warning session-extensions-dot tone-danger" aria-hidden="true" />
+        <span id={warningId} className="session-extensions-sr">{mcpFailed && "MCP connection failed. "}{lspCrashed && "A language server crashed. "}{connection !== "ready" ? "Last reported status; host unavailable." : ""}</span></>}
     </Button>
     {open && createPortal(<div ref={panel} id={id} role="dialog" aria-modal="false" aria-label="Extensions"
       className={`session-extensions-panel${selection ? " has-details" : ""}`} data-layout={narrow ? "drill-down" : "columns"}
@@ -153,6 +162,7 @@ export function SessionExtensionsMenu() {
       <div ref={categoryList} className="session-extensions-categories" hidden={narrow && selection !== null}>
       {categories.map(([label, count], index) => <Button key={label} type="button"
         ref={(element) => { rows.current[index] = element; }} className="session-extensions-category"
+        data-extension-category={index === 4 ? "hooks" : categoryKeys[index]}
         aria-expanded={selection?.index === index} aria-controls={selection?.index === index ? `${id}-details` : undefined}
         tabIndex={roving.tabIndexFor(index)} onFocus={() => roving.setActiveIndex(index)}
         onClick={() => select(index)}
@@ -168,7 +178,7 @@ export function SessionExtensionsMenu() {
           else roving.onKeyDown(index)(event);
         }}>
         <span>{label}{index === 0 && mcpFailed && <span className="session-extensions-dot tone-danger" aria-hidden="true" />}</span>
-        {index === 0 && mcpFailed && <span className="session-extensions-sr">MCP connection failed</span>}<span aria-live="polite">{count}</span><span aria-hidden="true">›</span>
+        {index === 0 && mcpFailed && <span className="session-extensions-sr">MCP connection failed</span>}<span aria-live="polite" title={index === 4 ? count : undefined}>{count}</span><span aria-hidden="true">›</span>
       </Button>)}
       </div>
       {selection && <div ref={details} id={`${id}-details`} className="session-extensions-details" tabIndex={-1}
@@ -177,20 +187,30 @@ export function SessionExtensionsMenu() {
         <Button type="button" className="session-extensions-back" onClick={back}>Back</Button>
         <h3>{categories[selection.index]![0]}</h3>
         {selection.index === 3 && <SessionExtensionsLspSummary servers={lspServers} core={engine === null}
-          ready={connection === "ready"} onDetails={() => {
+          ready={connection === "ready"} onRestart={() => {
+            if (engine === null && connection === "ready" && hasCrashedLspServer(lspServers)) send({ type: "lsp_restart_request" });
+          }} onDetails={() => {
             setOpen(false);
             useTabsStore.getState().setLspPanelOpen(tabId, true);
           }} />}
         {(selection.index === 1 || selection.index === 2) && engine !== null &&
           <p>AnyCode catalog. Availability in the current engine is not confirmed.</p>}
         {selection.index === 1 && <p>All projects; background services and account sources may change immediately.</p>}
-        <SessionExtensionsList category={categoryKeys[selection.index]!} reads={reads} mcpRows={mcpRows}
+        {selection.index === 4 && <section aria-label="Hooks summary">
+          <p>{formatEnvironmentHooksDetail(hooks)}</p>
+          {(hooks.length > 0 || hookConfigError !== null) && <Button type="button" data-extension-action="hooks-details"
+            onClick={() => {
+              setOpen(false);
+              useTabsStore.getState().setHooksPanelOpen(tabId, true);
+            }}>Details</Button>}
+        </section>}
+        {selection.index < 4 && <><SessionExtensionsList category={categoryKeys[selection.index]!} reads={reads} mcpRows={mcpRows}
           onManage={manage} catalogControls={catalogControls}
           mcpControls={{ setEnabled: setMcpEnabled, write: mcpWrite, busy: mcpBusy, writable: mcpWritable }}
           retry={(category) => { details.current?.focus(); retry(category); }} />
         <SessionExtensionsFooter key={`${tabId}:${selection.index}`} tabId={tabId} category={categoryKeys[selection.index]!}
           projectAvailable={reads.mcp.status === "ready" && reads.mcp.snapshot.projectAvailable}
-          onManage={manage} />
+          onManage={manage} /></>}
       </div>}
       </div>
     </div>, document.body)}

@@ -114,6 +114,12 @@ workflow-map-smoke
 `sidebar-rowcut-smoke` starts `electron-vite` itself rather than `pnpm dev`;
 it needs the same switches, passed directly.
 
+The `lsp-hooks-ui-smoke` panel toggles use Extensions → LSP / Hooks → Details
+through the real menu DOM, using `data-extension-category` and
+`data-extension-action` attributes. Hooks is Core-only. An empty hook list
+without a configuration error has no Details action; the corrupt-config
+fixture still opens Details to inspect the error.
+
 For a fully isolated profile, the smoke environment also points the automation
 home overrides and telemetry directory into its temporary profile.
 `ANYCODE_ISOLATED_SMOKE=1`, combined with the dev automation gate and an

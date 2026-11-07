@@ -14,6 +14,7 @@ import type {
 } from "../../../shared/browser-access.js";
 import { ConfirmDialog, type ConfirmDialogRequest } from "./ConfirmDialog.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
+import { Switch } from "../ui/index.js";
 import { Globe } from "./icons.js";
 
 export interface BrowserAccessBridge {
@@ -112,16 +113,15 @@ export function BrowserAccessRow({ bridge = window.anycode.browserAccess }: { br
         icon={<Globe />}
         title="Full browser access"
         detail={view.detail}
+        detailTone={view.checked ? "warning" : undefined}
         ariaLabel="Full browser access"
         control={
-          <input
-            type="checkbox"
+          <Switch
             aria-label="Allow full browser access for this session"
             data-environment-action="browser-full-access"
             checked={view.checked}
             disabled={view.disabled}
-            onChange={(event) => {
-              const next = event.target.checked;
+            onCheckedChange={(next) => {
               if (browserAccessToggleAction(view.checked, next) === "confirm") {
                 setConfirming(true);
                 return;

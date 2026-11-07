@@ -32,6 +32,7 @@ export type ActionId =
   | "session.new"
   | "terminal.toggle"
   | "settings.open"
+  | "branch.switch"
   | "sidebar.toggle"
   | "sidebar.search"
   | "tab.activate"
@@ -58,6 +59,7 @@ export const KEYMAP: readonly KeyBinding[] = [
   { action: "session.new", key: "n", mod: true, shift: false },
   { action: "terminal.toggle", key: "j", mod: true, shift: false },
   { action: "settings.open", key: ",", mod: true, shift: false },
+  { action: "branch.switch", key: "b", mod: true, shift: true },
   { action: "sidebar.toggle", key: "b", mod: true, shift: false },
   { action: "sidebar.search", key: "f", mod: true, shift: false },
   { action: "mode.focus", key: "m", mod: true, shift: true },
@@ -93,6 +95,7 @@ export const ACTION_CATALOG: readonly ActionMeta[] = [
   { action: "session.new", name: "New Task", description: "Start a new task.", editable: true },
   { action: "terminal.toggle", name: "Toggle terminal", description: "Show or hide the integrated terminal.", editable: true },
   { action: "settings.open", name: "Open settings", description: "Open the settings page.", editable: true },
+  { action: "branch.switch", name: "Switch branch", description: "Open the branch switcher.", editable: true },
   { action: "sidebar.toggle", name: "Toggle sidebar", description: "Show or hide the sidebar.", editable: true },
   { action: "sidebar.search", name: "Search sidebar", description: "Focus the sidebar search field.", editable: true },
   { action: "tab.activate", name: "Activate tab by number", description: "Jump to the nth open tab (⌘1–⌘9).", editable: false },

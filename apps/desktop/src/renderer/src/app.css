@@ -1513,6 +1513,13 @@ body {
 .session-extensions-categories, .session-extensions-details { min-width: 0; overflow: auto; }
 .session-extensions-category > span:first-child { flex: 1; text-align: left; }
 .session-extensions-category > span:last-child { margin-left: var(--sp-2); }
+/* Hook summaries can be longer than the category column. */
+.session-extensions-category[data-extension-category="hooks"] > span[aria-live] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-extensions-status .session-extensions-dot { margin: 0; }
 .session-extensions-category[aria-expanded="true"] { background: var(--bg-hover); }
 .session-extensions-details { padding: var(--sp-2); border-left: 1px solid var(--border); }
 .session-extensions-details h3 { margin: var(--sp-2) 0; font-size: inherit; }
@@ -1536,6 +1543,7 @@ body {
 .session-extensions-list li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
 .session-extensions-name, .session-extensions-source { display: block; overflow-wrap: anywhere; }
 .session-extensions-source { color: var(--text-2); }
+.session-extensions-status { display: flex; align-items: center; gap: var(--sp-1); line-height: 1.5; }
 @media (width < 600px) {
   .has-details .session-extensions-body { display: block; overflow: auto; }
   .session-extensions-details { border-left: 0; }
@@ -1546,6 +1554,11 @@ body {
   outline-offset: 2px;
 }
 @container session-header (width < 720px) {
+  .session-extensions-label { display: none; }
+  .environment-control-header .environment-trigger-has-branch .environment-workspace,
+  .environment-control-header .environment-trigger-has-branch .environment-separator { display: none; }
+}
+@container composer (width < 600px) {
   .session-extensions-label { display: none; }
 }
 
@@ -1756,11 +1769,13 @@ body {
   align-items: center;
   min-width: 0;
   flex-shrink: 1;
+  max-width: 100%;
   -webkit-app-region: no-drag;
 }
 
-.environment-trigger,
-.environment-more {
+.environment-trigger {
+  white-space: nowrap;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   min-width: 0;
@@ -1796,6 +1811,9 @@ body {
   /* п.6: room for the session cwd. workspaceLabel() already
      head-ellipsizes it to ≤44 chars, so it stays on one line; the base
      end-ellipsis only kicks in if the bar is narrower than that. */
+  /* Sacrifice the folder width before shrinking the branch label. */
+  flex: 0 100 auto;
+  min-width: 0;
   max-width: 44ch;
   color: var(--text-1);
   font-weight: var(--w-medium);
@@ -1814,7 +1832,9 @@ body {
 }
 
 .environment-branch {
-  max-width: 16ch;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 32ch;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }
@@ -1823,16 +1843,6 @@ body {
   color: var(--text-3);
 }
 
-.environment-more {
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  margin-left: var(--sp-1);
-  padding: 0;
-  border-radius: var(--r-sm);
-}
-
-.environment-more:hover,
 .environment-trigger:hover {
   color: var(--text-1);
   background: var(--bg-hover);
@@ -1876,12 +1886,15 @@ body {
 }
 
 .environment-menu-row {
+  height: auto;
+  line-height: 1.4;
+  font-weight: var(--w-normal);
   min-height: 2.7rem;
   padding: var(--sp-1) var(--sp-2);
   font-size: var(--fs-sm);
 }
 
-.environment-menu-row:hover,
+button.environment-menu-row:hover,
 .environment-branch-row:hover:not(.environment-branch-row-current) {
   background: var(--bg-hover);
   color: var(--text-1);
@@ -1914,7 +1927,6 @@ body {
   white-space: nowrap;
 }
 
-.environment-menu-chevron,
 .environment-menu-open {
   flex-shrink: 0;
   color: var(--text-3);
@@ -1935,12 +1947,42 @@ body {
   flex-direction: column;
 }
 
+
+.environment-menu-row[role="group"] {
+  cursor: default;
+}
+
+.environment-menu-group {
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.environment-menu-scope {
+  margin-left: var(--sp-2);
+  font-weight: var(--w-normal);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.environment-menu-dependents {
+  margin-left: calc(1rem + var(--sp-2));
+  padding-left: var(--sp-1);
+  border-left: 1px solid var(--border);
+}
+
+.environment-menu-row-detail.environment-menu-row-detail-warning {
+  color: var(--warning);
+}
+
 /* A row's secondary line always carries readable prose (state, hint, caption),
    so it wraps in full instead of taking the base detail's single-line clipping.
    Combined selector (0,2,0) so it outranks the base `.environment-menu-row-detail` rule. */
 .environment-menu-row-detail.environment-menu-row-detail-prose {
   overflow: visible;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
+  font-family: var(--font-ui);
   text-overflow: clip;
   white-space: normal;
 }
@@ -1974,21 +2016,12 @@ body {
   outline: none;
 }
 
-.environment-menu-chevron {
-  transition: transform var(--dur-1) var(--ease-out);
-}
-
-.environment-menu-chevron-open {
-  transform: rotate(180deg);
-}
-
 .environment-branches {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  margin: 0 0 var(--sp-1) calc(1rem + var(--sp-2));
-  padding: var(--sp-1);
-  border-left: 1px solid var(--border);
+  max-height: 15rem;
+  overflow-y: auto;
 }
 
 .environment-branch-row {
@@ -1999,6 +2032,7 @@ body {
 }
 
 .environment-branch-row-current {
+  cursor: default;
   color: var(--text-1);
 }
 
@@ -2006,6 +2040,63 @@ body {
   margin-left: auto;
   color: var(--success);
 }
+
+.environment-branch-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.environment-branch-picker h3 {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+}
+
+.environment-branch-picker .environment-menu-actions {
+  margin-left: 0;
+}
+
+.environment-branch-picker .environment-branch-row {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.environment-branch-picker .environment-branch-row span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.environment-branch-picker [data-active="true"] {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -1px;
+  background: var(--bg-hover);
+}
+
+.environment-branch-picker [aria-selected="true"] {
+  background: var(--bg-hover);
+}
+
+
+.environment-switch-warning, .environment-switch-error {
+  padding: var(--sp-3);
+  border-radius: var(--r-sm);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: var(--fs-sm);
+}
+
+.environment-git-count { flex: none; font-size: var(--fs-xs); }
+.environment-workspace-path { direction: rtl; text-align: left; }
+.environment-branch-count { margin-left: auto; color: var(--text-3); font-size: var(--fs-xs); }
+.environment-switch-error { max-height: 10rem; overflow: auto; }
+
+.environment-switch-warning { background: color-mix(in srgb, var(--warning) 15%, transparent); }
+.environment-switch-error { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.environment-branch-row[aria-disabled="true"] { cursor: default; opacity: .65; }
 
 .environment-menu-note {
   padding: var(--sp-2);
@@ -4529,11 +4620,15 @@ body {
 
 /* New sessions keep their repository context next to the prompt where it is
    useful, then the strip naturally disappears once the conversation starts. */
-.environment-control-composer {
-  align-self: stretch;
+.composer-environment {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   padding-bottom: var(--sp-2);
   border-bottom: 1px solid var(--border);
 }
+
+.composer-environment .environment-control-composer { min-width: 0; }
 
 .environment-control-composer .environment-trigger {
   background: transparent;

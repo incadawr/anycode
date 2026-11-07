@@ -34,3 +34,15 @@ it("drives add and reset on the rendered shortcuts panel", async () => {
     container.remove();
   }
 });
+
+it("lists Switch branch as a configurable shortcut", async () => {
+  const store = createSettingsStore();
+  store.setState({ snapshot: { settings: cloneDefaults(), readOnly: false } as never });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(KeyboardShortcutsPane, { store })));
+    expect(realShortcutsPaneDom().rows().map(row => row.action)).toContain("branch.switch");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

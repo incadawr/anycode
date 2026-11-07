@@ -93,12 +93,12 @@ test("layout assertion accepts both themes and rejects clipping, overflow and lo
   ]) assert.throws(() => assertLayout({ ...layout(), ...mutation }));
 });
 
-const unavailable = () => ({ text: "AnyCode LSP is unavailable in this engine. For new Core sessions.", switches: 0, details: false });
+const unavailable = () => ({ text: "AnyCode LSP is unavailable in this engine. For new Core sessions.", switches: 0, details: false, restart: false });
 test("native assertion rejects false capability, missing reason and actionable unsupported controls", () => {
   assertNativeUnavailable(unavailable());
   for (const mutation of [
     { text: "No configured entries." }, { text: "Connected" },
-    { switches: 1 }, { details: true }, { switches: undefined },
+    { switches: 1 }, { details: true }, { restart: true }, { restart: undefined }, { switches: undefined },
   ]) assert.throws(() => assertNativeUnavailable({ ...unavailable(), ...mutation }));
 });
 

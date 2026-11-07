@@ -27,8 +27,9 @@ describe("BrowserAccessRow — test 50", () => {
     const html = renderToStaticMarkup(createElement(BrowserAccessRow, { bridge: neverBridge }));
     expect(html).toContain('aria-label="Full browser access"');
     expect(html).toContain('data-environment-action="browser-full-access"');
-    expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*/);
-    expect(html).not.toMatch(/<input[^>]*checked=""/);
+    expect(html).toContain('role="switch"');
+    expect(html).toContain('class="ak-switch"');
+    expect(html).toContain('aria-checked="false"');
   });
 
   it("uses the shared menu row shape: icon, wrapping detail, control on the right", () => {

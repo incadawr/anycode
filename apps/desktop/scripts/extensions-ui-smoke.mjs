@@ -43,6 +43,7 @@ export function assertNativeUnavailable(view) {
   assert(view.text.includes("AnyCode LSP is unavailable in this engine. For new Core sessions."), "Honest native capability reason");
   assert.equal(view.switches, 0, "Unsupported LSP has no write control");
   assert.equal(view.details, false, "Unsupported LSP has no live status action");
+  assert.equal(view.restart, false, "Unsupported LSP has no restart action");
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -317,7 +318,7 @@ async function main() {
     const second = await create(b);
     phase = "empty header";
     assert.equal(await evaluate(`document.querySelectorAll('.session-header ${trigger}').length`), 0);
-    assert.equal(await evaluate("document.querySelectorAll('.session-header [aria-label=\"Open environment menu\"]').length"), 0);
+    assert.equal(await evaluate("document.querySelectorAll('.session-header .environment-trigger').length"), 0);
     results.checks.push("empty-header");
     phase = "Core startup";
     await turn(second, "Start local extensions fixture", true);
@@ -408,6 +409,7 @@ async function main() {
       await click(".session-extensions-category:nth-child(4)");
       assertNativeUnavailable(await evaluate(`({ text:document.querySelector('.session-extensions-details').textContent,
         switches:document.querySelectorAll('.session-extensions-details [role=switch]').length,
+        restart:[...document.querySelectorAll('.session-extensions-details button')].some(e=>e.textContent==='Restart'),
         details:[...document.querySelectorAll('.session-extensions-details button')].some(e=>e.textContent==='Details') })`));
       await shot(`${engine}-lsp-unavailable`);
       for (const index of [2, 3]) {

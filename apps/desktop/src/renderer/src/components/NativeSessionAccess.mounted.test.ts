@@ -24,19 +24,19 @@ it("mounted clicks write main policy; failed revoke keeps the grant and shows an
   try {
     await act(async () => root.render(createElement("div", null, createElement(NativeSessionAccess, { tabId: "a", bridge }), createElement(SessionApprovalsField, { approvals: false, onChange: externalApproval }))));
     expect(host.textContent).toContain("Recommended default: On"); expect(host.textContent).toContain("alpha ↔ beta"); expect(host.textContent).toContain("/alpha ↔ /beta");
-    const external = Array.from(host.querySelectorAll("input")).find(input => input.getAttribute("aria-label") === SESSION_APPROVALS_ARIA_LABEL)!;
+    const external = Array.from(host.querySelectorAll<HTMLButtonElement>("button[role=switch]")).find(input => input.getAttribute("aria-label") === SESSION_APPROVALS_ARIA_LABEL)!;
     await act(async () => external.click()); expect(externalApproval).toHaveBeenCalledWith(true);
     expect(policy.hasPairGrant("/alpha", "/beta")).toBe(false);
-    const toggle = host.querySelector<HTMLInputElement>('input[aria-label="Native session access"]')!;
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-label="Native session access"]')!;
     await act(async () => toggle.click()); expect(policy.isNativeEnabled("/alpha")).toBe(false);
     await act(async () => toggle.click()); expect(policy.isNativeEnabled("/alpha")).toBe(true);
-    await act(async () => host.querySelector("button")!.click()); expect(policy.hasPairGrant("/alpha", "/beta")).toBe(true);
+    await act(async () => host.querySelector<HTMLButtonElement>("button.ak-btn")!.click()); expect(policy.hasPairGrant("/alpha", "/beta")).toBe(true);
     rmSync(file); mkdirSync(file);
-    await act(async () => host.querySelector("button")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>("button.ak-btn")!.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("previous policy is unchanged");
-    expect(host.querySelector("button")?.textContent).toBe("Revoke communication"); expect(policy.hasPairGrant("/alpha", "/beta")).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>("button.ak-btn")?.textContent).toBe("Revoke communication"); expect(policy.hasPairGrant("/alpha", "/beta")).toBe(true);
     rmSync(file, { recursive: true });
-    await act(async () => host.querySelector("button")!.click()); expect(policy.hasPairGrant("/alpha", "/beta")).toBe(false);
+    await act(async () => host.querySelector<HTMLButtonElement>("button.ak-btn")!.click()); expect(policy.hasPairGrant("/alpha", "/beta")).toBe(false);
   } finally { await act(async () => root.unmount()); host.remove(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -55,19 +55,21 @@ it.each(["invalid", "unavailable", "io_error"] as const)("shows an actionable %s
       expect(rows[index + 1]?.querySelector(".environment-menu-row-detail-prose")?.textContent).toBe(`${project.key} ↔ ${peer.key}`);
       expect(rows[index + 1]?.textContent?.split(`${project.key} ↔ ${peer.key}`)).toHaveLength(2);
     }
-    await act(async () => host.querySelector("button")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>("button.ak-btn")!.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(messages[reason]);
   } finally { await act(async () => root.unmount()); }
 });
-it("hides the recommended default while loading and unavailable", async () => {
+it("keeps a disabled loading row until availability is known", async () => {
   let resolve!: (value: SessionPeerViewResult) => void;
   const bridge = { get: () => new Promise<SessionPeerViewResult>(r => { resolve = r; }), set: vi.fn() };
   const host = document.createElement("div"); const root = createRoot(host);
   try {
     await act(async () => root.render(createElement(NativeSessionAccess, { tabId: "a", bridge })));
     expect(host.textContent).not.toContain("Recommended default:");
+    expect(host.textContent).toContain("Loading…");
+    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Native session access"]')?.disabled).toBe(true);
     await act(async () => resolve({ ok: true, view: { available: false, project: { key: "/alpha", name: "alpha", enabled: true, trusted: true, granted: false }, peers: [] } }));
     expect(host.textContent).not.toContain("Recommended default:");
-    expect(host.textContent).toContain("unavailable in this build");
+    expect(host.querySelector('[aria-label="Native session access"]')).toBeNull();
   } finally { await act(async () => root.unmount()); }
 });

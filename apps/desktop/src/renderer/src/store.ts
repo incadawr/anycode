@@ -887,6 +887,8 @@ export type GitPanelView = "changes" | "history" | "diff";
 export type GitPendingKind = "refresh" | "branches" | "log" | "diff" | "mutation";
 
 export interface GitPendingRequest {
+  /** Optional UI observer, called only for this request after its result is applied. */
+  onResult?: (outcome: GitCommandOutcome) => void;
   kind: GitPendingKind;
   /** kind:"diff" only — what was asked for, so a stale/mismatched result is dropped. */
   diff?: { path: string | null; target: GitDiffTarget };
@@ -916,6 +918,7 @@ export interface GitSlice {
   panelOpen: boolean;
   view: GitPanelView;
   branches: GitBranchInfo[] | null;
+  branchesError: string | null;
   log: GitCommitInfo[] | null;
   diff: GitDiffState | null;
   /** Destructive intent awaiting confirmation; null = no dialog open. */
@@ -933,6 +936,7 @@ function initialGitSlice(): GitSlice {
     panelOpen: false,
     view: "changes",
     branches: null,
+    branchesError: null,
     log: null,
     diff: null,
     confirm: null,
@@ -2957,6 +2961,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
      */
     function applyGitResult(requestId: string, outcome: GitCommandOutcome): void {
+      const onResult = get().git.pending[requestId]?.onResult;
       if (!get().git.pending[requestId]) {
         console.warn(`[git] git_result for unknown requestId "${requestId}" — ignored (reset race).`);
         return;
@@ -2973,6 +2978,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         const next: GitSlice = { ...git, pending: nextPending };
 
         if (!outcome.ok) {
+          if (pending.kind === "branches") next.branchesError = outcome.reason;
           next.lastError = { label: pending.label, reason: outcome.reason };
           return { git: next };
         }
@@ -2980,6 +2986,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         switch (outcome.kind) {
           case "branches":
             next.branches = outcome.branches;
+            next.branchesError = null;
             break;
           case "log":
             next.log = outcome.commits;
@@ -3014,6 +3021,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
         return { git: next };
       });
+      onResult?.(outcome);
     }
 
     function scheduleFlush(): void {
@@ -6464,6 +6472,28 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       setHostExited(missingWorkspace = false, failure): void {
+        const reason = failure?.message ?? "Host process exited";
+        for (const [requestId, pending] of Object.entries(get().git.pending)) {
+          if (pending.kind === "mutation") {
+            applyGitResult(requestId, { ok: false, reason });
+            continue;
+          }
+          // Read-only loads (refresh/branches/log/diff) are retired without
+          // lastError: a host restart is not a git failure, so the panel must
+          // not show one. A dropped branch list keeps its own retry affordance
+          // via branchesError.
+          set((state) => {
+            const nextPending = { ...state.git.pending };
+            delete nextPending[requestId];
+            return {
+              git: {
+                ...state.git,
+                pending: nextPending,
+                branchesError: pending.kind === "branches" ? reason : state.git.branchesError,
+              },
+            };
+          });
+        }
         // Slice P7.14: the host dying is an anomalous end — hold a non-empty
         // queue paused so nothing drains silently once a new host connects.
         // The connection flip AWAY from "ready" already disables the drainer,
@@ -6737,7 +6767,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             request.kind === "diff" && request.diff
               ? { path: request.diff.path, target: request.diff.target, text: "", truncated: false }
               : state.git.diff;
-          return { git: { ...state.git, pending, diff } };
+          return { git: { ...state.git, pending, diff, branchesError: request.kind === "branches" ? null : state.git.branchesError } };
         });
       },
 

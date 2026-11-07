@@ -1,29 +1,17 @@
-import { describe, expect, it } from "vitest";
-import type { CommandHookDeclaration, LspServerStatus } from "@anycode/core";
-import {
-  formatEnvironmentHooksDetail,
-  formatEnvironmentLspDetail,
-  hasCrashedLspServer,
-  workspaceLabel,
-} from "./EnvironmentMenu.js";
+// @vitest-environment jsdom
+import { describe, expect, it, vi } from "vitest";
+// Mount the real rows: switches must retain the same tab-scoped bridge calls.
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { createDesktopStore } from "../store.js";
+import { TabContext } from "../tab-context.js";
+import type { UiToHostMessage } from "../../../shared/protocol.js";
+import { branchSwitchAction, runBranchSwitchAction } from "../App.js";
+import { matchKeymap } from "../keymap.js";
+import { useTabsStore } from "../tabs-store.js";
+import { EnvironmentMenu } from "./EnvironmentMenu.js";
 
-function server(overrides: Partial<LspServerStatus> = {}): LspServerStatus {
-  return {
-    name: "typescript",
-    state: "ready",
-    extensions: [".ts", ".tsx"],
-    stderrTail: "",
-    ...overrides,
-  };
-}
-
-function hook(overrides: Partial<CommandHookDeclaration> = {}): CommandHookDeclaration {
-  return {
-    event: "PreToolUse",
-    command: "echo hi",
-    ...overrides,
-  };
-}
+import { workspaceLabel } from "./EnvironmentMenu.js";
 
 describe("workspaceLabel", () => {
   it("returns the path unchanged when it fits within maxChars", () => {
@@ -65,78 +53,586 @@ describe("workspaceLabel", () => {
   });
 });
 
-// ── Environment-menu status rows (pure derivations) ──
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe("formatEnvironmentLspDetail", () => {
-  it("renders 'Not configured' for an empty server list", () => {
-    expect(formatEnvironmentLspDetail([])).toBe("Not configured");
-  });
-
-  it("marks a single ready server with ✓", () => {
-    expect(formatEnvironmentLspDetail([server({ name: "typescript" })])).toBe("typescript ✓");
-  });
-
-  it("summarizes mixed states per server", () => {
-    const servers = [
-      server({ name: "typescript", state: "ready" }),
-      server({ name: "python", state: "crashed", extensions: [".py"] }),
-    ];
-    expect(formatEnvironmentLspDetail(servers)).toBe("typescript ✓, python —");
-  });
-
-  it("renders — for every non-ready state (initializing, not_started, disposed, crashed)", () => {
-    for (const state of ["initializing", "not_started", "disposed", "crashed"] as const) {
-      expect(formatEnvironmentLspDetail([server({ name: "s", state })])).toBe(`s —`);
+it("opens one dialog trigger with sections and preserves access toggle handlers", async () => {
+  const originalShowModal = HTMLDialogElement.prototype.showModal;
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  const store = createDesktopStore();
+  store.setState({ workspace: "/fixture/notes", git: { ...store.getState().git, status: null, statusKnown: true } });
+  const view = (enabled: boolean, approvals = false) => ({ tabs: [{ tabId: "tab", enabled, approvals }] });
+  const communication = {
+    get: async () => ({ ok: true, envControlled: false, view: view(false) }),
+    setSessionAccess: vi.fn(async (_id, enabled) => ({ ok: true, view: view(enabled) })),
+    setSessionApprovals: vi.fn(async (_id, approvals) => ({ ok: true, view: view(true, approvals) })),
+    setSessionHandle: vi.fn(),
+  };
+  const browserAccess = {
+    get: async () => ({ ok: true, tabs: [{ tabId: "tab", fullAccess: true }] }),
+    onChanged: () => () => {},
+    set: vi.fn(async (tabId, fullAccess) => ({ ok: true, tab: { tabId, fullAccess } })),
+  };
+  const originalBridge = Object.getOwnPropertyDescriptor(window, "anycode");
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication, browserAccess,
+    sessionPeers: { get: async () => ({ ok: true, view: { available: false } }) },
+  } });
+  const host = document.createElement("div"); const root = createRoot(host);
+  const click = async (selector: string) => act(async () => host.querySelector<HTMLButtonElement>(selector)!.click());
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    expect(host.querySelectorAll("[aria-haspopup]")).toHaveLength(1);
+    expect(host.querySelector("[aria-haspopup]")?.getAttribute("aria-haspopup")).toBe("dialog");
+    await click(".environment-trigger");
+    const dialog = host.querySelector('[role="dialog"][aria-label="Environment"]')!;
+    expect(dialog).not.toBeNull();
+    expect(dialog.getAttribute("aria-modal")).toBe("false");
+    for (const title of ["Workspace", "Session access", "Diagnostics"]) {
+      expect(dialog.querySelector('section[aria-label="' + title + '"]')).not.toBeNull();
     }
+    expect(dialog.textContent).toContain("this session only");
+    expect(dialog.querySelector('section[aria-label="Workspace"] .environment-menu-row-main > span')?.textContent).toBe("notes");
+    expect(dialog.querySelector('section[aria-label="Diagnostics"]')?.textContent?.match(/Diagnostics/g)).toHaveLength(1);
+    expect(dialog.querySelector('section[aria-label="Workspace"]')?.textContent).toContain("Git is not available for this workspace.");
+    expect(dialog.querySelector('[aria-label="Native session access"]')).toBeNull();
+    const access = '[data-environment-action="sessions-api-access"]';
+    expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("false");
+    await click(access);
+    expect(communication.setSessionAccess).toHaveBeenCalledWith("tab", true);
+    expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector(".environment-menu-dependents input")).not.toBeNull();
+    await click('[data-environment-action="sessions-api-approvals"]');
+    expect(communication.setSessionApprovals).toHaveBeenCalledWith("tab", true);
+    expect(host.querySelector(".environment-menu-row-detail-warning")?.textContent).toBe("Agent can use any website without asking");
+    const browser = '[data-environment-action="browser-full-access"]';
+    expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("true");
+    await click(browser);
+    expect(browserAccess.set).toHaveBeenCalledWith("tab", false);
+    expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("false");
+    await click(browser);
+    expect(host.textContent).toContain("Allow full browser access?");
+    expect(browserAccess.set).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.unmount());
+    HTMLDialogElement.prototype.showModal = originalShowModal;
+    if (originalBridge) Object.defineProperty(window, "anycode", originalBridge);
+    else Reflect.deleteProperty(window, "anycode");
+  }
+});
+
+async function branchMenu(run: (host: HTMLDivElement, store: ReturnType<typeof createDesktopStore>, send: ReturnType<typeof vi.spyOn>) => Promise<void>) {
+  const { tabRegistry } = await import("../tab-registry.js");
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
+  Object.defineProperty(window, "anycode", { configurable: true, value: { communication: { get: async () => ({ ok: false }) }, browserAccess: { get: async () => ({ ok: false }), onChanged: () => () => {} }, sessionPeers: { get: async () => ({ ok: false }) } } });
+  const store = createDesktopStore();
+  store.setState({ connection: "ready", workspace: "/fixture/repo", git: { ...store.getState().git, statusKnown: true,
+    status: { head: { branch: "main", sha: "abcdef123", detached: false, ahead: null, behind: null }, staged: [], unstaged: [], untracked: [], dirtyCount: 0, filesTruncated: false } } });
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
+    await run(host, store, send);
+  } finally { await act(async () => root.unmount()); host.remove(); send.mockRestore(); if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode"); }
+}
+const branchItems = ["topic/z", "main", "topic/a"].map(name => ({ name, current: name === "main", sha: "abcdef123" }));
+
+it("drills into a branch screen, groups and filters in server order, and goes back", async () => {
+  await branchMenu(async (host, store) => {
+    expect(host.textContent).toContain("Switch branch");
+    expect(host.querySelector('section[aria-label="Session access"]')).toBeNull();
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {}, branches: branchItems } }));
+    expect(Array.from(host.querySelectorAll('[role="option"]')).map(n => n.textContent)).toEqual(["main✓", "topic/z", "topic/a"]);
+    const input = host.querySelector("input")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "TOPIC/A");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(host.querySelector('[role="group"][aria-label="Current"]')?.textContent).toContain("main");
+    expect(host.querySelector('[role="group"][aria-label="Matching"]')?.textContent).toBe("Matching · 1topic/a");
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+    expect(host.querySelector('section[aria-label="Session access"]')).not.toBeNull();
   });
 });
 
-describe("hasCrashedLspServer", () => {
-  it("is false for an empty list", () => {
-    expect(hasCrashedLspServer([])).toBe(false);
-  });
-
-  it("is false when every server is healthy (ready + initializing)", () => {
-    expect(
-      hasCrashedLspServer([server({ state: "ready" }), server({ name: "py", state: "initializing" })]),
-    ).toBe(false);
-  });
-
-  it("is true only when at least one server crashed", () => {
-    expect(hasCrashedLspServer([server({ state: "ready" }), server({ name: "py", state: "crashed" })])).toBe(true);
+it("navigates options with arrows and Enter sends the existing switch command", async () => {
+  await branchMenu(async (host, store, send) => {
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {}, branches: branchItems } }));
+    const input = host.querySelector("input")!;
+    const count = send.mock.calls.length;
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send.mock.calls).toHaveLength(count);
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    const active = input.getAttribute("aria-activedescendant");
+    expect(host.querySelector('[role="option"][aria-selected="true"]')?.textContent).toBe("main✓");
+    expect(document.getElementById(active!)?.textContent).toBe("topic/z");
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send).toHaveBeenCalledWith("tab", expect.objectContaining({ type: "git_command", command: { op: "switch_branch", name: "topic/z" } }));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
   });
 });
 
-describe("formatEnvironmentHooksDetail", () => {
-  it("renders 'None' for an empty hook list", () => {
-    expect(formatEnvironmentHooksDetail([])).toBe("None");
+it("shows loading, list error and Retry, then empty results", async () => {
+  await branchMenu(async (host, store, send) => {
+    expect(host.textContent).toContain("Loading branches…");
+    const request = Object.entries(store.getState().git.pending).find(([, p]) => p.kind === "branches")![0];
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: request, outcome: { ok: false, reason: "list failed" } }));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("list failed");
+    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Retry")!.click());
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "branches" } }));
+    expect(host.textContent).toContain("Loading branches…");
+    const retry = Object.entries(store.getState().git.pending).find(([, p]) => p.kind === "branches")![0];
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: retry, outcome: { ok: true, kind: "branches", branches: [] } }));
+    expect(host.textContent).toContain("No other branches");
   });
+});
 
-  it("uses the singular 'hook' for a single declaration", () => {
-    expect(formatEnvironmentHooksDetail([hook()])).toBe("1 hook (PreToolUse 1)");
+it.each([{ branch: null, sha: "123456789", detached: true, label: "detached @1234567" }, { branch: "new", sha: null, detached: false, label: "unborn" }])("keeps $label in Current", async head => {
+  await branchMenu(async (host, store) => {
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {}, branches: [], status: { ...store.getState().git.status!, head: { ...store.getState().git.status!.head, ...head } } } }));
+    expect(host.querySelector('[role="option"][aria-selected="true"]')?.textContent).toBe(head.label + "✓");
   });
+});
 
-  it("counts hooks and groups per event", () => {
-    const hooks = [
-      hook({ event: "PreToolUse" }),
-      hook({ event: "PostToolUse", command: "b" }),
-      hook({ event: "PostToolUse", command: "c" }),
-    ];
-    expect(formatEnvironmentHooksDetail(hooks)).toBe("3 hooks (PreToolUse 1, PostToolUse 2)");
+it("clicking a matching branch uses the same switch request", async () => {
+  await branchMenu(async (host, store, send) => {
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {}, branches: branchItems } }));
+    await act(async () => host.querySelector<HTMLElement>('[role="option"][aria-selected="false"]')!.click());
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "switch_branch", name: "topic/z" } }));
   });
+});
 
-  it("follows groupHooksByEvent's stable event order, not input order", () => {
-    const hooks = [
-      hook({ event: "SubagentStop" }),
-      hook({ event: "UserPromptSubmit" }),
-      hook({ event: "PreToolUse" }),
-    ];
-    // EVENT_LABELS key order: PreToolUse, PostToolUse, ..., UserPromptSubmit, Stop, SubagentStop.
-    expect(formatEnvironmentHooksDetail(hooks)).toBe("3 hooks (PreToolUse 1, UserPromptSubmit 1, SubagentStop 1)");
+it("Escape closes the branch screen through the existing panel handler", async () => {
+  await branchMenu(async (host) => {
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
+});
 
-  it("groups a duplicate event into one group with its count", () => {
-    const hooks = [hook({ event: "Stop", command: "a" }), hook({ event: "Stop", command: "b" })];
-    expect(formatEnvironmentHooksDetail(hooks)).toBe("2 hooks (Stop 2)");
+it("keeps a long branch name available in the row and its tooltip", async () => {
+  await branchMenu(async (host, store) => {
+    const name = "feature/" + "long-branch-segment-".repeat(18);
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {}, branches: [{ name, current: false, sha: "abcdef123" }] } }));
+    const option = host.querySelector('[role="option"][aria-selected="false"]')!;
+    expect(option.textContent).toBe(name);
+    expect(option.querySelector("span")?.getAttribute("title")).toBe(name);
   });
+});
+
+const clickText = async (host: HTMLElement, text: string) => act(async () => {
+  Array.from(host.querySelectorAll("button")).find(b => b.textContent === text)!.click();
+});
+async function readyBranches(store: ReturnType<typeof createDesktopStore>, dirtyCount = 0) {
+  await act(async () => store.setState({ git: { ...store.getState().git, pending: Object.fromEntries(Object.entries(store.getState().git.pending).filter(([, p]) => p.kind === "mutation")), branches: branchItems,
+    status: { ...store.getState().git.status!, dirtyCount } } }));
+}
+const pickTopic = async (host: HTMLElement) => act(async () => host.querySelector<HTMLElement>('[role="option"][aria-selected="false"]')!.click());
+function switchRequest(send: ReturnType<typeof vi.spyOn>) {
+  const calls = send.mock.calls as [string, UiToHostMessage][];
+  return calls.map(c => c[1]).filter((m): m is Extract<UiToHostMessage, { type: "git_command" }> => m.type === "git_command" && m.command.op === "switch_branch").at(-1)!;
+}
+
+it("warns on dirty selection; Cancel keeps the branch and confirm sends the same request", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store, 3);
+    await pickTopic(host);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("3 uncommitted changes");
+    expect(switchRequest(send)).toBeUndefined();
+    await clickText(host, "Cancel");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(store.getState().git.status!.head.branch).toBe("main");
+    expect(switchRequest(send)).toBeUndefined();
+    await pickTopic(host);
+    await clickText(host, "Switch anyway");
+    expect(switchRequest(send).command).toEqual({ op: "switch_branch", name: "topic/z" });
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+});
+
+it("switches clean trees directly, locks controls with a row spinner, and closes on success", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await pickTopic(host);
+    const request = switchRequest(send);
+    expect(request.command).toEqual({ op: "switch_branch", name: "topic/z" });
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[role="option"][aria-busy="true"]')?.textContent).toContain("topic/z");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("Switching");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.disabled).toBe(true);
+    const count = send.mock.calls.length;
+    await pickTopic(host);
+    expect(send.mock.calls).toHaveLength(count);
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: request.requestId, outcome: { ok: true, kind: "unit" } }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+it("keeps refusals readable inside the panel, retains Current, and retries the request", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await pickTopic(host);
+    const fail = async (reason: string) => act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: switchRequest(send).requestId, outcome: { ok: false, reason } }));
+    await fail("Local changes would be overwritten by checkout.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Local changes would be overwritten");
+    expect(host.querySelector('[aria-selected="true"]')?.textContent).toBe("main✓");
+    const first = switchRequest(send).requestId;
+    await clickText(host, "Retry");
+    expect(switchRequest(send).requestId).not.toBe(first);
+    expect(switchRequest(send).command).toEqual({ op: "switch_branch", name: "topic/z" });
+    await fail("Still refused");
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+    expect(host.querySelector('section[aria-label="Session access"]')).not.toBeNull();
+  });
+});
+
+it.each([true, false])("ignores a stale switch result after close/reopen (success=%s)", async ok => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await pickTopic(host);
+    const old = switchRequest(send);
+    await act(async () => store.setState({ git: { ...store.getState().git, pending: {} } }));
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
+    await readyBranches(store);
+    await pickTopic(host);
+    const current = switchRequest(send);
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: old.requestId,
+      outcome: ok ? { ok: true, kind: "unit" } : { ok: false, reason: "Old refusal" } }));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("Old refusal");
+    expect(host.querySelector('[role="option"][aria-busy="true"]')).not.toBeNull();
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: current.requestId, outcome: { ok: true, kind: "unit" } }));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+async function filterBranches(host: HTMLElement, value: string) {
+  const input = host.querySelector("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  return input;
+}
+it("trims the filter and Enter switches the first match without an arrow key", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    expect(host.querySelector('h3')?.parentElement?.textContent).toContain("Switch branch3 branches");
+    expect(host.textContent).toContain("↑↓ · Enter · Esc");
+    const input = await filterBranches(host, "  TOPIC/A  ");
+    expect(host.querySelector('[aria-label="Matching"]')?.textContent).toBe("Matching · 1topic/a");
+    expect(document.getElementById(input.getAttribute("aria-activedescendant")!)?.textContent).toBe("topic/a");
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(switchRequest(send).command).toEqual({ op: "switch_branch", name: "topic/a" });
+  });
+});
+it("distinguishes empty branches from a filter with no matches and treats spaces as empty", async () => {
+  await branchMenu(async (host, store) => {
+    await readyBranches(store);
+    await filterBranches(host, "   ");
+    expect(host.querySelectorAll('[aria-label="Matching"] [role="option"]')).toHaveLength(2);
+    await filterBranches(host, "absent");
+    expect(host.textContent).toContain("No branches match");
+    await filterBranches(host, "");
+    await act(async () => store.setState({ git: { ...store.getState().git, branches: [branchItems[1]!] } }));
+    expect(host.textContent).toContain("No other branches");
+  });
+});
+it("clears a branch-list error when reopening the menu", async () => {
+  await branchMenu(async (host, store) => {
+    const requestId = Object.entries(store.getState().git.pending).find(([, p]) => p.kind === "branches")![0];
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId, outcome: { ok: false, reason: "Old list failure" } }));
+    expect(host.textContent).toContain("Old list failure");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
+    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
+    expect(store.getState().git.branchesError).toBeNull();
+    expect(host.textContent).not.toContain("Old list failure");
+    expect(host.textContent).toContain("Loading branches…");
+  });
+});
+
+it("offers creation last only without an exact name and Enter creates and switches", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    for (const query of ["", "main", "topic/a"]) {
+      await filterBranches(host, query);
+      expect(host.textContent).not.toContain("Create branch “");
+    }
+    await filterBranches(host, "topic");
+    expect(host.querySelector('[role="option"]:last-child')).not.toBeNull();
+    expect(Array.from(host.querySelectorAll('[role="option"]')).at(-1)?.textContent).toBe('Create branch “topic”');
+    await act(async () => store.getState().gitRequestStarted("unrelated-refresh", { kind: "refresh", label: "refresh" }));
+    await filterBranches(host, "new/topic");
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "new/topic", switch: true } }));
+    expect(host.textContent).toContain("Creating…");
+    const requestId = Object.entries(store.getState().git.pending).find(([, request]) => request.kind === "mutation")![0];
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId, outcome: { ok: false, reason: "Creation refused" } }));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Creation refused");
+    await clickText(host, "Retry");
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "new/topic", switch: true } }));
+  });
+});
+it.each(["bad name", "-flag", "a..b", "a@{b", "a.lock", "a/.hidden", "a//b", "a?b", "a/", "@", "HEAD"])("refuses invalid branch %s inline without sending", async name => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await filterBranches(host, name);
+    const count = send.mock.calls.length;
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Invalid branch name");
+    expect(send.mock.calls).toHaveLength(count);
+    expect(host.querySelector('[role="alert"] button')).toBeNull();
+  });
+});
+it("opens the branch screen directly from a tab-scoped command and focuses its filter", async () => {
+  await branchMenu(async (host) => {
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "another-tab" })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
+    expect(host.textContent).toContain("Switch branch");
+    expect(document.activeElement).toBe(host.querySelector("input"));
+    host.querySelector("input")!.blur();
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
+    expect(document.activeElement).toBe(host.querySelector("input"));
+  });
+});
+
+it("focuses Copy path on open, restores Branch on Back and trigger on Escape/outside", async () => {
+  await branchMenu(async host => {
+    const trigger = host.querySelector<HTMLButtonElement>(".environment-trigger")!;
+    const back = host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!;
+    expect(document.activeElement).toBe(host.querySelector("input"));
+    const input = host.querySelector("input")!;
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true })));
+    expect(document.activeElement).toBe(back);
+    await act(async () => back.click());
+    expect(document.activeElement?.textContent).toContain("Branch");
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(document.activeElement).toBe(trigger);
+    await act(async () => trigger.click());
+    expect(document.activeElement).toBe(host.querySelector('[aria-label="Copy path"]'));
+    await act(async () => document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+});
+it("lets Tab leave the main panel without moving focus back", async () => {
+  await branchMenu(async host => {
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+    const outside = document.createElement("button"); document.body.append(outside);
+    try {
+      await act(async () => outside.focus());
+      expect(host.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.activeElement).toBe(outside);
+    } finally { outside.remove(); }
+  });
+});
+it("keeps pending switches open and recovers when their store record resets", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store); await pickTopic(host);
+    const request = switchRequest(send);
+    expect(store.getState().git.pending[request.requestId]).toMatchObject({ kind: "mutation", label: "switch branch" });
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => store.getState().reset());
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    expect(host.querySelector('[aria-busy="true"]')).toBeNull();
+    await act(async () => store.setState({ git: { ...store.getState().git, statusKnown: true,
+      status: { head: { branch: "main", sha: "abcdef", detached: false, ahead: null, behind: null }, staged: [], unstaged: [], untracked: [], dirtyCount: 0, filesTruncated: false } } }));
+    await readyBranches(store); await pickTopic(host);
+    expect(switchRequest(send).requestId).not.toBe(request.requestId);
+  });
+});
+it("allows another warning target and emphasizes Cancel", async () => {
+  await branchMenu(async (host, store) => {
+    await readyBranches(store, 3); await pickTopic(host);
+    await act(async () => Array.from(host.querySelectorAll<HTMLElement>('[role="option"]')).at(-1)!.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Switch to topic/a?");
+    expect(Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Cancel")?.className).toContain("secondary");
+  });
+});
+it("shows known nonzero git counts and copies the unchanged path with one reset timer", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+  vi.useFakeTimers();
+  try {
+    await branchMenu(async (host, store) => {
+      await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back"]')!.click());
+      await act(async () => store.setState({ git: { ...store.getState().git, status: {
+        ...store.getState().git.status!, dirtyCount: 3, head: { ...store.getState().git.status!.head, ahead: 2, behind: 1 }
+      } } }));
+      const trigger = host.querySelector(".environment-trigger")!;
+      expect(trigger.textContent).toContain("●3"); expect(trigger.textContent).toContain("↑2 ↓1");
+      await act(async () => store.setState({ git: { ...store.getState().git, status: {
+        ...store.getState().git.status!, dirtyCount: 0, head: { ...store.getState().git.status!.head, ahead: 0, behind: null }
+      } } }));
+      expect(trigger.textContent).not.toContain("●"); expect(trigger.textContent).not.toContain("↑");
+      const copy = host.querySelector<HTMLButtonElement>('[aria-label="Copy path"]')!;
+      await act(async () => copy.click());
+      expect(writeText).toHaveBeenCalledWith("/fixture/repo");
+      expect(host.querySelector('[role="status"]')?.textContent).toBe("Copied");
+      expect(host.textContent).toContain("/fixture/repo");
+      await act(async () => vi.advanceTimersByTime(1000));
+      await act(async () => copy.click());
+      await act(async () => vi.advanceTimersByTime(600));
+      expect(host.querySelector('[role="status"]')?.textContent).toBe("Copied");
+      await act(async () => vi.advanceTimersByTime(900));
+      expect(host.querySelector('[role="status"]')).toBeNull();
+      await act(async () => store.setState({ git: { ...store.getState().git, statusKnown: false } }));
+      expect(trigger.textContent).not.toContain("●3"); expect(trigger.textContent).not.toContain("↑2");
+      await act(async () => copy.click()); // unmount must cancel this timer
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { vi.useRealTimers(); if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard); else Reflect.deleteProperty(navigator, "clipboard"); }
+});
+
+it("uses a creation-specific dirty warning and keeps creation pending open", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store, 3);
+    await filterBranches(host, "feature/new");
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const warning = host.querySelector('[role="alert"]')!;
+    expect(warning.textContent).toContain("Create and switch to feature/new?");
+    expect(warning.textContent).not.toContain("Git will refuse");
+    await clickText(host, "Create and switch");
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "feature/new", switch: true } }));
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+  });
+});
+it("suspends branch choices when status disappears and recovers their indices", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    const status = store.getState().git.status;
+    await act(async () => store.setState({ git: { ...store.getState().git, status: null } }));
+    await filterBranches(host, "feature/new");
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(0);
+    const count = send.mock.calls.length;
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send.mock.calls).toHaveLength(count);
+    await act(async () => store.setState({ git: { ...store.getState().git, status } }));
+    await readyBranches(store);
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "feature/new", switch: true } }));
+  });
+});
+
+it("connects App's shortcut and palette command to the active tab panel and disables both without git", async () => {
+  await branchMenu(async (host, store) => {
+    const { tabRegistry } = await import("../tab-registry.js");
+    const previous = useTabsStore.getState().activeTabId;
+    const getStore = vi.spyOn(tabRegistry, "getStore").mockImplementation(id => id === "tab" ? store : undefined);
+    useTabsStore.setState({ activeTabId: "tab" });
+    const escape = () => act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    try {
+      await escape();
+      const match = matchKeymap(new KeyboardEvent("keydown", { key: "B", code: "KeyB", metaKey: true, shiftKey: true }), "darwin")!;
+      await act(async () => { expect(runBranchSwitchAction(match.action)).toBe(true); });
+      expect(document.activeElement).toBe(host.querySelector(".environment-branch-picker input"));
+      await escape();
+      const action = branchSwitchAction("⇧⌘B");
+      expect(action).toMatchObject({ id: "branch.switch", label: "Switch branch…", hint: "⇧⌘B", enabled: true });
+      await act(async () => action.run());
+      expect(document.activeElement).toBe(host.querySelector(".environment-branch-picker input"));
+      await escape();
+      await act(async () => store.setState({ git: { ...store.getState().git, status: null } }));
+      expect(branchSwitchAction(null).enabled).toBe(false);
+      await act(async () => { branchSwitchAction(null).run(); runBranchSwitchAction(match.action); });
+      expect(host.querySelector('[role="dialog"]')).toBeNull();
+      expect(runBranchSwitchAction("sidebar.toggle")).toBe(false);
+      useTabsStore.setState({ activeTabId: "foreign" });
+      expect(branchSwitchAction(null).enabled).toBe(false);
+    } finally { getStore.mockRestore(); useTabsStore.setState({ activeTabId: previous }); }
+  });
+});
+
+it.each(["awaiting_port", "awaiting_host_ready", "host_exited"] as const)("does not send after disconnect: %s", async connection => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await act(async () => store.setState({ connection }));
+    const count = send.mock.calls.length;
+    await pickTopic(host);
+    expect(send.mock.calls).toHaveLength(count);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(connection === "host_exited" ? "Host process exited" : connection === "awaiting_port" ? "Host connection is unavailable" : "Waiting for host readiness");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+it.each(["exit", "respawn", "timeout"])("unlocks an unanswered switch after %s", async event => {
+  vi.useFakeTimers();
+  try { await branchMenu(async (host, store, send) => {
+    await readyBranches(store); await pickTopic(host);
+    const request = switchRequest(send);
+    await act(async () => {
+      if (event === "exit") store.getState().setHostExited(false, { code: "spawn_refused", message: "Host stopped unexpectedly" });
+      else if (event === "respawn") store.getState().reset();
+      else vi.advanceTimersByTime(30_000);
+    });
+    expect(store.getState().git.pending[request.requestId]).toBeUndefined();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(event === "exit" ? "Host stopped unexpectedly" : event === "respawn" ? "interrupted" : "timed out");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    await act(async () => document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+  }); } finally { vi.useRealTimers(); }
+});
+it("ignores a late success for a switch retired by its timeout: error stays, no second switch, dialog stays open", async () => {
+  vi.useFakeTimers();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try { await branchMenu(async (host, store, send) => {
+    await readyBranches(store); await pickTopic(host);
+    const request = switchRequest(send);
+    const sent = send.mock.calls.length;
+    await act(async () => vi.advanceTimersByTime(30_000));
+    expect(store.getState().git.pending[request.requestId]).toBeUndefined();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("timed out");
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId: request.requestId, outcome: { ok: true, kind: "unit" } }));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("timed out");
+    expect(host.querySelector<HTMLInputElement>("input")!.disabled).toBe(false);
+    expect(send.mock.calls).toHaveLength(sent);
+  }); } finally { warn.mockRestore(); vi.useRealTimers(); }
+});
+it.each([false, true])("Enter creates a partial match unless an arrow selects it: %s", async arrow => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store, 1);
+    const input = await filterBranches(host, "topic");
+    if (arrow) await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })));
+    await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("1 uncommitted change");
+    expect(host.querySelector('[role="alert"]')?.textContent).not.toContain("1 uncommitted changes");
+    if (arrow) expect(host.querySelector('[role="alert"]')?.textContent).toContain("target branch");
+    expect(switchRequest(send)).toBeUndefined();
+    await clickText(host, arrow ? "Switch anyway" : "Create and switch");
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: arrow ? { op: "switch_branch", name: "topic/a" } : { op: "create_branch", name: "topic", switch: true } }));
+  });
+});
+it("palette activation reads current git availability and active tab", async () => {
+  const { tabRegistry } = await import("../tab-registry.js");
+  const store = createDesktopStore();
+  const previous = useTabsStore.getState().activeTabId;
+  const getStore = vi.spyOn(tabRegistry, "getStore").mockReturnValue(store);
+  const dispatch = vi.spyOn(window, "dispatchEvent");
+  try {
+    useTabsStore.setState({ activeTabId: "first" });
+    const action = branchSwitchAction(null);
+    expect(action.enabled).toBe(false);
+    store.setState({ git: { ...store.getState().git, status: { head: { branch: "main" } } as never } });
+    useTabsStore.setState({ activeTabId: "second" });
+    expect(action.enabled).toBe(true);
+    action.run();
+    expect(dispatch.mock.calls.at(-1)?.[0]).toMatchObject({ detail: "second" });
+    store.setState({ git: { ...store.getState().git, status: null } });
+    dispatch.mockClear(); action.run(); expect(dispatch).not.toHaveBeenCalled();
+  } finally { getStore.mockRestore(); dispatch.mockRestore(); useTabsStore.setState({ activeTabId: previous }); }
 });

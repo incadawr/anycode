@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Branch search and creation are available in the environment menu with ⇧⌘B; language servers and hooks moved to the Extensions panel.
+
 ### Fixed
 
 - Claude’s pre-session model pickers remember the live catalog for the current account and CLI, with versioned fallback choices including Fable; model selection prefers ordinary context when the account offers both ordinary and 1M variants.
