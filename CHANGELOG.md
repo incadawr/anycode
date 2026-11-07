@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.90] - 2026-11-07
+
 ### Changed
 
 - The environment menu shows worktrees, risky access and the parent session of a delegated worktree, keeps AnyCode-managed worktree branches fixed, and moves diagnostics export to the bottom of the menu.
