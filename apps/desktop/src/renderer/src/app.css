@@ -2636,6 +2636,12 @@ button.environment-menu-row:hover,
   animation: fade-slide-down var(--dur-2) var(--ease-out);
 }
 
+/* Menus take precedence over the background project's orientation hint. */
+.start-screen:has([role="menu"]) .start-project-hint,
+.start-screen:has([role="listbox"]) .start-project-hint {
+  display: none;
+}
+
 .start-project-menu {
   position: absolute;
   top: calc(100% + var(--sp-2));
@@ -9084,5 +9090,6 @@ dialog.role-picker-dialog {
 .connection-icon-swatches { flex-wrap: nowrap; gap: 3px; }
 .connection-icon-swatches button { flex: 0 0 14px; width: 14px; height: 14px; padding: 0; border: 1px solid var(--border-strong); border-radius: 4px; cursor: pointer; }
 .connection-icon-swatches button[aria-pressed="true"] { outline: 2px solid var(--text-1); outline-offset: 1px; }
-.connection-icon-swatches button:last-child { flex: 0 0 auto; width: auto; background: transparent; color: var(--text-2); font-size: var(--fs-2xs); }
+.connection-icon-swatches button.connection-icon-auto { background: linear-gradient(135deg, transparent 44%, var(--text-3) 44%, var(--text-3) 56%, transparent 56%); border: 1px dashed var(--border-strong); }
+.connection-icon-auto-label { color: var(--text-3); font-size: var(--fs-2xs); margin-left: 1px; }
 .connection-icon-reset { align-self: flex-start; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }

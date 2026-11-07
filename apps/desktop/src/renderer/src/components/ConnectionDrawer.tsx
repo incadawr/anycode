@@ -2551,7 +2551,7 @@ export function ConnectionDrawerFields({
         type="text"
         value={label}
         disabled={readOnly}
-        placeholder="e.g. Work, Personal"
+        placeholder="e.g. Work"
         onChange={(e) => setLabel(e.target.value)}
       />
 
@@ -2566,7 +2566,8 @@ export function ConnectionDrawerFields({
       </div>
       <div className="connection-icon-swatches" role="group" aria-label="Icon color">
         {CONNECTION_ICON_COLORS.map(color => <button key={color} type="button" aria-label={`Icon color ${color}`} aria-pressed={iconColor === color} disabled={readOnly} style={{ background: color }} onClick={() => setIconColor(color)} />)}
-        <button type="button" aria-label="Automatic icon color" aria-pressed={!iconColor} disabled={readOnly} onClick={() => setIconColor("")}>Auto</button>
+        <button className="connection-icon-auto" type="button" aria-label="Automatic icon color" aria-pressed={!iconColor} disabled={readOnly} onClick={() => setIconColor("")} />
+        <span className="connection-icon-auto-label" aria-hidden="true">Auto</span>
       </div>
       <span className="settings-field-hint">1–2 characters; empty uses an automatic monogram.</span>
       <button className="connection-icon-reset" type="button" disabled={readOnly} onClick={() => { setIconText(""); setIconColor(""); }}>Reset to default</button>

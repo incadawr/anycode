@@ -15,6 +15,7 @@
 // @vitest-environment jsdom
 import { act, createElement, useEffect } from "react";
 import { createRoot } from "react-dom/client";
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { watchExternalEngines } from "../engine-availability.js";
 import { StartScreen } from "./StartScreen.js";
@@ -80,6 +81,32 @@ async function mountStartScreen(): Promise<{ container: HTMLDivElement; root: Re
   });
   return { container, root };
 }
+
+it.each(["core", "codex"] as const)("hides the project hint while the %s model menu is open and restores it on close", async (engine) => {
+  if (engine === "core") {
+    const settings = cloneDefaults();
+    settings.provider.activeConnectionId = "c";
+    settings.provider.connections = [{ id: "c", providerId: "custom:test", model: "m" }];
+    useSettingsStore.setState({ snapshot: { settings, readOnly: false, secrets: [], envOverrides: [], providerReady: true, catalog: [] } });
+    useTabsStore.setState({ draft: { workspace: "/ws", prompt: "", engine: "core", model: null, mode: "build" } });
+  }
+  const path = existsSync("apps/desktop/src/renderer/src/app.css") ? "apps/desktop/src/renderer/src/app.css" : "src/renderer/src/app.css";
+  const rule = readFileSync(path, "utf8").match(/\.start-screen:has\(\[role="menu"\]\) \.start-project-hint,[\s\S]*?\{\s*display:\s*none;\s*\}/)?.[0];
+  expect(rule).toBeDefined();
+  const style = document.createElement("style"); style.textContent = rule!; document.head.append(style);
+  const { container, root } = await mountStartScreen();
+  try {
+    const hint = container.querySelector<HTMLElement>(".start-project-hint")!;
+    expect(hint).not.toBeNull();
+    expect(getComputedStyle(hint).display).not.toBe("none");
+    const chip = container.querySelector<HTMLButtonElement>(engine === "core" ? ".start-model > button" : 'button[aria-label="Engine model and effort"]')!;
+    await act(async () => chip.click());
+    expect(container.querySelector('[role="menu"]')).not.toBeNull();
+    expect(getComputedStyle(hint).display).toBe("none");
+    await act(async () => chip.click());
+    expect(getComputedStyle(hint).display).not.toBe("none");
+  } finally { await act(async () => root.unmount()); style.remove(); useSettingsStore.setState({ snapshot: null }); }
+});
 
 /** Opens the native menu and walks to its effort page. */
 async function openEffortPage(container: HTMLElement): Promise<HTMLElement> {

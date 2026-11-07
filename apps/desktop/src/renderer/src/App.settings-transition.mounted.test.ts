@@ -44,7 +44,7 @@ it.each(["before submit", "during submit"])("preserves the first connection draw
     await act(async () => [...container.querySelectorAll("button")].find(b => b.textContent === "Open settings")!.click());
     const provider = container.querySelector<HTMLSelectElement>("select")!;
     await act(async () => { provider.value = "openai"; provider.dispatchEvent(new Event("change", { bubbles: true })); });
-    const label = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Work, Personal"]') ?? container.querySelector<HTMLInputElement>("input")!;
+    const label = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Work"]') ?? container.querySelector<HTMLInputElement>("input")!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(label, "Main"); label.dispatchEvent(new Event("input", { bubbles: true })); });
     const button = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!;
     expect(button.disabled).toBe(false);

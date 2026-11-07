@@ -147,7 +147,7 @@ describe("compact subscription navigation", () => {
       expect(container.querySelector<HTMLElement>(".welcome-setup")?.hidden).toBe(false);
       expect(container.querySelector(".welcome-selected-subscription")).toBeNull();
       if (action === "saved connection") {
-        expect(container.querySelector<HTMLInputElement>('.welcome-setup input[placeholder="e.g. Work, Personal"]')?.value).toBe("Work GLM");
+        expect(container.querySelector<HTMLInputElement>('.welcome-setup input[placeholder="e.g. Work"]')?.value).toBe("Work GLM");
       } else {
         expect(container.querySelector<HTMLSelectElement>(".welcome-setup select")?.value).toBe("");
       }

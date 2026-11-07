@@ -471,7 +471,7 @@ it("uses a secondary Cancel and protects unsaved changes for Cancel, Escape, and
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
     expect([...container.querySelectorAll("button")].filter(b => b.classList.contains("ak-btn--primary")).map(b => b.textContent?.trim())).toEqual(["Save"]);
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "changed");
     const cancel = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Cancel")!;
     await act(async () => { cancel.focus(); cancel.click(); });
     expect(onClose).not.toHaveBeenCalled();
@@ -479,7 +479,7 @@ it("uses a secondary Cancel and protects unsaved changes for Cancel, Escape, and
     expect(document.activeElement?.textContent).toBe("Keep editing");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Keep editing")!.click(); });
     expect(document.activeElement).toBe(cancel);
-    expect((container.querySelector('input[placeholder="e.g. Work, Personal"]') as HTMLInputElement).value).toBe("changed");
+    expect((container.querySelector('input[placeholder="e.g. Work"]') as HTMLInputElement).value).toBe("changed");
     await act(async () => { container.querySelector("dialog")!.dispatchEvent(new Event("cancel", {bubbles:false, cancelable:true})); });
     expect(container.textContent).toContain("Discard unsaved changes?");
     await act(async () => { container.querySelector("dialog")!.dispatchEvent(new Event("cancel", {bubbles:false, cancelable:true})); });
@@ -498,7 +498,7 @@ it("clears the unsaved warning after Save succeeds but not after a failed Save",
   rig.update.mockResolvedValueOnce({ok:false, reason:"io_error"});
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "changed");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
     expect(container.textContent).toContain("Discard unsaved changes?");
@@ -527,7 +527,7 @@ it("keeps newer edits dirty if they are made while Save is in flight", async () 
   rig.update.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
-    const label = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Work, Personal"]')!;
+    const label = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Work"]')!;
     await typeInto(label, "first");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.disabled).toBe(true);
@@ -563,7 +563,7 @@ it("does not allow saving behind a pending discard confirmation", async () => {
   const rig = catalogRig(connection), onClose = vi.fn();
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "changed");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Cancel")!.click(); });
     expect(container.querySelector("[inert]")).not.toBeNull();
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
@@ -676,7 +676,7 @@ it("removes a resolved consent notice but keeps later form edits dirty", async (
   try {
     await typeInto(container.querySelector('input[type="password"]')!, "fixture-key");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
-    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "later edit");
+    await typeInto(container.querySelector('input[placeholder="e.g. Work"]')!, "later edit");
     await act(async () => { rig.store.setState({secretConsentResolution:{key:"provider.connection.c1.apiKey", ok:true}} as never); });
     expect(container.textContent).not.toContain("awaiting storage consent");
     expect(container.querySelector(".connection-drawer-saved")).toBeNull();
@@ -917,6 +917,13 @@ it("edits and resets the connection icon", async () => {
     await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Icon color #5E9E6E"]')!.click(); });
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({iconText:"WX", iconColor:"#5E9E6E"}));
+    const automatic = container.querySelector<HTMLButtonElement>('button[aria-label="Automatic icon color"]')!;
+    expect(automatic.nextElementSibling?.textContent).toBe("Auto");
+    expect(automatic.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => automatic.click());
+    expect(automatic.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({iconText:"WX", iconColor:""}));
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Reset to default")!.click(); });
     expect(container.querySelector(".connection-icon")?.textContent).toBe("WO");
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
