@@ -22,10 +22,12 @@ import { join } from "node:path";
 import { materializeMcpForwardFile } from "./mcp-forward-file.js";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { CLAUDE_NOT_SIGNED_IN, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
+import { CLAUDE_NOT_SIGNED_IN, ClaudeEngine, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import * as overlayPolicy from "./orchestration-policy.js";
-import type { ClaudeSystemInitMessage } from "./protocol.js";
+import { EngineVersionError, type ClaudeSystemInitMessage } from "./protocol.js";
+import { ClaudeClient } from "./claude-client.js";
+import { OrchestrationNotReadyError } from "../../orchestration-policy.js";
 import { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { createBridgePresentationStamp } from "./bridge-presentation-stamp.js";
 import { createEngineBrowserBridge } from "../browser-bridge.js";
@@ -69,7 +71,7 @@ const MODELS = [{ value: "model-a", resolvedModel: "model-a", displayName: "A" }
 function fakeSpawn(
   account: Record<string, unknown> = { tokenSource: "oauth" },
   models: unknown = MODELS,
-  initialization?: { hold: boolean },
+  initialization?: { hold?: boolean; crash?: boolean; error?: string; commands?: unknown[] },
   shutdown?: { wait: Promise<void>; started: () => void },
 ): {
   spawnImpl: (command: string, args: readonly string[]) => unknown;
@@ -114,9 +116,9 @@ function fakeSpawn(
       queueMicrotask(() => child.emit("close", 0, null));
       return true;
     };
-    if (args.includes("--version")) {
+    if (args.includes("--version") || args.includes("--help")) {
       queueMicrotask(() => {
-        child.stdout.emit("data", Buffer.from("2.1.212 (Claude Code)\n"));
+        child.stdout.emit("data", Buffer.from(args.includes("--help") ? "--plugin-dir" : "2.1.212 (Claude Code)\n"));
         child.emit("close", 0, null);
       });
       return child;
@@ -161,12 +163,13 @@ function fakeSpawn(
         sdkMcpServers = message.request.sdkMcpServers;
         const respondToInitialize = (): void => {
           if (initialization?.hold) return;
+          if (initialization?.crash) { child.emit("close", 1, null); return; }
           child.stdout.emit(
             "data",
             Buffer.from(
               `${JSON.stringify({
                 type: "control_response",
-                response: { subtype: "success", request_id: message.request_id, response: { commands: [], models, account } },
+                response: initialization?.error ? { subtype: "error", request_id: message.request_id, error: initialization.error } : { subtype: "success", request_id: message.request_id, response: { commands: initialization?.commands ?? [], models, account } },
               })}\n`,
             ),
           );
@@ -1327,7 +1330,7 @@ describe("explicit OFF recovery boot", () => {
 });
 
 // Protocol fixtures exercise lifecycle contracts without qualifying a native version.
-async function overlayContractRig() {
+async function overlayContractRig(withBuiltins = false, overrides: Pick<Parameters<typeof startClaudeEngine>[0], "resolveMcpForward"> = {}) {
   const fixture = JSON.parse(readFileSync(new URL("../../../../scripts/claude-orchestrate-fixture.json", import.meta.url), "utf8"));
   const fake = fakeSpawn();
   let failSpawn = false, holdAck = false;
@@ -1370,10 +1373,10 @@ async function overlayContractRig() {
     return postureHook ? postureHook(init, read) : init;
   };
   try {
-    ({ engine } = await startClaudeEngine({ ...baseOptions(spawnImpl), orchestrationFeatureEnabled: true,
+    ({ engine } = await startClaudeEngine({ ...baseOptions(spawnImpl), ...(withBuiltins ? { pluginDir: "/sealed" } : {}), orchestrationFeatureEnabled: true,
       resolveMcpForward: async () => ({ claudeConfigPath: null, claudeJson: '{"mcpServers":{}}', claudeNames: [], loaderProblems: [], forwardProblems: [], notices: [], cleanupFile: () => {} }),
       mcpBridge: new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: () => ["agent", "agent_status"].map(name => ({ name, description: name, inputSchema: { type: "object" as const, properties: {} } })), callTool: async () => ({ text: "ok", isError: false }) }),
-      orchestrationEvidence: { version: fixture.version, facts: fixture.facts, readPosture } }));
+      orchestrationEvidence: { version: fixture.version, facts: fixture.facts, readPosture }, ...overrides }));
     await engine.selectPreset("workspace");
   } catch (error) { mocks.forEach(mock => mock.mockRestore()); throw error; }
   return { engine, fake, children, lateAcks, policy: engine.orchestrationPolicy!,
@@ -1507,7 +1510,7 @@ it.each([true, false])("keeps host user/report admission closed until restart co
 });
 
 it.each(["permissionMode", "tools", "mcp_servers"])("does not declare OFF after restored %s drift", async key => {
-  const r = await overlayContractRig();
+  const r = await overlayContractRig(true);
   try {
     await r.policy.apply(true, {});
     r.hook(async init => ({ ...init, [key]: key === "permissionMode" ? "default" : [] }));
@@ -1584,4 +1587,148 @@ it.each([undefined, {}, { nativeBase: { version: 99 } }])("boots legacy recovery
     resolveMcpForward: async () => ({ claudeConfigPath: null, claudeJson: null, claudeNames: [], loaderProblems: ["invalid user config"], forwardProblems: [], notices: [], cleanupFile() {} }) });
   try { expect(engine.orchestrationState).toBe("off"); }
   finally { await engine.dispose("session-close"); }
+});
+
+it.each([false, true])("passes pluginDir through engine fresh/resume=%s", async resume => {
+  const fake = fakeSpawn();
+  const options = { ...baseOptions(fake.spawnImpl), pluginDir: "/synthetic/sealed-plugin" };
+  const connected = await (resume ? resumeClaudeEngine({ ...options, externalSessionRef: "persisted" }) : startClaudeEngine(options));
+  try {
+    const args = fake.capturedArgs()!;
+    expect(args.filter(arg => arg === "--plugin-dir")).toHaveLength(1);
+    expect(args[args.indexOf("--plugin-dir") + 1]).toBe(options.pluginDir);
+  } finally { await connected.engine.dispose("session-close"); }
+});
+it.each([{ error: "Failed to load plugin anycode-app" }, { error: "plugin anycode-app is invalid" }, { crash: true }])("retries unknown plugin boot failure once: %j", async failure => {
+  const failing = fakeSpawn(undefined, MODELS, failure); const ordinary = fakeSpawn();
+  let attempts = 0;
+  const spawnImpl = (command: string, args: readonly string[]) => {
+    if (!args.includes("--version")) attempts++;
+    return (attempts <= 1 ? failing : ordinary).spawnImpl(command, args);
+  };
+  const connected = await startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/synthetic/sealed-plugin" });
+  try {
+    expect(attempts).toBe(2);
+    const turn = connected.engine.runTurn("synthetic", { signal: new AbortController().signal })[Symbol.asyncIterator]();
+    let notice;
+    do { notice = await turn.next(); } while (!notice.done && !(notice.value.type === "engine_notice" && notice.value.message.includes("Retrying without them")));
+    await turn.return?.();
+    expect(notice.value).toMatchObject({ type: "engine_notice", message: "Claude could not start with built-in AnyCode skills. Retrying without them." });
+    expect(failing.capturedArgs()).toContain("--plugin-dir");
+    expect(ordinary.capturedArgs()).not.toContain("--plugin-dir");
+  } finally { await connected.engine.dispose("session-close"); }
+});
+
+it("does not retry an unsigned account with a plugin", async () => {
+  const fake = fakeSpawn({ tokenSource: "none" });
+  const spawnImpl = vi.fn(fake.spawnImpl);
+  await expect(startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" })).rejects.toThrow(CLAUDE_NOT_SIGNED_IN);
+  expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(1);
+});
+it("never retries the fallback boot", async () => {
+  const fake = fakeSpawn(undefined, MODELS, { error: "unknown boot failure" });
+  const spawnImpl = vi.fn(fake.spawnImpl);
+  await expect(startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" })).rejects.toThrow("unknown boot failure");
+  expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(2);
+});
+it("describes skill preparation and recognition without exposing internal identifiers", async () => {
+  const fake = fakeSpawn(undefined, MODELS, { commands: [{ name: "anycode-app:anycode-setup" }] });
+  const lease = { root: "/sealed/private", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
+  const connected = await startClaudeEngine({ ...baseOptions(fake.spawnImpl), prepareBuiltinSkills: async () => lease });
+  try {
+    const events = [];
+    const turn = connected.engine.runTurn("synthetic", { signal: new AbortController().signal })[Symbol.asyncIterator]();
+    // Read only the boot notices, before the fake receives any user frame.
+    while (events.filter(event => event.type === "engine_notice").length < 2) {
+      const event = await turn.next();
+      if (event.done) break;
+      events.push(event.value);
+    }
+    await turn.return?.();
+    expect(fake.userMessages).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Built-in AnyCode skill files are prepared for this session." }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Claude lists the built-in AnyCode skills for this session. This does not confirm they were used." }));
+    const messages = events.filter(e => e.type === "engine_notice").map(e => e.message).join(" ");
+    expect(messages).not.toContain("/sealed");
+    expect(messages).not.toMatch(/[a-f0-9-]{36}|plugin-start-failed|engine-switch preparation/);
+  } finally { await connected.engine.dispose("session-close"); }
+});
+
+it.each([new EngineVersionError("missing required capability"), new OrchestrationNotReadyError("posture unavailable")])("preserves typed non-plugin boot failure: %s", async error => {
+  const fake = fakeSpawn(); const spawnImpl = vi.fn(fake.spawnImpl);
+  const initialize = vi.spyOn(ClaudeClient.prototype, "initialize").mockRejectedValueOnce(error);
+  try {
+    await expect(startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" })).rejects.toBe(error);
+    expect(fake.capturedArgs()).toContain("--plugin-dir");
+    expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(1);
+  } finally { initialize.mockRestore(); }
+});
+
+
+it("re-resolves the cleaned MCP config on an OFF transition plugin retry", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-off-retry-")), paths: string[] = [];
+  const resolveMcpForward = async () => {
+    const file = materializeMcpForwardFile('{"mcpServers":{}}', { tmpDir: dir, pid: process.pid });
+    paths.push(file.path);
+    return { claudeConfigPath: file.path, claudeJson: '{"mcpServers":{}}', claudeNames: [],
+      loaderProblems: [], forwardProblems: [], notices: [], cleanupFile: () => rmSync(file.path, { force: true }) };
+  };
+  const r = await overlayContractRig(true, { resolveMcpForward });
+  let initialize: ReturnType<typeof vi.spyOn> | undefined;
+  try {
+    await r.policy.apply(true, {});
+    initialize = vi.spyOn(ClaudeClient.prototype, "initialize").mockRejectedValueOnce(new Error("unknown boot failure"));
+    await r.policy.apply(false, {});
+    const args = r.fake.capturedArgs()!;
+    const path = args[args.indexOf("--mcp-config") + 1]!;
+    expect(args).not.toContain("--plugin-dir");
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe('{"mcpServers":{}}');
+    expect(paths).toHaveLength(3);
+    expect(path).toBe(paths[2]);
+    expect(existsSync(paths[1]!)).toBe(false);
+    await r.policy.apply(true, {});
+    await r.policy.apply(false, {});
+  } finally {
+    initialize?.mockRestore(); await r.close();
+    expect(paths.every(path => !existsSync(path))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("preserves an ordinary verify error after successful initialize without retry", async () => {
+  const fake = fakeSpawn(), spawnImpl = vi.fn(fake.spawnImpl);
+  const { engine, sessionRef } = await startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" });
+  const error = new Error("post-initialize verification failed");
+  const verify = vi.fn(async () => { throw error; });
+  try {
+    await expect(engine.replaceTransport({ resume: sessionRef, verify })).rejects.toBe(error);
+    expect(verify).toHaveBeenCalledOnce();
+    expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version") && !args.includes("--help"))).toHaveLength(2);
+  } finally { await engine.dispose("session-close"); }
+});
+
+it("keeps the successful retry forward and bridge for later transports", async () => {
+  const failing = fakeSpawn(undefined, MODELS, { error: "unknown boot failure" }), ordinary = fakeSpawn();
+  let attempts = 0, resolutions = 0;
+  const spawnImpl = (command: string, args: readonly string[]) => {
+    if (!args.includes("--version") && !args.includes("--help")) attempts++;
+    return (attempts <= 1 ? failing : ordinary).spawnImpl(command, args);
+  };
+  const bridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: () => [], callTool: async () => ({ text: "ok", isError: false }) });
+  const fork = vi.spyOn(ClaudeMcpBridge.prototype, "fork");
+  const install = vi.spyOn(ClaudeEngine.prototype, "installOrchestration");
+  let engine: ClaudeEngine | undefined;
+  try {
+    ({ engine } = await startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed", mcpBridge: bridge,
+      resolveMcpForward: async () => {
+        const name = ++resolutions === 1 ? "failed" : "running";
+        return { claudeConfigPath: null, claudeJson: JSON.stringify({ mcpServers: { [name]: { command: "node" } } }),
+          claudeNames: [name], loaderProblems: [], forwardProblems: [], notices: [], cleanupFile() {} };
+      } }));
+    expect(install.mock.calls[0]![1]?.claudeNames).toEqual(["running"]);
+    const runningBridge = fork.mock.results[0]!.value as ClaudeMcpBridge;
+    await engine.replaceTransport({ resume: engine.sessionRef });
+    expect(fork.mock.contexts.at(-1)).toBe(runningBridge);
+  } finally { await engine?.dispose("session-close"); fork.mockRestore(); install.mockRestore(); }
 });

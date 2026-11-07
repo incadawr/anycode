@@ -1,3 +1,8 @@
+import { installCodexBuiltins } from "./engines/codex/builtin-skills.js";
+import { buildEngineBuiltinSkills } from "./engine-builtin-skills.js";
+import { readBuiltinPolicy } from "./skills/builtin-policy.js";
+import { prepareBuiltinSnapshot } from "./skills/builtin-snapshot.js";
+import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
 import { modelReplayPolicy } from "../shared/model-overrides.js";
 import { createFileActivityTaps } from "./file-activity.js";
 import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
@@ -1467,7 +1472,7 @@ function hostSwitchFactory(
           workspace, binaryPath, sourceEnv, broker: engineBroker, projectTrusted,
           orchestrationFeatureEnabled: launch?.claudeOrchestrateEnabled === true,
           profileDir: resolveClaudeConfigDir(), resolveMcpForward: () => forward("claude"),
-          bootNotices: [], agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
+          bootNotices: [{ type: "engine_notice", level: "warning", message: "Built-in AnyCode skills are unavailable after switching engines. Start a new Claude session to use them." }], agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
           peerToolNames: stamp.peerToolNames,
           browserToolNames: new Set(routing.browser.specs.map(spec => `mcp__anycode__${spec.claudeName}`)),
           binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
@@ -1637,6 +1642,7 @@ async function bootCodexSession(
       : {}),
   };
   const agentCardLog = new SqliteCodexAgentCardLog(persistence, bridgeRowId);
+  let codexBuiltinBrowser: Parameters<typeof prepareBuiltinSnapshot>[0]["browser"];
   let codexAgentBridge: CodexDynamicToolBridge | undefined;
   // The bridge's child port, kept so the Session below can surface its
   // detached-children registry (background_children) — without it a Codex
@@ -1690,6 +1696,7 @@ async function bootCodexSession(
       cwd: workspace,
       imageInputEnabled: () => codexParentEngine?.imageInputEnabled() ?? false,
     });
+    codexBuiltinBrowser = codexEngineBrowserBridge;
     let port: ChildSessionPort | undefined;
     if (catalog.length) {
       port = createChildSessionPort({
@@ -1749,7 +1756,19 @@ async function bootCodexSession(
     }
   }
 
-  const options = { bootstrap, ...buildCodexLaunchOptions({
+  const options = { bootstrap, ...(args.child ? {} : { prepareBuiltinSkills: async () => {
+    const home = hostProfileHome(), ids = ENGINE_BUILTIN_SKILLS.map(e => e.id);
+    const policy = await readBuiltinPolicy({ userConfigPath: join(home, ".anycode/config.json"),
+      projectConfigPath: join(workspace, ".anycode/config.json"), projectTrusted: hostWorkspaceTrust.projectTrusted, ids });
+    const failure = ids.map(id => policy[id]).find(p => !p.enabled && p.reason !== "disabled");
+    if (failure) throw new Error(failure.reason);
+    const disabled = ids.filter(id => !policy[id].enabled);
+    if (disabled.length === ids.length) return undefined;
+    const names = buildEngineBuiltinSkills({ engine: "codex", browser: codexBuiltinBrowser }).filter(d => !disabled.includes(d.id)).map(d => d.name);
+    const lease = prepareBuiltinSnapshot({ hostProfileHome: home, workspace, engine: "codex", browser: codexBuiltinBrowser, disabled,
+      excludedRoots: [codexProfile?.home, process.env.CODEX_HOME, join(homedir(), ".codex")].filter((p): p is string => !!p) });
+    return { lease, afterInitialize: (port: import("./engines/codex/builtin-skills.js").CodexBuiltinPort) => installCodexBuiltins(port, workspace, lease.root, names) };
+  } }), ...buildCodexLaunchOptions({
     broker: classifierBroker, workspace, binaryPath, rules, fs: new NodeFileSystemAdapter(), child: args.child,
     agentBridge: codexAgentBridge, agentCardLog, shadowLog, processOwnership, tempDir: codexChildTempDir,
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
@@ -2290,6 +2309,7 @@ async function bootClaudeSession(
   let stamp: ReturnType<typeof createBridgePresentationStamp> | undefined;
   // hoisted (same cell shape as `stamp`) — set by the non-child
   // boot block below, read by the `options` wiring further down.
+  let builtinBrowser: Parameters<typeof prepareBuiltinSnapshot>[0]["browser"];
   let claudeBrowserToolNames: Set<string> | undefined;
   let claudePeerToolNames: ReadonlySet<string> | undefined;
   let agentCatalogNonEmpty = false;
@@ -2389,6 +2409,7 @@ async function bootClaudeSession(
     // the CLI names the approval bridge auto-allows (one per
     // browser spec, `mcp__anycode__<claudeName>`), and the catalog switch
     // that alone gates `agentBridgePrompt` in the options wiring below.
+    builtinBrowser = engineBrowserBridge;
     claudeBrowserToolNames = new Set<string>(
       engineBrowserBridge.specs.map((spec) => `mcp__anycode__${spec.claudeName}`),
     );
@@ -2466,7 +2487,18 @@ async function bootClaudeSession(
     return mcpForward;
   };
 
-  const options = { bootstrap, ...buildClaudeLaunchOptions({
+  const options = { bootstrap, ...(args.child ? {} : { prepareBuiltinSkills: async () => {
+    const home = hostProfileHome();
+    const ids = ENGINE_BUILTIN_SKILLS.map(entry => entry.id);
+    const policy = await readBuiltinPolicy({ userConfigPath: join(home, ".anycode/config.json"),
+      projectConfigPath: join(workspace, ".anycode/config.json"), projectTrusted: hostWorkspaceTrust.projectTrusted, ids });
+    const failure = ids.map(id => policy[id]).find(value => !value.enabled && value.reason !== "disabled");
+    if (failure) throw new Error(failure.reason);
+    const disabled = ids.filter(id => !policy[id].enabled);
+    if (disabled.length === ids.length) return undefined;
+    return prepareBuiltinSnapshot({ hostProfileHome: home, workspace, engine: "claude", browser: builtinBrowser,
+      disabled, excludedRoots: [resolveClaudeConfigDir(), process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME].filter((p): p is string => !!p) });
+  } }), ...buildClaudeLaunchOptions({
     broker: claudeClassifierBroker, workspace, binaryPath, child: args.child,
     orchestrationFeatureEnabled: claudeCompositionEnabled,
     projectTrusted: hostWorkspaceTrust.projectTrusted, profileDir: resolveClaudeConfigDir(),

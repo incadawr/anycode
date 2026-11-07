@@ -12,7 +12,7 @@
 import { mkdtemp, mkdir, readFile, writeFile, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   handleSkillsCreate,
   handleSkillsDelete,
@@ -24,7 +24,25 @@ import {
   NodeSkillsFs,
   type SkillsIpcDeps,
 } from "./skills-ipc.js";
+import ts from "typescript";
+import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
 import { skillsPaneDiscoveryOptions } from "../host/plugin-wiring.js";
+
+// Exercise the production worker against synthetic configs; no built JS fixture.
+const policyWorker = vi.hoisted(() => ({ root: "", entry: "" }));
+vi.mock("node:worker_threads", async () => {
+  const { Worker } = await vi.importActual<typeof import("node:worker_threads")>("node:worker_threads");
+  return { Worker: class extends Worker {
+    constructor(_url: URL, options: import("node:worker_threads").WorkerOptions) { super(policyWorker.entry, options); }
+  } };
+});
+beforeAll(async () => {
+  policyWorker.root = await mkdtemp(join(tmpdir(), "skills-policy-worker-"));
+  policyWorker.entry = join(policyWorker.root, "worker.mjs");
+  const source = await readFile(new URL("../host/skills/builtin-policy-worker.ts", import.meta.url), "utf8");
+  await writeFile(policyWorker.entry, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext } }).outputText);
+});
+afterAll(async () => { await rm(policyWorker.root, { recursive: true, force: true }); });
 
 const TAB_ID = "tab-1";
 const fs = new NodeSkillsFs();
@@ -615,4 +633,76 @@ describe("handleSkillsList — the user's disabled plugins are a state, not prob
     const scan = await handleSkillsImportScan(storeDeps(ws, home), { tabId: TAB_ID });
     expect(scan.candidates.find((c) => c.name === "toolsmith")).toMatchObject({ alreadyPresent: false });
   });
+});
+
+describe("app builtin controls", () => {
+  it("lists a separate catalog despite a file override and unions scope decisions", async () => {
+    const ws = await tmp(), home = await tmp();
+    await seed(join(ws, ".anycode/skills/anycode-setup/SKILL.md"), "---\nname: anycode-setup\ndescription: custom\n---\nbody");
+    await seed(join(home, ".anycode/config.json"), JSON.stringify({ skills: { disabled: ["anycode-setup"] } }));
+    const snapshot = await handleSkillsList(makeDeps(ws, home), { tabId: TAB_ID });
+    expect(snapshot.rows.find(r => r.name === "anycode-setup")?.path).toContain("SKILL.md");
+    expect(snapshot.builtins).toHaveLength(3);
+    expect(snapshot.builtins?.[0]).toMatchObject({ id: "anycode-setup", userDisabled: true, projectDisabled: false });
+    expect(snapshot.builtinNotice).toContain("next engine process for Claude and Codex");
+  });
+  it("writes only a known builtin in the selected scope without any catalog scan", async () => {
+    const ws = await tmp(), home = await tmp();
+    await seed(join(ws, ".anycode/config.json"), JSON.stringify({ hooks: { x: 1 }, skills: { other: 2 } }));
+    const deps = makeDeps(ws, home);
+    deps.fs = Object.create(fs);
+    let scans = 0;
+    deps.fs.readdir = async () => { scans++; throw new Error("admin scan forbidden"); };
+    const result = await handleSkillsSetEnabled(deps, { tabId: TAB_ID, builtinId: "anycode-setup", scope: "project", enabled: false });
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(await readFile(join(ws, ".anycode/config.json"), "utf8"))).toEqual({
+      hooks: { x: 1 }, skills: { other: 2, disabled: ["anycode-setup"] },
+    });
+    const personal = await handleSkillsSetEnabled(deps, { builtinId: "control-browser", scope: "user", enabled: false });
+    expect(personal.ok).toBe(true);
+    expect(scans).toBe(0);
+    expect(JSON.parse(await readFile(join(home, ".anycode/config.json"), "utf8")).skills.disabled).toEqual(["control-browser"]);
+  });
+  it("refuses foreign builtin identities, paths and file actions before writing", async () => {
+    const ws = await tmp(), home = await tmp(), deps = makeDeps(ws, home);
+    for (const extra of [{ builtinId: "foreign" }, { builtinId: "../anycode-setup" },
+      { builtinId: "anycode-setup", path: "/foreign" }]) {
+      expect(await handleSkillsSetEnabled(deps, { ...extra, scope: "user", enabled: false })).toEqual({ ok: false, reason: "invalid" });
+    }
+    for (const action of [handleSkillsDelete, handleSkillsReveal]) {
+      expect(await action(deps, { builtinId: "anycode-setup", name: "anycode-setup" })).toEqual({ ok: false, reason: "invalid" });
+    }
+    expect(await handleSkillsImportApply(deps, { scope: "user", ids: ["builtin:anycode-setup"] })).toMatchObject({ ok: false });
+    expect(await exists(join(home, ".anycode/config.json"))).toBe(false);
+  });
+});
+
+describe("builtin preview limits", () => {
+  it("shows project and personal disables independently and never calls them process state", async () => {
+    const ws = await tmp(), home = await tmp(), deps = makeDeps(ws, home);
+    await seed(join(ws, ".anycode/config.json"), JSON.stringify({ skills: { disabled: ["control-browser"] } }));
+    await seed(join(home, ".anycode/config.json"), JSON.stringify({ skills: { disabled: ["control-browser"] } }));
+    const result = await handleSkillsSetEnabled(deps, { tabId: TAB_ID, builtinId: "control-browser", scope: "project", enabled: true });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.builtinsOnly).toBe(true);
+      expect(result.snapshot.builtins?.find(r => r.id === "control-browser")).toEqual({
+        id: "control-browser", userDisabled: true, projectDisabled: false,
+      });
+      expect(result.snapshot).not.toHaveProperty("generation");
+    }
+    expect(await handleSkillsSetEnabled(deps, { builtinId: "control-browser", scope: "project", enabled: false })).toEqual({ ok: false, reason: "no_workspace" });
+  });
+  it.each(["{", '{"skills":{"disabled":null}}'])("does not promise availability on invalid config %s", async config => {
+    const ws = await tmp(), home = await tmp();
+    await seed(join(home, ".anycode/config.json"), config);
+    const snapshot = await handleSkillsList(makeDeps(ws, home), { tabId: TAB_ID });
+    expect(snapshot.builtinNotice).toContain("availability cannot be previewed");
+  });
+});
+
+it.each(ENGINE_BUILTIN_SKILLS)("accepts catalog builtin $id in the writer", async ({ id }) => {
+  const ws = await tmp(), home = await tmp();
+  expect((await handleSkillsSetEnabled(makeDeps(ws, home), { builtinId: id, scope: "user", enabled: false })).ok).toBe(true);
+  expect(JSON.parse(await readFile(join(home, ".anycode/config.json"), "utf8")).skills.disabled).toEqual([id]);
 });

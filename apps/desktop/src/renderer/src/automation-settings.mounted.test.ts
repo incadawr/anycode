@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAutomationFacade, realMcpPaneDom, realSkillsPaneDom, realSubagentsPaneDom, realProviderPaneDom, realSettingsDom, realVisionPaneDom, realCodexPaneDom, type AnycodeBridge } from "./automation.js";
 import { McpFormDialog, McpImportDialog, McpRowItem, McpServersPane, blankMcpFormFields, type McpConfigBridge } from "./components/McpServersPane.js";
 import { SkillImportDialog, SkillRowItem, SkillsPane, type SkillsBridge } from "./components/SkillsPane.js";
+import { ENGINE_BUILTIN_SKILLS } from "../../shared/engine-skills.js";
 import { ScopeDropdown } from "./components/ScopeSwitcher.js";
 import { USER_SCOPE, scopeRefFor, type ScopeSelection } from "./components/scope-model.js";
 import type { ScopeWorkspaceEntry } from "../../shared/scope-workspaces.js";
@@ -386,4 +387,24 @@ it("mcpAddServer refuses with scope_unavailable when no workspace exists to pick
   expect(upsert).not.toHaveBeenCalled();
   // The refusal must not leave the scope dropdown hanging open.
   expect(document.querySelector("[data-scope-trigger]")?.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("exposes distinct builtin automation rows, filters file sections and reports config write errors", async () => {
+  const snapshot = { rows: [{ name: "anycode-setup", sourceKind: "user", enabled: true, description: "Override" }], problems: [],
+    builtins: ENGINE_BUILTIN_SKILLS.map(({ id }) => ({ id, userDisabled: false, projectDisabled: false })) };
+  const bridge = { list: vi.fn().mockResolvedValue(snapshot), setEnabled: vi.fn().mockResolvedValue({ ok: false, reason: "io_error" }) };
+  const view = await mount(createElement(SkillsPane, { bridge: bridge as never }));
+  const dom = realSkillsPaneDom();
+  expect(dom.rows()).toHaveLength(4);
+  expect(dom.rows().filter(row => row.sourceKind === "builtin")).toEqual(ENGINE_BUILTIN_SKILLS.map(({ id }) => ({
+    name: `builtin:${id}`, sourceKind: "builtin", enabled: true, hasToggle: true,
+  })));
+  expect(dom.rowExists("anycode-setup")).toBe(true);
+  await act(async () => { expect(dom.clickRowToggle("builtin:anycode-setup")).toBe(true); });
+  expect(bridge.setEnabled).toHaveBeenCalledWith({ tabId: undefined, builtinId: "anycode-setup", scope: "user", enabled: false });
+  expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(".anycode/config.json");
+  const select = view.container.querySelector<HTMLSelectElement>('[aria-label="Filter by source"]')!;
+  await act(async () => { select.value = "builtin"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(dom.rows()).toHaveLength(3);
+  expect(view.container.textContent).not.toMatch(/Workspace and personal skills|No workspace or personal skills yet/);
 });

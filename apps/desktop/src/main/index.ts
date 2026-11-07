@@ -43,7 +43,7 @@ import {
 } from "./browser-access-ipc.js";
 import { BROWSER_ACCESS_CHANGED_CHANNEL, BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { stdioAdapterForHost } from "./communication-adapter.js";
-import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs, checkReloadProtection } from "./self-check.js";
+import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs, checkReloadProtection, checkBuiltinPolicyWorker } from "./self-check.js";
 import { buildApplicationMenuTemplate, confirmReloadIfBusy, isReloadAccelerator } from "./application-menu.js";
 import { assertChildModel, connectionChildModels, connectionRoutingSettings } from "../shared/child-model.js";
 /**
@@ -4366,9 +4366,10 @@ void app.whenReady().then(async () => {
     win!.webContents.on("did-fail-load", (_event, code) => console.error(`[self-check] renderer load failed (${code})`));
     win!.webContents.on("render-process-gone", (_event, details) => console.error(`[self-check] renderer exited (${details.reason})`));
     try {
+      await checkBuiltinPolicyWorker(selfCheckProfile);
       await runSelfCheck(win!, selfCheckProfile, process.platform === "linux" && process.argv.includes("--self-check-allow-unavailable-capture"));
       await checkReloadProtection(win!, Menu.getApplicationMenu(), process.platform);
-      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes", "reload-shortcuts"] })}`);
+      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["builtin-policy-worker", "renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes", "reload-shortcuts"] })}`);
       await shutdownEverything();
       app.exit(0);
     } catch (error) {

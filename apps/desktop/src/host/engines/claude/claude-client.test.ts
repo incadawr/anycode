@@ -1,5 +1,8 @@
+import { createEngineBrowserBridge } from "../browser-bridge.js";
+import { spawn as spawnChild } from "node:child_process";
+import { prepareBuiltinSnapshot } from "../../skills/builtin-snapshot.js";
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -51,6 +54,12 @@ afterAll(() => {
       // best-effort cleanup only
     }
   }
+  const unseal = (path: string) => {
+    if (!statSync(path).isDirectory()) return;
+    chmodSync(path, 0o700);
+    for (const name of readdirSync(path)) unseal(join(path, name));
+  };
+  unseal(scratchDir);
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
@@ -546,6 +555,9 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
     // registry/skills/slash-commands support no conclusions about AnyCode.
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/Task tool/);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not AnyCode features/);
+    expect(CLAUDE_GUI_SURFACE_PROMPT).not.toContain("anycode-app plugin");
+    expect(buildClaudeSpawnArgs({ pluginDir: "/sealed" }).join(" ")).toContain("anycode-app plugin");
+    expect(buildClaudeSpawnArgs({}).join(" ")).not.toContain("anycode-app plugin");
   });
 
   /**
@@ -1288,4 +1300,134 @@ describe("ClaudeClient — MCP forward file custody", () => {
     }
     expect(existsSync(path)).toBe(false);
   }, 10_000);
+});
+
+
+describe("app builtin launch", () => {
+  it.each([false, true])("preserves argv and a single plugin directory, resume=%s", resume => {
+    const base = { model: "test", effort: "high", mcpConfigPath: "/mcp.json", projectTrusted: false,
+      enableSlashPassthrough: true, ...(resume ? { resume: "saved" } : { sessionId: "fresh" }) };
+    const old = buildClaudeSpawnArgs(base);
+    const args = buildClaudeSpawnArgs({ ...base, pluginDir: "/sealed" });
+    const index = args.indexOf("--plugin-dir");
+    expect(index).toBeGreaterThan(-1);
+    expect(args.filter(a => a === "--plugin-dir")).toHaveLength(1);
+    expect(args.splice(index, 2)).toEqual(["--plugin-dir", "/sealed"]);
+    const promptIndex = args.indexOf("--append-system-prompt") + 1;
+    expect(args[promptIndex]).toContain("anycode-app plugin");
+    args[promptIndex] = args[promptIndex]!.split("\n\n")[0]!;
+    expect(args).toEqual(old);
+    expect(buildClaudeSpawnArgs({})).not.toContain("--plugin-dir");
+    expect(buildClaudeSpawnArgs({ pluginDir: "/sealed" })).toContain("--disable-slash-commands");
+  });
+  it.each([false, true])("binds before initialize and retains on disposal/failed boot=%s", async fail => {
+    const root = join(scratchDir, `snapshot-${fail}`); mkdirSync(root, { recursive: true });
+    mkdirSync(join(root, "skills/anycode-setup"), { recursive: true });
+    const skill = join(root, "skills/anycode-setup/SKILL.md"); writeFileSync(skill, "sealed builtin"); chmodSync(skill, 0o400);
+    let bound = false;
+    const lease = { root, bindChild: vi.fn(() => { bound = true; }), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
+    const prepare = vi.fn(async () => lease);
+    const client = makeClient(["--builtin-test", ...(fail ? ["--hang-init"] : [])], {
+      // Successful initialize includes real Node startup; only the hang case needs a short deadline.
+      prepareBuiltinSkills: prepare, initTimeoutMs: fail ? 100 : 1000,
+    });
+    await client.start(); expect(bound).toBe(true);
+    expect(lease.bindChild).toHaveBeenCalledWith(expect.anything(), process.platform !== "win32");
+    if (fail) await expect(client.initialize()).rejects.toThrow();
+    else expect((await client.initialize()).commands).toContain("sealed builtin");
+    expect(prepare).toHaveBeenCalledTimes(1);
+    await client.close(); expect(lease.abortNeverSpawned).not.toHaveBeenCalled();
+    expect(existsSync(skill)).toBe(true);
+  });
+  it("fails soft with a bounded reason and no directory", async () => {
+    const notice = vi.fn();
+    const client = makeClient(["--builtin-test"], { prepareBuiltinSkills: async () => { throw new Error("unsafe-anchor"); }, onBuiltinSkillNotice: notice });
+    await client.start(); await client.initialize(); await client.close();
+    expect(notice).toHaveBeenCalledWith("unsafe-anchor");
+  });
+});
+
+it("opens a sealed snapshot and applies disabled changes only to the next process", async () => {
+  const home = join(scratchDir, "builtin-home"); mkdirSync(home, { mode: 0o700 });
+  let disabled = false;
+  const roots: string[] = [];
+  const prepare = vi.fn(async () => {
+    const lease = prepareBuiltinSnapshot({ hostProfileHome: home, workspace: scratchDir + "-workspace", engine: "claude",
+      browser: createEngineBrowserBridge({ preview: {} as never, broker: { requestPermission: vi.fn() }, fullAccess: () => false, cwd: scratchDir }),
+      disabled: disabled ? ["using-browser-preview"] : [] });
+    roots.push(lease.root);
+    // Intentionally retain for inspection after disposal; the real lease still binds.
+    return { ...lease, bindChild: (child: import("node:child_process").ChildProcess) => lease.bindChild(child, false) };
+  });
+  for (const resume of [undefined, "saved"]) {
+    const client = makeClient(["--builtin-test"], { prepareBuiltinSkills: prepare, resume });
+    try {
+      await client.start();
+      const root = roots.at(-1)!;
+      expect(statSync(join(root, "skills/anycode-setup/SKILL.md")).mode & 0o777).toBe(0o400);
+      const before = readFileSync(join(root, "skills/anycode-setup/SKILL.md"), "utf8");
+      expect(existsSync(join(root, "skills/using-browser-preview"))).toBe(!disabled);
+      disabled = true;
+      expect((await client.initialize()).commands).toContain(before);
+      expect(prepare).toHaveBeenCalledTimes(roots.length);
+      expect(readFileSync(join(root, "skills/anycode-setup/SKILL.md"), "utf8")).toBe(before);
+    } finally { await client.close(); }
+  }
+  expect(roots[0]).not.toBe(roots[1]);
+  expect(existsSync(join(roots[1]!, "skills/using-browser-preview"))).toBe(false);
+});
+
+it("releases a real snapshot when spawn returns no PID", async () => {
+  const home = join(scratchDir, "never-spawned-home"); mkdirSync(home, { mode: 0o700 });
+  const lease = prepareBuiltinSnapshot({ hostProfileHome: home, workspace: scratchDir + "-workspace", engine: "claude" });
+  const abort = vi.spyOn(lease, "abortNeverSpawned");
+  const client = makeClient(["--builtin-test"], {
+    prepareBuiltinSkills: async () => lease,
+    spawnImpl: (command, args, options) => spawnChild((args.includes("--version") || args.includes("--help")) ? command : join(home, "missing-cli"), [...args], options),
+  });
+  await expect(client.start()).rejects.toThrow();
+  expect(abort).toHaveBeenCalled(); expect(existsSync(lease.root)).toBe(false);
+  await client.close();
+});
+
+it("disables the adapter when the executable lacks the plugin flag", async () => {
+  const prepare = vi.fn(); const notice = vi.fn();
+  const client = makeClient(["--builtin-test", "--no-plugin-help"], { prepareBuiltinSkills: prepare, onBuiltinSkillNotice: notice });
+  try {
+    await client.start(); expect((await client.initialize()).commands).toEqual(["no plugin"]);
+    expect(prepare).not.toHaveBeenCalled(); expect(notice).toHaveBeenCalledWith("unsupported-plugin-dir");
+  } finally { await client.close(); }
+});
+
+it.each(["close", "trust"])("aborts the lease when %s changes during preparation", async fault => {
+  const lease = { root: "/sealed", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
+  let trusted = true;
+  const spawnImpl = vi.fn((command: string, args: readonly string[], options: import("node:child_process").SpawnOptions) => {
+    if (!args.includes("--help") && !args.includes("--version")) throw new Error("unexpected main spawn");
+    return spawnChild(command, [...args], options);
+  });
+  const client = makeClient(["--builtin-test"], { spawnImpl,
+    binaryTrust: () => trusted ? null : "revoked",
+    prepareBuiltinSkills: async () => {
+      if (fault === "close") await client.close(); else trusted = false;
+      return lease;
+    },
+  });
+  await expect(client.start()).rejects.toThrow(fault === "close" ? "closed" : "revoked");
+  expect(spawnImpl.mock.calls.every(([, args]) => args?.includes("--help") || args?.includes("--version"))).toBe(true);
+  expect(lease.abortNeverSpawned).toHaveBeenCalledOnce();
+  expect(lease.bindChild).not.toHaveBeenCalled();
+  await client.close();
+});
+
+it.each([false, true])("binds the lease with actual detached=%s", async detached => {
+  const lease = { root: "/sealed", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
+  const client = makeClient(["--builtin-test"], { prepareBuiltinSkills: async () => lease });
+  const seams = client as unknown as { spawnOptions(group: boolean): import("node:child_process").SpawnOptions };
+  const original = seams.spawnOptions.bind(client);
+  vi.spyOn(seams, "spawnOptions").mockImplementation(group => ({ ...original(group), detached }));
+  try {
+    await client.start();
+    expect(lease.bindChild).toHaveBeenCalledExactlyOnceWith(expect.anything(), detached);
+  } finally { await client.close(); }
 });

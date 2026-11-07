@@ -14,6 +14,7 @@
 
 import { claudeOrchestrationSpawnOptions } from "./orchestration-policy.js";
 import { randomUUID } from "node:crypto";
+import type { BuiltinSnapshotLease } from "../../skills/builtin-snapshot.js";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { realpathSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
@@ -67,6 +68,7 @@ export class ClaudeClientError extends Error {
 // ── spawn argv (cut §1.3) ──
 
 export interface ClaudeSpawnArgsOptions {
+  pluginDir?: string;
   orchestrationSpawn?: import("./orchestration-policy.js").ClaudeOrchestrationSpawnSnapshot;
   /**
    * Omitted entirely (no `--permission-mode` in argv) when undefined. That is
@@ -166,8 +168,9 @@ export interface ClaudeSpawnArgsOptions {
  * `CLAUDE_AGENT_BRIDGE_PROMPT` below and rides the argv only when the door is
  * actually announced (`agentBridgePrompt`).
  */
+const CLAUDE_APP_PLUGIN_PROMPT = "The anycode-app plugin separately supplies app builtins; same-name filesystem skills do not replace those app definitions.";
 export const CLAUDE_GUI_SURFACE_PROMPT =
-  "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles. The Task tool's own registry is not AnyCode's.";
+  "IMPORTANT SURFACE CORRECTION: this session runs inside AnyCode, a desktop GUI application — not a terminal. Anything above that describes output as rendered in a terminal does not apply here: your replies render as markdown in AnyCode's chat panel; ANSI escape codes, terminal colors, cursor control, and TTY affordances do not work. The user cannot see the raw stdout/stderr of your tool calls — never refer them to \"the output above\"; restate important results in your reply. Ownership boundary: the subagent registry behind the Task tool, the native skills catalog, and slash commands are Claude Code CLI features, not AnyCode features; their contents support no conclusions about AnyCode's own code, configuration, or agent profiles. The Task tool's own registry is not AnyCode's.";
 
 /**
  * cross-review M2: the catalog-conditional half of the append —
@@ -233,10 +236,12 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
     "--strict-mcp-config",
     "--append-system-prompt",
-    options.agentBridgePrompt !== undefined
-      ? `${CLAUDE_GUI_SURFACE_PROMPT}\n\n${options.agentBridgePrompt}`
-      : CLAUDE_GUI_SURFACE_PROMPT,
+    [CLAUDE_GUI_SURFACE_PROMPT,
+      ...(options.pluginDir !== undefined && overlay === undefined ? [CLAUDE_APP_PLUGIN_PROMPT] : []),
+      ...(options.agentBridgePrompt !== undefined ? [options.agentBridgePrompt] : []),
+    ].join("\n\n"),
   ];
+  if (!overlay && options.pluginDir !== undefined) args.push("--plugin-dir", options.pluginDir);
   if (options.permissionModeFlag !== undefined) args.push("--permission-mode", options.permissionModeFlag);
   if (options.model !== undefined) args.push("--model", options.model);
   if (options.effort !== undefined) args.push("--effort", options.effort);
@@ -472,6 +477,11 @@ export interface InboundControlRequest {
 }
 
 export interface ClaudeClientOptions {
+  pluginDir?: string;
+  /** Root-only; evaluated once per new process, including resume. */
+  prepareBuiltinSkills?: () => Promise<BuiltinSnapshotLease | undefined>;
+  onBuiltinSkillNotice?: (reason: string) => void;
+  onBuiltinSkillReady?: (stage: "prepared" | "CLI-reported", generation: string) => void;
   orchestrationSpawn?: ClaudeSpawnArgsOptions["orchestrationSpawn"];
   onTerminal?: () => void;
   binaryPath: string;
@@ -658,19 +668,41 @@ export class ClaudeClient {
     };
   }
 
+  get hasBuiltinPlugin(): boolean { return this.builtinPlugin; }
+  private builtinPlugin = false;
+  private builtinGeneration: string | undefined;
+
   /** Preflight + spawn only. Caller sends `initialize` after the bootstrap owns disposal. */
   async start(): Promise<void> {
     if (this.child !== null) throw new ClaudeClientError("claude client already started");
     if (!isAbsolute(this.options.binaryPath)) {
       throw new EngineVersionError("Claude binary path must be absolute");
     }
+    let lease: BuiltinSnapshotLease | undefined;
     try {
       await this.preflightVersion();
       if (this.closing) throw new ClaudeClientError("claude client closed");
       // Re-validated HERE, immediately before THIS spawn — the preflight's own
       // trust check is stale by a whole `--version` round trip (TOCTOU).
       this.assertTrusted();
+      let pluginDir = this.options.orchestrationSpawn ? undefined : this.options.pluginDir;
+      if (!this.options.orchestrationSpawn && this.options.prepareBuiltinSkills) {
+        try {
+          // Help only: no model frame. Unsupported flags disable this adapter.
+          if (!await this.supportsPluginDirectory()) throw new Error("unsupported-plugin-dir");
+          lease = await this.options.prepareBuiltinSkills();
+          pluginDir = lease?.root;
+        } catch (error) {
+          const reason = error instanceof Error && /^(unsupported-plugin-dir|unsafe-anchor|snapshot-io|quota|unsupported|invalid-config|unsafe-file|too-large|too-deep|io-error|timeout|worker-error)$/.test(error.message)
+            ? error.message : "preparation-failed";
+          this.options.onBuiltinSkillNotice?.(reason);
+          pluginDir = undefined;
+        }
+      }
+      if (this.closing) throw new ClaudeClientError("claude client closed");
+      this.assertTrusted();
       const args = buildClaudeSpawnArgs({
+        pluginDir,
         orchestrationSpawn: this.options.orchestrationSpawn,
         // An explicit flag always wins. Without one, a FRESH spawn falls back to
         // the fail-closed `manual` (= wire `default`, the Ask preset), while a
@@ -694,14 +726,23 @@ export class ClaudeClient {
         // option keeps the historical argv byte-for-byte.
         ...(this.options.projectTrusted !== undefined ? { projectTrusted: this.options.projectTrusted } : {}),
       });
-      const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
+      this.builtinPlugin = pluginDir !== undefined;
+      const spawnOptions = this.spawnOptions(true);
+      const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], spawnOptions);
       this.child = child;
+      if (child.pid === undefined) lease?.abortNeverSpawned();
+      else lease?.bindChild(child, spawnOptions.detached === true);
       this.reportOwnedProcess(child);
       child.once("close", () => this.reportOwnedProcess(child, true));
       this.options.bootstrap?.adopt(() => this.close());
       this.bindChild(child);
       await this.awaitSpawn(child);
+      if (this.builtinPlugin) {
+        this.builtinGeneration = randomUUID();
+        this.options.onBuiltinSkillReady?.("prepared", this.builtinGeneration);
+      }
     } catch (error) {
+      lease?.abortNeverSpawned();
       // a failed start still owned the file — release it (and any
       // child a late failure adopted) before propagating. The guard keeps
       // connect's own failure path from double-terminating a child that was
@@ -746,6 +787,10 @@ export class ClaudeClient {
   async initialize(extra?: Record<string, unknown>): Promise<ClaudeInitializeResult> {
     const raw = await this.controlRequest<Record<string, unknown>>("initialize", { ...extra }, { timeoutMs: this.initTimeoutMs });
     const account = (raw.account ?? {}) as Record<string, unknown>;
+    if (this.builtinGeneration && Array.isArray(raw.commands) && raw.commands.some(command => {
+      const name = typeof command === "string" ? command : (command as { name?: unknown } | null)?.name;
+      return typeof name === "string" && name.startsWith("anycode-app:");
+    })) this.options.onBuiltinSkillReady?.("CLI-reported", this.builtinGeneration);
     return {
       commands: Array.isArray(raw.commands) ? raw.commands : [],
       models: Array.isArray(raw.models) ? raw.models : [],
@@ -908,6 +953,30 @@ export class ClaudeClient {
       if (!(error instanceof EngineVersionError) || !error.message.startsWith("Claude version preflight timed out after ")) throw error;
       await this.preflightVersionOnce();
     }
+  }
+
+  private supportsPluginDirectory(): Promise<boolean> {
+    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--help"], this.spawnOptions(true));
+    this.reportOwnedProcess(child);
+    child.once("close", () => this.reportOwnedProcess(child, true));
+    return new Promise(resolve => {
+      let output = "", settled = false;
+      const finish = (supported: boolean) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer); this.signalOwnedProcess(child, "SIGKILL"); resolve(supported);
+      };
+      const timer = setTimeout(() => finish(false), 5000);
+      child.stdin?.on("error", () => {});
+      child.stdout?.on("error", () => finish(false));
+      child.stderr?.on("error", () => finish(false));
+      child.stdout?.on("data", (chunk: Buffer) => {
+        output += chunk.toString("utf8"); if (output.length > 256 * 1024) finish(false);
+      });
+      child.stderr?.resume();
+      child.once("error", () => finish(false));
+      child.once("close", code => finish(code === 0 && output.includes("--plugin-dir")));
+      child.stdin?.end();
+    });
   }
 
   private async preflightVersionOnce(): Promise<void> {

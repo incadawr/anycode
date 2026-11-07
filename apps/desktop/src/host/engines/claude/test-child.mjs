@@ -9,11 +9,22 @@ function flagValue(prefix) {
   return arg ? arg.slice(prefix.length) : undefined;
 }
 
+if (args.includes("--help")) { process.stdout.write(args.includes("--no-plugin-help") ? "help\n" : "--plugin-dir <path>\n"); process.exit(0); }
 if (args.includes("--version")) {
   if (args.includes("--bad-version")) process.stdout.write("2.1.0 (Claude Code)\n");
   else if (args.includes("--hang-version")) setInterval(() => {}, 1_000);
   else process.stdout.write("2.1.212 (Claude Code)\n");
   if (!args.includes("--hang-version")) process.exit(0);
+} else if (args.includes("--builtin-test")) {
+  const root = args[args.indexOf("--plugin-dir") + 1];
+  const body = args.includes("--plugin-dir") ? readFileSync(`${root}/skills/anycode-setup/SKILL.md`, "utf8") : "no plugin";
+  const rl = readline.createInterface({ input: process.stdin });
+  rl.on("line", line => {
+    const frame = JSON.parse(line);
+    if (args.includes("--hang-init")) return;
+    process.stdout.write(JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: frame.request_id,
+      response: { commands: [body], models: [], account: {} } } }) + "\n");
+  });
 } else {
   if (args.includes("--malformed")) process.stdout.write("not-json\n");
   if (args.includes("--oversize")) process.stdout.write(`${"x".repeat(4_096)}\n`);

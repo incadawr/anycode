@@ -26,6 +26,8 @@
  * surface to defend beyond that lookup.
  */
 
+import { readBuiltinPolicy } from "../host/skills/builtin-policy.js";
+import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
 import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
@@ -208,18 +210,28 @@ const scopeSchema: z.ZodType<SkillScope> = z.enum(["project", "user"]);
 
 const listSchema = z.object({ tabId: z.string().optional() });
 
-const setEnabledSchema = z.object({
+const fileEnabledSchema = z.object({
+  path: z.unknown().optional(), // Legacy display-only field; never used for resolution.
   tabId: z.string().optional(),
   name: z.string().min(1),
   enabled: z.boolean(),
-});
+}).strict();
+const builtinEnabledSchema = z.object({
+  tabId: z.string().optional(),
+  builtinId: z.enum(ENGINE_BUILTIN_SKILLS.map(({ id }) => id)),
+  scope: scopeSchema,
+  enabled: z.boolean(),
+}).strict();
+const setEnabledSchema = z.union([fileEnabledSchema, builtinEnabledSchema]);
 
 const deleteSchema = z.object({
+  builtinId: z.never().optional(),
   tabId: z.string().optional(),
   name: z.string().min(1),
 });
 
 const revealSchema = z.object({
+  builtinId: z.never().optional(),
   tabId: z.string().optional(),
   name: z.string().min(1),
 });
@@ -241,9 +253,10 @@ const createSchema = z.object({
 const importScanSchema = z.object({ tabId: z.string().optional() });
 
 const importApplySchema = z.object({
+  builtinId: z.never().optional(),
   tabId: z.string().optional(),
   scope: scopeSchema,
-  ids: z.array(z.string().min(1)),
+  ids: z.array(z.string().min(1).refine(id => !id.startsWith("builtin:"))),
 });
 
 // ── path resolution helpers ──
@@ -343,6 +356,35 @@ function pluginWorldFor(
   return deps.pluginDiscoveryOptions?.(home, workspace || home);
 }
 
+/** Configuration preview, never export authority or a claim about a running CLI. */
+export async function builtinSettings(deps: SkillsIpcDeps, tabId?: string): Promise<Pick<SkillsSnapshot, "builtins" | "builtinNotice">> {
+  const workspace = resolveWorkspace(deps, tabId);
+  const home = deps.home();
+  let readable = true;
+  // Preview configured bits per scope, not launch authority. The same bounded
+  // worker enforces byte/depth/time limits and refuses special/linked files.
+  const disabled = async (base?: string): Promise<string[]> => {
+    if (!base) return [];
+    const path = anycodeConfigPath(base);
+    try { await deps.fs.lstat(path); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; }
+    const ids = ENGINE_BUILTIN_SKILLS.map(({ id }) => id);
+    // Preview intentionally reads workspace config without the trust gate; preview is not authority.
+    const policy = await readBuiltinPolicy({ userConfigPath: path, projectConfigPath: path, projectTrusted: false, ids });
+    if (ids.some(id => !["enabled", "disabled"].includes(policy[id].reason))) readable = false;
+    return ids.filter(id => policy[id].reason === "disabled");
+  };
+  const [user, project] = await Promise.all([disabled(home), disabled(workspace)]);
+  return {
+    builtins: ENGINE_BUILTIN_SKILLS.map(({ id }) => ({
+      id, userDisabled: user.includes(id), projectDisabled: project.includes(id),
+    })),
+    builtinNotice: process.platform === "win32" ? "Unavailable on Windows; ordinary CLI chat is available." :
+      !readable ? "Configuration unreadable, invalid or beyond preview limits; availability cannot be previewed." :
+      "Settings for the next engine process for Claude and Codex, including resume. Availability is checked at launch.",
+  };
+}
+
 /**
  * Builds the joined catalog snapshot. No resolvable workspace ⇒ scans with
  * `workspace===home` (buildSkillRoots' own "load once" collapse), which
@@ -356,6 +398,7 @@ async function buildSnapshot(deps: SkillsIpcDeps, tabId: string | undefined): Pr
 
   const scan = await scanSkillsAdmin(deps.fs, scanOptions(deps, home, effectiveWorkspace));
   return {
+    ...await builtinSettings(deps, tabId),
     rows: scan.rows.map((row) => toRowView(row, hasWorkspace)),
     problems: scan.problems,
   };
@@ -404,6 +447,15 @@ export async function handleSkillsSetEnabled(deps: SkillsIpcDeps, raw: unknown):
   const parsed = setEnabledSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
+  }
+  if ("builtinId" in parsed.data) {
+    const { tabId, builtinId, scope, enabled } = parsed.data;
+    const workspace = resolveWorkspace(deps, tabId);
+    if (scope === "project" && !workspace) return { ok: false, reason: "no_workspace" };
+    try {
+      await setSkillEnabled(deps.fs, scopeConfigPath(scope, workspace ?? deps.home(), deps.home()), builtinId, enabled);
+      return { ok: true, builtinsOnly: true, snapshot: { rows: [], problems: [], ...await builtinSettings(deps, tabId) } };
+    } catch { return { ok: false, reason: "io_error" }; }
   }
   const { tabId, name, enabled } = parsed.data;
   const found = await findRow(deps, tabId, name);

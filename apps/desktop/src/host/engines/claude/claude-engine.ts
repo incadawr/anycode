@@ -48,6 +48,7 @@ import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
+  EngineVersionError,
   buildFlagSettings,
   permissionModeToFlag,
   type ClaudeResultMessage,
@@ -508,7 +509,7 @@ export function claudeRestrictedForkToolNames(peerToolNames: ReadonlySet<string>
     ...[...peerToolNames].map(name => name.replace("mcp__anycode__", ""))]);
 }
 
-type TransportSpawn = Pick<ClaudeSpawnArgsOptions, "sessionId" | "resume" | "model" | "effort" | "permissionModeFlag" | "orchestrationSpawn"> & { forward?: ClaudeForward; verify?: (client: ClaudeTransport) => Promise<void> };
+type TransportSpawn = Pick<ClaudeSpawnArgsOptions, "sessionId" | "resume" | "model" | "effort" | "permissionModeFlag" | "orchestrationSpawn"> & { forward?: ClaudeForward; verify?: (client: ClaudeTransport, forward?: ClaudeForward) => Promise<void> };
 type ClaudeForward = Pick<import("../mcp-forward-boot.js").PreparedEngineMcpForward, "claudeConfigPath" | "notices" | "cleanupFile"> & Partial<Pick<import("../mcp-forward-boot.js").PreparedEngineMcpForward, "claudeJson" | "claudeNames" | "loaderProblems" | "forwardProblems">>;
 interface TransportBinding { client: ClaudeTransport; approvals: ClaudeApprovalBridge; close(): Promise<void> }
 type TransportFactory = (spawn: TransportSpawn, current: () => boolean, signal?: AbortSignal) => Promise<TransportBinding>;
@@ -663,8 +664,13 @@ async function connectClaudeEngine(
   // no native state a resend could clobber on resume — unlike model, where a
   // stale row could overwrite a session's own surviving choice, an omitted
   // `--effort` here would simply forget ours for no benefit.
-  const createClient = (approvals: ClaudeApprovalBridge, next: TransportSpawn, path: string | undefined, current: () => boolean, bridge: ClaudeMcpBridge | undefined) => new ClaudeClient({
+  const createClient = (approvals: ClaudeApprovalBridge, next: TransportSpawn, path: string | undefined, current: () => boolean, bridge: ClaudeMcpBridge | undefined, disableBuiltins = false) => new ClaudeClient({
     ...options,
+    ...(disableBuiltins ? { pluginDir: undefined, prepareBuiltinSkills: undefined } : {}),
+    onBuiltinSkillNotice: () => notices.push(warning("Built-in AnyCode skills could not be prepared. You can continue chatting.")),
+    onBuiltinSkillReady: stage => notices.push({ type: "engine_notice", level: "info", message: stage === "prepared"
+      ? "Built-in AnyCode skill files are prepared for this session."
+      : "Claude lists the built-in AnyCode skills for this session. This does not confirm they were used." }),
     ...(next.resume !== undefined ? { permissionModeFlag: undefined } : { permissionModeFlag: permissionModeToFlag(preset.mode) }),
     effort: engine === null ? requestedEffort : engine.snapshot().effort,
     ...next,
@@ -692,8 +698,9 @@ async function connectClaudeEngine(
   });
   let firstTransport = true;
   let initialForward: ClaudeForward | undefined;
+  let bridgeBase = options.mcpBridge;
   let recoveryProblem: string | undefined;
-  const openTransport = async (next: TransportSpawn, current: () => boolean, signal?: AbortSignal) => {
+  const openTransport = async (next: TransportSpawn, current: () => boolean, signal?: AbortSignal, disableBuiltins = false): Promise<TransportBinding & { initialized: Awaited<ReturnType<ClaudeClient["initialize"]>> }> => {
     const resolving = next.orchestrationSpawn ? undefined : next.forward ? Promise.resolve(next.forward) : options.resolveMcpForward?.();
     const abort = signal === undefined ? undefined : watchAbort(signal);
     void resolving?.then(forward => { if (!current()) forward.cleanupFile(); }, () => {});
@@ -715,27 +722,41 @@ async function connectClaudeEngine(
     let bridge: ClaudeMcpBridge | undefined;
     let client: ClaudeClient | undefined;
     let live = true;
+    let initializedOk = false;
     const close = async () => {
       live = false;
       try { await bridge?.close(); } finally { await client?.close(); }
     };
     const onAbort = () => { void close(); };
     try {
-      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? claudeRestrictedForkToolNames(options.peerToolNames) : undefined);
-      if (firstTransport) initialForward = forward;
+      bridge = firstTransport ? bridgeBase : bridgeBase?.fork(next.orchestrationSpawn ? claudeRestrictedForkToolNames(options.peerToolNames) : undefined);
       firstTransport = false;
       const approvals = createApprovals(bridge);
-      client = createClient(approvals, next, next.orchestrationSpawn ? undefined : forward !== undefined ? forward.claudeConfigPath ?? undefined : options.mcpConfigPath, () => live && current(), bridge);
+      client = createClient(approvals, next, next.orchestrationSpawn ? undefined : forward !== undefined ? forward.claudeConfigPath ?? undefined : options.mcpConfigPath, () => live && current(), bridge, disableBuiltins);
       signal?.addEventListener("abort", onAbort, { once: true });
       await client.start();
       const initialized = await client.initialize(bridge?.announceOn());
+      initializedOk = true;
       if (!isClaudeSignedIn(initialized.account)) throw new Error(CLAUDE_NOT_SIGNED_IN);
-      await next.verify?.(client);
+      await next.verify?.(client, forward);
+      if (engine === null) initialForward = forward;
+      // Keep the full catalog as the source for future restricted/unrestricted forks.
+      if (!next.orchestrationSpawn) bridgeBase = bridge;
       if (forward !== undefined) notices.push(...forward.notices);
       return { client, approvals, initialized, close };
     } catch (error) {
       await close();
       forward?.cleanupFile();
+      // An unknown boot failure may be the adapter, including an early child exit.
+      // Successful initialize, typed non-plugin failures and cancellation retain their cause.
+      const nonPluginFailure = initializedOk || error instanceof EngineVersionError ||
+        error instanceof OrchestrationNotReadyError || error instanceof ClaudeTransportAbortError ||
+        (error instanceof Error && error.message === CLAUDE_NOT_SIGNED_IN);
+      if (!nonPluginFailure && !disableBuiltins && client?.hasBuiltinPlugin && !signal?.aborted && current()) {
+        notices.push(warning("Claude could not start with built-in AnyCode skills. Retrying without them."));
+        // The failed attempt removed its materialized MCP file. Resolve a fresh one.
+        return openTransport({ ...next, forward: undefined }, current, signal, true);
+      }
       throw signal?.aborted ? transportAbortError(signal) : error;
     } finally {
       signal?.removeEventListener("abort", onAbort);
@@ -1080,7 +1101,11 @@ export class ClaudeEngine implements SessionEngine {
             if (claudeMcpDigest(forward) !== saved.digest) throw new Error("Claude MCP base changed; restore refused");
           }
           if (!this.transportReady()) throw new Error("Claude transport became busy");
-          const verify = async (client: ClaudeTransport) => {
+          const verify = async (client: ClaudeTransport, runningForward?: ClaudeForward) => {
+            if (!snapshot) {
+              forward = runningForward;
+              if (claudeMcpDigest(forward) !== saved.digest) throw new Error("Claude MCP base changed; restore refused");
+            }
             const init = await evidence.readPosture(client);
             if (init.session_id !== this.sessionRef || !this.settings!.catalog.readBackMatches(saved.model, init.model)) throw new Error("Claude identity or model drift");
             if (snapshot) assertClaudeOrchestrationReadback({ ...init, mcp_servers: init.mcp_servers as { name: string }[] }, snapshot, options.peerToolNames);

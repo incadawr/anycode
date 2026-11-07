@@ -416,6 +416,7 @@ function buildSettings(
 
 /** Narrow transport seam keeps lifecycle tests independent from a real child. */
 export interface CodexClient {
+  afterInitializeBuiltinSkills?(timeoutMs: number): Promise<void>;
   request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T>;
   notify(method: string, params?: unknown): void;
   notifications(): AsyncIterable<JsonRpcNotification>;
@@ -571,6 +572,7 @@ export async function initializeAndVerifyAccount(
     capabilities: { experimentalApi },
   }, { timeoutMs });
   client.notify("initialized");
+  await client.afterInitializeBuiltinSkills?.(timeoutMs);
   const account = await client.request<AccountResult>("account/read", {}, { timeoutMs });
   const requiresOpenaiAuth = typeof account.requiresOpenaiAuth === "boolean" ? account.requiresOpenaiAuth : undefined;
   // Doctor row 7 (cut §4.2, main/codex-doctor.ts:778-785), byte-identical
