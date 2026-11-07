@@ -25,7 +25,7 @@ import {
 import { childRelationKey, spawnToolCallIdForChild, type ChildRelation } from "./child-sessions.js";
 
 /**
- * CUT-S3 §3.3's "отсутствующая карточка → фолбэк ..., как в B" fallback: a
+ * The "missing card → fallback ..., as in B" fallback: a
  * split row's counters need every field, and the card is genuinely unknown
  * here, so zero-valued is the honest reading.
  */

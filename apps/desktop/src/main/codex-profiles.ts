@@ -20,7 +20,7 @@
  *
  * CUSTODY: this module never reads, copies, logs, or deletes credential
  * CONTENT. The auth.json guard below uses lstat/readlink ONLY (amended §A1.2
- * — "содержимое auth.json не читается никогда, ни в одной ветке"), symlinks
+ * — "the contents of auth.json are never read, in any branch"), symlinks
  * are created in OUR home pointing OUT at the owner's file, and `~/.codex`
  * itself is never written — not one byte.
  */

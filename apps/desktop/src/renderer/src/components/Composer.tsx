@@ -133,7 +133,7 @@ export function hasSendableDraft(text: string, imageCount: number): boolean {
  * the engine-level `supportsImages` gate (button visibility) is untouched by
  * this, this is model-level and rides ON TOP of it.
  *
- * срез D: a configured recognizer fallback (`imageFallback === true`,
+ * slice D: a configured recognizer fallback (`imageFallback === true`,
  * off the same hello/model_changed wire) unblocks a blind model — the host
  * now honestly accepts attachments for it (session.ts's `imagesAccepted()`),
  * so the composer's own gate must stop lying about it. Any value other than
@@ -150,7 +150,7 @@ export function isImageAttachBlockedByModel(imageInput: boolean | undefined, ima
  * moment the model swings vision -> non-vision mid-session (cut §3/W3(c)):
  * the user must switch back or remove them, never lose them silently.
  *
- * срез D: same recognizer-fallback carve-out as
+ * slice D: same recognizer-fallback carve-out as
  * `isImageAttachBlockedByModel` — a configured fallback unblocks send too.
  * Exported for unit testing.
  */
@@ -1455,7 +1455,7 @@ export function Composer() {
   const mode = useTabStore((state) => state.mode);
   const model = useTabStore((state) => state.model);
   const imageInput = useTabStore((state) => state.imageInput);
-  // срез D: mirrors `imageInput` off the same wire messages — a
+  // slice D: mirrors `imageInput` off the same wire messages — a
   // configured recognizer fallback re-opens the gates below without waiting
   // for the model itself to report vision support.
   const imageFallback = useTabStore((state) => state.imageFallback);

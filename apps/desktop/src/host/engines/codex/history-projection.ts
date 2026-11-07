@@ -84,7 +84,7 @@
  *    own text rather than degrading to a bare type label.
  *  - Every other item type has no HistoryItem counterpart in core's
  *    `ChatMessage` union — it degrades to a deterministic formatted text
- *    block (cut §3.6, "допустимая деградация, фиксируется в тесте голдом")
+ *    block ("acceptable degradation, pinned by a golden test")
  *    rather than being silently dropped.
  *  - The result is capped to the last `maxItems` (200 in production, cut
  *    §2(e)); when truncated, a leading marker item is prepended. When the

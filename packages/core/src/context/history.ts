@@ -48,7 +48,7 @@ export class ConversationHistory {
 
   /**
    * Appends a message as a new item (uuid, timestamp, token estimate) and
-   * feeds the sink. `meta.origin` (срез 2) stamps a `role:"user"`
+   * feeds the sink. `meta.origin` (slice 2) stamps a `role:"user"`
    * item as host-injected rather than human-typed — see HistoryItem.origin's
    * own doc for why this is presentation-only and never touches `message`.
    * `meta.turnId`/`meta.step` stamp the item's causal identity

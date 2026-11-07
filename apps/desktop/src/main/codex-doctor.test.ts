@@ -442,7 +442,7 @@ describe("runCodexDoctor", () => {
     expect(report.error).toMatch(/version/i);
   });
 
-  it("judges the version against the MANIFEST policy, not a hardcoded range (cut §7.1: истина — манифест)", async () => {
+  it("judges the version against the MANIFEST policy, not a hardcoded range (cut §7.1: the manifest is the truth)", async () => {
     // The fixture reports 0.144.3; a manifest that excludes it must flip the
     // verdict without any code change — that is the whole point.
     const report = await runCodexDoctor("/fake/codex", {

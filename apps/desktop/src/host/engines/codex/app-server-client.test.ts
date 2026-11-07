@@ -510,7 +510,7 @@ describe("AppServerClient", () => {
       HTTPS_PROXY: "https://proxy",
       SSL_CERT_FILE: "/cert.pem",
       ANYCODE_API_KEY: "must-not-pass",
-      // срез C durable (precedent): the vision-fallback
+      // slice C durable (precedent): the vision-fallback
       // recognizer's OWN credential must never reach a codex child either —
       // this allowlist projection excludes it structurally, the same way it
       // already excludes the primary provider key.

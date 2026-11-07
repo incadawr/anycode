@@ -963,7 +963,7 @@ describe("dock probe/driver + window size", () => {
   });
 });
 
-describe("Vision pane thin facade commands forward method + args (срез E2c)", () => {
+describe("Vision pane thin facade commands forward method + args (slice E2c)", () => {
   it("visionPaneState -> callFacade('visionPaneState', [])", async () => {
     const deps = fakeDeps();
     await visionPaneState(deps);

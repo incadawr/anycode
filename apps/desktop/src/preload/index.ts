@@ -1101,7 +1101,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CONNECTION_DELETE_CHANNEL, req) as Promise<SettingsMutationResult>,
     connectionCheck: (req: ConnectionCheckRequest): Promise<SettingsMutationResult> =>
       ipcRenderer.invoke(CONNECTION_CHECK_CHANNEL, req) as Promise<SettingsMutationResult>,
-    // срез E2: the Vision panel's "Probe" button — resolves a
+    // slice E2: the Vision panel's "Probe" button — resolves a
     // {connectionId, modelId} pair (not necessarily saved yet) through the
     // SAME production ladder a live run uses and sends one real vision
     // question through it. Always resolves a tagged `RecognizerProbeResult`,

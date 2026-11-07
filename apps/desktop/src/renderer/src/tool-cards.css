@@ -241,7 +241,7 @@
 }
 
 /* Workflow step row's real interactive element (slice S4 — owner
-   ask: "а кликнуть в них нельзя будет?"). The `<li>` keeps its
+   ask: "so they can't be clicked?"). The `<li>` keeps its
    `workflow-step substatus-<kind>` classes rather than handing them to the
    button, because app.css's row selectors need them on THAT element —
    `.workflow-step.substatus-running .workflow-step-id` requires both
@@ -284,7 +284,7 @@
   background: var(--bg-active);
 }
 
-/* Run map (slice S6 — owner ask, twice: "а где красивый граф?").
+/* Run map (slice S6 — owner ask, twice: "where's the pretty graph?").
    Opened on demand by `.workflow-map-toggle`; the checklist above stays the
    record and this is a second view of it. Colour comes from the SAME
    `substatus-<kind>` vocabulary the rows use — never a second palette, or a
@@ -371,7 +371,7 @@
 }
 
 /* Collapsed-card tick strip (slice S7 — the plan's collapsed state:
-   "полоса засечек по числу шагов, карточка не растёт против сегодняшней").
+   "a strip of ticks by number of steps, card does not grow compared to today's").
    It rides INLINE in the toggle row, unlike `.subagent-collapsed-progress`
    above, which claims a line of its own (flex-basis: 100% + wrap on the
    toggle) — that form grows the card by a whole line, which is exactly what

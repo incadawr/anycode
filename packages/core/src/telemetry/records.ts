@@ -92,8 +92,8 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
     case "subagent_end":
       // closes the known gap where a completed child's model
       // attribution never reached telemetry at all. `model` (the REQUESTED
-      // id, owner's ruling: "модель никогда не ответит, главное какие
-      // запросы мы шлем") and `responseModel` (the provider's own claim,
+      // id, owner's ruling: "the model will never answer, what matters is what
+      // requests we send") and `responseModel` (the provider's own claim,
       // kept as separate evidence) are added field-by-field,
       // same whitelist discipline as every other case here — this stays a
       // projection, never a spread of the raw event.
@@ -215,7 +215,7 @@ export function buildTelemetryTap(
 /**
  * Telemetry track: the tap an inline subagent's child AgentLoop
  * gets, so its usage/tool/turn_end records land in the PARENT's sink
- * (decision §2.2 option а — same file, marked by tier) with the child's
+ * (decision §2.2 option (a) — same file, marked by tier) with the child's
  * `agentType`/`model` stamped as the envelope's `sub`. Same whitelist as
  * buildTelemetryTap (telemetryRecordFor) — a null-mapped event is never
  * stamped or recorded.

@@ -2544,8 +2544,8 @@ describe("workflow step ordering & phases (render, slice S3)", () => {
   });
 });
 
-// slice S4 (owner ask: "а кликнуть в них нельзя будет? глянуть
-// лог?"). `WorkflowStepsBody` is exported specifically so the "step
+// slice S4 (owner ask: "can't I click on them? take a look
+// log?"). `WorkflowStepsBody` is exported specifically so the "step
 // selected" markup can be rendered honestly under SSR: `renderToStaticMarkup`
 // can't simulate a click (no event system, and a real `WorkflowStatus` mount
 // always starts its `useState` at null), but a controlled `selectedStepId`
@@ -2813,8 +2813,8 @@ describe("workflow step failure block (render)", () => {
 });
 
 // slice S7 — the plan's collapsed state:
-// "Свёрнутое состояние — полоса засечек по числу шагов, карточка не растёт
-// против сегодняшней". The three pins below are the ones that had to be
+// "Collapsed state — a strip of ticks by step count; the card does not grow
+// compared to today's". The three pins below are the ones that had to be
 // proven red by mutation before this suite was allowed to pass: one tick per
 // step in dependency order with the right kind; no strip at all while the
 // card is expanded; and the state class riding on the SAME node as the

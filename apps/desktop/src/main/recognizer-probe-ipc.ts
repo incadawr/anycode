@@ -1,5 +1,5 @@
 /**
- * IPC registration ONLY for the Vision panel's "Probe" button (срез
+ * IPC registration ONLY for the Vision panel's "Probe" button (slice
  * E2). This file owns the one `ipcMain` import the feature needs and does
  * NOTHING else — no request validation, no candidate resolution, no error
  * classification, no try/catch. Every branch of that logic lives in

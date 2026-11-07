@@ -18,8 +18,8 @@
  * dialog only ever displays the preview's stats/warnings/meta — the imported
  * history reaches its tab the normal `session_history` wire way, once resumed.
  *
- * Model catalog (cut §8.8: "модель новой сессии выбирается пользователем...
- * продолжить на другой модели"): the imported session is always engine
+ * Model catalog (cut §8.8: "the new session's model is chosen by the user...
+ * continue on another model"): the imported session is always engine
  * `"core"` (main's `createSession` call, codex-rollout-ipc.ts), so the model
  * list is the ACTIVE connection's own provider catalog — the same
  * `snapshot.catalog` + `modelMenuItems` ModelPill.tsx/StartScreen.tsx already
@@ -121,8 +121,8 @@ export function truncateRolloutPreview(text: string | undefined): string | undef
 }
 
 /**
- * The list row's PRIMARY, human-readable label (owner: "в списке
- * импортируемых сессий нужно показывать название сессии"): the first line of
+ * The list row's PRIMARY, human-readable label (owner: "in the list
+ * of importable sessions we must show the session name"): the first line of
  * the rollout's own first user message, trimmed and capped — the exact
  * "first line, 80 chars" convention `deriveSessionTitle` (`@anycode/core`)
  * uses for a session's own title, so an imported session's list entry and

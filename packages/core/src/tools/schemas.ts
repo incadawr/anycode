@@ -291,7 +291,7 @@ export interface WebFetchOutput {
  * touching this frozen schema (design §3.4). Absent => "general-purpose".
  *
  * `tier`/`provider`/`detach` (CUT-S2 §2.1; `detach` added
- * срез 1) are the FULL declaration — only used when
+ * slice 1) are the FULL declaration — only used when
  * `createAgentTool({sessionTier:true})` builds the root desktop host's tool
  * (tools/agent.ts). `model` stays valid for BOTH tiers (CUT-S2 §1 p.2: the
  * inline `model` override is an existing, tested capability — narrowing it
@@ -328,7 +328,7 @@ export const agentInputSchema = z.object({
       "Exact model id to run the subagent on (defaults to the parent's model); if this host cannot honor it the call fails with an explanation. Call ListConnections to see available models.",
     ),
   /**
-   * срез 1: session-tier-only, mirrors the `provider` field's
+   * slice 1: session-tier-only, mirrors the `provider` field's
    * "invalid for inline tier" discipline exactly (handler-level check,
    * agent.ts). Session calls start in the
    * background by default; false opts into a
@@ -405,7 +405,7 @@ export interface AgentOutput {
    * the FinishReason of the child's last turn_end, carried onto the
    * model-visible payload so formatResultForModel can prefix a "length" cutoff
    * (the provider's own output ceiling, not this cap) — see agent.ts markers
-   * (а)/(б). Absent has the same meaning as on SubagentOutcome: no turn ever
+   * (a)/(b). Absent has the same meaning as on SubagentOutcome: no turn ever
    * reached turn_end.
    */
   finalTurnFinishReason?: FinishReason;

@@ -3820,7 +3820,7 @@ describe("handleConnectionCheck — probe (W11)", () => {
 // ── OAuth prep still finds the ACTIVE connection of a provider bucket (§4.3) ──
 // `findOrCreateConnectionByProvider`/`bucketConnection` survive the W12
 // write-seam removal (they are NOT part of the retired shim — OAuth prep is the
-// one remaining caller, cut §4.3/§8 "downstream W10/W11: без изменений").
+// one remaining caller, cut §4.3/§8 "downstream W10/W11: unchanged").
 
 describe("handleOAuthStart routes to the ACTIVE connection of a provider bucket, not first-match", () => {
   it("threads the ACTIVE connection id to the engine when two connections share a provider", async () => {
@@ -4111,7 +4111,7 @@ describe("W9′-FIX #5 — validated merge (§5.3)", () => {
 
 // ── W12 gate: the legacy write-seam is FULLY retired, not just unused ──
 // (metadata-shim + secret-write-translation + alias-projection, cut §4.4/§8 —
-// "снимаются одним пунктом"). A mechanical grep, not just behavioral tests, so
+// "are removed in one item"). A mechanical grep, not just behavioral tests, so
 // a future edit can't quietly resurrect a dead symbol name without this
 // failing — the retired names must never reappear in EITHER file's source text.
 

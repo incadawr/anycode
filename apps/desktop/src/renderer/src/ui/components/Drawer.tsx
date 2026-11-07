@@ -5,34 +5,34 @@ import { focusable } from "./focus.js";
 import { useOverlayFocus } from "./useOverlayFocus.js";
 import { IconClose } from "./icons.js";
 
-/** Размер ящика: ширина берётся из токена `--drawer-w`. */
+/** Drawer size: width comes from the `--drawer-w` token. */
 export type DrawerSize = "md" | "lg";
 
 export interface DrawerProps {
   open: boolean;
   onClose: () => void;
   title: string;
-  /** Подзаголовок в шапке (слот header). */
+  /** Subtitle in the header (header slot). */
   subtitle?: string;
-  /** Дополнительное содержимое в шапке — слот header. */
+  /** Extra header content — header slot. */
   headerExtra?: ReactNode;
   children?: ReactNode;
   footer?: ReactNode;
-  /** Закрывать по клику по подложке. */
+  /** Close on click on the backdrop. */
   closeOnScrimClick?: boolean;
-  /** Размер ящика: md | lg. */
+  /** Drawer size: md | lg. */
   size?: DrawerSize;
   className?: string;
   initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
 /**
- * Drawer — боковая панель поверх приложения (замена `connection-drawer`).
+ * Drawer — a side panel over the app (replaces `connection-drawer`).
  *
- * Слоты: header (липкий заголовок + subtitle + headerExtra + кнопка закрытия),
- * body (прокручивается), footer (липкий). Esc закрывает, фокус запирается
- * внутри, по закрытию фокус возвращается на триггер. Имя доступности —
- * `aria-labelledby` на заголовок. Подложка — токен `--bg-scrim`.
+ * Slots: header (sticky title + subtitle + headerExtra + close button),
+ * body (scrollable), footer (sticky). Esc closes, focus is trapped
+ * inside and returns to the trigger on close. Accessible name is
+ * `aria-labelledby` on the title. Backdrop uses the `--bg-scrim` token.
  */
 export function Drawer({
   open,

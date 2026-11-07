@@ -3,23 +3,23 @@ import { IconButton } from "./IconButton.js";
 import { IconAccent, IconClose, IconDanger, IconInfo, IconSuccess, IconWarning } from "./icons.js";
 
 /**
- * Статус сообщения. Базовые: ok | run | warn | bad | info | neutral;
- * синонимы тонов: success (ok), warning (warn), error (bad).
+ * Message status. Base tones: ok | run | warn | bad | info | neutral;
+ * tone aliases: success (ok), warning (warn), error (bad).
  */
 export type ToastStatus = "ok" | "run" | "warn" | "bad" | "info" | "neutral" | "success" | "warning" | "error";
 
 export interface ToastProps {
   status: ToastStatus;
-  /** Текст сообщения — обязателен (статус = цвет + иконка + слово). */
+  /** Message text — required (status = color + icon + word). */
   message: string;
-  /** Дополнительное действие, например «Undo». */
+  /** Optional extra action, e.g. «Undo». */
   action?: { label: string; onClick: () => void };
   onDismiss?: () => void;
-  /** assertive — только для ошибки, прерывающей работу. */
+  /** assertive — only for errors that interrupt work. */
   assertive?: boolean;
-  /** Автозакрытие через N мс. Таймер снимается при размонтировании (без утечки). */
+  /** Auto-hide after N ms. The timer is cleared on unmount (no leak). */
   duration?: number;
-  /** Вызывается при автозакрытии (по истечении `duration`). */
+  /** Called on auto-hide (after `duration` elapses). */
   onAutoHide?: () => void;
   className?: string;
 }
@@ -36,15 +36,15 @@ const STATUS_ICON: Record<ToastStatus, ReactNode> = {
   neutral: <IconInfo size={14} />,
 };
 
-/** Тона, которые читаются как ошибка: роль alert. */
+/** Tones read as errors: role alert. */
 const ALERT_STATUS: ToastStatus[] = ["bad", "error"];
 
 /**
- * Toast. role="status" + aria-live="polite" (по умолчанию);
- * для ошибки (статус bad/error) — role="alert" + aria-live="assertive".
+ * Toast. role="status" + aria-live="polite" (default);
+ * for errors (status bad/error) — role="alert" + aria-live="assertive".
  *
- * `duration` включает автозакрытие: таймер снимается при размонтировании,
- * повторный вызов `onAutoHide` не происходит после ухода компонента.
+ * `duration` enables auto-hide: the timer is cleared on unmount,
+ * `onAutoHide` is not called after the component unmounts.
  */
 export function Toast({
   status,
@@ -93,14 +93,14 @@ export function Toast({
 }
 
 export interface ToastStackProps {
-  /** Дочерние тосты (обычно <Toast/>). */
+  /** Child toasts (usually <Toast/>). */
   children?: ReactNode;
-  /** Имя области для скринридера (необязательно). */
+  /** Landmark name for screen readers (optional). */
   label?: string;
   className?: string;
 }
 
-/** Контейнер тостов: фиксированная полоса в правом нижнем углу. */
+/** Toast container: a fixed strip in the bottom-right corner. */
 export function ToastStack({ children, label, className }: ToastStackProps): React.ReactElement {
   return <div
     className={["ak-toasts", className].filter(Boolean).join(" ")}

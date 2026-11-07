@@ -1,12 +1,12 @@
 /**
- * Live smoke for CUT-S2 §4.2 пп.9,10,11 (S2d D3) — the track's race
+ * Live smoke for CUT-S2 §4.2 items 9, 10, 11 (S2d D3) — the track's race
  * probes. Drives a REAL Electron dev instance end-to-end over the automation
  * HTTP channel and proves four things a synchronous fake-fork unit test
  * cannot (`tabs.test.ts`'s admission-atomicity/drain matrix uses a FAKE
- * `fork` — CUT-S2 §5.1's own anti-facade risk: "юниты main НЕ доказывают
- * parentPort-провод, boot-argv, отдельный SQLite-коннект"):
+ * `fork` — CUT-S2 §5.1's own anti-facade risk: "unit tests of main do NOT prove
+ *   parentPort wiring, boot argv, a separate SQLite connection"):
  *
- *   A. §4.2 п.10 (per-parent half): 4 REAL `Agent(tier:"session")` calls
+ *   A. §4.2 item 10 (per-parent half): 4 REAL `Agent(tier:"session")` calls
  *      issued by a live model IN ONE TURN admit exactly 3 (three genuinely
  *      live, distinct OS pids) and refuse the 4th with the VERBATIM §2.7
  *      `limit_parent` text (`main/tabs.ts:99-100`) — never a queued retry:
@@ -16,7 +16,7 @@
  *      action — so this is a structural guarantee, checked live by polling
  *      the tab's childRuns back to 0 after the 3 finish and confirming it
  *      stays 0, not just asserted from reading the source).
- *   B. §4.2 п.9 (cascade half): closing a root tab with a REAL running
+ *   B. §4.2 item 9 (cascade half): closing a root tab with a REAL running
  *      child cascades — the child's OS pid dies (`isPidAlive` polled to
  *      false), the ledger entry disappears (slot freed) — and resuming the
  *      CLOSED session afterward shows the parent's own Agent tool_call card
@@ -24,7 +24,7 @@
  *      REAL renderer geometry + PNG, not a transcript-JSON-only claim
  *      (anti-facade §5.4's "DOM-presence ≠ visibility" applies here exactly
  *      as it did to S2d/D2's child-pane checks).
- *   C. §4.2 п.11: an EXTERNAL `SIGKILL` on the child's own OS pid (this
+ *   C. §4.2 item 11: an EXTERNAL `SIGKILL` on the child's own OS pid (this
  *      script's own `process.kill`, never an app-internal lever — the
  *      point is proving main's exit-detection survives a kill it did not
  *      initiate) lands the parent's card in status "error" with the exact
@@ -32,8 +32,8 @@
  *      "eternal running" is a FAIL only a deadline can catch, so the poll
  *      below has one and treats exhausting it as red, not as "still
  *      settling."
- *   D. Anti-facade §5.8's own named risk ("Close-тест без гонки: `spawn;
- *      await; close` не ловит spawn в окне closing"): a spawn detected the
+ *   D. Anti-facade §5.8's own named risk ("Close test without a race: `spawn;
+ *      await; close` does not catch a spawn in the closing window"): a spawn detected the
  *      INSTANT it is admitted (tight polling, no `await turnStatus running`
  *      first) is raced by an immediate `close` fired in the very next line
  *      — the closest a black-box HTTP driver can get to "a spawn flying in
@@ -42,9 +42,9 @@
  *      the moment of admission, before close is even sent) is confirmed
  *      dead afterward, and the ledger/tab entries are confirmed gone.
  *
- * Global limit 8 (§4.2 п.10's second half) is NOT exercised live here — it
+ * Global limit 8 (§4.2 item 10's second half) is NOT exercised live here — it
  * needs 3 separate root tabs summing to 9 spawns, and per this slice's own
- * cut text ("если живьём не вытянешь, НЕ подделывай: доложи честно") that
+ * cut text ("if you can't pull it off live, do NOT fake it: report honestly") that
  * is reported honestly rather than faked: it IS covered by
  * `apps/desktop/src/main/tabs.test.ts`, the test named "the 9th global
  * spawn (spread across 3 parents, each under ITS OWN per-parent cap) is
@@ -56,7 +56,7 @@
  * dispatch helper below is IMPORTED, unmodified, from the already-green
  * `child-session-explicit-provider-smoke.mjs`. `step1LaunchApp` is reused
  * UNMODIFIED for the whole launch/profile/settings-seed sequence (the same
- * real v2 `provider.connections[]` seed — the "ГРАБЛИ" lesson: only that
+ * real v2 `provider.connections[]` seed — the "pitfalls" lesson: only that
  * file's seed round-trips the current settings schema). `attemptDispatch`/
  * `settleTurn`/`waitUntilTab` are reused for EVERY probe's dispatch by
  * temporarily pointing the shared `ctx.tabId` at whichever tab is currently
@@ -79,8 +79,8 @@
  * disjoint race probes sharing one app instance purely for launch-cost
  * amortization. Each is wrapped in its own try/catch; one probe's FAIL does
  * NOT abort the others — this is deliberately MORE informative than
- * fail-fast for a race-probe suite (CUT-S2's own framing: "Гоночные пробы —
- * ровно то место, где продукт может реально треснуть"), and the exit code
+ * fail-fast for a race-probe suite (CUT-S2's own framing: "Race probes —
+ * exactly where the product can actually crack"), and the exit code
  * still reflects the worst outcome across all four.
  *
  * Usage:   node apps/desktop/scripts/child-session-race-smoke.mjs [--keep]
@@ -147,7 +147,7 @@ const CHILD_HOST_EXITED_MESSAGE = "Agent: the child session host exited before c
  * their own `createSession` — "database is locked", no `busy_timeout` set
  * anywhere in `packages/core/src/adapters/node/sqlite-persistence.ts` — and
  * were only reaped once this FULL deadline elapsed, not on their own 8s
- * sleep). See this run's own report under "КРАСНОЕ" for the finding; the
+ * sleep). See this run's own report under "RED" for the finding; the
  * fix here is a correct wait, not a queue-forgiving one.
  */
 const CHILD_START_DEADLINE_MS = 30_000;
@@ -383,7 +383,7 @@ async function createRootTab(ctx, step, workspace) {
  * up with a documented SKIP. The base harness asks twice (initial + one
  * retry); probes B and C need the model to volunteer ONE
  * `Agent(tier:"session")` call and skipped on two separate runs at that
- * budget, while §10.14.7 п.3 needs them to actually execute. The extra
+ * budget, while §10.14.7 item 3 needs them to actually execute. The extra
  * attempt only re-asks — no assertion below is relaxed, and the skip reason
  * carries the attempt count so a SKIP is never readable as proof.
  */
@@ -434,7 +434,7 @@ async function dispatchOneSpawn(ctx, step, tabId, sleepSeconds, label) {
   }
 }
 
-// ── probe A (§4.2 п.10, per-parent half): 4 spawns one turn -> 3 admitted + 1 refused ──
+// ── probe A (§4.2 item 10, per-parent half): 4 spawns one turn -> 3 admitted + 1 refused ──
 
 async function probeA(ctx) {
   const step = "A";
@@ -477,9 +477,9 @@ async function probeA(ctx) {
       };
     }
 
-    // Stability check (anti-facade §5.9's own risk: "надо мерить, когда все
-    // четыре запроса УЖЕ обработаны, иначе намеришь 3 просто потому, что
-    // четвёртый не успел"): poll until the split settles to 3 non-terminal +
+    // Stability check (anti-facade §5.9's own risk: "must measure when all
+    // four requests are ALREADY handled, otherwise you'd measure 3 simply because
+    // the fourth hadn't finished yet"): poll until the split settles to 3 non-terminal +
     // 1 terminal and STAYS that way across a second read.
     const stable = await pollUntil(20_000, 300, async () => {
       const { transcript, childRuns } = await getTranscriptBlocks(ctx, step, tab.tabId);
@@ -558,7 +558,7 @@ async function probeA(ctx) {
   }
 }
 
-// ── probe B (§4.2 п.9): close master with a running child -> cascade cancel, PNG-verified ──
+// ── probe B (§4.2 item 9): close master with a running child -> cascade cancel, PNG-verified ──
 
 async function probeB(ctx) {
   const step = "B";
@@ -636,7 +636,7 @@ async function probeB(ctx) {
   }
 }
 
-// ── probe C (§4.2 п.11): external SIGKILL on the child pid -> error card, not eternal running ──
+// ── probe C (§4.2 item 11): external SIGKILL on the child pid -> error card, not eternal running ──
 
 async function probeC(ctx) {
   const step = "C";

@@ -6,10 +6,10 @@
  * `SessionSurface` or C4's read-only `ChildHistoryContent` — is NOT built
  * here: App.tsx composes it (it owns the `TabContext.Provider`/`tabRegistry`
  * wiring, this file's fence excludes both) and hands it down as `children`
- * (§3.3's "композиция вместо экстракции" — keeps App.tsx as the only place
+ * ("composition over extraction" — keeps App.tsx as the only place
  * `SessionSurface` gets re-scoped onto a child tab, so no App ⇄
  * ChildSplitPane import cycle forms and `SessionSurface` never needs its own
- * file, §9 п.13).
+ * file).
  *
  * §3.5's DOM contract is FROZEN for this file: the class names/attributes
  * below (`.child-split-pane`/`-head`/`-head-roster`/`-head-expand`/
@@ -34,7 +34,7 @@ export interface ChildSplitPaneProps {
   rows: readonly ChildSplitRow[];
   /** The currently-expanded row's id — MUST be a member of `rows` (mirrors §2.1's `expandedId ∈ order` invariant). */
   expandedId: string;
-  /** A collapsed row's click (§3.2 "клик по свёрнутой строке" → `expandRow`). */
+  /** A collapsed row's click ("click on a collapsed row" → `expandRow`). */
   onExpandRow(spawnToolCallId: string): void;
   /** ⤢ — leaves the split for layout B on the expanded child (§3.2 `exitSplit`). */
   onExitSplit(): void;
@@ -68,7 +68,7 @@ function ChildSplitBadge({ badge }: { badge: ChildBadgeKind }) {
   );
 }
 
-/** The stack head's `single` shape (mokap C): one child's own identity + counters, no separate row below it (§3.3: "N=1 строка-заголовок не дублирует голову"). */
+/** The stack head's `single` shape (mockup C): one child's own identity + counters, no separate row below it ("N=1: a header row does not duplicate the head"). */
 function ChildSplitHeadSingle({ row }: { row: ChildSplitRow }) {
   return (
     <>

@@ -42,7 +42,7 @@ import {
 } from "./codex-manifest.js";
 import { codexProfilesRoot } from "./codex-profiles.js";
 
-// ── caps (amended §A4.3 п.4 — fail-closed on breach; live artifact: ~115 MiB compressed / 311 MB unpacked / 7 entries) ──
+// ── caps (amended §A4.3 item 4 — fail-closed on breach; live artifact: ~115 MiB compressed / 311 MB unpacked / 7 entries) ──
 
 export interface CodexInstallCaps {
   maxTarballBytes: number;
@@ -79,7 +79,7 @@ export interface ResolveCodexArtifactOptions {
  * `GET {registry}/@openai/codex/<version>-<platform-suffix>` -> validated
  * `{dist.tarball, dist.integrity}`. Every mismatch — name echo, version echo,
  * `os`/`cpu` gate, missing/non-sha512 integrity, tarball not on the pinned
- * registry host over https — is a refusal, never a heuristic (§A4.1 п.3).
+ * registry host over https — is a refusal, never a heuristic (§A4.1 item 3).
  */
 export async function resolveCodexArtifact(version: string, options: ResolveCodexArtifactOptions = {}): Promise<Result<ResolvedCodexArtifact>> {
   const platform = options.platform ?? process.platform;
@@ -132,7 +132,7 @@ export async function resolveCodexArtifact(version: string, options: ResolveCode
   return { ok: true, tarballUrl: tarballUrl.toString(), integrity };
 }
 
-// ── download + integrity (cut §7.2 п.3-4: verify BEFORE unpack; the file never becomes executable) ──
+// ── download + integrity (cut §7.2 items 3-4: verify BEFORE unpack; the file never becomes executable) ──
 
 export interface DownloadCodexTarballOptions {
   integrity: string;
@@ -145,7 +145,7 @@ export interface DownloadCodexTarballOptions {
 /**
  * Streams the tarball to `destFile` (mode 0600 — data, never a program),
  * hashing as it writes. A size-cap breach, a redirect (refused, not followed
- * — cross-host redirect defense, §A4.1 п.4), a non-200, or an integrity
+ * — cross-host redirect defense, §A4.1 item 4), a non-200, or an integrity
  * mismatch deletes the file: a failed download leaves NOTHING behind.
  */
 export async function downloadCodexTarball(url: string, options: DownloadCodexTarballOptions): Promise<Result> {
@@ -311,7 +311,7 @@ function parsePaxRecords(body: Buffer): { path?: string; size?: number } {
 /**
  * Splits a tar entry name into path components, refusing every traversal
  * shape: NUL, backslash separators, absolute paths, drive letters, and any
- * `..` component (amended §A4.3 п.2). `.` components and empty segments are
+ * `..` component (amended §A4.3 item 2). `.` components and empty segments are
  * dropped, not refused (harmless artifacts of `./package/...` naming).
  */
 function safeEntryComponents(name: string): string[] | null {
@@ -414,7 +414,7 @@ export async function extractCodexVendorSubtree(
       if (!isFile && !isDirectory) {
         // Symlink ('2'), hardlink ('1'), char/block device, fifo, GNU longlink
         // ('K'), anything unknown: an anomalous artifact — refuse the WHOLE
-        // install (§A4.3 п.1; the live archive has none of these).
+        // install (§A4.3 item 1; the live archive has none of these).
         throw new Error(`archive carries a forbidden entry type '${typeflag}' — install refused`);
       }
 
@@ -503,7 +503,7 @@ export type CodexInstallOutcome =
  * The full §7.2 pipeline for one version: resolve -> download -> verify ->
  * extract (into `bin/.tmp-*`) -> cross-check `codex-package.json`
  * (`layoutVersion === 1`, `entrypoint === "bin/codex"` — fail-closed against
- * a future layout change, §A4.3 п.6) -> atomic `rename` to
+ * a future layout change, §A4.3 item 6) -> atomic `rename` to
  * `bin/<version>/`. A failure at ANY stage leaves no partial directory under
  * the final name and no temp litter. Never throws.
  */
@@ -558,7 +558,7 @@ export async function installCodexVersion(version: string, options: InstallCodex
     const extracted = await extractCodexVendorSubtree(tarballPath, vendorDest, triple, options.caps ?? {});
     if (!extracted.ok) return extracted;
 
-    // Cross-check the layout manifest the artifact itself ships (§A4.3 п.6).
+    // Cross-check the layout manifest the artifact itself ships (§A4.3 item 6).
     let layout: { layoutVersion?: unknown; entrypoint?: unknown };
     try {
       layout = JSON.parse(await readFile(join(vendorDest, "codex-package.json"), "utf8")) as typeof layout;
@@ -576,7 +576,7 @@ export async function installCodexVersion(version: string, options: InstallCodex
       return { ok: false, error: "artifact carries no main binary at its declared entrypoint — install refused" };
     }
     // The integrity gate passed long before this point; the entrypoint may now
-    // become executable (cut §7.2 п.6 ordering).
+    // become executable (cut §7.2 item 6 ordering).
     await chmod(stagedBinary, 0o755);
 
     // amendment-1 §262 (BM3): fsync the staging directory itself — durable
@@ -629,7 +629,7 @@ export interface CodexInstallControllerDeps {
   caps?: Partial<CodexInstallCaps>;
   /** Reads `settings.codex.riskAcceptedVersions` fresh every call. */
   readRiskAcceptedVersions: () => Promise<string[]>;
-  /** Persists through the settings-set pipeline (same custody as codex-ipc: only a path/version list, никогда account material). */
+  /** Persists through the settings-set pipeline (same custody as codex-ipc: only a path/version list, never account material). */
   writeCodexSettings: (patch: { binaryPath?: string; riskAcceptedVersions?: string[] }) => Promise<unknown>;
   /** Fired after a successful install / risk acceptance so main pushes ENGINES_CHANGED and rechecks. */
   onChanged?: () => void;
@@ -691,7 +691,7 @@ export function createCodexInstallController(deps: CodexInstallControllerDeps): 
     const fresh = installed.alreadyInstalled !== true;
     const refuse = (error: string): CodexInstallControllerResult => {
       // A freshly installed tree that failed its gate is removed (cut §7.2
-      // п.7); a pre-existing install is refused but left in place — deleting
+      // item 7); a pre-existing install is refused but left in place — deleting
       // a tree the user may be running from is not this handler's call.
       if (fresh) removeCodexInstall(installed.installDir);
       return { ok: false, error };

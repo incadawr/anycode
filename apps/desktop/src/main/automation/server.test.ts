@@ -447,7 +447,7 @@ describe("GET /child-runs (S2d D1, dev-only durable maintenance list)", () => {
   });
 });
 
-describe("POST /sessions/:id/delete-tree (S2d D3, CUT-S2 §4.2 п.12 dev-only cascade delete)", () => {
+describe("POST /sessions/:id/delete-tree (S2d D3, CUT-S2 §4.2 item 12 dev-only cascade delete)", () => {
   it("calls deleteSessionTree with the path id and returns its result", async () => {
     const deleteSessionTree = vi.fn(async () => ({ deletedSessionIds: ["root-1", "child-1"], externalSessionRefs: [] }));
     const h = await boot({ persistence: { listSessionsForMaintenance: vi.fn(async () => []), deleteSessionTree } });
@@ -465,7 +465,7 @@ describe("POST /sessions/:id/delete-tree (S2d D3, CUT-S2 §4.2 п.12 dev-only ca
   });
 });
 
-describe("POST /tabs/:tabId/child/open (S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
+describe("POST /tabs/:tabId/child/open (S2d D1, CUT-S2 §4.2 item 5 'Open click')", () => {
   it("401s without a token", async () => {
     const h = await boot();
     const res = await fetch(url(h, "/tabs/tab-a/child/open"), {
@@ -3753,7 +3753,7 @@ describe("Profile pane routes (design/slice-P7.22-cut.md §4 W4, period/models/r
   });
 });
 
-describe("Vision pane routes (срез E2c)", () => {
+describe("Vision pane routes (slice E2c)", () => {
   const VISION_POST_ROUTES: ReadonlyArray<{ path: string; body: unknown }> = [
     { path: "/settings/vision/connection", body: { connectionId: "conn-1" } },
     { path: "/settings/vision/model", body: { modelId: "glm-5.3-flash" } },

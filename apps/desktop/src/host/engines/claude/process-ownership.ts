@@ -2,8 +2,8 @@
  * Host-side, typed bridge for the Claude engine bootstrap to report ownership.
  *
  * Duplicated on purpose from host/engines/codex/process-ownership.ts (cut
- * §1.3: "дословный дубликат... межкаталожный импорт codex→claude создал бы
- * связность, которой шов избегает"). Both engine directories import ONLY the
+ * §1.3: "a verbatim duplicate... a cross-directory import codex→claude would create
+ * coupling that the seam avoids"). Both engine directories import ONLY the
  * shared, value-only `shared/engines.ts` — never each other.
  */
 

@@ -18,8 +18,8 @@
  * (the merged schema that command also writes — every per-type file in that
  * same directory is a strict subset of it, so this is the one file this
  * extractor needs). Canonicalization = recursive key-sort of the WHOLE output
- * (cut §1: "JSON-schema отличается только порядком ключей ⇒ drift-гейт обязан
- * канонизировать сортировкой ключей"), so two schema dumps that differ only in
+ * (cut §1: "JSON schema differs only in key order ⇒ the drift gate must
+ * canonicalize by sorting keys"), so two schema dumps that differ only in
  * property insertion order extract to byte-identical output.
  *
  * With no <outFile>, the canonical JSON is written to stdout.

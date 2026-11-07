@@ -386,8 +386,8 @@ describe("agentTool — honest outcome mapping", () => {
 });
 
 // ---------------------------------------------------------------------------
-// degeneration/length/byte-cap markers. (а) a guard-cut turn is
-// never ok:true; (б)/(в) are prefixes applied only in formatResultForModel,
+// degeneration/length/byte-cap markers. (a) a guard-cut turn is
+// never ok:true; (b)/(c) are prefixes applied only in formatResultForModel,
 // never in output.finalText (cards/persistence keep the raw text).
 
 describe("agentTool — degeneration/truncation markers", () => {
@@ -424,14 +424,14 @@ describe("agentTool — degeneration/truncation markers", () => {
     expect(agentTool.formatResultForModel?.(result)).toBe(result.error);
   });
 
-  it("degenerate + truncated: the (а) marker does not FALSELY claim the delivered partial ends inside the loop (codex review finding)", async () => {
+  it("degenerate + truncated: the (a) marker does not FALSELY claim the delivered partial ends inside the loop (codex review finding)", async () => {
     // Real scenario: >100KB of ordinary text, THEN the loop starts — the
     // runner's capUtf8Bytes (runner.ts) runs BEFORE this outcome exists and
     // keeps the HEAD, trimming from the end. So by the time outcomeToResult
     // sees it, finalText may be nothing but ordinary head text with the loop
-    // itself entirely in the discarded tail. formatResultForModel's own (в)
+    // itself entirely in the discarded tail. formatResultForModel's own (c)
     // prefix NEVER reaches an ok:false result (it early-returns result.error
-    // verbatim), so the byte-cap fact has to be folded into (а)'s own message.
+    // verbatim), so the byte-cap fact has to be folded into (a)'s own message.
     const headText = "a".repeat(SUBAGENT_OUTPUT_MAX_BYTES);
     const result = await agentTool.handler(
       { description: "x", prompt: "y", agent_type: "general-purpose" },
@@ -453,7 +453,7 @@ describe("agentTool — degeneration/truncation markers", () => {
     // NOT appear here — it would be a lie about what the delivered head text
     // actually shows.
     expect(result.error).not.toContain("The text below ends inside a degenerate loop.");
-    // The byte cap fact is named explicitly, same number as marker (в).
+    // The byte cap fact is named explicitly, same number as marker (c).
     expect(result.error).toContain(`${SUBAGENT_OUTPUT_MAX_BYTES}`);
     expect(result.error).toContain(headText.slice(0, 100));
   });

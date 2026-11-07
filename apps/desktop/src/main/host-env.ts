@@ -1513,7 +1513,7 @@ export async function resolveRecognizerConfig(
   // connection itself (a connection only POINTS at the record via its
   // providerId) — reading `connection.baseUrl`/a connection-scoped vault key
   // here left both blank for every custom-provider recognizer
-  // ("Хвост от E1"). A missing record (deleted while a connection still
+  // ("Tail from E1"). A missing record (deleted while a connection still
   // references it) is FAIL-CLOSED exactly like the primary branch: neither
   // field falls back to the connection-scoped key/baseUrl. Its transport is
   // untouched by the catalog ladder below — a `custom:` id has no catalog

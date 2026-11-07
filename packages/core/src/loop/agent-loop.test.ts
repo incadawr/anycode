@@ -579,7 +579,7 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
     expect(Object.keys(user!)).toEqual(["role", "content"]);
   });
 
-  it("срез 2: options.origin stamps the appended user HistoryItem's origin, never the message itself (role/content stay byte-identical either way)", async () => {
+  it("slice 2: options.origin stamps the appended user HistoryItem's origin, never the message itself (role/content stay byte-identical either way)", async () => {
     const loop = makeLoop({ modelPort: new MockModelPort([completeStep]) });
     await collect(loop.runTurn("background report", { origin: "system" }));
     const [item] = loop.history.items;
@@ -587,7 +587,7 @@ describe("AgentLoop.runTurn — image attachments (design slice-6.2-cut.md §2-C
     expect(item!.message).toEqual({ role: "user", content: "background report" });
   });
 
-  it("срез 2: origin is absent by default (an ordinary runTurn call never stamps it)", async () => {
+  it("slice 2: origin is absent by default (an ordinary runTurn call never stamps it)", async () => {
     const loop = makeLoop({ modelPort: new MockModelPort([completeStep]) });
     await collect(loop.runTurn("plain text"));
     const [item] = loop.history.items;

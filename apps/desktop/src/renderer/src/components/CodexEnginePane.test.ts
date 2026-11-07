@@ -175,7 +175,7 @@ describe("sentinel-email custody PoC (cut §4.4): renders, but never leaks to co
     try {
       const report: CodexDoctorReport = { status: "ready", version: "0.144.3", account: { type: "chatgpt", email: "sentinel-custody@example.com", plan: "plus" } };
 
-      // Rendered — this IS the intended behavior (cut §4.4: "e-mail показывается как ВТОРИЧНАЯ строка").
+      // Rendered — this IS the intended behavior (cut §4.4: "e-mail is shown as a SECONDARY line").
       expect(describeAccountEmailLine(report)).toBe("sentinel-custody@example.com");
 
       // Never fabricated into the primary status text.
@@ -442,7 +442,7 @@ describe("manifestRefreshNotice", () => {
   });
 });
 
-// ── R3-3/R3b-9 (cut §4.3: profiles are diagnosed SEQUENTIALLY, "не N параллельных app-server'ов" — pinned at the pure-helper `refreshAll` delegates to) ──
+// ── R3-3/R3b-9 (cut §4.3: profiles are diagnosed SEQUENTIALLY, "not N parallel app-servers" — pinned at the pure-helper `refreshAll` delegates to) ──
 
 function fakeSnapshot(): CodexOnboardingSnapshot {
   return { report: { status: "ready", version: "0.144.3", account: null }, binaryPath: "/usr/local/bin/codex", source: "path", checkedAt: "2026-07-17T00:00:00.000Z" };

@@ -232,7 +232,7 @@ export const START_MODEL_RECENT_WINDOW = 30;
  * D6). "Popular" is measured from the user's OWN history rather than a
  * curated constant in code — the constant was what made the strip disappear
  * for a user whose providers it did not happen to name (owner live smoke
- * 16.08: «пропали избранные»). Windowed so a long-abandoned model cannot
+ * 16.08: "favorites disappeared"). Windowed so a long-abandoned model cannot
  * outvote this month's by sheer accumulated count. Exported for unit testing.
  */
 export function deriveRecentModelIds(
@@ -247,7 +247,7 @@ export function deriveRecentModelIds(
 }
 
 /**
- * D6 + owner decision 17.08 ("топ 3 популярных"): the root level's
+ * D6 + owner decision 17.08 ("top 3 popular"): the root level's
  * three quick picks. Ranked by how often the model appears in the recent
  * session window (ties → the more recently used one), each mapped to a group
  * that actually offers it — the CURRENT connection's group when it does, so a
@@ -322,8 +322,8 @@ export function buildStartModelPopularRows(
 export const START_MODEL_DEFAULT_EFFORTS: readonly string[] = ["off", "low", "medium", "high"];
 
 /**
- * (owner decision 17.08: «effort у разных моделей по-разному
- * определяется»): the effort levels ONE model accepts, or `undefined` when it
+ * (owner decision 17.08: "effort is determined differently per model
+ * "): the effort levels ONE model accepts, or `undefined` when it
  * accepts none and the picker must not show an effort level at all.
  *
  * The vocabulary belongs to the model, never to the app: `catalog-data.ts`
@@ -548,7 +548,7 @@ export function startModelMenuFlipsUp(
  *
  * This is a `max-height`, not a height: a level shorter than the room renders
  * at its natural size with no scrollbar at all, which is the owner's standing
- * requirement («попап не должен был скроллбокс порождать»). The predecessor
+ * requirement ("the popup must not have produced a scroll box"). The predecessor
  * clamped this value UP to a minimum row count, which is how the popover came
  * to run past the window's bottom edge on the live smoke — a floor cannot
  * create room that isn't there. Exported for unit testing.

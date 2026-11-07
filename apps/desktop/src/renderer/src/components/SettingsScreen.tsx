@@ -159,7 +159,7 @@ type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
  * `requestedPane` initial value stays "provider", unrelated to array order.
  * P7.24/F20 W3 (design/slice-P7.24-cut.md §1.4) inserts "shortcuts" between
  * Appearance and About, mirroring the ref's Personal-section grouping.
- * срез E2a inserts "vision" between Tools and Network — the
+ * slice E2a inserts "vision" between Tools and Network — the
  * fallback-recognizer pane belongs next to the other cross-cutting run-time
  * knobs, not among the per-provider connection panes.
  */
@@ -1106,7 +1106,7 @@ export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
  * `ConnectionDrawer` (add/edit) and the weak-storage `ConsentDialog`
  * (`pendingConsent` only ever arises from a `setSecret` call, which now lives
  * inside the drawer) are the two dialogs this pane owns. Two consumers:
- * SettingsScreen below (dialog) and WelcomeScreen (first-run, cut §"Отдельный
+ * SettingsScreen below (dialog) and WelcomeScreen (first-run, cut §"Separate
  * first-run empty state") — WelcomeScreen conditionally narrows the grid to a
  * single first-connection prompt, see its own file.
  */
@@ -1213,7 +1213,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
   const secrets = snapshot.secrets;
   const editConnection = drawerConnectionId !== null ? connections.find((c) => c.id === drawerConnectionId) : undefined;
   // Roving focus targets: every tile's select-button, then the trailing "+
-  // Add connection" tile (design §"Компактная сетка": keyboard navigation
+  // Add connection" tile (design §"Compact grid": keyboard navigation
   // across the whole grid, add tile included).
   const rovingCount = connections.length + 1;
 

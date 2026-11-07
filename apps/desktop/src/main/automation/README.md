@@ -105,7 +105,7 @@ missing/bad token → `401`.
 
 | Method / path | Body | Returns |
 |---|---|---|
-| `POST /tabs/:tabId/prompt` | `{text, images?}` | `{ok:true, requestId}` \| `{ok:false, reason:"image_not_found"\|"image_too_many"\|"image_unsupported_type"\|"image_too_large"\|"images_unsupported"}` — `images` (live-smoke facade) is a list of ABSOLUTE on-disk paths, never base64 over the wire. handlers.ts (main, the only side with fs access) reads + base64-encodes each path, failing closed on ANY unreadable/non-absolute path with `image_not_found` before the facade is even called. The renderer facade then runs the SAME validation a live drag-drop does: `sniffComposerImageMediaType` (content, never the extension) against `image_too_large`/`image_unsupported_type`, `COMPOSER_IMAGE_MAX_PER_MESSAGE` against `image_too_many`, and the W3-FIX `isSendBlockedByModelImages` gate — a blind model with no configured recognizer fallback (срез D) refuses the whole send as `images_unsupported`, same reason `/tabs/:tabId/retry` already reports, rather than silently stripping the images |
+| `POST /tabs/:tabId/prompt` | `{text, images?}` | `{ok:true, requestId}` \| `{ok:false, reason:"image_not_found"\|"image_too_many"\|"image_unsupported_type"\|"image_too_large"\|"images_unsupported"}` — `images` (live-smoke facade) is a list of ABSOLUTE on-disk paths, never base64 over the wire. handlers.ts (main, the only side with fs access) reads + base64-encodes each path, failing closed on ANY unreadable/non-absolute path with `image_not_found` before the facade is even called. The renderer facade then runs the SAME validation a live drag-drop does: `sniffComposerImageMediaType` (content, never the extension) against `image_too_large`/`image_unsupported_type`, `COMPOSER_IMAGE_MAX_PER_MESSAGE` against `image_too_many`, and the W3-FIX `isSendBlockedByModelImages` gate — a blind model with no configured recognizer fallback (slice D) refuses the whole send as `images_unsupported`, same reason `/tabs/:tabId/retry` already reports, rather than silently stripping the images |
 | `POST /tabs/:tabId/permission` | `{behavior:"allow"\|"deny", requestId?}` | `{ok:true}` |
 | `POST /tabs/:tabId/mode` | `{mode}` | `{ok:true}` |
 | `POST /tabs/:tabId/orchestrate` | `{enabled}` | `{ok:true}` \| `{ok:false, reason:"unknown_tab"\|"not_ready"}` |
@@ -1085,7 +1085,7 @@ per-tab workspace concept at all — this is the ONLY home lever the pane
 needs (unlike skills/subagents, which also take a `workspaceForTab`). See
 `apps/desktop/scripts/profile-ui-smoke.mjs` for the reference wiring.
 
-### Vision pane probe/driver (срез E2c)
+### Vision pane probe/driver (slice E2c)
 
 Mirrors `VisionPane.tsx` (the Settings "Vision" recognizer-fallback page) — a
 DOM probe/driver, same "no mirrored state" discipline as the Profile pane

@@ -67,7 +67,7 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
  *    cancel-addressing and concurrent-run disambiguation) — the two ids must
  *    never be collapsed into one again.
  *
- * срез 1 (`req.detach`): the ONE deliberate exception to the
+ * slice 1 (`req.detach`): the ONE deliberate exception to the
  * sync-join contract above. A detached run's `run()` promise settles at
  * `accepted` (admit) instead of `terminal` — the tool call that spawned it
  * returns immediately, telling the model the child is now running in the
@@ -87,11 +87,11 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
  *    happened, so there is nothing to detach FROM — the tool call fails
  *    exactly like a sync one would.
  *
- * срез 3 (revises срез 1's original abort-listener choice): `opts.
+ * slice 3 (revises slice 1's original abort-listener choice): `opts.
  * signal`'s abort listener is now REMOVED at the moment a detached run
- * admits, not left armed past it. Срез 1 kept it armed on the reasoning that
- * "жизненный цикл наследуются от sync-яруса" — cancelling the parent's turn
- * should cascade into the child it just detached. Срез 3 inverts that: a
+ * admits, not left armed past it. Slice 1 kept it armed on the reasoning that
+ * "the lifecycle is inherited from the sync tier" — cancelling the parent's turn
+ * should cascade into the child it just detached. Slice 3 inverts that: a
  * detach is an EXIT from the turn (design §8), and Stop cancels a TURN, not
  * every process that turn ever spawned into the background — the same
  * distinction bash background tasks and ZCode's own background tier both
@@ -297,7 +297,7 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
 }
 
 /**
- * срез 1: the admit-time `finalText` for a detached run — the ONLY
+ * slice 1: the admit-time `finalText` for a detached run — the ONLY
  * text the model ever sees for this call, since a detached call never waits
  * for the child's own finalText. `status:"completed"` on the outcome this
  * feeds (see the "accepted" case below) is honest under the SAME reading
@@ -333,7 +333,7 @@ function joinBudgetHandoffMessage(childSessionId: string): string {
 }
 
 /**
- * срез 3: one live detached (background) child, as tracked by this
+ * slice 3: one live detached (background) child, as tracked by this
  * port's own in-memory registry — surfaced host-side so `session.ts` can
  * answer "how many children are running in the background" and let the
  * renderer (a later slice's job, not this one) cancel one by id. Deliberately
@@ -395,7 +395,7 @@ export interface CreateChildSessionPortOptions {
   statusStore?: ReturnType<typeof createChildStatusStore>;
   canRun?(): boolean;
   /**
-   * срез 1: invoked when a DETACHED run's `terminal` ChildRunEvent
+   * slice 1: invoked when a DETACHED run's `terminal` ChildRunEvent
    * arrives — strictly AFTER this same run's `run()` promise already
    * resolved at `accepted` (see the file header's addendum), so the
    * terminal can no longer settle it. `req` is the ORIGINAL request (the
@@ -490,7 +490,7 @@ export interface CreateChildSessionPortOptions {
 }
 
 /**
- * срез 3: the port's own return type widens `SessionSubagentPort`
+ * slice 3: the port's own return type widens `SessionSubagentPort`
  * (`run` alone) with the background-children surface — never part of the
  * frozen `SessionSubagentPort` core interface itself (core has no concept of
  * "background", only the host does; see `ports/session-subagent.ts`'s own
@@ -536,7 +536,7 @@ export interface ChildSessionPort extends SessionSubagentPort {
    * `true` but sends no second `ChildRunCancel`.
    */
   cancelBackgroundChild(childSessionId: string): boolean;
-  /** Cancels every currently-live detached child (срез 3 §3: an explicit sweep, not a side effect of aborting a turn). */
+  /** Cancels every currently-live detached child (slice 3: an explicit sweep, not a side effect of aborting a turn). */
   cancelAllBackgroundChildren(): void;
   /** Subscribes to registry changes (a child admitted or reaching its terminal). Returns an unsubscribe fn, mirroring `lsp.onStatusChange`. */
   onBackgroundChildrenChanged(listener: () => void): () => void;
@@ -547,7 +547,7 @@ interface Waiter {
   onEvent(event: ChildRunEvent): void;
 }
 
-/** срез 3: one registry row — the detach waiter's `requestId` (for cancel-addressing) plus the public snapshot and its own cancel-idempotency flag. */
+/** slice 3: one registry row — the detach waiter's `requestId` (for cancel-addressing) plus the public snapshot and its own cancel-idempotency flag. */
 interface BackgroundChildEntry {
   requestId: string;
   snapshot: BackgroundChildSnapshot;
@@ -569,7 +569,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   const stallTimeoutMs = options.stallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
   const waiters = new Map<string, Waiter>();
   const joiningAgents = new Map<string, () => void>();
-  // срез 3: registry of live detached children, keyed by
+  // slice 3: registry of live detached children, keyed by
   // childSessionId (the id `cancelBackgroundChild`/the renderer's future list
   // both address by) — populated at admit, removed at terminal, see the two
   // `req.detach === true` branches below.
@@ -704,7 +704,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
 
     const requestId = createRequestId();
 
-    // срез 1: the child's own id, known only once "accepted"
+    // slice 1: the child's own id, known only once "accepted"
     // arrives (the detach branch below sets it). Read by a DETACHED run's
     // onStall closure (slice 2) — declared here, ahead of both the
     // clock and the promise executor, so the same mutable binding is visible
@@ -921,8 +921,8 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // Detached admission resolves the tool call while this waiter
               // continues relaying lifecycle events until the child settles.
               //
-              // срез 3: the abort listener IS removed here, though
-              // (file header's срез-3 addendum) — a detach is an exit from
+              // slice 3: the abort listener IS removed here, though
+              // (see the file header's slice-3 addendum) — a detach is an exit from
               // the turn, so cancelling the parent's turn after this point
               // must NOT cascade into this child. Registered into the
               // background-children registry in the SAME step, so a child is
@@ -1171,19 +1171,19 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 ...(event.errorDescriptor !== undefined ? { errorDescriptor: event.errorDescriptor } : {}),
                 ...(userCancelled ? { cancelledBy: "user" as const } : {}),
               };
-              // срез 1: this run's `run()` promise already settled
+              // slice 1: this run's `run()` promise already settled
               // at admit (above) — this terminal can no longer resolve it.
               // Relay the terminal independently of the settled tool call. Clean
               // up HERE instead — this is the true end of this waiter's
               // life, the one point a detached waiter still needs its own
               // teardown that `finish()` would otherwise have done.
               //
-              // срез 3: also the true end of this child's life in
+              // slice 3: also the true end of this child's life in
               // the background-children registry — removed here (whether the
               // terminal followed an explicit `cancelBackgroundChild` or the
               // child simply finished on its own), and the abort-listener
               // removal below is now a defensive no-op in the common case
-              // (срез 3 already removed it at admit) but stays cheap and
+              // (slice 3 already removed it at admit) but stays cheap and
               // harmless for a request that somehow never reached "accepted"'s
               // detach branch (defense in depth, not a reachable path today).
               if (mode === "background") {
@@ -1213,7 +1213,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 options.onDetachedTerminal?.(outcome, backgroundRequest());
                 return;
               }
-              // CUT-S2 §10.7 п.4: passthrough of the honest suppressed-count
+              // passthrough of the honest suppressed-count
               // (main relayed it verbatim from the child's own ChildTerminal)
               // — mirrors the inline runner's own `activitySuppressed` on its
               // `kind:"end"` SubagentProgress (runner.ts:573). Absent when
@@ -1366,12 +1366,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     });
   }
 
-  /** срез 3, `ChildSessionPort.listBackgroundChildren` — see that interface's own doc. */
+  /** slice 3, `ChildSessionPort.listBackgroundChildren` — see that interface's own doc. */
   function listBackgroundChildren(): BackgroundChildSnapshot[] {
     return [...backgroundChildren.values()].map((entry) => entry.snapshot);
   }
 
-  /** срез 3, `ChildSessionPort.cancelBackgroundChild` — see that interface's own doc. */
+  /** slice 3, `ChildSessionPort.cancelBackgroundChild` — see that interface's own doc. */
   function cancelBackgroundChild(childSessionId: string): boolean {
     return requestBackgroundChildCancel(childSessionId, "user");
   }
@@ -1389,14 +1389,14 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     return true;
   }
 
-  /** срез 3, `ChildSessionPort.cancelAllBackgroundChildren` — see that interface's own doc. */
+  /** slice 3, `ChildSessionPort.cancelAllBackgroundChildren` — see that interface's own doc. */
   function cancelAllBackgroundChildren(): void {
     for (const childSessionId of [...backgroundChildren.keys()]) {
       requestBackgroundChildCancel(childSessionId, "shutdown");
     }
   }
 
-  /** срез 3, `ChildSessionPort.onBackgroundChildrenChanged` — see that interface's own doc. */
+  /** slice 3, `ChildSessionPort.onBackgroundChildrenChanged` — see that interface's own doc. */
   function onBackgroundChildrenChanged(listener: () => void): () => void {
     backgroundChildrenListeners.add(listener);
     return () => {

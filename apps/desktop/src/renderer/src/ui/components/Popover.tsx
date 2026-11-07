@@ -79,14 +79,14 @@ export interface MenuItemProps {
   selected?: boolean;
   checkable?: boolean;
   disabled?: boolean;
-  /** Пункт — текущий (aria-current="true"). */
+  /** Item is the current one (aria-current="true"). */
   active?: boolean;
   onSelect?: () => void;
   children?: ReactNode;
 }
 /**
- * Пункт меню. Роль фиксирована: `menuitem` либо `menuitemcheckbox`
- * (тогда `aria-checked`). `selected` — отмеченный пункт, `active` — текущий.
+ * Menu item. Role is fixed: `menuitem` or `menuitemcheckbox`
+ * (then `aria-checked`). `selected` — checked item, `active` — current.
  */
 export function MenuItem({ label, description, selected = false, checkable = false, disabled = false, active = false, onSelect, children }: MenuItemProps): React.ReactElement {
   const closeMenu = useContext(MenuCloseContext);

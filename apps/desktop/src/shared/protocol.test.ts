@@ -89,7 +89,7 @@ describe("set_model protocol (slice P7.15 · F14)", () => {
     expect(structuredClone(ready)).toEqual(ready);
   });
 
-  // срез C: `imageFallback` rides beside `imageInput` on both
+  // slice C: `imageFallback` rides beside `imageInput` on both
   // host_ready and model_changed (same additive-optional discipline, same
   // compile-time proof that the field-absent shapes above stay valid), and
   // the new `image_fallback_changed` event is structured-clone-safe.
@@ -387,9 +387,9 @@ describe("reserved orchestration wire forms", () => {
   });
 });
 
-// срез 2: the detached-child-report delivery wire additions —
+// slice 2: the detached-child-report delivery wire additions —
 // user_message's optional `origin` and the new child_report_ack ack message.
-describe("срез 2 protocol additions", () => {
+describe("slice 2 protocol additions", () => {
   it("user_message.origin accepts the literal \"system\" and is absent by default", () => {
     expect(
       uiToHostMessageSchema.safeParse({ type: "user_message", requestId: "r1", text: "hi", origin: "system" })

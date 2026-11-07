@@ -250,7 +250,7 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       durationMs: number;
       childSessionId: string;
       /**
-       * Additive field (CUT-S2 §10.7 п.4, authorized amendment to
+       * Additive field (CUT-S2 §10.7 item 4, authorized amendment to
        * this otherwise-frozen S2a type): mirrors `ChildTerminal
        * .activitySuppressed` through to the parent-host wire — main relays it
        * verbatim from the child's own `ChildTerminal` (§2.6.4). Present only
@@ -359,12 +359,12 @@ export const CHILD_START_DEADLINE_MS = 60_000;
 export const CHILD_STEER_QUEUE_MAX = 16;
 /**
  * Max spawn requests parked waiting for a per-parent/global slot,
- * application-wide (срез 1: a cap-exceeding spawn now queues
+ * application-wide (slice 1: a cap-exceeding spawn now queues
  * instead of being refused outright). Bounds the queue itself — an
  * unbounded queue would only trade a lost task for a silently, indefinitely
- * stuck one, which the task's own "Границы решения" rules out just as
+ * stuck one, which the task's own "Decision boundaries" rules out just as
  * firmly as dropping the cap would be. Sized like `CHILD_STEER_QUEUE_MAX`
- * (no empirical basis exists yet for either number; срез 2
+ * (no empirical basis exists yet for either number; slice 2
  * revisits both).
  */
 export const CHILD_SPAWN_QUEUE_MAX = 16;
@@ -557,7 +557,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "effort",
   "permissionMode",
   // CUT-S4 §3.1: additive key, authorized amendment (mirrors the
-  // §2.6 п.4 amendment style already used for `activitySuppressed` below).
+  // §2.6 item 4 amendment style already used for `activitySuppressed` below).
   "engine",
   "resumeChildSessionId",
   // additive key (profile turn budget for the creating spawn).
@@ -742,7 +742,7 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "toolCalls",
   "durationMs",
   "childSessionId",
-  // CUT-S2 §10.7 п.4: additive key, authorized amendment.
+  // CUT-S2 §10.7 item 4: additive key, authorized amendment.
   "activitySuppressed",
   "finalTurnFinishReason",
   "declaredDoneAtCeiling",

@@ -354,8 +354,8 @@ export function buildChildConfig(
   // §2.2, reaffirmed: same precedence as the
   // model-override resolution in run() (request > persona default) — the
   // spawn identity stamped onto every telemetry record this child produces,
-  // when the parent wired a tap factory. (owner's ruling — "модель
-  // никогда не ответит, главное какие запросы мы шлем"): this REQUEST ECHO
+  // when the parent wired a tap factory. (owner's ruling — "the model
+  // never answers, what matters is which requests we send"): this REQUEST ECHO
   // is now the single authoritative answer to "which model did the child run
   // on," used identically here and by run()'s own `requestedModel` below —
   // never the constructed port's own identity (see the `onProgress`
@@ -1348,8 +1348,8 @@ export function createSubagentRunner(
           // the CONSTRUCTED port (`childModelPort?.modelId ?? requestedModel`),
           // so the card and telemetry's `spawnModel` (buildChildConfig, ~line
           // 208) could disagree the moment a port canonicalized an id. Owner's
-          // ruling — "модель никогда не ответит, главное какие запросы мы
-          // шлем" — makes the REQUEST the single authoritative answer to
+          // ruling — "the model never answers, what matters is which requests we
+          // send" — makes the REQUEST the single authoritative answer to
           // "which model did the child run on": a constructed port's own
           // identity is still our own construction, not independent evidence,
           // so it is never consulted here. Absent still means "inherited the
@@ -1755,8 +1755,8 @@ export function createSubagentRunner(
         // reports nothing on purpose: the parent's shared port carries
         // whichever call streamed last, which is not attributable to this child.
         //
-        // (owner's ruling, verbatim: "модель никогда не ответит,
-        // главное какие запросы мы шлем и что в них фигурирует"): this claim
+        // (owner's ruling, verbatim: "the model never answers,
+        // what matters is which requests we send and what they contain"): this claim
         // is evidence ABOUT the provider, never the answer to "which model did
         // the child run on" — that question is answered exclusively by
         // `requestedModel` (below, and at the start event above). Kept as its

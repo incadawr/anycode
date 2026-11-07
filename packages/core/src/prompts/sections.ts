@@ -56,8 +56,8 @@ export const SECTION_TOOL_DISCIPLINE_GENERIC = [
 /**
  * Vision-fallback section (plan §5): present ONLY while InspectImage
  * is actually registered (a blind model with a configured recognizer). Names
- * the tool literally — the plan's own risk analysis (spec §5, "molча мёртвая
- * фича") calls this the strongest lever after the inline stub text for
+ * the tool literally — the plan's own risk analysis (spec §5, "silently dead
+ * feature") calls this the strongest lever after the inline stub text for
  * getting a model to actually call it.
  */
 export const SECTION_VISION_FALLBACK = [

@@ -8,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
  *  - main: window/lifecycle entry, plus the host utilityProcess as a second
  *    entry of the same (Node, ESM) target, plus the Vision panel's recognizer-
- *    probe child (срез E2) as a THIRD — all three share
+ *    probe child (slice E2) as a THIRD — all three share
  *    externalization rules and all three need `@anycode/core`'s TS sources
  *    bundled directly (no core build step; its `exports` field points at
  *    `./src/index.ts`).

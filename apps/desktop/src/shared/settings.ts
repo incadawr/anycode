@@ -228,7 +228,7 @@ export type ProviderHealthStatus =
   | "misconfigured";
 
 /**
- * One user-created provider connection (§«Техническая модель»): an
+ * One user-created provider connection (§"Technical model"): an
  * instance of a catalog `providerId` with its own label, default
  * model/transport/baseUrl/effort and its OWN vault credential
  * (`provider.connection.<id>.{apiKey,oauth}`). `id` is a stable opaque id minted
@@ -649,7 +649,7 @@ export interface AnycodeSettings {
      * single-profile behavior, the `system` pseudo-profile). Each element
      * validates INDEPENDENTLY at the zod boundary (settings/schema.ts) — a
      * single malformed profile record is dropped without disturbing its
-     * siblings or `binaryPath` (cut §2.3 "zod-гранулярность").
+     * siblings or `binaryPath` (cut §2.3 "zod granularity").
      */
     profiles?: CodexProfileRecord[];
     /** Default profile id for NEW sessions; absent = `system`. */
@@ -756,7 +756,7 @@ export interface AnycodeSettings {
     contextWindowTokens?: number;
   };
   /**
-   * Named proxy profiles + the APP-level reference (редакция 2;
+   * Named proxy profiles + the APP-level reference (revision 2;
    * additive-optional, `version` NOT bumped — a settings.json with no `network`
    * key round-trips byte-identically and every child env stays byte-for-byte
    * what it was before this slice).
@@ -1522,7 +1522,7 @@ export interface PermissionRuleAddRequest {
  * source of truth for both processes; value-only (the lanes consume it, never
  * edit it). 2.5 extends this list with provider credentials.
  *
- * срез C durable (precedent): `ANYCODE_RECOGNIZER_API_KEY`
+ * slice C durable (precedent): `ANYCODE_RECOGNIZER_API_KEY`
  * is a second, independently-resolved credential (main/host-env.ts's
  * `resolveRecognizerConfig`/`applyRecognizerEnv`) that rides a host fork's
  * env exactly like `ANYCODE_API_KEY` does — without an entry here it would

@@ -430,8 +430,8 @@ export function createElectronPreviewWindow(opts: CreateWindowOpts): PreviewWind
   const win = new BrowserWindow({
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
-    // stage 4 («Этап 4»: always-on-top для
-    // превью-окон): a preview window is a passive artifact viewer the user
+    // stage 4 (always-on-top for
+    // preview windows): a preview window is a passive artifact viewer the user
     // wants beside the app — 'floating' keeps it above the main window
     // without fighting the OS focus (macOS floating level; Windows/Linux
     // honor the flag best-effort).

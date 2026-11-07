@@ -9,7 +9,7 @@ export interface SegmentedOption<T extends string> {
 
 interface BaseProps<T extends string> {
   options: SegmentedOption<T>[];
-  /** Подпись группы (label). */
+  /** Group label. */
   label: string;
   className?: string;
 }
@@ -21,7 +21,7 @@ export interface SingleSegmentedControlProps<T extends string> extends BaseProps
 }
 
 export interface MultiSegmentedControlProps<T extends string> extends BaseProps<T> {
-  /** Выбранные значения. */
+  /** Selected values. */
   value: T[];
   onChange: (value: T[]) => void;
   multiple: true;
@@ -33,8 +33,8 @@ export type SegmentedControlProps<T extends string> =
 
 /**
  * SegmentedControl.
- *  - single: роль `radiogroup`, у каждого пункта aria-checked;
- *  - multi:  группа кнопок с aria-pressed (мультивыбор — «усилия», модель и т.п.).
+ *  - single: role `radiogroup`, each item has aria-checked;
+ *  - multi:  button group with aria-pressed (multi-select — "effort", model, etc.).
  */
 export function SegmentedControl<T extends string>(
   props: SegmentedControlProps<T>,

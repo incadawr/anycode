@@ -42,7 +42,7 @@ describe("checkCodexHomeTrust (pure policy, cut §2.5)", () => {
     expect(checkCodexHomeTrust(input({}))).toEqual({ ok: true, needsChmod: false });
   });
 
-  it("flags a wider-mode OWNED home for chmod repair and continues (cut §2.5: 'чиним и продолжаем')", () => {
+  it("flags a wider-mode OWNED home for chmod repair and continues ('we fix and continue')", () => {
     expect(checkCodexHomeTrust(input({ home: { mode: 0o755 } }))).toEqual({ ok: true, needsChmod: true });
     expect(checkCodexHomeTrust(input({ home: { mode: 0o777 } }))).toEqual({ ok: true, needsChmod: true });
   });

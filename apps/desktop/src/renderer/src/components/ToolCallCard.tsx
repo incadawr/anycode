@@ -550,7 +550,7 @@ export function workflowStepAria(step: WorkflowStepStatus): string {
  *
  * [CORRECTED] An earlier revision of this comment claimed the plan left
  * "strip vs. graph" to the builder. It did not: §S3 states
- * "раскрытие — граф по уровням зависимостей" as a requirement and leaves open
+ * "expansion is a graph by dependency levels" as a requirement and leaves open
  * only WHICH OF THE TWO IS THE DEFAULT. Slice S6 is therefore the repair of an
  * under-delivered S3, not an extra. (Slice S4 turned each row into a real
  * `<button>` that filters the activity lane below — see `WorkflowStepsBody`;
@@ -575,7 +575,7 @@ export function orderStepsByDependency(steps: readonly WorkflowStepStatus[]): Wo
 }
 
 /* ── Run map (slice S6) ──────────────────────────────────────────
- * Owner 30.08, asked twice: "а где красивый граф?". The flat reordered list
+ * Owner 30.08, asked twice: "where's the nice graph?". The flat reordered list
  * above stays — it is the record — and the map is a second VIEW of the same
  * steps and the same selection, opened on demand.
  *
@@ -933,7 +933,7 @@ export function toggleWorkflowStepSelection(current: string | null, stepId: stri
  * `AgentCardBody` being split out of `ToolCallCard` itself).
  *
  * Each row's content moved from the `<li>` straight into a `<button>` (owner
- * ask: "а кликнуть в них нельзя будет?") — a real button gives keyboard
+ * ask: "won't it be possible to click them?") — a real button gives keyboard
  * focus, Enter/Space activation, and an implicit role for free, none of which
  * a `<li onClick>` would carry. `aria-label` rides on the button now (it used
  * to sit on the `<li>`).
@@ -1968,9 +1968,9 @@ function diffPath(block: ToolCallBlock): string {
 }
 
 /* ── Collapsed tick strip (slice S7) ────────────────────────
- * The plan's collapsed state, verbatim: "Свёрнутое
- * состояние — полоса засечек по числу шагов, карточка не растёт против
- * сегодняшней". One tick per step, in dependency order, coloured from the same
+ * The plan's collapsed state, verbatim: "Collapsed
+ * state — a strip of ticks by step count, the card does not grow versus
+ * today's". One tick per step, in dependency order, coloured from the same
  * `substatus-<kind>` vocabulary the checklist rows and the map already speak.
  *
  * "Collapsed" is NOT a synonym for "running" here: `defaultExpanded` keeps a

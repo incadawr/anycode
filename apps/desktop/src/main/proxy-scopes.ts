@@ -264,8 +264,8 @@ export interface LegacyProxyImport {
  * Converts ONE legacy `proxyUrl` string into a registry profile, IN PLACE on a
  * draft the caller owns, and returns the id the scope should now reference.
  *
- * The single implementation for all three scopes (§1 "импорт-на-записи — в
- * одном месте"): three copies would dedupe against three different notions of
+ * The single implementation for all three scopes (§1 "import-on-write — in
+ * one place"): three copies would dedupe against three different notions of
  * "same proxy", and three connections sharing one corporate string would end up
  * as three twin profiles.
  *

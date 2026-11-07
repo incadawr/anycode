@@ -933,7 +933,7 @@ describe("desktop store — notice channel (Wave-1 revision)", () => {
   });
 });
 
-describe("desktop store — child_report enqueues through the P7.14 prompt queue (срез 1/2)", () => {
+describe("desktop store — child_report enqueues through the P7.14 prompt queue (slice 1/2)", () => {
   it("enqueues the notification text verbatim, with no images, stamped origin:\"system\" and originId — the queue's own drainer (tab-registry.ts's maybeDrain) then decides WHEN to send it; see tab-registry.test.ts for the end-to-end idle-dispatch proof", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -963,7 +963,7 @@ describe("desktop store — child_report enqueues through the P7.14 prompt queue
     expect(store.getState().turn).toEqual(turnBefore);
   });
 
-  it("dedupes a re-delivered report already sitting in promptQueue — a second child_report with the SAME id is not enqueued twice (срез 2 §4 point 1: host resends an un-acked report on every ui_ready)", () => {
+  it("dedupes a re-delivered report already sitting in promptQueue — a second child_report with the SAME id is not enqueued twice (slice 2 §4 point 1: host resends an un-acked report on every ui_ready)", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
@@ -1001,7 +1001,7 @@ describe("desktop store — child_report enqueues through the P7.14 prompt queue
   });
 });
 
-describe("desktop store — takeQueueHead pause-bypass for a system report (срез 2 §4 point 2)", () => {
+describe("desktop store — takeQueueHead pause-bypass for a system report (slice 2 §4 point 2)", () => {
   it("while paused, a system-origin item is still taken even though a HUMAN-typed item is ahead of it in the queue — FIFO among user items is preserved (the user item stays queued, untouched, in its original relative position)", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

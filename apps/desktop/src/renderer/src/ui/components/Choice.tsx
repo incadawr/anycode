@@ -3,26 +3,26 @@ import type { ReactNode } from "react";
 import { useRovingTabindex } from "./useRovingTabindex.js";
 
 export interface CheckboxProps {
-  /** Текстовая подпись; связывается с контролом через label htmlFor. */
+  /** Text label; linked to the control via label htmlFor. */
   label: ReactNode;
-  /** Контролируемое состояние. */
+  /** Controlled state. */
   checked?: boolean;
-  /** Начальное состояние для неконтролируемого режима. */
+  /** Initial state for the uncontrolled mode. */
   defaultChecked?: boolean;
   onCheckedChange?: (checked: boolean) => void;
-  /** Третье состояние «частично выбрано» (aria-checked="mixed"). */
+  /** Third "partially selected" state (aria-checked="mixed"). */
   indeterminate?: boolean;
   disabled?: boolean;
-  /** Вспомогательный текст под подписью (id для aria-describedby). */
+  /** Helper text under the label (id for aria-describedby). */
   description?: string;
   className?: string;
   id?: string;
 }
 
 /**
- * Checkbox. Роль `checkbox`, состояния checked / indeterminate (mixed) / disabled.
- * Метка связана с контролом через id (useId), описание — через aria-describedby.
- * Нативный <input type="checkbox">: клик мышью и Space работают без скриптов.
+ * Checkbox. Role `checkbox`, states checked / indeterminate (mixed) / disabled.
+ * The label is linked to the control via id (useId), the description via aria-describedby.
+ * Native <input type="checkbox">: mouse click and Space work without scripts.
  */
 export function Checkbox({
   label,
@@ -82,28 +82,28 @@ export interface RadioOption {
   value: string;
   label: ReactNode;
   disabled?: boolean;
-  /** Вспомогательный текст под подписью. */
+  /** Helper text under the label. */
   description?: string;
 }
 
 export interface RadioGroupProps {
-  /** Подпись группы (legend). */
+  /** Group label (legend). */
   label: string;
   options: RadioOption[];
-  /** Выбранное значение. */
+  /** Selected value. */
   value?: string;
   defaultValue?: string;
   onValueChange?: (value: string) => void;
-  /** Направление навигации стрелками. */
+  /** Arrow-key navigation direction. */
   orientation?: "vertical" | "horizontal" | "both";
   disabled?: boolean;
   className?: string;
 }
 
 /**
- * RadioGroup. Роль `radiogroup` внутри fieldset/legend, roving tabindex:
- * в табуляции только выбранный (или первый) пункт, стрелки перемещают выбор.
- * Общий механизм — useRovingTabindex (его переиспользуют пикер акцента и RolePickerDialog).
+ * RadioGroup. Role `radiogroup` inside fieldset/legend, roving tabindex:
+ * only the selected (or first) item is in the tab order; arrows move the selection.
+ * Shared mechanism: useRovingTabindex (reused by the accent picker and RolePickerDialog).
  */
 export function RadioGroup({
   label,
@@ -132,7 +132,7 @@ export function RadioGroup({
       pendingFocus.current = index;
     },
   });
-  // Внешняя смена выбора (например, из props) двигает roving-фокус следом.
+  // An external selection change (e.g. from props) moves the roving focus along with it.
   useEffect(() => {
     if (selectedIndex >= 0) roving.setActiveIndex(selectedIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -206,8 +206,8 @@ export interface RadioProps {
 }
 
 /**
- * Radio. Одиночный переключатель (роль `radio`, aria-checked).
- * Обычно применяется внутри RadioGroup, который владеет roving tabindex.
+ * Radio. A single toggle (role `radio`, aria-checked).
+ * Usually used inside a RadioGroup, which owns the roving tabindex.
  */
 export function Radio({
   label,

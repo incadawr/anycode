@@ -3,15 +3,15 @@ import type { ReactNode } from "react";
 import { IconChevron } from "./icons.js";
 
 export interface ToolCardProps {
-  /** Имя вызова (моноширинное). */
+  /** Tool call name (monospace). */
   name: string;
-  /** Краткое описание одной строкой. */
+  /** Short one-line description. */
   summary?: string;
-  /** Содержимое раскрытой части (моноширинное). */
+  /** Expanded content (monospace). */
   body?: ReactNode;
-  /** Дополнительный контент в заголовке справа (например Badge). */
+  /** Extra content on the right of the header (e.g. Badge). */
   aside?: ReactNode;
-  /** Управляемый режим: если задан — состояние полностью контролируется извне. */
+  /** Controlled mode: if set, the state is fully driven from outside. */
   expanded?: boolean;
   defaultExpanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
@@ -19,8 +19,8 @@ export interface ToolCardProps {
 }
 
 /**
- * ToolCard — раскрываемая карточка вызова инструмента.
- * Заголовок — <button aria-expanded> + aria-controls; тело связано через id.
+ * ToolCard — an expandable card for a tool call.
+ * Header — <button aria-expanded> + aria-controls; the body is linked via id.
  */
 export function ToolCard({
   name,

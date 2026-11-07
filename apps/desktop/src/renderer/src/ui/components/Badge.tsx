@@ -2,12 +2,12 @@ import type { ReactNode } from "react";
 import { IconAccent, IconDanger, IconInfo, IconSuccess, IconWarning } from "./icons.js";
 
 /**
- * Статус бейджа.
+ * Badge status.
  *
- * Канонические тона (S3, волна W3): `neutral` | `success` | `warning` | `danger` |
- * `info`. Исторические имена `ok` | `warn` | `bad` | `run` сохранены как синонимы
- * (`ok`→`success`, `warn`→`warning`, `bad`→`danger`, `run`→`accent`), чтобы
- * существующий код и тесты не ломались.
+ * Canonical tones (S3, wave W3): `neutral` | `success` | `warning` | `danger` |
+ * `info`. The historical names `ok` | `warn` | `bad` | `run` are kept as aliases
+ * (`ok`→`success`, `warn`→`warning`, `bad`→`danger`, `run`→`accent`), so that
+ * existing code and tests don't break.
  */
 export type BadgeStatus =
   | "neutral"
@@ -22,16 +22,16 @@ export type BadgeStatus =
   | "bad";
 
 export interface BadgeProps {
-  /** Статус: тон + значок + слово. */
+  /** Status: tone + icon + word. */
   status: BadgeStatus;
-  /** Текстовый статус — обязателен: статус нельзя передавать только цветом. */
+  /** Text status — required: status cannot be conveyed by color alone. */
   label: string;
-  /** Переопределить значок статуса. */
+  /** Override the status icon. */
   icon?: ReactNode;
   className?: string;
 }
 
-/** Канонический тон для каждого имени статуса. */
+/** Canonical tone for each status name. */
 const TONE: Record<BadgeStatus, "neutral" | "success" | "warning" | "danger" | "info" | "accent"> = {
   neutral: "neutral",
   success: "success",
@@ -45,7 +45,7 @@ const TONE: Record<BadgeStatus, "neutral" | "success" | "warning" | "danger" | "
   run: "accent",
 };
 
-/** Значок тона: форма значка несёт смысл (не только цвет). */
+/** Tone icon: the icon's shape carries meaning (not only color). */
 const TONE_ICON: Record<"neutral" | "success" | "warning" | "danger" | "info" | "accent", ReactNode> = {
   neutral: <IconInfo size={12} />,
   success: <IconSuccess size={12} />,
@@ -56,10 +56,10 @@ const TONE_ICON: Record<"neutral" | "success" | "warning" | "danger" | "info" | 
 };
 
 /**
- * Badge. Статус = цвет + значок + слово (WCAG 1.4.1).
- * Значки: success — галочка, accent — ромб, warning — треугольник,
- * danger — крест, info/neutral — круг (единственная округлая форма).
- * `label` обязателен: цвет сам по себе не является статусом.
+ * Badge. Status = color + icon + word (WCAG 1.4.1).
+ * Icons: success — checkmark, accent — diamond, warning — triangle,
+ * danger — cross, info/neutral — circle (the only round shape).
+ * `label` is required: color alone is not a status.
  */
 export function Badge({ status, label, icon, className }: BadgeProps): React.ReactElement {
   const tone = TONE[status];

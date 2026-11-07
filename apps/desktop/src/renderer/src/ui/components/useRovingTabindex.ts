@@ -1,34 +1,34 @@
 import { useCallback, useState } from "react";
 
 export interface RovingOptions {
-  /** Количество элементов в группе. */
+  /** Number of items in the group. */
   count: number;
-  /** Направление навигации: horizontal — только стрелки влево/вправо. */
+  /** Navigation direction: horizontal — left/right arrows only. */
   orientation?: "horizontal" | "vertical" | "both";
-  /** Индекс элемента, который получает фокус (обычно выбранный). */
+  /** Index of the item that receives focus (usually the selected one). */
   activeIndex?: number;
-  /** Вызывается при смене активного элемента клавишами. */
+  /** Called when the active item changes via the keyboard. */
   onActiveIndexChange?: (index: number) => void;
-  /** Элемент заблокирован — клавиатурная навигация его пропускает. */
+  /** Item is disabled — keyboard navigation skips it. */
   isDisabled?: (index: number) => boolean;
 }
 
 export interface RovingTabindex {
-  /** Активный (focusable) индекс группы. */
+  /** Active (focusable) index of the group. */
   activeIndex: number;
-  /** tabIndex для элемента по индексу: 0 у активного, -1 у остальных. */
+  /** tabIndex for the item at an index: 0 for the active one, -1 for the rest. */
   tabIndexFor: (index: number) => 0 | -1;
-  /** Обработчик клавиатуры для элемента по индексу. */
+  /** Keyboard handler for the item at an index. */
   onKeyDown: (index: number) => (event: React.KeyboardEvent) => void;
-  /** Задать активный индекс вручную (например, по клику). */
+  /** Set the active index manually (e.g. on click). */
   setActiveIndex: (index: number) => void;
 }
 
 /**
- * Общий механизм roving tabindex: в группе в табуляции только один элемент
- * (tabIndex=0), остальные — -1. Стрелки (и Home/End) перемещают активный
- * элемент; перемещение циклическое. Используется RadioGroup кита; тот же
- * ходок переводит на себя пикер акцента и RolePickerDialog.
+ * Shared roving tabindex mechanism: only one item in the group is in the tab order
+ * (tabIndex=0), the rest are -1. Arrow keys (and Home/End) move the active
+ * item; movement wraps around. Used by the kit's RadioGroup; the same
+ * helper also drives the accent picker and RolePickerDialog.
  */
 export function useRovingTabindex({
   count,

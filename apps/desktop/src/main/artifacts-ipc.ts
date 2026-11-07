@@ -6,7 +6,7 @@
  * (unit-testable without ipcMain), zod validates every payload at the
  * boundary, and `registerArtifactsIpc` is the only Electron-touching piece.
  *
- * THREAT MODEL (§«Риск, который нельзя проглядеть», extended by
+ * THREAT MODEL (§"Risk that must not be overlooked", extended by
  * and below): the path in an assistant message is
  * MODEL-CONTROLLED text. This module is therefore the one place that decides
  * what the renderer may do with it:

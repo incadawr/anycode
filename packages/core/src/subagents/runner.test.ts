@@ -536,7 +536,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
   });
 });
 
-// §2.2: the inline subagent tap. Decision (а) — child records land in
+// §2.2: the inline subagent tap. Decision (a) — child records land in
 // the PARENT's own telemetry file, marked with `sub`. `buildSubagentTelemetryTap`
 // itself (whitelist mapping, sub stamping, model omission) is pinned exhaustively
 // in telemetry/records.test.ts; these tests pin the WIRING — buildChildConfig
@@ -3876,8 +3876,8 @@ describe("run() — child capabilities resolved for the child's own model", () =
 
 describe("start progress — requested id is authoritative (reverses port-identity readback)", () => {
   it("reports the REQUESTED string even when the constructed port's modelId differs", async () => {
-    // Owner's ruling: "модель никогда не ответит, главное какие
-    // запросы мы шлем" — the request is what we control and can prove; a
+    // Owner's ruling: "the model will never answer, what matters is what
+    // requests we send" — the request is what we control and can prove; a
     // port's own modelId is our construction too, not independent evidence,
     // so it must never outrank the request even when a future port
     // canonicalizes ids (no production port does today).

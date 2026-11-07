@@ -363,8 +363,8 @@ export const SUBAGENT_WRAPUP_MIN_WINDOW_MS = 15_000;
  * genuinely hung child is noticed in minutes instead of at nightfall, while a
  * legitimately long single tool call merely produces one honest "silent for
  * 10 minutes, currently running X" report rather than a kill: the detector
- * REPORTS, it never aborts the run (design owner's framing: "разве
- * это агент должен килять?"). Configurable via ANYCODE_SUBAGENT_STALL_MS.
+ * REPORTS, it never aborts the run (design owner's framing: "is it really the agent
+ * that should be killed?"). Configurable via ANYCODE_SUBAGENT_STALL_MS.
  */
 export const SUBAGENT_STALL_TIMEOUT_MS = 600_000;
 
@@ -599,7 +599,7 @@ export const DEGENERATION_WINDOW_CHARS = 4_096;
 export const DEGENERATION_CHECK_STRIDE_CHARS = 512;
 
 /**
- * срез 1 (cli/child-notification.ts): cap on a detached child's
+ * slice 1 (cli/child-notification.ts): cap on a detached child's
  * report `summary` field inside the `<task-notification>` block delivered to
  * the parent session. The summary is the child's FINAL ANSWER only, never its
  * transcript, so it may be as long as a real deliverable: a planner's plan or

@@ -1,5 +1,5 @@
 /**
- * ConnectionTile (W12, cut §"Компактная сетка подключений"): one
+ * ConnectionTile (W12, "compact connection grid"): one
  * selectable tile in the Provider pane's grid — provider name/label, default
  * model, health status dot+TEXT (never color alone), a selected/default
  * marker, and an overflow menu (Edit · Replace key/Sign in-out · Check ·

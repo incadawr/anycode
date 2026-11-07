@@ -229,7 +229,7 @@ describe("scrubSecretEnv", () => {
     expect(env.ANYCODE_API_KEY).toBeUndefined();
   });
 
-  // срез C durable (precedent): the recognizer's OWN
+  // slice C durable (precedent): the recognizer's OWN
   // resolved credential rides ANYCODE_RECOGNIZER_API_KEY on a host fork's env
   // exactly like the primary provider's rides ANYCODE_API_KEY — without a
   // scrub it would survive into every Bash-tool child a core session spawns
@@ -1277,7 +1277,7 @@ describe("resolveEngineDraftPresetId — the engine boots' argv→preset seam (f
     "--child-spawn-call", "call-1",
     "--child-mode", "build",
     "--engine-model", "gpt-5.6",
-    "--engine-preset", "ask", // the draft argv a child NEVER honors (§3.2 п.4: enginePreset is null for children)
+    "--engine-preset", "ask", // the draft argv a child NEVER honors (§3.2 item 4: enginePreset is null for children)
   ];
 
   it("a --child-mode build codex child boot resolves child-ask THROUGH parseHostArgs — the draft preset argv is never consulted", () => {

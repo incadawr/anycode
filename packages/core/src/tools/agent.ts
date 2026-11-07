@@ -21,7 +21,7 @@
  * version here validates agent_type, enforces the fail-closed "unavailable"
  * lock, and keeps the run() seam clean.
  *
- * срез 1 adds `detach` (session-tier only, same "FULL declaration
+ * slice 1 adds `detach` (session-tier only, same "FULL declaration
  * only" discipline as `tier`/`provider`): `runSessionTier` below just
  * forwards it onto `SessionSubagentRequest` after the same fail-fast
  * tier-mismatch check `provider` already has. Everything past that point —
@@ -79,9 +79,9 @@ import {
 import type { SubagentCardTarget, ToolResultPresentation } from "../types/subagent-card.js";
 import { agentInputSchema, restrictedAgentInputSchema, type AgentInput, type AgentOutput } from "./schemas.js";
 
-// срез S1 (F9): outcomeToResult/formatResultForModel/mapProgressToEvent
+// slice S1 (F9): outcomeToResult/formatResultForModel/mapProgressToEvent
 // moved to subagents/agent-bridge.ts so the in-process MCP bridge (host-side,
-// срез S3+) runs a claude-CLI-initiated subagent call through the exact same
+// slice S3+) runs a claude-CLI-initiated subagent call through the exact same
 // projection code — re-exported here so anything importing them off this
 // module (the natural place to look for them) keeps working.
 export { formatResultForModel, mapProgressToEvent, outcomeToResult };
@@ -205,7 +205,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         };
       }
 
-      // срез 1: same precedent as the provider check above — an
+      // slice 1: same precedent as the provider check above — an
       // explicit `detach:true` on a tier that cannot honor it (only
       // "session" spawns a real child process to detach FROM) is a fail-fast
       // invalid_input, not a silent downgrade to sync-join. `detach:false`
@@ -576,7 +576,7 @@ async function runSessionTier(
   // (subagents/runner.ts — `req.model ?? persona.model`). Absent both, no
   // model key rides the request at all.
   //
-  // срез S1: the request itself is built by the SHARED
+  // slice S1: the request itself is built by the SHARED
   // buildSessionSubagentRequest (subagents/agent-bridge.ts) so a
   // claude-CLI-initiated subagent call goes through byte-identical
   // composition — `provider`/`detach` stay this tool's own fields (agent-
@@ -719,8 +719,8 @@ async function runSessionTier(
     };
   }
 
-  // The three ids ride ONLY the presentation target (CUT-S2 §2.1: "core их
-  // только копирует в target и НЕ изобретает") — core relays exactly what
+  // The three ids ride ONLY the presentation target (CUT-S2 §2.1: "core
+  // only copies them into the target and does NOT invent them") — core relays exactly what
   // the host's accepted-relay + its own sessionId already know, never
   // fabricating any of the three.
   const target: SubagentCardTarget = {

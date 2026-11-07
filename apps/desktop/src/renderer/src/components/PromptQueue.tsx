@@ -37,7 +37,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
   const connection = useTabStore((state) => state.connection);
   const queuePaused = useTabStore((state) => state.queuePaused);
   // the banner must name the REAL reason the queue is held
-  // ("turn limit" vs "cancelled/failed") — «Работа» §2.
+  // ("turn limit" vs "cancelled/failed") — "Work" §2.
   const queuePauseReason = useTabStore((state) => state.queuePauseReason);
   // steers already on the wire to the host's steer queue, awaiting
   // their turn_started. Host-owned — no renderer edit/delete controls.

@@ -17,7 +17,7 @@ export function mount(element: ReactElement) {
 export const click = (element: HTMLElement) => act(() => element.click());
 export const key = (value: string, target: Element | null = document.activeElement, shiftKey = false) =>
   act(() => { target?.dispatchEvent(new KeyboardEvent("keydown", {key:value, shiftKey, bubbles:true, cancelable:true})); });
-/** Текст элемента без содержимого, скрытого от скринридера (aria-hidden). */
+/** Text of an element, excluding content hidden from the screen reader (aria-hidden). */
 function visibleText(el: Element | null): string {
   if (!el) return "";
   const clone = el.cloneNode(true) as Element;

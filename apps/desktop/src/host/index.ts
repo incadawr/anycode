@@ -585,9 +585,9 @@ let hostWorkspaceTrust: HostWorkspaceTrust = { projectTrusted: false };
 function workspaceTrustRequiredMessage(): HostToUiMessage | undefined {
   return hostWorkspaceTrust.pending?.message;
 }
-// срез 2: one pending-report queue per host process, i.e. per parent
+// slice 2: one pending-report queue per host process, i.e. per parent
 // session — see child-report-queue.ts's own header for why a bare
-// `outbound.sendDirect` (срез 1) is not reconnect-safe on its own. Wired into
+// `outbound.sendDirect` (slice 1) is not reconnect-safe on its own. Wired into
 // `deliverDetachedChildReport` below and, once the root Session exists, into
 // its own `pendingChildReports` seam (resendAll on ui_ready, ack on
 // child_report_ack). follow-up: all three root boots (core via
@@ -744,14 +744,14 @@ function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | C
 let routedChildComposition: ReturnType<typeof createRoutedChildComposition> | undefined;
 
 /**
- * срез 1/2: builds and delivers a detached child's terminal report
+ * slice 1/2: builds and delivers a detached child's terminal report
  * to its parent tab. Wired as `createChildSessionPort`'s `onDetachedTerminal`
  * seam above — called ONLY for a `detach:true` session-tier spawn, strictly
  * AFTER the spawning Agent tool call already resolved at admit, so this is
  * entirely decoupled from that call's own (already-settled) promise.
  *
- * Handed to `childReportQueue` (срез 2) rather than a bare `outbound.
- * sendDirect` (срез 1's original posture) — see that queue's own header for
+ * Handed to `childReportQueue` (slice 2) rather than a bare `outbound.
+ * sendDirect` (slice 1's original posture) — see that queue's own header for
  * why a direct send is not reconnect-safe, and protocol.ts's `child_report`
  * doc for why `Outbound.emit`'s buffered replay is the wrong fix (no
  * per-message identity -> a resend would re-enqueue a second turn). `id` is
@@ -1860,7 +1860,7 @@ async function bootCodexSession(
     : (async () => {
         // CUT-S4 §4.2: a child boots on the posture the child-
         // permission-map derives from its inherited mode — NEVER the (always
-        // absent, §3.2 п.4's `enginePreset: null`) draft preset argv. A
+        // absent, §3.2 item 4's `enginePreset: null`) draft preset argv. A
         // non-child boot keeps the byte-identical prior draft.preset path.
         // (finding 5: the ternary lives in boot.ts's
         // `resolveEngineDraftPresetId` so the argv→preset seam is tested.)
@@ -2251,7 +2251,7 @@ async function bootClaudeSession(
   // notice rather than reaching the wire.
   const draft = parseClaudeEngineArgs(process.argv.slice(2));
 
-  // срез S4: the MCP agent-bridge door for this tab. Built and
+  // slice S4: the MCP agent-bridge door for this tab. Built and
   // wired into `options` BEFORE `startClaudeEngine`/`resumeClaudeEngine`
   // ever call `client.initialize()` — probes.md P0's load-bearing finding is
   // that the CLI drives its OWN mcp handshake (`initialize` ->
@@ -2546,7 +2546,7 @@ async function bootClaudeSession(
     : (async () => {
         // CUT-S4 §4.2: a child boots on the posture the child-
         // permission-map derives from its inherited mode — NEVER the
-        // (always absent, §3.2 п.4's `enginePreset: null`) draft preset
+        // (always absent, §3.2 item 4's `enginePreset: null`) draft preset
         // argv. A non-child boot keeps the byte-identical prior path.
         // (finding 5: same extracted seam as the codex boot.)
         const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, claudeChildPresetId);
@@ -2603,9 +2603,9 @@ async function bootClaudeSession(
   };
   // The AnyCode row id is preallocated IN MEMORY so Session, the shadow mirror
   // and every `touch` can use it immediately — but no row is written yet
-  // (native-first, cut §1.5 hazard (а); the ordering rule itself, plus the
+  // (native-first, cut §1.5 hazard (a); the ordering rule itself, plus the
   // buffering of patches that arrive before the row exists, lives in
-  // session-row.ts where it is unit-tested). Computed ABOVE (срез
+  // session-row.ts where it is unit-tested). Computed ABOVE (slice
   // S4, before `connected` exists — the mcp bridge's session-tier port needs
   // it too) rather than here: `connected.sessionMeta?.id` is never a THIRD
   // value — a resume's `existing.id` is `args.sessionId` by construction
@@ -2715,7 +2715,7 @@ async function bootClaudeSession(
   if (connected.sessionMeta !== null) {
     // Resume: the row is already there, so only the identity facts are
     // refreshed now. Its model/mode stay untouched until the resumed session's
-    // own `system/init` reports what actually survived (hazard (б)) — writing
+    // own `system/init` reports what actually survived (hazard (b)) — writing
     // our persisted posture back here would relaunder a stale row as fresh.
     await persistence.touchSession(rowId, sessionRow);
   }
@@ -2739,7 +2739,7 @@ async function bootClaudeSession(
   );
 
   const booted = await plugin.boot({ claudeEngine: shadowEngine });
-  // `fs` built ABOVE (срез S4 — needed early for the agent-profile
+  // `fs` built ABOVE (slice S4 — needed early for the agent-profile
   // catalog scan, before `connected` exists) and reused here verbatim.
 
   // Shell wiring, identical to the codex branch: AnyCode's own repo context
@@ -2949,7 +2949,7 @@ async function bootClaudeSession(
   console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${rowId} db=${dbPath}`);
 }
 
-// ── срез C: vision-fallback host wiring — pure helpers ──
+// ── slice C: vision-fallback host wiring — pure helpers ──
 
 /**
  * Wraps a recognizer `ModelPort` with a usage-telemetry tap (plan §8): `ask()`
@@ -3242,7 +3242,7 @@ async function boot(): Promise<void> {
       return new AiSdkModelPort(endpoint, hostDiagnosticSink);
     };
     const switchableModelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
-    // срез C (plan §3): the ONE external decorator around the
+    // slice C (plan §3): the ONE external decorator around the
     // SwitchableModelPort — mirror of cli/main.ts's own
     // `modelPortWithMediaProjection` wrap (B1) — so every consumer of
     // `config.modelPort` (the main turn loop, ceiling verdict, compaction,
@@ -3940,7 +3940,7 @@ async function boot(): Promise<void> {
     // prompt stays byte-identical). A failed/unloaded server never contributes.
     const mcpInstructionsSection = mcpManager ? buildMcpInstructionsSection(mcpManager.instructions()) : "";
 
-    // срез C (finding #6): the boot-time `toolNames` snapshot this
+    // slice C (finding #6): the boot-time `toolNames` snapshot this
     // comment used to describe is GONE — `composeSystemPrompt` below now
     // reads `registry.list()` LIVE on every composition instead, so a tool
     // registered/unregistered after boot (InspectImage's own gate flipping
@@ -4110,7 +4110,7 @@ async function boot(): Promise<void> {
     // sees a fixed value instead of chasing the module-level `let`.
     const subagentTelemetry = telemetry;
 
-    // срез C (plan §8): wraps the plain port ask() would otherwise
+    // slice C (plan §8): wraps the plain port ask() would otherwise
     // build itself (`new AiSdkModelPort(endpoint)`) with a usage-telemetry
     // tap — see VisionTelemetryModelPort's own doc. Reuses `subagentTelemetry`
     // (the const capture right above, not the mutable `telemetry` let) for
@@ -4141,7 +4141,7 @@ async function boot(): Promise<void> {
         });
       });
     };
-    // срез C (plan §5 "условная регистрация до композиции"): the
+    // slice C (plan §5 "conditional registration before composition"): the
     // boot-time registration decision, made BEFORE the first
     // composeSystemPrompt() call below so the very first system prompt
     // already reflects it (no post-boot recompose needed for the common
@@ -4186,8 +4186,8 @@ async function boot(): Promise<void> {
       // Stage 1 / 4730: optional; absent = byte-identical to pre-4702.
       ...(effectiveAskClassifierBoot !== undefined ? { askClassifier: effectiveAskClassifierBoot } : {}),
       mode,
-      // remainder (owner rule 2026-08-22): "присмотр есть ⇒ корневая
-      // сессия вообще без потолка" — a supervised interactive ROOT has no turn
+      // remainder (owner rule 2026-08-22): "supervision present ⇒ the root
+      // session has no ceiling at all" — a supervised interactive ROOT has no turn
       // ceiling at all; a child session (session-tier subagent) ALWAYS keeps
       // the ladder regardless. `isChildSessionBoot` — lock #2's own
       // discriminator, the OR of the argv authority (`args.child`) and the
@@ -4302,7 +4302,7 @@ async function boot(): Promise<void> {
     };
 
     /**
-     * срез C (plan §1.3): the host-owned HOW of a recognizer-config
+     * slice C (plan §1.3): the host-owned HOW of a recognizer-config
      * commit — Session's own `applyRecognizerConfig` decides WHEN (now, if
      * idle; deferred to the next busy->idle boundary otherwise) and calls
      * this. Swaps the live endpoint (mutating `liveRecognizerEndpoint`'s
@@ -4337,7 +4337,7 @@ async function boot(): Promise<void> {
     // mismatch. The THIRD, independent defense lives in a different process
     // entirely: `main/tabs.ts`'s own `childOf` ledger + sender check
     // (`spawnChild`) — that one does not read anything boot built here.
-    // срез 3 §2: kept as its OWN reference (not narrowed to the
+    // slice 3 §2: kept as its OWN reference (not narrowed to the
     // frozen `SessionSubagentPort` core interface `config.sessionSubagents`
     // holds below) so the richer `ChildSessionPort` surface —
     // list/cancel/cancelAll/onChange for the desktop's own detached-children
@@ -4375,7 +4375,7 @@ async function boot(): Promise<void> {
         getPermissionMode: () => spawnModeCell.read(),
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
-        // срез 1: the detach-delivery seam. Fires strictly AFTER
+        // slice 1: the detach-delivery seam. Fires strictly AFTER
         // the spawning Agent tool call already returned at admit — see
         // deliverDetachedChildReport's own comment for the full picture.
         // a detached child's TERMINAL is the only place its real
@@ -4558,7 +4558,7 @@ async function boot(): Promise<void> {
         // would still be live in Session while the cell held a stale value.
         selectedEffort = selectedTier;
         const previous = currentModel;
-        // срез C (plan §3): the SWITCHABLE port, not the outer
+        // slice C (plan §3): the SWITCHABLE port, not the outer
         // media-projection decorator (`modelPort`) — setPort mutates what
         // that decorator forwards to, so every existing holder (loop,
         // ContextManager, subagents, titling) sees the new model without a
@@ -4591,7 +4591,7 @@ async function boot(): Promise<void> {
         const resolvedEffort = resolveSessionEffort(id, entryFor(id), selectedTier, liveCapsFor(id), effortLevelsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
-        // срез C (plan §9): a model switch can flip sighted<->blind,
+        // slice C (plan §9): a model switch can flip sighted<->blind,
         // which flips the InspectImage registration gate too — recomputed
         // BEFORE the unconditional recompose right below, so this switch's
         // own prompt rebuild (which runs regardless of whether registration
@@ -4702,7 +4702,7 @@ async function boot(): Promise<void> {
       fs: fsAdapter,
       workspace,
       projectRoot: sessionMeta.projectRoot ?? sessionMeta.workspace,
-      // срез 2: wired unconditionally — for a child-mode boot (no
+      // slice 2: wired unconditionally — for a child-mode boot (no
       // `config.sessionSubagents`, non-recursion lock above) the queue simply
       // stays empty forever, so `resendAll`/`ack` are harmless no-ops. This is
       // the ONLY Session construction site among the three engines (core is
@@ -4908,7 +4908,7 @@ async function boot(): Promise<void> {
         list: () => hookDeclarations,
         ...(hookConfigError !== undefined ? { configError: hookConfigError } : {}),
       },
-      // срез 3 §2: read/cancel seam onto the detached-children
+      // slice 3 §2: read/cancel seam onto the detached-children
       // registry `childSessionPortHandle` owns. Absent for a child-session
       // boot or a claude/codex master (`childSessionPortHandle` itself is
       // undefined there) — Session's own `?? []` makes that a silent
@@ -4962,8 +4962,8 @@ async function boot(): Promise<void> {
       imageInputEnabled: media.imageInputEnabled,
       contextWindowAssumed: () => liveContextWindowAssumed,
       modelSettingsConnectionId: liveCapsConnectionId ?? null,
-      // срез C: core-only wiring (codex/claude Sessions never pass
-      // these two — "codex/claude НЕ задеты (замыкание не установлено)").
+      // slice C: core-only wiring (codex/claude Sessions never pass
+      // these two — "codex/claude are NOT affected (closure not established)").
       imageFallbackAvailable: media.recognizerConfigured,
       postPreviewArtifacts: sendPreviewArtifacts,
       // CUT-S2 §2.6.3 (slice S2b B4): present ONLY for a child-mode
@@ -5270,7 +5270,7 @@ process.parentPort.on("message", (event) => {
     }
     return;
   }
-  // срез C (plan §1.2/§1.3): main's live recognizer-config push
+  // slice C (plan §1.2/§1.3): main's live recognizer-config push
   // (main/tabs.ts's `broadcastRecognizerConfig`, filtered upstream to live
   // ROOT core tabs only — a codex/claude fork or a child-session fork never
   // receives this at all). `session` may still be null here (this fork

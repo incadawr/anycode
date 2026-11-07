@@ -347,10 +347,10 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
     }
   });
 
-  // CUT-S2 §10.7 п.6c (B2-micro): a terminal event's `activitySuppressed`
+  // CUT-S2 §10.7 item 6c (B2-micro): a terminal event's `activitySuppressed`
   // is passed through onto the "end" progress report — mirrors the inline
   // runner's own `kind:"end"` SubagentProgress (runner.ts:573).
-  describe("terminal activitySuppressed passthrough (CUT-S2 §10.7 п.6c)", () => {
+  describe("terminal activitySuppressed passthrough (CUT-S2 §10.7 item 6c)", () => {
     it("a terminal event carrying activitySuppressed puts it on the end-progress report", async () => {
       const { port, sent, emit } = harness();
       const onProgress = vi.fn();
@@ -820,11 +820,11 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // срез 1: `req.detach` breaks sync-join on purpose — the run()
+  // slice 1: `req.detach` breaks sync-join on purpose — the run()
   // promise settles at "accepted" (admit), not "terminal". See the file
   // header's addendum for the full contract this suite pins.
 
-  describe("detach (срез 1)", () => {
+  describe("detach (slice 1)", () => {
     function detachHarness(getPermissionMode: () => PermissionMode = () => "build") {
       const sent: SentMessage[] = [];
       let listener: ((event: ChildRunEvent) => void) | undefined;
@@ -1141,7 +1141,7 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       }
     });
 
-    it("срез 3: an abort on opts.signal AFTER admit sends NO ChildRunCancel — Stop cancels the parent's TURN, not a child it already detached into the background", async () => {
+    it("slice 3: an abort on opts.signal AFTER admit sends NO ChildRunCancel — Stop cancels the parent's TURN, not a child it already detached into the background", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const controller = new AbortController();
       const pending = port.run(
@@ -1167,7 +1167,7 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.status).toBe("completed");
     });
 
-    it("срез 3: a SYNC (non-detached) run is UNCHANGED — an abort still sends exactly one ChildRunCancel (cascade preserved for the sync tier)", async () => {
+    it("slice 3: a SYNC (non-detached) run is UNCHANGED — an abort still sends exactly one ChildRunCancel (cascade preserved for the sync tier)", async () => {
       const { port, sent } = detachHarness();
       const controller = new AbortController();
       const pending = port.run(
@@ -1182,7 +1182,7 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       expect(cancels(sent)[0]!.requestId).toBe(requestId);
     });
 
-    it("срез 3: cancelBackgroundChild sends a ChildRunCancel for a live detached child by childSessionId, and its eventual 'cancelled' terminal still reaches onDetachedTerminal", async () => {
+    it("slice 3: cancelBackgroundChild sends a ChildRunCancel for a live detached child by childSessionId, and its eventual 'cancelled' terminal still reaches onDetachedTerminal", async () => {
       const { port, sent, emit, detachedTerminals } = detachHarness();
       const pending = port.run(
         { agentType: "general-purpose", description: "d", prompt: "p", spawnToolCallId: "spawn-detach-explicit-cancel", detach: true },
@@ -1238,13 +1238,13 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       expect(detachedTerminals[0]!.outcome.cancelledBy).toBeUndefined();
     });
 
-    it("срез 3: cancelBackgroundChild on an unknown/already-finished childSessionId returns false and sends nothing", () => {
+    it("slice 3: cancelBackgroundChild on an unknown/already-finished childSessionId returns false and sends nothing", () => {
       const { port, sent } = detachHarness();
       expect(port.cancelBackgroundChild("no-such-child")).toBe(false);
       expect(sent).toHaveLength(0);
     });
 
-    it("срез 3: listBackgroundChildren reflects admit (added) and terminal (removed), carrying agentType/description/childSessionId/startedAt", async () => {
+    it("slice 3: listBackgroundChildren reflects admit (added) and terminal (removed), carrying agentType/description/childSessionId/startedAt", async () => {
       const { port, sent, emit } = detachHarness();
       expect(port.listBackgroundChildren()).toEqual([]);
 
@@ -1265,7 +1265,7 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       expect(port.listBackgroundChildren()).toEqual([]);
     });
 
-    it("срез 3: cancelAllBackgroundChildren cancels every live detached child (and only those)", async () => {
+    it("slice 3: cancelAllBackgroundChildren cancels every live detached child (and only those)", async () => {
       const { port, sent, emit } = detachHarness();
       const pendingA = port.run(
         { agentType: "general-purpose", description: "a", prompt: "p", spawnToolCallId: "spawn-all-a", detach: true },
@@ -1285,7 +1285,7 @@ describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
       expect(cancels(sent).map((c) => c.requestId).sort()).toEqual([reqA, reqB].sort());
     });
 
-    it("срез 3: onBackgroundChildrenChanged fires on admit and on terminal, and the returned unsubscribe stops further notifications", async () => {
+    it("slice 3: onBackgroundChildrenChanged fires on admit and on terminal, and the returned unsubscribe stops further notifications", async () => {
       const { port, sent, emit } = detachHarness();
       const listener = vi.fn();
       const unsubscribe = port.onBackgroundChildrenChanged(listener);

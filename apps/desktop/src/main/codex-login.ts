@@ -1,5 +1,5 @@
 /**
- * Native Codex login flow (п.3): `account/login/start` -> open the
+ * Native Codex login flow (item 3): `account/login/start` -> open the
  * returned `authUrl` in the system browser -> wait (bounded, cancellable) for
  * the `account/login/completed` server notification -> close. Reuses
  * `CodexRpcClient` from main/codex-doctor.ts verbatim — one spawn/teardown
@@ -7,7 +7,7 @@
  * independently drift (see that module's own header for why that matters).
  *
  * NOT live-evidenced (cut §1 point 5: "account/login/start, account/login/
- * cancel, account/logout — schema-only, live НЕ evidenced — интерактивный
+ * cancel, account/logout — schema-only, live NOT evidenced — interactive
  * browser-flow"): built strictly to the pinned JSON-RPC schema
  * (host/engines/codex/contract/pinned-contract.json's `LoginAccountParams`/
  * `LoginAccountResponse`/`AccountLoginCompletedNotification`), with bounded
@@ -97,7 +97,7 @@ export interface RunCodexLoginOptions {
   /** DI seam for the spawn-time trust gate; production re-reads the real filesystem (`checkCodexBinaryPathTrust`). */
   trust?: (binaryPath: string) => string | null;
   /**
-   * The profile this login signs INTO (п.2): its home OVERWRITES any
+   * The profile this login signs INTO (item 2): its home OVERWRITES any
    * ambient CODEX_HOME in the child env, so `codex` writes the credential
    * into the profile's own tree — never into `~/.codex`. Absent or system:
    * env inheritance, byte-for-byte the pre-profiles behavior. An authLink

@@ -43,7 +43,7 @@ describe("ConversationHistory", () => {
     expect(sink.appended).toEqual([[item]]);
   });
 
-  it("append(message, {origin:\"system\"}) stamps the item's origin (срез 2) — absent by default for every ordinary call", () => {
+  it("append(message, {origin:\"system\"}) stamps the item's origin (slice 2) — absent by default for every ordinary call", () => {
     const history = new ConversationHistory();
 
     const injected = history.append({ role: "user", content: "background report" }, { origin: "system" });

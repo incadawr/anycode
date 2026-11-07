@@ -468,7 +468,7 @@ export function createTabRegistry(
     const cancelRetry = () => entry.store.getState().cancelUnsentSystemRetry(requestId);
     if (!retryStillRejected()) { cancelRetry(); return; }
     if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
-    // срез 2: `item.origin` (set only for a detached-child report,
+    // slice 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host
     // stamps the persisted HistoryItem with it, so a reload renders the SAME
@@ -744,7 +744,7 @@ export function createTabRegistry(
           // store+connection+ui_ready mechanism (below/attach()) but never
           // the root-tab bootstrap — no Sidebar/StartScreen/CommandPalette
           // entry, no status-mirror, no prompt-queue-drainer (the child's
-          // steer-queue is host-side, §1 п.1 of the cut, not this
+          // steer-queue is host-side (§1 item 1), not this
           // renderer-side one). This is the discriminator against the
           // pre-S2 facade, where ANY delivered port took the branch below
           // unconditionally.
@@ -798,7 +798,7 @@ export function createTabRegistry(
           // bails. `entry` is captured (not reassigned) so it always points at
           // the live connection after a respawn's `attach`.
           //
-          // срез 2 (spec §4 point 2): `queuePaused` alone no longer
+          // slice 2 (spec §4 point 2): `queuePaused` alone no longer
           // means "nothing to drain" — a detached child's SYSTEM-origin report
           // must still leave the queue while paused (takeQueueHead enforces
           // the actual per-kind eligibility; this is only the cheap pre-check

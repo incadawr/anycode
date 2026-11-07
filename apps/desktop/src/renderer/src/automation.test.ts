@@ -537,7 +537,7 @@ describe("automation facade — sendPrompt with images (live-smoke facade)", () 
     expect(port.sent.filter((m) => (m as { type: string }).type !== "ui_ready")).toHaveLength(0);
   });
 
-  it("a blind model WITH a configured recognizer fallback -> unblocked, images still go out (срез D carve-out)", () => {
+  it("a blind model WITH a configured recognizer fallback -> unblocked, images still go out (slice D carve-out)", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
     port.emit({ type: "model_changed", model: "glm-5.2", reasoningEffort: "off", imageInput: false, imageFallback: true });
@@ -948,7 +948,7 @@ describe("automation facade — stop / selectTab", () => {
   });
 });
 
-describe("automation facade — childOpen (S2d D1, CUT-S2 §4.2 п.5 'Open-клик')", () => {
+describe("automation facade — childOpen (S2d D1, CUT-S2 §4.2 item 5 'Open click')", () => {
   it("switches the root tab's pane onto the given child — the SAME call ToolCallCard.tsx's Open button makes", () => {
     childLayoutStore.getState().reset();
     const tabsStore = createTabsStore();
@@ -6906,7 +6906,7 @@ async function atDeadline<T>(run: () => Promise<T>, deadlineMs: number): Promise
   }
 }
 
-describe("automation facade — Vision pane probe/driver (срез E2c)", () => {
+describe("automation facade — Vision pane probe/driver (slice E2c)", () => {
   /** Builds a facade wired ONLY for the Vision pane methods — every other DI slot keeps its own lazy real default, same posture as the Profile block's `buildFacade`. */
   function buildFacade(dom: VisionPaneDom) {
     const tabsStore: TabsStoreApi = createTabsStore();
@@ -11157,7 +11157,7 @@ describe("automation facade — replay* (S2)", () => {
     expect(facade.replayState().rootOnScreen).toBe(false);
 
     // …and the mount that outlived the disarm is what makes the next arming
-    // live at once — no second seam, no re-mount (S12 pin (д)).
+    // live at once — no second seam, no re-mount (S12 pin (d)).
     expect(facade.replayArm(tabId)).toEqual({ ok: true });
     expect(facade.replayState().rootOnScreen).toBe(true);
   });

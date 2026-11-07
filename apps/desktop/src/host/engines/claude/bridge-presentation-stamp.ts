@@ -9,7 +9,7 @@
  * One call = one tool_use id = at most one stamped presentation. The map
  * (`bridgePresentations`, closed over here) is the durable-snapshot channel
  * between this handler and the engine's `takePresentation`/
- * `dropPresentations` seams (claude-engine.ts, срез S4 + 4056 P1): the MCP
+ * `dropPresentations` seams (claude-engine.ts, slice S4 + 4056 P1): the MCP
  * `tools/call` response itself carries only `{text, isError}` (plan §3.1),
  * so the card snapshot rides the map until the paired top-level
  * `tool_result` consumes it — or until the turn-end sweep drops it.
@@ -147,7 +147,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
           isError: true,
         };
       }
-      // план §2.3/Ruling 1: no `wallMs` override — the sync v1
+      // plan §2.3/Ruling 1: no `wallMs` override — the sync v1
       // wall is `runAgentBridgeCall`'s own default (SUBAGENT_TIME_BUDGET_MS,
       // 6h), the SAME stance every other bridge caller takes.
       if (!declaredNames.has(input.agent_type)) {
@@ -209,7 +209,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       }
       return { text: result.text, isError: result.isError };
     },
-    /** The engine's `takePresentation` seam (срез S4): consume exactly once. */
+    /** The engine's `takePresentation` seam (slice S4): consume exactly once. */
     takePresentation: (toolUseId: string) => {
       const presentation = bridgePresentations.get(toolUseId);
       bridgePresentations.delete(toolUseId);

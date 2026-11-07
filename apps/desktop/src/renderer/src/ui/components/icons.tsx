@@ -1,12 +1,12 @@
 import type { SVGProps } from "react";
 
 /**
- * Единый набор иконок UI-kit.
- * Правила (DESIGN-SYSTEM.md §7):
- *  - толщина линии 1.5, round cap/join;
- *  - иконка всегда aria-hidden, смысл несёт подпись рядом или aria-label;
- *  - форма значка НЕСЁТ смысл: у info — круг, у warning — треугольник,
- *    у danger — крест, у success — галочка, у accent — ромб.
+ * Unified icon set for the UI kit.
+ * Rules (DESIGN-SYSTEM.md §7):
+ *  - line width 1.5, round cap/join;
+ *  - the icon is always aria-hidden; meaning is carried by an adjacent label or aria-label;
+ *  - the icon shape CARRIES the meaning: info — circle, warning — triangle,
+ *    danger — cross, success — check mark, accent — diamond.
  */
 
 export type IconProps = SVGProps<SVGSVGElement> & {
@@ -30,7 +30,7 @@ function base({ size = 16, ...rest }: IconProps): SVGProps<SVGSVGElement> {
   };
 }
 
-/** Статусная форма: success — угловая замкнутая галочка. */
+/** Status shape: success — angular closed check mark. */
 export function IconSuccess(props: IconProps): React.ReactElement {
   return (
     <svg {...base(props)}>
@@ -39,7 +39,7 @@ export function IconSuccess(props: IconProps): React.ReactElement {
   );
 }
 
-/** Статусная форма: warning — острый треугольник с «!». */
+/** Status shape: warning — sharp triangle with "!". */
 export function IconWarning(props: IconProps): React.ReactElement {
   return (
     <svg {...base(props)}>
@@ -50,7 +50,7 @@ export function IconWarning(props: IconProps): React.ReactElement {
   );
 }
 
-/** Статусная форма: danger — разрывный крест. */
+/** Status shape: danger — broken cross. */
 export function IconDanger(props: IconProps): React.ReactElement {
   return (
     <svg {...base(props)}>
@@ -59,7 +59,7 @@ export function IconDanger(props: IconProps): React.ReactElement {
   );
 }
 
-/** Статусная форма: info — единственная ОКРУГЛАЯ форма. */
+/** Status shape: info — the only ROUND shape. */
 export function IconInfo(props: IconProps): React.ReactElement {
   return (
     <svg {...base(props)}>
@@ -70,7 +70,7 @@ export function IconInfo(props: IconProps): React.ReactElement {
   );
 }
 
-/** Статусная форма: accent / выделение — ромб. */
+/** Status shape: accent / highlight — diamond. */
 export function IconAccent(props: IconProps): React.ReactElement {
   return (
     <svg {...base(props)}>

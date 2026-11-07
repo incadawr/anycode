@@ -103,7 +103,7 @@ it("ratchets raw controls outside ui per file",()=>{
   for(const path of new Set([...Object.keys(BASELINE),...actual.keys()])) {
     const lines=actual.get(path)??[],baseline=BASELINE[path]??0;
     if(lines.length>baseline) errors.push(`${path}: baseline ${baseline}, actual ${lines.length}; raw control lines: ${lines.join(", ")}`);
-    if(lines.length<baseline) errors.push(`${path}: baseline ${baseline}, actual ${lines.length}; затяни храповик: обнови базу (tighten the ratchet: update BASELINE)`);
+    if(lines.length<baseline) errors.push(`${path}: baseline ${baseline}, actual ${lines.length}; tighten the ratchet: update BASELINE`);
   }
   expect(errors,errors.join("\n")).toEqual([]);
 });

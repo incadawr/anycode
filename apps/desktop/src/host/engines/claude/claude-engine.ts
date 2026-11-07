@@ -539,7 +539,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
   selection?: ClaudeSessionSelection;
   timeouts?: Partial<ClaudeEngineTimeouts>;
   /**
-   * срез S4: the MCP agent-bridge door for this tab, built and
+   * slice S4: the MCP agent-bridge door for this tab, built and
    * routed BEFORE `initialize()` is ever sent (probes.md P0 — the CLI drives
    * its OWN mcp handshake INSIDE our outbound `initialize`, before it answers
    * ours). Absent for a claude CHILD boot and for a tab whose profile catalog
@@ -570,7 +570,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   agentBridgePrompt?: string;
   /**
-   * срез S4: looks up (and consumes) the durable subagent-card
+   * slice S4: looks up (and consumes) the durable subagent-card
    * snapshot for one `mcp__anycode__agent` tool_use id — stamped by the
    * bridge's `callTool` handler (host/index.ts) onto its own
    * `AgentBridgeCallResult.presentation` once the child session settles. The
@@ -626,7 +626,7 @@ async function connectClaudeEngine(
   const requestedEffort = resolveEffort(options.selection, notices);
   const sessionRef = "sessionId" in spawn ? spawn.sessionId : spawn.resume;
   let engine: ClaudeEngine | null = null;
-  // срез S4 (probes.md P0's ordering correction): the bridge is
+  // slice S4 (probes.md P0's ordering correction): the bridge is
   // handed to `ClaudeApprovalBridge` HERE, before `ClaudeClient` is even
   // constructed — the CLI's own MCP handshake (`initialize` ->
   // `notifications/initialized` -> `tools/list`, each wrapped as a
@@ -650,7 +650,7 @@ async function connectClaudeEngine(
   // ride the spawn argv. It is applied right after `initialize` via `set_model`
   // — live-proven to apply immediately, with a rejection being a clean no-op.
   //
-  // On RESUME neither posture is applied here (cut §1.5 hazard (б)): the native
+  // On RESUME neither posture is applied here (cut §1.5 hazard (b)): the native
   // session kept its OWN model and permissionMode across process death (probe
   // #4), and our persisted row may have drifted from them. Sending
   // `--permission-mode`/`set_model` before the first `system/init` would
@@ -857,7 +857,7 @@ export async function startClaudeEngine(options: ClaudeEngineCreateOptions): Pro
  * Resumes one exact persisted native session via `--resume <ref>` (CC-D-min,
  * cut §1.5, probe #4: `session_id`/model/`permissionMode` all survive process
  * death). It deliberately never falls back to a fresh session — a resume
- * whose native side has expired (retention, test-hazard в) surfaces as a
+ * whose native side has expired (retention, test-hazard v) surfaces as a
  * boot failure, not a silent new session under the old id. The engine's own
  * `model`/`presetId` here are the DRAFT/persisted request only — the ACTUAL
  * settled posture is confirmed later, from the resumed session's first
@@ -908,7 +908,7 @@ export class ClaudeEngine implements SessionEngine {
   /** Live engine state from the most recent `system/init` (re-emitted every turn). */
   private sessionId: string | null = null;
   private liveModel: string | null = null;
-  /** The wire-level permission mode the CLI is ACTUALLY running (CC-D resume settle, cut §1.5 hazard (б)) — distinct from `activePresetId`, which is our own requested posture. */
+  /** The wire-level permission mode the CLI is ACTUALLY running (CC-D resume settle, cut §1.5 hazard (b)) — distinct from `activePresetId`, which is our own requested posture. */
   private livePermissionMode: ClaudeWirePermissionMode | null = null;
   /** Latch + one-shot observers for the FIRST turn-scoped `system/init` (`onFirstSystemInit`). */
   private firstInitSeen = false;
@@ -1006,7 +1006,7 @@ export class ClaudeEngine implements SessionEngine {
     private approvals?: ClaudeApprovalBridge,
     private readonly settings?: ClaudeEngineSettings,
     overrides?: Partial<ClaudeEngineTimeouts>,
-    /** срез S4 — see `ClaudeEngineCreateOptions.takePresentation`'s own doc. */
+    /** slice S4 — see `ClaudeEngineCreateOptions.takePresentation`'s own doc. */
     private readonly takePresentation?: (toolUseId: string) => ToolResultPresentation | undefined,
     /** cross-review P1 — see `ClaudeEngineCreateOptions.dropPresentations`'s own doc. */
     private readonly dropPresentations?: (toolUseIds: readonly string[]) => void,
@@ -1492,7 +1492,7 @@ export class ClaudeEngine implements SessionEngine {
     const beginInterrupt = (): void => {
       settle ??= deadline(this.bounds.postInterruptSettleMs);
       // The CLI withdraws its own pending `can_use_tool` via
-      // `control_cancel_request` (hazard (д)); this only closes OUR modal.
+      // `control_cancel_request` (hazard (d)); this only closes OUR modal.
       this.approvals?.denyAll("Claude turn was cancelled", "turn_cancelled");
       void this.sendInterruptOnce();
     };
@@ -1841,8 +1841,8 @@ export class ClaudeEngine implements SessionEngine {
       }
 
       // The ctx meter, AFTER the terminal result and only for a turn that
-      // actually ran (cut §1.4 table: "result -> turn_end + loop_end; следом
-      // ctx-метр"). Session drains the full iterable, so an event yielded
+      // actually ran (cut §1.4 table: "result -> turn_end + loop_end; followed by
+      // context meter"). Session drains the full iterable, so an event yielded
       // after loop_end still reaches the UI. the final read is
       // UNCONDITIONAL — never throttled by, and never merged with, a mid-turn
       // refresh. Any physical request still in flight is awaited first (it
@@ -2304,7 +2304,7 @@ export class ClaudeEngine implements SessionEngine {
 
   /**
    * Adopts the CLI's OWN posture into the engine's settings (cut §1.5 hazard
-   * (б): the first `system/init` of a resumed session is the truth, not our
+   * (b): the first `system/init` of a resumed session is the truth, not our
    * persisted row). Runs on every init, which is a no-op for a fresh session
    * that already spawned under exactly this posture.
    *
@@ -2339,7 +2339,7 @@ export class ClaudeEngine implements SessionEngine {
    * the moment the native session provably materialized (probe #1: init is
    * emitted per TURN, never at handshake, so nothing before this proves a
    * resumable native session exists). The host uses it for native-first row
-   * creation and the resume settle-patch (cut §1.5 hazard (а)/(б)). A listener
+   * creation and the resume settle-patch (cut §1.5 hazard (a)/(b)). A listener
    * registered after the first init has already been seen is invoked
    * immediately with the latched values.
    */

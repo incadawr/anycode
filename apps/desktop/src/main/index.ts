@@ -2906,7 +2906,7 @@ void app.whenReady().then(async () => {
     providerReady: () => providerReady,
     // Codex has no dependency on AnyCode's provider settings. Its main-plane
     // readiness fact is the codex-doctor-CONFIRMED status (version-compatible
-    // AND signed in, п.2/п.3) — a merely-discovered-but-unchecked or
+    // AND signed in, items 2/3) — a merely-discovered-but-unchecked or
     // stale-cached path is never enough to let a tab spawn. Readiness is
     // per PROFILE (codex-profiles cut §4.2): the tab layer threads the profile
     // the spawn will run under as the optional second argument (S3-1 — the
@@ -3500,7 +3500,7 @@ void app.whenReady().then(async () => {
     shellOwnsProxyFamily,
   });
 
-  // срез E2: the Vision panel's "Probe" button. Same spawned-child
+  // slice E2: the Vision panel's "Probe" button. Same spawned-child
   // canon as the proxy probe just above (`process.execPath` +
   // ELECTRON_RUN_AS_NODE=1), but the candidate is resolved through
   // `resolveRecognizerConfig` (the SAME ladder the live recognizer fork-env
@@ -3683,17 +3683,17 @@ void app.whenReady().then(async () => {
     );
   });
 
-  // Kick off the first discovery+doctor pass in the background (п.1:
+  // Kick off the first discovery+doctor pass in the background (item 1:
   // a compatible CLI on PATH must be found with no env var and no user
   // action). Never awaited here — a slow or hung Codex CLI must not delay
   // the window from appearing; `engineReady("codex")` simply stays false
   // (its safe default) until this resolves.
   // prime EVERY profile's readiness at boot, not just the active one
-  // (п.1: a compatible CLI must be found with no env var and no user
+  // (item 1: a compatible CLI must be found with no env var and no user
   // action), so a Codex tab — or a resume pinned to a non-active profile —
   // opens without a trip to Settings: the tab gate then reads a warm verdict
-  // instead of the fail-closed UNKNOWN default. SEQUENTIAL ("не N параллельных
-  // app-server'ов"): each `ensureChecked` awaits the previous, so at most one
+  // instead of the fail-closed UNKNOWN default. SEQUENTIAL ("not N parallel
+  // app-servers"): each `ensureChecked` awaits the previous, so at most one
   // doctor child runs at a time. The active profile is always one of
   // `[SYSTEM, ...profiles]`, so this single chain SUBSUMES the old standalone
   // active-only recheck (its top-level lastCheck still lands via

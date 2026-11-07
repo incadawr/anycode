@@ -254,7 +254,7 @@ export interface AutomationServerDeps {
   mdDocDeps?: MdDocDeps;
   /**
    * Forwarded to `HandlerDeps.persistence` (S2d D1 `/child-runs`,
-   * widened by S2d D3 for `/sessions/:id/delete-tree`, CUT-S2 §4.2 п.12).
+   * widened by S2d D3 for `/sessions/:id/delete-tree`, CUT-S2 §4.2 item 12).
    * Absent -> both routes degrade to `PERSISTENCE_UNAVAILABLE`, never throw.
    */
   persistence?: Pick<PersistencePort, "listSessionsForMaintenance" | "deleteSessionTree">;
@@ -550,7 +550,7 @@ const subagentsNameBody = z.object({ name: z.string().min(1).max(64) });
 // not the shared vocabulary" posture as `skillsImportApplyBody.scope` above. ──
 const profilePeriodBody = z.object({ period: z.enum(["today", "7d", "30d", "all"]) }).strict();
 
-// ── Vision pane bodies (срез E2c): global (app-level) routes, no
+// ── Vision pane bodies (slice E2c): global (app-level) routes, no
 // `:tabId` segment — same posture as the Profile bodies above. `connectionId`
 // shares the same 256-char cap `startScreenModelMenuSelectBody` already uses
 // for the identical field, min 1 (the empty string names no real connection —
@@ -822,7 +822,7 @@ async function route(
   if (method === "GET" && pathname === "/child-runs") {
     return listChildRunsMaintenance(deps);
   }
-  // S2d D3 (CUT-S2 §4.2 п.12): dev-only direct cascade-delete —
+  // S2d D3 (CUT-S2 §4.2 item 12): dev-only direct cascade-delete —
   // see `deleteSessionTreeMaintenance`'s own doc for why this exists (no
   // production delete-session UI yet, CUT-S2 §6 names automation as the
   // interim caller). `parts` shape mirrors `/child-runs` above one level
@@ -1029,7 +1029,7 @@ async function route(
   if (method === "GET" && pathname === "/settings/profile") {
     return profilePaneState(deps);
   }
-  // Vision pane probe (срез E2c): a DEDICATED route — every prior
+  // Vision pane probe (slice E2c): a DEDICATED route — every prior
   // `/settings*` probe above stays byte-untouched (§4 custody), same "own
   // probe, no widening" posture as the Profile pane probe.
   if (method === "GET" && pathname === "/settings/vision") {
@@ -1431,7 +1431,7 @@ async function route(
     parseBody(rawBody, emptyBody);
     return profileRebuild(deps);
   }
-  // Vision pane routes (срез E2c): mirror the SAME DOM paths
+  // Vision pane routes (slice E2c): mirror the SAME DOM paths
   // VisionPane.tsx itself uses (the connection `<select>`, the model
   // `<input>`, Save/Probe, and the "Turn off" -> "Really turn off?" two-step
   // gesture), through the facade's thin wrappers — no second path.
@@ -1693,7 +1693,7 @@ async function route(
     parseBody(rawBody, emptyBody);
     return rolePickerClickSkip(deps, tabId);
   }
-  // S2d D1 (CUT-S2 §4.2 п.5): `/tabs/:tabId/child/open` — same
+  // S2d D1 (CUT-S2 §4.2 item 5): `/tabs/:tabId/child/open` — same
   // `parts.length === 4` shape as the slash-menu routes above, just with
   // `child`/`open` in the `parts[2]`/`parts[3]` slots.
   if (method === "POST" && parts[0] === "tabs" && parts.length === 4 && parts[2] === "child" && parts[3] === "open") {

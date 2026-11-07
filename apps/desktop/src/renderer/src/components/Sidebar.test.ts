@@ -76,7 +76,7 @@ afterEach(() => {
 });
 
 describe("buildSidebarGroups", () => {
-  it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none (п.5)", () => {
+  it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none (item 5)", () => {
     const groups = buildSidebarGroups(
       [tab({ tabId: "t1", workspace: "/ws" })],
       [

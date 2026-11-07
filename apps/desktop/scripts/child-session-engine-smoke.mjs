@@ -27,12 +27,12 @@
  * nothing and must never look like 7/7 to a caller reading only the exit
  * code — CUT-S4 §0.8).
  *
- * SCOPE / one invocation = one engine (CUT-S4 §6.2's own "сценарий
- * параметризуется движком... тем же кодом вторым прогоном"): this script
+ * SCOPE / one invocation = one engine (the design doc's "scenario
+ * is parameterized by the engine... same code, second run"): this script
  * takes `--engine claude|codex` (default `claude`, the mandatory engine per
- * §0.6 п.2's ordering — "бридж богаче, бинарь гарантирован дев-машиной").
- * The orchestrator runs it TWICE, once per engine, and arbitrates §0.6 п.2
- * ("движок без зелёного прогона -> честный unsupported-отказ, не остаётся на
+ * ordering from the design doc — "the bridge is richer, the binary is guaranteed on the dev machine").
+ * The orchestrator runs it TWICE, once per engine, and arbitrates the ordering in item 2
+ * ("an engine without a green run gets an honest unsupported refusal, it does not stay on
  * one-shot") off the two independent exit codes/result JSONs — this script
  * does not itself decide that policy, it only supplies the evidence.
  *
@@ -51,8 +51,8 @@
  * `listChildRunsMaintenance`). Nothing in this file assumes a NEW route or a
  * NEW facade method beyond what S2/S3 already shipped.
  *
- * Engine-profile seeding (CUT-S4 §6.2: "сид-профиль `engine: claude` в
- * `.anycode/agents/` воркспейса кладёт САМ скрипт (и убирает за собой)"):
+ * Engine-profile seeding (design doc: "seed profile `engine: claude` in
+ * `.anycode/agents/` of the workspace is written by the script itself (and it cleans up after itself)"):
  * `seedEngineProfile`/`removeEngineProfile` below write/remove exactly one
  * `<workspace>/.anycode/agents/task-helper.md` file, project-root precedence
  * (`admin-scan.ts`'s `buildAgentProfileRoots`), format verified against
@@ -86,7 +86,7 @@
  * never hard-asserted (see `openChildAndWaitModal`'s callers) — the load-
  * bearing assertions for BOTH engines are the modal TITLE substring and,
  * above everything else, the negative/positive FILE-EXISTENCE proof (§6.2
- * пп.3-5), which is engine-agnostic by construction.
+ * items 3-5), which is engine-agnostic by construction.
  *
  * LAWS enforced throughout (this track's own, restated because a violation
  * here would silently pass a broken gate): (1) DOM-presence != visibility —
@@ -113,7 +113,7 @@
  * Usage:   node apps/desktop/scripts/child-session-engine-smoke.mjs [--engine claude|codex] [--keep]
  *
  *   --engine   Which engine's child to drive (default "claude" — the
- *              mandatory engine per CUT-S4 §0.6 п.2). Pass "codex" for the
+ *              mandatory engine per the design doc). Pass "codex" for the
  *              second, best-effort run — SAME script, SAME steps.
  *   --keep     Do not delete the temp workspace/profile on exit (debugging).
  *
@@ -126,17 +126,17 @@
  * 1..7 item numbers verbatim:
  *   1 = spawn via the engine profile; card running + engine chip + childRuns=1
  *   2 = Open -> modal live+real in the CHILD surface; badge on master, no
- *       master modal (anti-facade §8 п.1/п.2: a chujoy/wrong broker, or a
+ *       master modal (anti-facade check: a foreign/wrong broker, or a
  *       modal showing before a real ask, would fail this step)
  *   3 = NEGATIVE: no file yet, tool_call still running, while pending
- *   4 = Deny -> NEGATIVE: still no file, child reaches terminal (§8 п.1/п.3)
+ *   4 = Deny -> NEGATIVE: still no file, child reaches terminal
  *   5 = re-spawn, Allow via a REAL click -> file appears AFTER the click
- *       (mtime check) with exact content (§8 п.1)
+ *       (mtime check) with exact content
  *   6 = post-terminal re-Open -> non-empty universal-snapshot transcript,
  *       durable row's engineId/parentSessionId/spawnToolCallId match, child
- *       absent from every session list (§8 пп.4,6,7)
+ *       absent from every session list
  *   7 = 3 PNGs captured + CDP console-error grep + app-stderr grep, both
- *       clean above AND below the startup-window sentinel (§8 п.5's own
+ *       clean above AND below the startup-window sentinel (design doc item 5's own
  *       "SKIP closes the gate" risk is closed by the exit-code arbitration
  *       at the bottom of this file, not by this step)
  *
@@ -454,7 +454,7 @@ const CLICK_DENY_JS = hitTestClickJs(JSON.stringify(".permission-deny-button"));
 const CLICK_ALLOW_JS = hitTestClickJs(JSON.stringify(".permission-allow-button"));
 const CLICK_BREADCRUMB_MASTER_JS = hitTestClickJs(JSON.stringify(".child-breadcrumb-master"));
 
-/** Master card's session-child badge (`.tool-call-child-badge`, `ToolCallCard.tsx`) — the attention signal proving the ask reached the MASTER's own always-visible card, distinct from the child-surface modal itself (§8 п.1's "attention from the wrong broker" risk: this reads the badge's OWN geometry, plus whether ANY permission modal exists anywhere in the document — the master-modal-absent half of the same anti-facade check). */
+/** Master card's session-child badge (`.tool-call-child-badge`, `ToolCallCard.tsx`) — the attention signal proving the ask reached the MASTER's own always-visible card, distinct from the child-surface modal itself (guards against the "attention from the wrong broker" risk: this reads the badge's OWN geometry, plus whether ANY permission modal exists anywhere in the document — the master-modal-absent half of the same anti-facade check). */
 function masterBadgeGeometryJs(toolCallId) {
   return `(() => {
     const card = document.querySelector('[data-tool-call-id="${toolCallId}"]');
@@ -567,7 +567,7 @@ const SIDEBAR_ROW_TITLES_JS = `(() => Array.from(document.querySelectorAll('.sid
 
 /**
  * On-screen text of the card's own sub-status counter line — the "engine
- * chip" CUT-S4 §4.6/§6.2 п.1 calls for is a `"<engine> · "` TEXT PREFIX on
+ * chip" the design doc asks for is a `"<engine> · "` TEXT PREFIX on
  * this element while running (R5's `formatSubagentCounters`,
  * `ToolCallCard.tsx`), not a separate badge element. An Agent card is
  * COLLAPSED BY DEFAULT in EVERY status (`defaultExpanded` returns `false`
@@ -622,7 +622,7 @@ function seedEngineProfile(ctx) {
   writeFileSync(ctx.profileMdPath, md);
 }
 
-/** "…и убирает за собой" (CUT-S4 §6.2): removes the ONE file this script itself seeded, independent of (and before) the outer workspace-directory teardown — explicit hygiene, not reliance on the outer wipe. No-op under --keep, matching every other piece of this script's own cleanup. */
+/** "...and cleans up after itself": removes the ONE file this script itself seeded, independent of (and before) the outer workspace-directory teardown — explicit hygiene, not reliance on the outer wipe. No-op under --keep, matching every other piece of this script's own cleanup. */
 function removeEngineProfile(ctx) {
   if (FLAGS.keep) {
     return;
@@ -705,9 +705,9 @@ function spawnPromptRetry(taskInstruction) {
  * never produced a childRuns entry, the block's own `modelText` is checked
  * for an environment-shaped rejection (`/not (ready|available)/i` — the
  * `not_ready` family of texts, main/tabs.ts's `CHILD_ENGINE_NOT_READY_
- * MESSAGE`-style wording, §3.2 п.2's "Отказ `not_ready` называет движок")
+ * MESSAGE`-style wording; the "`not_ready` refusal names the engine")
  * before falling through to a hard FAIL with the full payload. This is the
- * distinction CUT-S4 §0.6 п.2 needs from a run's own evidence: "the model
+ * distinction the design doc needs from a run's own evidence: "the model
  * never engaged" and "this dev machine cannot boot this engine right now"
  * are not proof of a product defect the same way an unexplained admission
  * failure is.
@@ -788,7 +788,7 @@ async function pollForChildRow(ctx, step, childSessionId, timeoutMs) {
   }
 }
 
-// ── step 1: spawn via the engine profile — card running, engine chip, childRuns=1 (CUT-S4 §6.2 п.1) ──
+// ── step 1: spawn via the engine profile — card running, engine chip, childRuns=1 ──
 
 async function step1Spawn(ctx) {
   const step = 1;
@@ -856,7 +856,7 @@ async function step1Spawn(ctx) {
   pass(step, `spawned via engine-profile "${PROFILE_NAME}": card running with engine chip "${counterText}" (${counter.node}), childRuns=1 (childSessionId=${ctx.denyChildSessionId})`);
 }
 
-// ── step 2: Open -> modal live+real in the CHILD surface; badge on master, no master modal (CUT-S4 §6.2 п.2, anti-facade §8 пп.1,2) ──
+// ── step 2: Open -> modal live+real in the CHILD surface; badge on master, no master modal (anti-facade check) ──
 
 async function step2OpenModal(ctx) {
   const step = 2;
@@ -882,7 +882,7 @@ async function step2OpenModal(ctx) {
 
   // Structural half of the "attention from the wrong broker" risk: the
   // MASTER's own /state permission field must stay untouched while the
-  // CHILD's own connection is the one asking (§8 п.2).
+  // CHILD's own connection is the one asking.
   const rootPermission = await rootPermissionState(ctx);
   assert(step, rootPermission === null, `master's OWN /state permission field is non-null while the child is asking — the MASTER modal would be up: ${JSON.stringify(rootPermission)}`);
 
@@ -916,7 +916,7 @@ async function step2OpenModal(ctx) {
   pass(step, `permission modal visible+real in the child surface (title="${modalGeo.titleText}"), badge visible on master, no master modal`);
 }
 
-// ── step 3: NEGATIVE — no file yet, tool_call still running, while pending (CUT-S4 §6.2 п.3) ──
+// ── step 3: NEGATIVE — no file yet, tool_call still running, while pending ──
 
 async function step3PendingNegative(ctx) {
   const step = 3;
@@ -932,7 +932,7 @@ async function step3PendingNegative(ctx) {
   pass(step, `negative proof: ${ctx.sentinelPath} does not exist and the tool_call is still "running" while approval is pending`);
 }
 
-// ── step 4: Deny (REAL click) -> NEGATIVE — still no file, child reaches terminal (CUT-S4 §6.2 п.4, anti-facade §8 п.3) ──
+// ── step 4: Deny (REAL click) -> NEGATIVE — still no file, child reaches terminal (anti-facade check) ──
 
 async function step4Deny(ctx) {
   const step = 4;
@@ -955,8 +955,8 @@ async function step4Deny(ctx) {
   assert(step, terminal !== null, `child never reached a terminal status after Deny within ${TERMINAL_WAIT_TIMEOUT_MS}ms. Last observed: ${JSON.stringify(lastSeenBlock)}`);
   ctx.denyTerminal = terminal;
 
-  // The load-bearing assertion (CUT-S4 §8 п.3: "Отказ показан, эффект уже
-  // случился" — a visible Deny outcome proves nothing; only file-absence
+  // The load-bearing assertion ("A refusal is shown, the effect has already
+  // happened" — a visible Deny outcome proves nothing; only file-absence
   // does). Deliberately NOT asserting a specific `terminal.status` value: a
   // real external CLI reacting to a decline can legitimately finish its turn
   // several different "honest" ways (explain it couldn't comply, retry and
@@ -969,7 +969,7 @@ async function step4Deny(ctx) {
   pass(step, `deny honored: ${ctx.sentinelPath} absent, child reached terminal status="${terminal.status}"`);
 }
 
-// ── step 5: re-spawn, Allow (REAL click) -> file appears AFTER the click, exact content (CUT-S4 §6.2 п.5, anti-facade §8 п.1) ──
+// ── step 5: re-spawn, Allow (REAL click) -> file appears AFTER the click, exact content (anti-facade check) ──
 
 async function step5AllowRespawn(ctx) {
   const step = 5;
@@ -1024,8 +1024,8 @@ async function step5AllowRespawn(ctx) {
 
   // Existence-transition proof (stronger than mtime alone: this file
   // provably did NOT exist a moment ago, per the re-check above) PLUS the
-  // mtime check CUT-S4 §6.2 п.5 asks for verbatim ("mtime после timestamp'а
-  // клика") — both kept, neither substitutes for the other.
+  // mtime check the design doc asks for verbatim ("mtime after the timestamp'
+  // of the click") — both kept, neither substitutes for the other.
   const fileAppeared = await pollUntil(15_000, 300, async () => (existsSync(ctx.sentinelPath) ? true : undefined));
   assert(step, fileAppeared === true, `Write was allowed but ${ctx.sentinelPath} never appeared on disk within 15s of terminal`);
   const stat = statSync(ctx.sentinelPath);
@@ -1041,7 +1041,7 @@ async function step5AllowRespawn(ctx) {
   pass(step, `allow effective: ${ctx.sentinelPath} appeared AFTER the click (mtime=${stat.mtimeMs} >= click=${preClickAt}) with exact content, child terminal status="${settled.status}"`);
 }
 
-// ── step 6: post-terminal re-Open -> non-empty universal-snapshot transcript, durable row identity, absent from lists (CUT-S4 §6.2 п.6, anti-facade §8 пп.4,6,7) ──
+// ── step 6: post-terminal re-Open -> non-empty universal-snapshot transcript, durable row identity, absent from lists (anti-facade check) ──
 
 async function step6PostTerminal(ctx) {
   const step = 6;
@@ -1055,11 +1055,11 @@ async function step6PostTerminal(ctx) {
   assert(step, rootSummary !== undefined && typeof rootSummary.sessionId === "string", `could not resolve the root tab's own sessionId off /state: ${JSON.stringify(rootSummary)}`);
   ctx.rootSessionId = rootSummary.sessionId;
 
-  // "Open заново" (CUT-S4 §6.2 п.6): navigate away, then re-Open fresh —
+  // "Open again": navigate away, then re-Open fresh —
   // proves the OPEN code path itself renders the persisted history for an
   // already-terminal child, not just a still-mounted live view continuing to
-  // render (the exact anti-facade risk §8 п.4 names: "карточка done, Open
-  // пуст").
+  // render (the exact anti-facade risk named there: "done card, Open
+  // is empty").
   const backToMaster = await ctx.cdp.eval(CLICK_BREADCRUMB_MASTER_JS);
   assert(step, backToMaster.ok === true, `breadcrumb "back to master" click failed: ${JSON.stringify(backToMaster)}`);
   await sleep(250);
@@ -1086,15 +1086,15 @@ async function step6PostTerminal(ctx) {
 
   const row = await pollForChildRow(ctx, step, ctx.allowChildSessionId, 30_000);
   assert(step, row !== null, `no durable /child-runs row for childSessionId=${ctx.allowChildSessionId} appeared within 30s`);
-  assert(step, row.engineId === ENGINE, `child's durable row.engineId is not "${ENGINE}" (engine identity not stamped, or wrong) — the exact "molчаливый фолбэк в core" risk §8 п.7 names: ${JSON.stringify(row)}`);
+  assert(step, row.engineId === ENGINE, `child's durable row.engineId is not "${ENGINE}" (engine identity not stamped, or wrong) — the exact "silent fallback in core" risk named there: ${JSON.stringify(row)}`);
   assert(step, row.spawnToolCallId === ctx.allowToolCallId, `child's durable row.spawnToolCallId (${row.spawnToolCallId}) !== the spawning Agent tool_call (${ctx.allowToolCallId})`);
   assert(step, row.parentSessionId === ctx.rootSessionId, `child's durable row.parentSessionId (${row.parentSessionId}) !== the root session's own id (${ctx.rootSessionId})`);
   ctx.allowChildRow = row;
 
   // Border sanity (I5) — the SAME class of assert every S2/S3 harness in
   // this directory reuses for "the child never joins the ordinary session
-  // surfaces", re-run here for both children (§8 п.6: "ребёнок засветился в
-  // списках" — a missing stamp on either engine's own boot path).
+  // surfaces", re-run here for both children (the "child session showed up in
+  // lists" — a missing stamp on either engine's own boot path).
   const sessions = await apiOk(ctx, step, "GET", "/sessions");
   assert(step, Array.isArray(sessions), `GET /sessions did not return an array: ${JSON.stringify(sessions)}`);
   for (const id of [ctx.denyChildSessionId, ctx.allowChildSessionId]) {
@@ -1118,7 +1118,7 @@ async function step6PostTerminal(ctx) {
   );
 }
 
-// ── step 7: PNG evidence complete + console/stderr grep clean (CUT-S4 §6.2 п.7, law #2) ──
+// ── step 7: PNG evidence complete + console/stderr grep clean (rule #2) ──
 
 async function step7GrepAndEvidence(ctx) {
   const step = 7;

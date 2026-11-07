@@ -1,5 +1,5 @@
 /**
- * Detached-child notification formatting tests (срез 1). Covers the
+ * Detached-child notification formatting tests (slice 1). Covers the
  * verbatim anti-spoofing header, XML escaping, summary truncation, and the
  * 4-way -> 3-way status mapping — the hermetic e2e (a detached run actually
  * producing and delivering one of these) lives in child-session-port.test.ts
@@ -269,7 +269,7 @@ describe("mapChildRunStatusToNotification (spec §4bis: 4-way -> 3-way)", () => 
   });
 });
 
-describe("formatChildReportCapNotice (spec §8 срез 2: 'тихо резать нельзя')", () => {
+describe("formatChildReportCapNotice (spec §8 slice 2: 'silent cutting is not allowed')", () => {
   it("starts with the SAME verbatim anti-spoofing header as a real task notification", () => {
     const text = formatChildReportCapNotice(1);
     expect(text.startsWith("[SYSTEM NOTIFICATION - NOT USER INPUT]\n")).toBe(true);

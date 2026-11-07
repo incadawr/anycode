@@ -67,7 +67,7 @@ export type { ProviderUsageRecord } from "./adapters/node/sqlite-persistence.js"
 // below does not apply): re-exported for the desktop host's notice injection
 // (slice 6.DP-2), so both wiring paths append byte-identical reminder blocks.
 export { withBackgroundTaskNotices } from "./cli/background-notice.js";
-// Pure string helper (срез 1): builds a detached child session's
+// Pure string helper (slice 1): builds a detached child session's
 // terminal report as a ZCode-form `<task-notification>` block. Re-exported
 // so the desktop host's detach-delivery seam (host/index.ts's
 // `onDetachedTerminal`) formats byte-identical text to what this module's
@@ -120,8 +120,8 @@ export * from "./dispatch/index.js";
 export * from "./loop/index.js";
 export * from "./subagents/index.js";
 export * from "./mcp/index.js";
-// срез S2: the in-process MCP server + control-channel transport the
-// desktop host's claude-engine glue (срез S3+) serves `mcp__anycode__agent`
+// slice S2: the in-process MCP server + control-channel transport the
+// desktop host's claude-engine glue (slice S3+) serves `mcp__anycode__agent`
 // calls through. Exported HERE, directly, rather than by adding it to
 // `mcp/index.ts` (F14): `mcp/index.ts` backs the main-safe `@anycode/core/
 // mcp-admin` subpath's own barrel discipline (mcp/admin.ts's explicit "NO

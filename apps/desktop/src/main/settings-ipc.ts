@@ -2025,7 +2025,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         normalizedProxyRef = req.proxyRef;
       }
     }
-    // §3 (Фаза 3): editing a significant ENDPOINT field invalidates the
+    // §3 (Phase 3): editing a significant ENDPOINT field invalidates the
     // last observed health — a health status confirmed against the OLD
     // model/transport/baseUrl must not linger under the new one. A label-only
     // edit (or a no-op resend of the same value) leaves health untouched.

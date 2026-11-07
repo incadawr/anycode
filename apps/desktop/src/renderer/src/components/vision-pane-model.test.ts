@@ -1,5 +1,5 @@
 /**
- * срез E2a — pure-logic tests for the Vision panel's decision layer
+ * slice E2a — pure-logic tests for the Vision panel's decision layer
  * (vision-pane-model.ts). Same `.test.ts`-only, no-jsdom discipline as every
  * other Settings pane in this directory (vitest.config.ts runs `environment:
  * "node"`; see ProfilePane.test.ts's own docstring) — every rule the panel

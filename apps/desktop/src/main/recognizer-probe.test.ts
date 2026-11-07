@@ -1,5 +1,5 @@
 /**
- * Unit tests for the Vision panel's "Probe" button (срез E2). Every
+ * Unit tests for the Vision panel's "Probe" button (slice E2). Every
  * scenario runs over an INJECTED spawner (`RecognizerProbeSpawner`) — no test
  * here starts a process, reads a vault, or touches Electron, matching
  * proxy-probe.test.ts's own discipline for the sibling §6 probe.
@@ -243,7 +243,7 @@ describe("handleRecognizerProbeRequest — success", () => {
     expect(calls).toHaveLength(1);
 
     const call = calls[0]!;
-    // Requirement (coordinator, срез E2): args carries NOTHING but the
+    // Requirement (coordinator, slice E2): args carries NOTHING but the
     // child entry path — the api key must never be visible in `ps` to any
     // other process on the machine.
     expect(call.args).toEqual(["/out/main/recognizer-probe-child.js"]);

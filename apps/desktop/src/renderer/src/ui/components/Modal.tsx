@@ -4,7 +4,7 @@ import { IconClose } from "./icons.js";
 import { focusable } from "./focus.js";
 import { useOverlayFocus } from "./useOverlayFocus.js";
 
-/** Размер диалога: ширина берётся из токенов `--dialog-w*`. */
+/** Dialog size: width comes from the `--dialog-w*` tokens. */
 export type ModalSize = "sm" | "md" | "lg";
 
 export interface ModalProps {
@@ -14,12 +14,12 @@ export interface ModalProps {
   subtitle?: string;
   children?: ReactNode;
   footer?: ReactNode;
-  /** Дополнительное содержимое в шапке (кнопки, счётчики) — слот header. */
+  /** Extra header content (buttons, counters) — header slot. */
   headerExtra?: ReactNode;
   closeOnScrimClick?: boolean;
-  /** Устаревший синоним `size="lg"`, оставлен для совместимости. */
+  /** Deprecated alias for `size="lg"`, kept for compatibility. */
   wide?: boolean;
-  /** Размер диалога: sm | md | lg. */
+  /** Dialog size: sm | md | lg. */
   size?: ModalSize;
   /** Additional classes on the dialog surface. */
   className?: string;
@@ -29,11 +29,11 @@ export interface ModalProps {
 /**
  * Native top-layer dialog with a layout-independent keyboard fallback.
  *
- * Слоты: header (title/subtitle/headerExtra + кнопка закрытия), body (children,
- * прокручивается), footer (footer). Размеры: sm | md | lg (`wide` = lg).
- * Фокус запирается внутри, по закрытию возвращается на триггер, Esc закрывает.
- * Имя доступности — `aria-labelledby` на заголовок, описание — `aria-describedby`.
- * Подложка — токен `--bg-scrim`.
+ * Slots: header (title/subtitle/headerExtra + close button), body (children,
+ * scrollable), footer (footer). Sizes: sm | md | lg (`wide` = lg).
+ * Focus is trapped inside, returns to the trigger on close, Esc closes.
+ * Accessible name — `aria-labelledby` on the title, description — `aria-describedby`.
+ * Backdrop uses the `--bg-scrim` token.
  */
 export function Modal({ open, onClose, title, subtitle, children, footer, headerExtra,
   closeOnScrimClick = true, wide = false, size, className, initialFocusRef }: ModalProps): React.ReactElement | null {

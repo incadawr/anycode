@@ -723,8 +723,8 @@ describe("createProfileLoader — dispose", () => {
 
 // ── automatic backlog catch-up ──
 //
-// The owner's requirement is that the numbers pull themselves in ("пускай
-// они кружочками лениво подтягиваются"). A cold cache needs three passes on
+// The owner's requirement is that the numbers pull themselves in ("let them
+// slowly fill in one circle at a time"). A cold cache needs three passes on
 // the measured 60 785-file directory, so a pane that only prints "press
 // Refresh" hands the user two manual clicks. Every brake below has its own
 // case, because an unguarded loop here is an unbounded IPC storm.

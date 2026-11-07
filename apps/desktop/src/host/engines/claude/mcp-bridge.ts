@@ -1,7 +1,7 @@
 /**
  * `ClaudeMcpBridge` — the desktop glue that serves the CLI's in-process MCP
- * door (срез S3, plan §3.3/§3.4 as amended by
- * P0/P1/P3). Wires срез S2's
+ * door (slice S3, plan §3.3/§3.4 as amended by
+ * P0/P1/P3). Wires slice S2's
  * `createInProcessMcpServer`/`ControlChannelTransport` (`@anycode/core`) to
  * `ClaudeClient`'s control-request routing (`approval-bridge.ts`), using the
  * literal wire shapes CLI 2.1.261 was proven, live, to send and accept.
@@ -50,7 +50,7 @@ import type { ControlRequestResponder, InboundControlRequest } from "./claude-cl
 
 /**
  * `apps/desktop` has no direct dependency on `@modelcontextprotocol/sdk`
- * (only `packages/core` does — срез S2's own `package.json`), so its types
+ * (only `packages/core` does — slice S2's own `package.json`), so its types
  * are never imported by NAME here; `Parameters<...>` pulls the exact
  * `JSONRPCMessage` type structurally off the already-imported
  * `ControlChannelTransport` instead, resolved from `@anycode/core`'s own
@@ -81,7 +81,7 @@ export const CLAUDE_MCP_NOTIFICATION_ACK = { mcp_response: { jsonrpc: "2.0", res
 /**
  * Structurally identical to core's `McpToolCallMeta`
  * (`packages/core/src/mcp/in-process-server.ts`), which is not on
- * `@anycode/core`'s barrel (срез S2 exports only `CreateInProcessMcpServerOptions`
+ * `@anycode/core`'s barrel (slice S2 exports only `CreateInProcessMcpServerOptions`
  * / `McpToolCallResult` / `McpToolDecl`, not the meta type by itself).
  * Re-declared here rather than widening core's exports — TypeScript's
  * structural typing accepts this shape wherever `McpToolCallMeta` is
@@ -96,9 +96,9 @@ export interface ClaudeMcpBridgeOptions {
   /** MCP server name announced on `initialize` and matched against every inbound `mcp_message.server_name` — "anycode" in production. */
   serverName: string;
   version: string;
-  /** Injected (срез S4 builds the real one from `discoverAgentProfiles`) — this module never reads a profile catalog itself. */
+  /** Injected (slice S4 builds the real one from `discoverAgentProfiles`) — this module never reads a profile catalog itself. */
   listTools: () => McpToolDecl[];
-  /** Injected (срез S4 wires this to `runAgentBridgeCall` + the session-tier port) — this module never spawns a child session itself. */
+  /** Injected (slice S4 wires this to `runAgentBridgeCall` + the session-tier port) — this module never spawns a child session itself. */
   callTool: (
     name: string,
     args: Record<string, unknown>,

@@ -83,7 +83,7 @@ export function recognizerEndpointFromFields(fields: {
 }
 
 /**
- * срез C: `ANYCODE_RECOGNIZER_{TRANSPORT,BASE_URL,API_KEY,MODEL,
+ * slice C: `ANYCODE_RECOGNIZER_{TRANSPORT,BASE_URL,API_KEY,MODEL,
  * PROVIDER_NAME}` -> a core `RecognizerEndpoint`, or null when the fallback
  * is unconfigured. Literal local var-name copies mirror main/host-env.ts's
  * `ENV_RECOGNIZER_*` constants by contract — the same "host stays core-free

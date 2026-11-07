@@ -1881,7 +1881,7 @@ describe("host Claude resume wiring (SLICE-CC D-min, cut §1.5)", () => {
   });
 
   /**
-   * Reproduces the shape of the resume-settle callback (test-hazard (б)):
+   * Reproduces the shape of the resume-settle callback (test-hazard (b)):
    * the persisted row's model/mode may diverge from what the resumed native
    * session actually settled on (it keeps its own posture across process
    * death) — the FIRST observed `system/init` is truth, and only the fields
@@ -2283,13 +2283,13 @@ describe("Codex engine-child history flush write primitive", () => {
 });
 
 /**
- * срез C: `parseRecognizerEnv`/`recognizerEndpointFromFields`
+ * slice C: `parseRecognizerEnv`/`recognizerEndpointFromFields`
  * (index.ts's own env-var-name literal mirror of main/host-env.ts's
  * ANYCODE_RECOGNIZER_* family). index.ts is not importable (see file
  * header) — reproduced verbatim, same idiom as every other describe block
  * in this file.
  */
-describe("host recognizer env parsing (срез C)", () => {
+describe("host recognizer env parsing (slice C)", () => {
   // Live-run fix:
   // `recognizerEndpointFromFields` is the ONE construction point both
   // `parseRecognizerEnv` (the boot-env snapshot below) AND main's live
@@ -2451,7 +2451,7 @@ describe("host recognizer env parsing (срез C)", () => {
 });
 
 /**
- * срез C (plan §8): `VisionTelemetryModelPort` (index.ts's own
+ * slice C (plan §8): `VisionTelemetryModelPort` (index.ts's own
  * usage-telemetry wrap around a recognizer's `AiSdkModelPort`). Not
  * importable (see file header) — reproduced verbatim.
  */
@@ -2476,7 +2476,7 @@ class VisionTelemetryModelPort implements ModelPort {
   }
 }
 
-describe("host VisionTelemetryModelPort (срез C, plan §8)", () => {
+describe("host VisionTelemetryModelPort (slice C, plan §8)", () => {
   function fakePort(events: ModelStreamEvent[]): ModelPort {
     return {
       modelId: "vision-model",
@@ -2515,18 +2515,18 @@ describe("host VisionTelemetryModelPort (срез C, plan §8)", () => {
 });
 
 /**
- * срез C (plan §8, `agentType:"vision"` envelope): reproduces
+ * slice C (plan §8, `agentType:"vision"` envelope): reproduces
  * `recognizerPortFactory`'s own envelope-construction body — the piece
  * `VisionTelemetryModelPort` above deliberately does NOT know about (it only
- * calls the injected `report(usage)`). This is the "телеметрия vision-
- * вызова в jsonl сессии" acceptance line: a vision ask() call's usage lands
+ * calls the injected `report(usage)`). This is the "vision-call telemetry
+ * in the jsonl session" acceptance line: a vision ask() call's usage lands
  * in the session's jsonl with the SAME `t:"usage"` shape
  * telemetry/records.ts's own whitelist projects for a normal turn, stamped
  * `sub:{agentType:"vision", model}` — the exact envelope
  * `buildSubagentTelemetryTap` uses for inline subagents, applied
  * here to a one-shot recognizer call instead of a nested AgentLoop run.
  */
-describe("host recognizer telemetry envelope (срез C, plan §8)", () => {
+describe("host recognizer telemetry envelope (slice C, plan §8)", () => {
   function recordedFor(endpoint: RecognizerEndpoint, usage: TokenUsage, session: string): unknown {
     return {
       v: 1,
@@ -2580,14 +2580,14 @@ describe("host recognizer telemetry envelope (срез C, plan §8)", () => {
 });
 
 /**
- * срез C (plan §5): `recomputeInspectImageRegistration`'s gate +
+ * slice C (plan §5): `recomputeInspectImageRegistration`'s gate +
  * the tool-instance-lifetime discipline the coordinator flagged (build the
  * tool factory EXACTLY ONCE for the host's whole life; only its
  * REGISTRATION toggles). Uses the REAL ToolRegistry/createInspectImageTool/
  * buildSystemPrompt (all importable core exports) — only the gate/recompute
  * closure itself is reproduced (index.ts is not importable).
  */
-describe("host InspectImage registration gate + instance lifetime (срез C, plan §5)", () => {
+describe("host InspectImage registration gate + instance lifetime (slice C, plan §5)", () => {
   function makeHarness(opts?: { portFactory?: (endpoint: RecognizerEndpoint) => ModelPort }) {
     const registry = createDefaultToolRegistry();
     let recognizerConfigured = false;
@@ -2668,7 +2668,7 @@ describe("host InspectImage registration gate + instance lifetime (срез C, p
   });
 
   /**
-   * Coordinator requirement ("НАХОДКА B2"): the per-image
+   * Coordinator requirement ("FINDING B2"): the per-image
    * question counter/transcript live in the FACTORY's closure
    * (tools/inspect-image.ts) — this proves they survive the SAME
    * unregister->re-register boundary a live recognizer-config push or a
@@ -2740,7 +2740,7 @@ describe("host InspectImage registration gate + instance lifetime (срез C, p
 });
 
 /**
- * срез C (plan §3): the ONE external media-projection decorator
+ * slice C (plan §3): the ONE external media-projection decorator
  * around the SwitchableModelPort — both `createMediaProjectionPort` and
  * `SwitchableModelPort` are real, importable core exports, so this
  * exercises the ACTUAL composition index.ts builds (`modelPort =
@@ -2748,7 +2748,7 @@ describe("host InspectImage registration gate + instance lifetime (срез C, p
  * reproduction — only the "which object does index.ts call .setPort() on"
  * wiring choice is host-specific and worth pinning here.
  */
-describe("host media-projection decorator composition (срез C, plan §3)", () => {
+describe("host media-projection decorator composition (slice C, plan §3)", () => {
   function scriptedPort(id: string): ModelPort {
     return {
       modelId: id,

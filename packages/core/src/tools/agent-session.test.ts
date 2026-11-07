@@ -7,8 +7,8 @@
  * case" scope comment).
  *
  * `agent.test.ts` itself is UNTOUCHED by this slice: it stays the
- * discriminator for inline-path byte-identical behavior (CUT-S2 §3 B1 — "если
- * они краснеют, это твой регресс").
+ * discriminator for inline-path byte-identical behavior ("if
+ * they go red, it's your regression").
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -243,8 +243,8 @@ describe("agentTool handler — session-tier fail-closed lock (CUT-S2 §2.1)", (
 });
 
 // ---------------------------------------------------------------------------
-// Outcome mapping (CUT-S2 §2.1: "маппинг outcome→result ОБЩИЙ для обоих
-// ярусов") — all four terminal statuses through the session-tier port,
+// Outcome mapping ("outcome→result mapping is SHARED for both
+// tiers") — all four terminal statuses through the session-tier port,
 // mirroring agent.test.ts's inline coverage byte-for-byte.
 
 describe("agentTool handler — session-tier outcome mapping, all 4 terminal statuses (CUT-S2 §2.1)", () => {
@@ -601,7 +601,7 @@ describe("agentTool handler — send_to", () => {
 
 // ---------------------------------------------------------------------------
 // S1 presentation snapshot carries target.kind==="session" + the three ids
-// (CUT-S2 §2.1: "core их только копирует в target и НЕ изобретает").
+// ("core only copies them into the target and does NOT invent them").
 
 describe("agentTool handler — session-tier presentation target (CUT-S2 §2.1)", () => {
   const full = createAgentTool({ sessionTier: true });
@@ -736,7 +736,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
 });
 
 // ---------------------------------------------------------------------------
-// spawnToolCallId (CUT-S2 §10.5 — правит замороженный §2.2): the ONE field on
+// spawnToolCallId (amends the frozen §2.2 spec): the ONE field on
 // SessionSubagentRequest core does not merely relay but OWNS. Fable's
 // addendum reverted a builder's temporary "mint a fresh uuid" workaround; the
 // durable rule is "spawnToolCallId IS ctx.toolCallId, verbatim, both ways."
@@ -1256,12 +1256,12 @@ describe("agentTool export sanity (CUT-S2 §2.1)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// срез 1: `detach` (session-tier only). Same non-recursion-lock
+// slice 1: `detach` (session-tier only). Same non-recursion-lock
 // discipline as `provider`/`tier` above — restricted schema never declares
 // it, the handler refuses it on the wrong tier, and (unlike `provider`) a
 // plain `false` is a legitimate no-op on any tier rather than a violation.
 
-describe("createAgentTool — detach declaration (срез 1)", () => {
+describe("createAgentTool — detach declaration (slice 1)", () => {
   it("restricted (default) has NO detach key and no \"background\" leak anywhere in the serialized JSON schema", () => {
     const restricted = createAgentTool();
     const jsonSchema = z.toJSONSchema(restricted.inputSchema) as { properties?: Record<string, unknown> };
@@ -1289,7 +1289,7 @@ describe("createAgentTool — detach declaration (срез 1)", () => {
   });
 });
 
-describe("agentTool handler — detach validation (срез 1, precedent: provider check agent.ts:207-212)", () => {
+describe("agentTool handler — detach validation (slice 1, precedent: provider check agent.ts:207-212)", () => {
   it("detach:true with tier:\"inline\" (explicit) => invalid_input with the exact message", async () => {
     const full = createAgentTool({ sessionTier: true });
     const result = await full.handler({ description: "d", prompt: "p", tier: "inline", detach: true }, makeCtx());
@@ -1326,7 +1326,7 @@ describe("agentTool handler — detach validation (срез 1, precedent: provid
   });
 });
 
-describe("agentTool handler — detach forwarding onto SessionSubagentRequest (срез 1)", () => {
+describe("agentTool handler — detach forwarding onto SessionSubagentRequest (slice 1)", () => {
   const full = createAgentTool({ sessionTier: true });
 
   it("forwards detach:true onto the request when input.detach is true", async () => {
@@ -1377,7 +1377,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (�
 });
 
 // ---------------------------------------------------------------------------
-// срез 1: the ADMIT-shaped outcome a detached port returns (this is
+// slice 1: the ADMIT-shaped outcome a detached port returns (this is
 // what child-session-port.ts's `run()` actually resolves with at "accepted",
 // never waiting for the child's own terminal — see that file's own tests for
 // the port-level split). This suite proves agent.ts's SHARED outcome-mapping
@@ -1387,7 +1387,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (�
 // presentation card is fabricated because no `subagent_start` progress ever
 // preceded it.
 
-describe("agentTool handler — detach admit outcome mapping (срез 1, zero special-casing in agent.ts)", () => {
+describe("agentTool handler — detach admit outcome mapping (slice 1, zero special-casing in agent.ts)", () => {
   const full = createAgentTool({ sessionTier: true });
 
   function admitOnlyPort(finalText: string, childSessionId: string): SessionSubagentPort {

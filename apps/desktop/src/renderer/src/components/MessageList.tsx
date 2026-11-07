@@ -1172,7 +1172,7 @@ export function MessageList({
           const block = item.block;
           switch (block.kind) {
             case "user_text":
-              // срез 2 (spec §4 point 3): a host-injected ("system"-
+              // slice 2 (spec §4 point 3): a host-injected ("system"-
               // origin) turn renders as a compact system card, never the
               // ordinary user bubble — the model still sees this as a
               // `role:"user"` turn (owner decision, unchanged), only the

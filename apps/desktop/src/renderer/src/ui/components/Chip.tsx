@@ -1,17 +1,17 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { IconAuto, IconBuild, IconEdit, IconPlan, IconYolo } from "./icons.js";
 
-/** Режим доступа. Эскалация цвета: plan (нейтральный) → build/edit (акцент) → auto (warning) → yolo (danger). */
+/** Access mode. Color escalation: plan (neutral) → build/edit (accent) → auto (warning) → yolo (danger). */
 export type AccessMode = "plan" | "build" | "edit" | "auto" | "yolo";
 
 export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** Режим доступа — задаёт и цвет, и значок. */
+  /** Access mode — sets both the color and the icon. */
   mode?: AccessMode;
-  /** Обычный нейтральный чип (без режима). */
+  /** Plain neutral chip (no mode). */
   label?: string;
-  /** Переопределить иконку режима. */
+  /** Override the mode icon. */
   icon?: ReactNode;
-  /** Выбранное состояние: `aria-pressed="true"` + акцентная подсветка. */
+  /** Selected state: `aria-pressed="true"` + accent highlight. */
   selected?: boolean;
   disabled?: boolean;
   children?: ReactNode;
@@ -34,8 +34,8 @@ export const ACCESS_MODE_LABEL: Record<AccessMode, string> = {
 };
 
 /**
- * Chip. Если задан `mode` — чип показывает режим доступа: свой цвет И свой значок
- * (правило «статус = цвет + иконка + слово»). Иначе — нейтральный чип.
+ * Chip. If `mode` is set, the chip shows the access mode: its own color AND its own icon
+ * (the rule "status = color + icon + word"). Otherwise — a neutral chip.
  */
 export function Chip({
   mode,

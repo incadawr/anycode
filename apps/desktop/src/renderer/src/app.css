@@ -1140,7 +1140,7 @@ body {
   color: var(--text-1);
 }
 
-/* п.4: conspicuous open-row treatment — inset accent bar + primary text. */
+/* item 4: conspicuous open-row treatment — inset accent bar + primary text. */
 .sidebar-row-open {
   color: var(--text-1);
   /* Audit C12: only the CURRENT tab wears the accent bar. Other open tabs keep
@@ -1314,12 +1314,12 @@ body {
   opacity: 0;
 }
 
-/* п.4: close affordance is ALWAYS visible on open rows (not hover-only). */
+/* item 4: close affordance is ALWAYS visible on open rows (not hover-only). */
 .sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-close:not(:disabled) {
   opacity: 1;
 }
 
-/* п.4 fix: the now permanently visible close button occupies the
+/* item 4 fix: the now permanently visible close button occupies the
    row's right edge — reserve its slot on OPEN rows (close + its right offset)
    so the engine/worktree/status indicators never sit underneath the ×.
    Resumable rows are untouched (their delete stays hover-revealed, swapping
@@ -1807,7 +1807,7 @@ body {
 }
 
 .environment-workspace {
-  /* п.6: room for the session cwd. workspaceLabel() already
+  /* item 6: room for the session cwd. workspaceLabel() already
      head-ellipsizes it to ≤44 chars, so it stays on one line; the base
      end-ellipsis only kicks in if the bar is narrower than that. */
   /* Sacrifice the folder width before shrinking the branch label. */
@@ -1822,7 +1822,7 @@ body {
    below (line ~1530) sets nowrap/hidden/ellipsis and would otherwise win the
    equal-specificity cascade by source order; this must outrank it. */
 .environment-menu-row-detail.environment-menu-row-detail-wrap {
-  /* п.6: the full Workspace path in the menu row — override the base
+  /* item 6: the full Workspace path in the menu row — override the base
      detail's single-line clipping so the long cwd actually wraps, fully visible. */
   word-break: break-all;
   white-space: normal;
@@ -3152,7 +3152,7 @@ button.environment-menu-row:hover,
   margin-top: var(--sp-2);
 }
 
-/* ── срез 2: detached-child report system card ──
+/* ── slice 2: detached-child report system card ──
    Collapsed-by-default plate, styled after .reasoning-block (quiet, not a
    user bubble) — the role stays "user" for the model, but the transcript
    view is deliberately NOT the accent-soft .message-user card, so a human

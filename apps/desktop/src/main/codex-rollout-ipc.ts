@@ -12,13 +12,13 @@
  * absolute paths by construction, not by stripping). `resolveProfileSessionsDir`
  * is an INJECTED resolver, not an import of `main/codex-profiles.ts`: that
  * file is lane A's zone (cut §13.1 row D lists only this file + codex-rollout.ts
- * + fixtures), and lane A builds after this one in the plan (§13, "D зависит
- * только от C0"). The orchestrator wires the real resolver at integration
+ * + fixtures), and lane A builds after this one in the plan (§13, "D depends
+ * only on C0"). The orchestrator wires the real resolver at integration
  * time — see this lane's final report for the ready snippet.
  *
  * Channel constants/request/result types live HERE rather than in
  * `shared/**` because that directory is frozen for the whole track once C0
- * lands (cut §13/§15: "после него ни один лейн не редактирует shared/**").
+ * lands (cut §13/§15: "after it no lane edits shared/**").
  * `main/codex-rollout.ts`'s own `RolloutImportReport` already sets this
  * precedent (cut §3.7 places it in `main/`, not `shared/`) — see the final
  * report's ESCALATE note on how a later preload wire-up should consume these.
@@ -76,7 +76,7 @@ export type CodexRolloutPreviewResult =
 export interface CodexRolloutImportRequest {
   profileId: string;
   fileName: string;
-  /** Model for the NEW core session — chosen by the user (§8.8: "продолжить на другой модели" is the whole point of the feature). */
+  /** Model for the NEW core session — chosen by the user (§8.8: "continue on another model" is the whole point of the feature). */
   model: string;
   mode?: PermissionMode;
 }
@@ -87,7 +87,7 @@ export type CodexRolloutImportResult =
 
 export interface CodexRolloutIpcDeps {
   persistence: Pick<PersistencePort, "createSession" | "appendHistory">;
-  /** `profileId` -> absolute path of THAT profile's `sessions/` directory (§1.3: "rollout лежит в доме своего профиля"); `null` = unknown profile. Owned by lane A's profile registry — injected so this file never imports it. */
+  /** `profileId` -> absolute path of THAT profile's `sessions/` directory (§1.3: "rollout lives in its profile's home"); `null` = unknown profile. Owned by lane A's profile registry — injected so this file never imports it. */
   resolveProfileSessionsDir(profileId: string): Promise<string | null>;
   /**
    * The active provider connection at the moment of `import & apply` (S4-1 arm 1,

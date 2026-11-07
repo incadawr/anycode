@@ -376,7 +376,7 @@ export interface HarnessOptions {
    */
   imageInputEnabled?: boolean | (() => boolean) | null;
   /**
-   * срез C: live verdict for the vision fallback, mirroring
+   * slice C: live verdict for the vision fallback, mirroring
    * `imageInputEnabled`'s own boolean/function/omitted shapes. Omitted ->
    * `SessionOptions.imageFallbackAvailable` is absent (byte-identical to
    * for every existing test — the turn-accept gate falls back
@@ -386,7 +386,7 @@ export interface HarnessOptions {
   /** `SessionOptions.contextWindowAssumed` seam; omitted -> absent (no hint on the wire). */
   contextWindowAssumed?: boolean | (() => boolean);
   /**
-   * срез C: the host-owned commit callback a test can inspect
+   * slice C: the host-owned commit callback a test can inspect
    * (e.g. `vi.fn()`) to assert what Session's deferred-apply mechanics
    * actually invoked and when. Omitted -> `SessionOptions.
    * applyRecognizerConfig` is absent (every existing test unaffected).
@@ -501,7 +501,7 @@ export interface HarnessOptions {
    */
   planExit?: boolean;
   /**
-   * срез 2: the host's pending-detached-child-report queue seam,
+   * slice 2: the host's pending-detached-child-report queue seam,
    * threaded DIRECTLY to Session (mirror of the checkpointsSeam/
    * reportProviderHealth precedent above). Omitted -> `ui_ready`'s
    * `resendAll()` call and `child_report_ack`'s `ack()` call are both no-ops

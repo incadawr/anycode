@@ -375,8 +375,8 @@ export interface BootSessionResult {
 
 /**
  * The session-row fields a freshly CREATED session gets from `args.child`
- * (CUT-S2 §2.6.2/§0's "Строку сессии ребёнка создаёт ХОСТ ребёнка,
- * из argv"): `parentSessionId`/`spawnToolCallId` (durable parent-link,
+ * (CUT-S2 §2.6.2/§0's "The child session's row is created by the child session's host,
+ * from argv"): `parentSessionId`/`spawnToolCallId` (durable parent-link,
  * migration v13) plus `mode: initialMode` — the parent's permission-mode
  * SNAPSHOT at spawn, in place of the hardcoded `"build"` every non-child
  * creation still gets (a fresh root session has no prior mode to inherit).
@@ -621,7 +621,7 @@ function toPermissionRule(rule: { toolName: string; pattern?: string }): { toolN
 
 /**
  * Deletes every `SECRET_ENV_KEYS` entry (`ANYCODE_API_KEY`, and since
- * срез C also `ANYCODE_RECOGNIZER_API_KEY`) from the live `process.env`
+ * slice C also `ANYCODE_RECOGNIZER_API_KEY`) from the live `process.env`
  * of THIS host process. Called from `boot()`'s
  * `finally` in index.ts, which — by construction of `finally` — runs strictly
  * AFTER the try block, i.e. after `AiSdkModelPort` has already captured

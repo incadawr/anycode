@@ -2,30 +2,30 @@ import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "
 import { MenuCloseContext, Popover } from "./Popover.js";
 
 export interface MenuProps {
-  /** Подпись триггера (кнопка, открывающая меню). */
+  /** Trigger label (the button that opens the menu). */
   label: string;
-  /** Содержимое меню: MenuItem / MenuSeparator. */
+  /** Menu content: MenuItem / MenuSeparator. */
   children?: ReactNode;
-  /** Заголовок-разделитель в шапке меню. */
+  /** Divider heading in the menu header. */
   heading?: string;
-  /** Иконка в триггере (aria-hidden). */
+  /** Icon in the trigger (aria-hidden). */
   icon?: ReactNode;
-  /** Триггер отключён. */
+  /** Trigger is disabled. */
   disabled?: boolean;
-  /** Меню открыто извне (контролируемый режим). */
+  /** Menu is open from outside (controlled mode). */
   open?: boolean;
-  /** Вызывается при переключении состояния (неконтролируемый режим). */
+  /** Called when the state toggles (uncontrolled mode). */
   onOpenChange?: (open: boolean) => void;
   className?: string;
   triggerClassName?: string;
 }
 
 /**
- * Menu — кнопка-триггер с выпадающим меню (`role="menu"`).
+ * Menu — a trigger button with a dropdown menu (`role="menu"`).
  *
- * Триггер: `aria-haspopup="menu"`, `aria-expanded`, Enter/Space/ArrowDown
- * открывают, Escape закрывает и возвращает фокус на триггер. Пункты — MenuItem
- * (role menuitem / menuitemcheckbox), навигация стрелками, Home/End.
+ * Trigger: `aria-haspopup="menu"`, `aria-expanded`, Enter/Space/ArrowDown
+ * open it, Escape closes it and returns focus to the trigger. Items are MenuItem
+ * (role menuitem / menuitemcheckbox), arrow-key and Home/End navigation.
  */
 export function Menu({
   label,

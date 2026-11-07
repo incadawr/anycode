@@ -405,7 +405,7 @@ describe("ClaudeClient", () => {
     }
   });
 
-  // blocker (probes.md, "Блокер, которого в плане нет"): the live
+  // blocker (probes.md, "A blocker not in the plan"): the live
   // CLI emits this exact top-level frame every ~30s during a long tool call.
   // Before dispatch() recognized it, it fell through to the unrecognized-type
   // branch and terminalized the whole session on the FIRST heartbeat.
@@ -551,7 +551,7 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not a terminal/i);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/chat panel/);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/stdout\/stderr/);
-    // Ownership-boundary clause (§"Связи"): the CLI's own subagent
+    // Ownership-boundary clause (§"Links"): the CLI's own subagent
     // registry/skills/slash-commands support no conclusions about AnyCode.
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/Task tool/);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not AnyCode features/);
@@ -691,7 +691,7 @@ describe("buildClaudeChildEnv", () => {
     expect("CLAUDE_CONFIG_DIR" in env).toBe(false);
   });
 
-  // срез C durable (precedent): the ALLOWLIST projection
+  // slice C durable (precedent): the ALLOWLIST projection
   // excludes any name it does not enumerate — AnyCode's own provider
   // credential and the vision-fallback recognizer's OWN, separately-resolved
   // credential are both structurally excluded exactly like any other unnamed

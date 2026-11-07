@@ -60,7 +60,7 @@ export interface RunTurnOptions {
   /** Ephemeral host context for this real turn; never persisted as a user frame. */
   systemContext?: string;
   /**
-   * срез 2: stamps the appended user HistoryItem's `origin` (the
+   * slice 2: stamps the appended user HistoryItem's `origin` (the
    * turn was opened by a host-injected message — a detached child's report —
    * not human input). Forwarded verbatim to `AgentLoop.runTurn`'s own
    * `origin` option (core-engine.ts); only CoreEngine ever reads it — Claude/

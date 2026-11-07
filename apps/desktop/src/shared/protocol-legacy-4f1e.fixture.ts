@@ -32,9 +32,9 @@ export const userMessageSchema = z
       )
       .max(IMAGE_MAX_PER_MESSAGE)
       .optional(),
-    // срезы 2+3 (merged): renderer-set only when draining a queued
+    // slices 2+3 (merged): renderer-set only when draining a queued
     // detached-child report (QueuedPrompt.origin). Validated here like every
-    // other untrusted field — and unlike срез 2's original reading, a mis-set
+    // other untrusted field — and unlike slice 2's original reading, a mis-set
     // value is NOT display-only: it also suppresses's human-presence
     // signal (see the UiToHostMessage union's own doc), so fail-closed
     // validation here is load-bearing, not just defense in depth.

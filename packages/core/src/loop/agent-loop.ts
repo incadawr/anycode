@@ -176,11 +176,11 @@ const OVERVIEW_CAPTION_TIMEOUT_MS = 20_000;
 
 /**
  * Turn-wide deadline for ALL of a turn's bootstrap overview captions combined
- * (plan §11 "Потолок и бюджет времени"). Without this, a strictly sequential
+ * (plan §11 "Ceiling and time budget"). Without this, a strictly sequential
  * loop each awaiting its own OVERVIEW_CAPTION_TIMEOUT_MS could block the turn
  * for up to N * 20s on N attachments — the plan calls this out by name as the
- * product defect this budget exists to prevent ("8 × 20 с = 160 с блокировки
- * — продуктовый дефект"), not a figure to reach for. Applied via ONE shared
+ * product defect this budget exists to prevent ("8 × 20 s = 160 s blocked
+ * — product defect"), not a figure to reach for. Applied via ONE shared
  * AbortController (describeImagesForBlindModel) so a slow image can still be
  * individually capped at OVERVIEW_CAPTION_TIMEOUT_MS while the batch as a
  * whole never runs past this ceiling.
@@ -189,7 +189,7 @@ const CAPTIONS_TURN_BUDGET_MS = 30_000;
 
 /**
  * Concurrent overview-caption calls in flight at once (plan §11). Bounds the
- * "залп из 8 биллимых вызовов" the plan also calls out — a burst of N
+ * "a burst of 8 billable calls" the plan also calls out — a burst of N
  * simultaneous provider calls on N attachments — while still finishing well
  * inside CAPTIONS_TURN_BUDGET_MS.
  */
@@ -197,7 +197,7 @@ const CAPTIONS_CONCURRENCY = 2;
 
 /**
  * Text appended after every image stub, telling the model the tool's exact
- * name and how to address the image (plan §5's "самый сильный сигнал").
+ * name and how to address the image (plan §5's "strongest signal").
  * Deliberately literal: `formatImageStub`'s output plus this line is what a
  * blind model actually reads before deciding whether to call InspectImage.
  */
@@ -817,7 +817,7 @@ export class AgentLoop {
    * One bootstrap overview caption (plan §1 step 4 / §3): a single ask()
    * call with the fixed OVERVIEW_QUESTION, cached by image + recognizer
    * identity + focus (vision/ask-cache.ts). A failure or timeout degrades to
-   * the bare stub (plan §3 "не успел/упал") — the fallback feature must
+   * the bare stub (plan §3 "didn't finish/crashed") — the fallback feature must
    * never be able to kill the turn. `turnSignal` is linked into the ask()
    * deadline (not passed to ask() alone, which would then wait forever
    * absent a cancel) so an aborted turn actually cancels an in-flight
@@ -970,7 +970,7 @@ export class AgentLoop {
       attachments?: ImageAttachment[];
       /** Ephemeral context added to this turn's system prompt, never history. */
       systemContext?: string;
-      /** срез 2: stamps the appended user HistoryItem's `origin` (host-injected, not human-typed). See HistoryItem.origin's doc. */
+      /** slice 2: stamps the appended user HistoryItem's `origin` (host-injected, not human-typed). See HistoryItem.origin's doc. */
       origin?: "system";
       /** outer turn UUID stamp threaded onto every HistoryItem this turn appends (see runTurnInner's own doc). */
       turnId?: string;

@@ -1,7 +1,7 @@
 /* ============================================================================
  * AnyCode UI-kit — components.css
- * Стили компонентов. Только токены из tokens.css, никаких magic numbers.
- * Имена классов: .ak-*
+ * Component styles. Tokens from tokens.css only, no magic numbers.
+ * Class names: .ak-*
  * ==========================================================================*/
 
 .ak-root {
@@ -193,7 +193,7 @@
   flex: none;
 }
 
-/* Выбранный чип: акцентная подсветка + `aria-pressed="true"`. */
+/* Selected chip: accent highlight + `aria-pressed="true"`. */
 .ak-chip--selected {
   background: var(--accent-soft);
   border-color: var(--accent-border);
@@ -203,8 +203,8 @@
   color: currentColor;
 }
 
-/* Режимы доступа: plan — нейтральный, build/edit — акцент, auto — warning,
-   yolo — danger. Каждый режим имеет СВОЙ значок (не только цвет). */
+/* Access modes: plan — neutral, build/edit — accent, auto — warning,
+   yolo — danger. Each mode has its OWN icon (not only color). */
 .ak-chip--plan {
   background: transparent;
   border-color: var(--border);

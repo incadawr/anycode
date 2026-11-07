@@ -10,11 +10,11 @@
  *
  * NO "installed" rung: unlike Codex (`~/.anycode/codex/bin/**`),
  * AnyCode does not download/manage a Claude Code binary in this track
- * (OG-CC-2, licensing — cut §1.2 "НЕ делаем").
+ * (OG-CC-2, licensing — "we do NOT do this").
  *
  * Trust policy is imported AS-IS from shared/codex-binary-trust.ts (cut §1.2:
- * "политика движко-агностична; переименование = запрещённый рефакторинг
- * общего файла") — the policy judges ownership/writability of a path about to
+ * "the policy is engine-agnostic; renaming = a forbidden refactor
+ * of a shared file") — the policy judges ownership/writability of a path about to
  * be executed, and that judgment has nothing to do with which CLI it is.
  */
 import { realpathSync, statSync } from "node:fs";

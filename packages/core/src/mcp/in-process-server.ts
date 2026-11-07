@@ -1,15 +1,15 @@
 /**
- * In-process MCP server + control-channel transport (срез S2, план
- * §3.4, факты F14/probes.md P0-P3). Exposes ONE model-visible tool over the
+ * In-process MCP server + control-channel transport (slice S2, plan
+ * §3.4, facts F14/probes.md P0-P3). Exposes ONE model-visible tool over the
  * MCP SDK's own `Server` (never a hand-rolled JSON-RPC layer, ruling B5) so
- * the desktop host's claude-engine glue (срез S3) can serve
+ * the desktop host's claude-engine glue (slice S3) can serve
  * `mcp__anycode__agent` calls that arrive over the CLI's already-open control
  * channel — no `--mcp-config`, no socket, no port (F1/§2.1).
  *
  * `ControlChannelTransport` is the SDK `Transport` this server is `connect()`-
  * ed to. It is NOT a wire transport in the usual sense (nothing goes over a
  * socket): it is a synchronous adapter between one inbound `mcp_message`
- * envelope at a time (the glue's own concern, срез S3) and the SDK Server's
+ * envelope at a time (the glue's own concern, slice S3) and the SDK Server's
  * `onmessage`/`send` contract. A JSON-RPC REQUEST is fed to the server and
  * `handleInbound` resolves once the server answers that same id via `send()`;
  * a NOTIFICATION (e.g. `initialize`'s handshake `notifications/initialized`,
@@ -21,8 +21,8 @@
  * already matches an inbound `notifications/cancelled`'s `params.requestId`
  * against the `AbortController` it created for that in-flight request and
  * aborts it — the tool handler's `extra.signal` fires on its own (probes.md
- * P3: "AbortSignal для runAgentBridgeCall берётся из extra.signal SDK-
- * сервера, а не из signal конверта"). The same base class aborts every still-
+ * P3: "AbortSignal for runAgentBridgeCall is taken from extra.signal of the SDK-
+ * server, not from the envelope's signal"). The same base class aborts every still-
  * pending request when the transport closes (its `close()` invokes the
  * wrapped `onclose`, which is `Protocol._onclose` after `connect()`), so
  * `ControlChannelTransport.close()` needs only to call `onclose()` — the
@@ -66,7 +66,7 @@ export interface McpToolCallResult {
 /**
  * Correlation the CLI attaches to `tools/call` under `_meta` (probes P1:
  * `"_meta":{"claudecode/toolUseId":"toolu_…","progressToken":2}`). It is the
- * reason срез S3 needs no `tool_use` registry of its own — the id of the
+ * reason slice S3 needs no `tool_use` registry of its own — the id of the
  * claude-side tool call the subagent must be nested under arrives with the
  * call itself. Both fields are absent when the peer is not the claude CLI.
  */
@@ -93,7 +93,7 @@ export interface CreateInProcessMcpServerOptions {
  * Builds an MCP `Server` over exactly `tools/list` + `tools/call`
  * (`capabilities: {tools: {}}` — no resources, no prompts, no sampling: this
  * door serves one thing). The returned server is unconnected; the caller
- * (срез S3's `ClaudeMcpBridge`) `server.connect(new ControlChannelTransport())`s
+ * (slice S3's `ClaudeMcpBridge`) `server.connect(new ControlChannelTransport())`s
  * it.
  */
 export function createInProcessMcpServer(options: CreateInProcessMcpServerOptions): Server {
@@ -176,7 +176,7 @@ export class ControlChannelTransport implements Transport {
    * response (has `id`) settles the `handleInbound` promise waiting on that
    * id; a server-initiated notification or request has no pending waiter in
    * v1 (the server never emits `notifications/tools/list_changed` — plan
-   * §3.3 "v1 их не шлёт" — and never sends its own requests), so it is
+   * §3.3 "v1 does not send them" — and never sends its own requests), so it is
    * silently dropped rather than mis-filed.
    */
   async send(message: JSONRPCMessage): Promise<void> {

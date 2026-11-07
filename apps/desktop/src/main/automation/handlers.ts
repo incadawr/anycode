@@ -188,8 +188,8 @@ export interface HandlerDeps {
    * `{ok:false, error:"persistence unavailable", errorKind:"unavailable"}`
    * the preview routes' own absent-dep branch uses, never throws.
    *
-   * S2d D3 (CUT-S2 §4.2 п.12 / §6's own "UI удаления сессий — вне
-   * S2... automation зовёт его напрямую для теста" contract): widened
+   * S2d D3 (CUT-S2 §4.2 item 12 / §6's own "session-deletion UI — out of
+   * S2... automation calls it directly for the test" contract): widened
    * (`| "deleteSessionTree"`) so `deleteSessionTreeMaintenance` below can
    * call the SAME adapter's cascade delete directly — no production
    * delete-session UI exists yet, so this dev-only route is the ONLY way to
@@ -438,7 +438,7 @@ export async function listChildRunsMaintenance(
 }
 
 /**
- * `POST /sessions/:id/delete-tree` (S2d D3, CUT-S2 §4.2 п.12): a
+ * `POST /sessions/:id/delete-tree` (S2d D3, CUT-S2 §4.2 item 12): a
  * dev-only direct call into `PersistencePort.deleteSessionTree` — the SAME
  * cascade delete `sqlite-persistence.test.ts` covers with a full unit
  * matrix (every dependent table, sibling isolation, transactional
@@ -700,8 +700,8 @@ export function selectTab(deps: HandlerDeps, tabId: string): Promise<unknown> {
 }
 
 /**
- * `POST /tabs/:tabId/child/open` (S2d D1, CUT-S2 §4.2 п.5
- * "Open-клик"): thin forward to the facade's `childOpen`, same shape as
+ * `POST /tabs/:tabId/child/open` (S2d D1, CUT-S2 §4.2 item 5
+ * "Open click"): thin forward to the facade's `childOpen`, same shape as
  * `selectTab` above. `tabId` here is the ROOT tab whose pane switches;
  * `spawnToolCallId` names which of its children. The child's own composer
  * send / permission response need no dedicated route — `sendPrompt`/
@@ -1563,7 +1563,7 @@ export function windowSetSize(deps: HandlerDeps, width: number, height: number):
   return { ok: true };
 }
 
-// --- Vision pane probe/driver (срез E2c): thin wrappers over the
+// --- Vision pane probe/driver (slice E2c): thin wrappers over the
 // frozen facade contract, same discipline as the Profile pane probe/driver
 // above — the facade owns every guard (pane_not_mounted / option_not_present /
 // field_not_present / save_not_present / save_disabled / probe_not_present /

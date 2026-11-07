@@ -11,11 +11,11 @@
  *
  * Echoing BOTH `updatedInput` and `toolUseID` on an allow is mandatory since
  * v2.1.207 — the live allow carries them, and an allow that omits them
- * degrades silently rather than failing loudly (hazard (в)).
+ * degrades silently rather than failing loudly (hazard (v)).
  *
  * A denial is a NORMAL protocol answer: the turn CONTINUES, the model sees the
  * reason and reacts, and the transport stays reusable for the next turn
- * (hazard (б) — a deny implemented as an error response or a closed stdin kills
+ * (hazard (b) — a deny implemented as an error response or a closed stdin kills
  * the session instead).
  *
  * Fail-closed throughout: every path that is not an explicit user allow ends as
@@ -41,13 +41,13 @@ export const CLAUDE_MCP_MESSAGE = "mcp_message";
  * through `can_use_tool`, in every permission mode. Approving it in the
  * read-only preset would let the model escalate straight out of the posture the
  * user chose — and, live, the tool calls that follow an approved ExitPlanMode
- * run WITHOUT asking again (implicit escalation, hazard (е)). So the MVP denies
+ * run WITHOUT asking again (implicit escalation, hazard (e)). So the MVP denies
  * it with an instruction instead of auto-allowing, and never builds the exit arc.
  */
 const EXIT_PLAN_MODE = "ExitPlanMode";
 
 /**
- * AskUserQuestion has no AnyCode surface in the MVP (cut §1.4 "не делаем"): it
+ * AskUserQuestion has no AnyCode surface in the MVP (cut §1.4 "not in scope"): it
  * is denied WITH an explanation, which the model reliably answers by asking the
  * same thing as ordinary text in its next message.
  */
@@ -105,7 +105,7 @@ export interface ClaudeApprovalRequest {
  * required — without it no answer can be correlated. Everything else is
  * optional and unknown keys are ignored BY CONSTRUCTION: the live request
  * carries `permission_suggestions`, `decision_reason`, `decision_reason_type`
- * and `display_name`, none of which the MVP projects (cut §1.4 "не делаем"),
+ * and `display_name`, none of which the MVP projects (cut §1.4 "not in scope"),
  * and a strict decode would fail-closed on a perfectly valid approval.
  */
 export function decodeCanUseTool(request: Record<string, unknown>): ClaudeApprovalRequest | null {
@@ -280,7 +280,7 @@ export class ClaudeApprovalBridge {
     this.pending = true;
     // The CLI can also withdraw it WHILE the user is looking at the modal
     // (`control_cancel_request` — it does this by itself on interrupt, hazard
-    // (д)). Nothing else would release the broker in that case: our own Stop
+    // (d)). Nothing else would release the broker in that case: our own Stop
     // path calls `denyAll` explicitly, but a CLI-originated withdrawal has no
     // such trigger, so the ask stays parked, the modal stays open, and
     // `pending` never clears — refusing every later approval in the session
@@ -297,9 +297,9 @@ export class ClaudeApprovalBridge {
       const decision = await this.options.broker.requestPermission(permission);
       // Both outcomes are a control_response SUCCESS envelope: a denial is a
       // normal answer whose payload says "deny", never a protocol error
-      // (hazard (б)). If the CLI already withdrew this request via
+      // (hazard (b)). If the CLI already withdrew this request via
       // `control_cancel_request` — which it does by itself on interrupt
-      // (hazard (д)) — the client's pairing rule makes this a silent no-op.
+      // (hazard (d)) — the client's pairing rule makes this a silent no-op.
       responder.success(
         decision.behavior === "allow"
           ? allowResponse(approval, decision.updatedInput)

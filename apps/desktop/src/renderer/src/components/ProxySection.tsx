@@ -1,6 +1,6 @@
 /**
  * The ONE proxy-profile editor plaque (§3, owner's explicit
- * requirement: "редактор-плашка существует ровно в одном месте"). Every knob a
+ * requirement: "the editor tile exists in exactly one place"). Every knob a
  * proxy has — mode, host/port/scheme, exemptions, credentials, Check — is
  * declared here exactly once and rendered by whoever needs it:
  * `ProxyProfilesPane` (the Network settings pane) and `ProxyRefPicker`'s

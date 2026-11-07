@@ -1,14 +1,14 @@
 /**
- * Live smoke for CUT-S2 §4.2 пп.1,2,3,5,8 — S2d D2, the track's
+ * Live smoke for CUT-S2 §4.2 items 1,2,3,5,8 — S2d D2, the track's
  * FIRST PNG gate. Drives a REAL Electron dev instance end-to-end and proves,
  * on a real screen, what a unit matrix structurally cannot:
  *
- *   п.1  A real model calling `Agent(tier:"session")` — the declaration
+ *   item 1  A real model calling `Agent(tier:"session")` — the declaration
  *        works as discovery, no hand-holding beyond the tool's own schema.
- *   п.2  `GET /state` shows two DISTINCT OS pids (master, child) while the
+ *   item 2  `GET /state` shows two DISTINCT OS pids (master, child) while the
  *        parent's own Agent tool_call is still `status:"running"` — the
  *        parent tool is genuinely blocked on the child, not a fire-and-forget.
- *   п.3  The child is NOWHERE user-facing: absent from `/sessions`, and
+ *   item 3  The child is NOWHERE user-facing: absent from `/sessions`, and
  *        `/state`'s per-tab `states` map (fed by the renderer's own
  *        root-only `tabsStore.tabs`) has exactly ONE key (the master) — the
  *        child port never auto-registered a root tab (tab-registry.ts's own
@@ -19,7 +19,7 @@
  *        ordinary renderer") — this script asserts the child IS there with
  *        the right `childOf` tag, not that it is absent (an earlier version
  *        of this script wrongly asserted absence there and went red on the
- *        very first live run; see this run's own report under "КРАСНОЕ").
+ *        very first live run; see this run's own report under "RED").
  *        Sidebar row count is asserted unchanged (a live, on-screen surface,
  *        via CDP DOM); StartScreen is structurally inapplicable while a tab
  *        is open, and CommandPalette reads the SAME `listSessions()` bridge
@@ -27,7 +27,7 @@
  *        this file's own header comment above `SIDEBAR_ROW_TITLES_JS` and the
  *        smoke's own DEVIATIONS note in its final report for why those two
  *        surfaces are not independently re-driven live.
- *   п.5  Open on the RUNNING child: DOM-presence is not visibility (anti-facade
+ *   item 5  Open on the RUNNING child: DOM-presence is not visibility (anti-facade
  *        §5.4) — this asserts real Blink geometry (non-zero
  *        `getBoundingClientRect`/`offsetHeight`, viewport intersection,
  *        `display`/`visibility`/`opacity`, `elementFromPoint` at the pane's
@@ -36,7 +36,7 @@
  *        production code touched — `--remote-debugging-port` is a first-class
  *        `electron-vite dev` lever, same technique `custom-provider-live-smoke.mjs`
  *        already established for this same command surface).
- *   п.8  Terminal: the parent's card gets the child's final text; the child's
+ *   item 8  Terminal: the parent's card gets the child's final text; the child's
  *        OS pid is polled to real death (`isPidAlive` false) BEFORE Open is
  *        driven on the completed card, so hydration is provably a DISK read
  *        (`childHistory` IPC -> durable SQLite), not a live process still
@@ -45,18 +45,18 @@
  *        mounts `<Composer/>`, App.tsx:646-648 vs :686 — a stronger form of
  *        "disabled" than a disabled attribute).
  *
- * Pп.4,6,7,9-12 are OUT OF SCOPE here (next wave, D3 gets the race probes).
+ * Items 4,6,7,9-12 are OUT OF SCOPE here (next wave, D3 gets the race probes).
  *
  * REUSE (CUT-S2 §3 D2's own directive — the seam is exports, not a rewrite):
  * every generic process/fs/HTTP/polling helper below is IMPORTED, unmodified,
  * from the already-green `child-session-explicit-provider-smoke.mjs` (§4.2
- * п.13's harness) — that file only grew `export` keywords plus one `import.
+ * item 13's harness) — that file only grew `export` keywords plus one `import.
  * meta.url` main-module guard around its own auto-invoked `run()`, so a
  * direct `node child-session-explicit-provider-smoke.mjs` run is untouched
  * byte-for-byte in behavior (verified: re-run after the edit, still
  * `5/4 steps passed — ALL GREEN`). In particular `step1LaunchApp` is reused
  * UNMODIFIED for the whole launch/profile/settings-seed sequence (the SAME
- * real v2 `provider.connections[]` seed as the п.13 harness — the "ГРАБЛИ"
+ * real v2 `provider.connections[]` seed as the item 13 harness — the "PITFALLS"
  * lesson: only that file's seed round-trips the current settings schema) —
  * this script never edits or duplicates that seed. The one piece of state
  * this script threads INTO that reused function without touching its source
@@ -65,7 +65,7 @@
  * ...}` and never reads or deletes that key, so it passes through for free.
  *
  * NOT reused (deliberately, with reasons — see this run's own report under
- * "ШОВ"): `hasRequiredInput` (provider-pinning predicate, not this scenario's
+ * "SEAM"): `hasRequiredInput` (provider-pinning predicate, not this scenario's
  * concern — a local `hasSessionTierInput` is used instead);
  * `step2Dispatch`/`step3RealStart`/`step4ConnectionIdParity` (a different
  * scenario, different assertions); `teardown`/`runTeardown`/
@@ -88,7 +88,7 @@
  * and exits 1. Step 1 (discovery) allows exactly ONE prompt retry for live-
  * model nondeterminism, then a documented SKIP (exit 0, not a FAIL) if the
  * model never calls the Agent tool with `tier:"session"` at all — same
- * discipline as the п.13 harness, for the same reason (a live-model
+ * discipline as the item 13 harness, for the same reason (a live-model
  * limitation is not a product failure). Evidence (2 PNGs + a JSON result
  * dump) lands in `working-docs/child-session-smoke/evidence/S2/`.
  */
@@ -155,7 +155,7 @@ function hasSessionTierInput(block) {
 }
 
 // ── small local helpers (generic poll + port reservation — not scenario
-// logic, no meaningful duplication risk; the п.13 harness has no equivalents
+// logic, no meaningful duplication risk; the item 13 harness has no equivalents
 // to import) ──
 
 function reserveUnusedPort() {
@@ -334,12 +334,12 @@ const CLICK_BREADCRUMB_MASTER_JS = `(() => {
  * session has no title and is never registered as either kind of row
  * (root-only `tabsStore`/`listSessions`, CUT-S2 §5.5); comparing the row
  * COUNT before spawn vs. while the child is admitted is the live, on-screen
- * half of §4.2 п.3 — the `/sessions`+`/state` HTTP checks in step 3 are the
+ * half of §4.2 item 3 — the `/sessions`+`/state` HTTP checks in step 3 are the
  * other half (the shared root-only data source itself).
  */
 const SIDEBAR_ROW_TITLES_JS = `(() => Array.from(document.querySelectorAll('.sidebar-row')).map((row) => (row.querySelector('.sidebar-row-title')?.textContent ?? null)))()`;
 
-// ── step 1 (§4.2 п.1): a real model calls Agent(tier:"session") — discovery ──
+// ── step 1 (§4.2 item 1): a real model calls Agent(tier:"session") — discovery ──
 
 async function step1Discovery(ctx) {
   const step = 1;
@@ -392,7 +392,7 @@ async function step1Discovery(ctx) {
   pass(step, `discovery worked — a real model invoked Agent(tier:"session") and the child was admitted (requestId=${result.childRuns[0].requestId})`);
 }
 
-// ── step 2 (§4.2 п.2): two distinct OS pids; parent tool still "running" ──
+// ── step 2 (§4.2 item 2): two distinct OS pids; parent tool still "running" ──
 
 function step2DistinctPidsRunning(ctx) {
   const step = 2;
@@ -421,7 +421,7 @@ function step2DistinctPidsRunning(ctx) {
   pass(step, `two distinct OS pids confirmed — master pid=${rootSummary.pid}, child pid=${entry.pid} — parent tool_call still "running"`);
 }
 
-// ── step 3 (§4.2 п.3): the child is nowhere — /sessions, /state root tabs+states, sidebar row count ──
+// ── step 3 (§4.2 item 3): the child is nowhere — /sessions, /state root tabs+states, sidebar row count ──
 
 async function step3NowhereVisible(ctx) {
   const step = 3;
@@ -479,7 +479,7 @@ async function step3NowhereVisible(ctx) {
   );
 }
 
-// ── step 4 (§4.2 п.5): Open on the RUNNING child — geometry + PNG ──
+// ── step 4 (§4.2 item 5): Open on the RUNNING child — geometry + PNG ──
 
 async function step4OpenLiveGeometry(ctx) {
   const step = 4;
@@ -536,7 +536,7 @@ async function step4OpenLiveGeometry(ctx) {
   );
 }
 
-// ── step 5 (§4.2 п.8): terminal text on the master card; Open-completed hydrates the durable transcript AFTER PID reap; composer disabled ──
+// ── step 5 (§4.2 item 8): terminal text on the master card; Open-completed hydrates the durable transcript AFTER PID reap; composer disabled ──
 
 async function step5TerminalAndCompletedOpen(ctx) {
   const step = 5;

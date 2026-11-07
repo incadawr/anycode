@@ -596,7 +596,7 @@ declare global {
         proxyProfileDelete(req: ProxyProfileDeleteRequest): Promise<ProxyProfileDeleteResult>;
         proxyRefSet(req: ProxyRefSetRequest): Promise<SettingsMutationResult>;
         proxyCheck(req: ProxyCheckRequest): Promise<ProxyCheckResult>;
-        // срез E2: the Vision panel's "Probe" button — resolves a
+        // slice E2: the Vision panel's "Probe" button — resolves a
         // {connectionId, modelId} pair (not necessarily saved yet) through the
         // SAME production ladder a live run uses. Always resolves a tagged
         // `RecognizerProbeResult`, never rejects.

@@ -4234,7 +4234,7 @@ describe("PreviewHost — markdown: BrowserScreenshot (M4, CUT.md GAP 2)", () =>
 });
 
 /**
- * stage 4 («Этап 4» live-reload): a file-backed preview
+ * stage 4 ("Stage 4" live-reload): a file-backed preview
  * follows its artifact on disk. The rig's `watchers` map is a hand-written
  * fake of the `watchFile` dep (no real fs, no chokidar — mirrors this file's
  * Electron-free discipline); `vi.useFakeTimers()` drives the 150ms debounce.

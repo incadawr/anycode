@@ -50,7 +50,7 @@ import type { LspServerStatus } from "@anycode/core";
 import type { EngineId } from "./engines.js";
 import { ENGINE_IDS } from "./engines.js";
 import type { UsageLimitNotice } from "./usage-limit.js";
-// срез 3 §2(a): the exact childSessionId shape bound every producer
+// slice 3 §2(a): the exact childSessionId shape bound every producer
 // on the host<->main child-session wire already validates against — reused
 // here rather than re-derived, so the UI wire's cap can never silently drift
 // from the id shape this system actually mints.
@@ -217,7 +217,7 @@ export interface WireHistoryItem {
   createdAt: number;
   kind?: "normal" | "compact_summary" | "microcompact_cleared" | "turn_error";
   error?: SerializedError;
-  /** срез 2: mirrors core's `HistoryItem.origin` — marks a `role:"user"` item the host injected (a detached child's report), not the human. See that field's own doc. */
+  /** slice 2: mirrors core's `HistoryItem.origin` — marks a `role:"user"` item the host injected (a detached child's report), not the human. See that field's own doc. */
   origin?: "system";
   /**
    * causal stamps, mirrored from core's `HistoryItem.turnId`/`step`
@@ -421,7 +421,7 @@ export interface WireCheckpointMeta {
 export type RewindScopeWire = "both" | "files" | "conversation";
 
 /**
- * срез 3 §2: one live detached (background) child, as pushed to the
+ * slice 3 §2: one live detached (background) child, as pushed to the
  * renderer. Deliberately its own type rather than an import of host/
  * child-session-port.ts's `BackgroundChildSnapshot` (same "Wire"-prefixed,
  * self-contained-projection precedent as `WireCheckpointMeta` above) — the
@@ -460,15 +460,15 @@ export type UiToHostMessage =
       /** Reserved atomic orchestration intent; currently unavailable. */
       orchestrate?: "enable";
       connectionId?: string;
-      // срезы 2+3 (merged): set ONLY when the renderer is draining a
+      // slices 2+3 (merged): set ONLY when the renderer is draining a
       // queued detached-child report (tab-registry.ts's dispatchQueuedPrompt,
       // mirror of `QueuedPrompt.origin` — store.ts). Absent for every ordinary
       // human-typed send (Composer, App.tsx's retry offer, automation.ts).
       // This ONE field carries both things the host needs to know about such a
-      // message. (1) Display, срез 2: threaded verbatim onto the appended
+      // message. (1) Display, slice 2: threaded verbatim onto the appended
       // HistoryItem's own `origin` (session.ts's runTurn -> RunTurnOptions ->
       // AgentLoop.runTurn) so a reload's `session_history` replay renders the
-      // SAME system card — see WireHistoryItem.origin. (2) Presence, срез 3:
+      // SAME system card — see WireHistoryItem.origin. (2) Presence, slice 3:
       // `session.ts`'s `route()` skips `broker.noteHumanPresent()` for it, so
       // a background wake-up cannot silently rearm's unattended latch
       // on an autonomous run nobody is actually attending — a wake-up is not
@@ -558,7 +558,7 @@ export type UiToHostMessage =
   // busy-rejects WITH a rewind_result reply while a turn runs, unlike set_model's
   // silent drop — the timeline needs a non-silent refusal).
   | { type: "rewind_request"; requestId: string; checkpointId: string; scope: RewindScopeWire }
-  // срез 2: acknowledges ONE `child_report` (HostToUiMessage below)
+  // slice 2: acknowledges ONE `child_report` (HostToUiMessage below)
   // by its stable `id` — the renderer sends this the instant it has enqueued
   // (or recognized as an already-queued duplicate of) that report, BEFORE the
   // queue actually drains it onto the wire as a real `user_message`. The
@@ -567,13 +567,13 @@ export type UiToHostMessage =
   // doc for why "renderer confirmed enqueue" (not "turn actually sent") is
   // the chosen removal point.
   | { type: "child_report_ack"; id: string }
-  // срез 3 §2: read-only background-children list request (mirror of
+  // slice 3 §2: read-only background-children list request (mirror of
   // task_list_request — payload-less, served even mid-turn: listing the
   // host's own in-memory registry is a pure read). This slice wires only the
   // data + command on the wire, purposely NOT a renderer surface (design
   // mandate: no new panel here, a later slice draws it).
   | { type: "background_children_request" }
-  // срез 3 §2(a): cancel ONE detached child by id (mirror of
+  // slice 3 §2(a): cancel ONE detached child by id (mirror of
   // task_kill_request's shape). Untrusted -> validated by
   // `backgroundChildCancelRequestSchema` below.
   | { type: "background_child_cancel_request"; requestId: string; childSessionId: string }
@@ -641,7 +641,7 @@ export type HostToUiMessage =
        */
       imageInput?: boolean;
       /**
-       * срез C (plan §1.3/§4): live verdict for the vision-fallback
+       * slice C (plan §1.3/§4): live verdict for the vision-fallback
        * recognizer — true exactly when `settings.recognizer` currently
        * resolves to a usable endpoint, independent of `imageInput` above (a
        * blind model can still accept images through the fallback). Additive
@@ -986,7 +986,7 @@ export type HostToUiMessage =
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
       imageInput?: boolean;
-      /** срез C: the fallback verdict re-read for the NEW model, same precedent as `imageInput` above. */
+      /** slice C: the fallback verdict re-read for the NEW model, same precedent as `imageInput` above. */
       imageFallback?: boolean;
       /** the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
@@ -1086,12 +1086,12 @@ export type HostToUiMessage =
   | { type: "task_list"; tasks: BackgroundTaskSnapshot[] }
   | { type: "task_output"; taskId: string; snapshot: BackgroundTaskSnapshot | null; newOutput: string }
   | { type: "task_kill_result"; requestId: string; ok: boolean; reason?: string }
-  // срез 3 §2: trusted snapshot of the host's own live
+  // slice 3 §2: trusted snapshot of the host's own live
   // background-children registry (host/child-session-port.ts). Pushed on
   // ui_ready (mirror of hooks_list/task_list) and in response to a
   // background_children_request; no zod schema (host->renderer direction).
   | { type: "background_children"; children: WireBackgroundChild[] }
-  // срез 3 §2(a): trusted result of one background_child_cancel_request
+  // slice 3 §2(a): trusted result of one background_child_cancel_request
   // (mirror of task_kill_result). `ok:false` covers an unknown/already-finished
   // childSessionId — not a refusal on the merits.
   | { type: "background_child_cancel_result"; requestId: string; ok: boolean; reason?: string }
@@ -1123,7 +1123,7 @@ export type HostToUiMessage =
       restoredPaths: number | null;
       safetyCheckpointId?: string;
     }
-  // срез 1/2: delivers a DETACHED child session's terminal report to
+  // slice 1/2: delivers a DETACHED child session's terminal report to
   // its parent. `text` is the FULL pre-formatted `<task-notification>` block
   // (@anycode/core's formatChildTaskNotification) — already XML-escaped and
   // length-capped; the renderer treats it as opaque prompt text and enqueues
@@ -1134,7 +1134,7 @@ export type HostToUiMessage =
   // deliberately not `emit`: a REPLAY-ring resend on renderer reconnect would
   // re-enqueue the same report under a FRESH `enqueuePrompt`-minted id every
   // time (no dedup possible). Reconnect-safety instead lives one level up
-  // (срез 2): `id` — the spawning Agent tool_call id (`spawnToolCallId`),
+  // (slice 2): `id` — the spawning Agent tool_call id (`spawnToolCallId`),
   // stable across every re-delivery of THIS report — lets the renderer dedupe
   // at enqueue time (store.ts's `child_report` case) and lets the host's own
   // pending-report queue (child-report-queue.ts) track which reports are
@@ -1159,7 +1159,7 @@ export type HostToUiMessage =
         ceiling?: ChildCeilingSummary;
       };
     }
-  // срез C (plan §1.3): fires strictly AFTER a live recognizer-config
+  // slice C (plan §1.3): fires strictly AFTER a live recognizer-config
   // push (main's RecognizerConfigChanged, E1) has been COMMITTED
   // host-side — applied immediately while idle, or deferred to the very next
   // busy->idle boundary and applied there, last-pending-value-wins (mirrors
@@ -1218,9 +1218,9 @@ export const userMessageSchema = z
       )
       .max(IMAGE_MAX_PER_MESSAGE)
       .optional(),
-    // срезы 2+3 (merged): renderer-set only when draining a queued
+    // slices 2+3 (merged): renderer-set only when draining a queued
     // detached-child report (QueuedPrompt.origin). Validated here like every
-    // other untrusted field — and unlike срез 2's original reading, a mis-set
+    // other untrusted field — and unlike slice 2's original reading, a mis-set
     // value is NOT display-only: it also suppresses's human-presence
     // signal (see the UiToHostMessage union's own doc), so fail-closed
     // validation here is load-bearing, not just defense in depth.
@@ -1483,7 +1483,7 @@ export const rewindRequestSchema = z
   })
   .strict();
 
-// срез 2: untrusted ack for ONE `child_report` — see that
+// slice 2: untrusted ack for ONE `child_report` — see that
 // HostToUiMessage variant's own doc for the id's provenance (spawnToolCallId).
 export const childReportAckSchema = z
   .object({
@@ -1492,7 +1492,7 @@ export const childReportAckSchema = z
   })
   .strict();
 
-// срез 3 §2: payload-less background-children list request (mirror
+// slice 3 §2: payload-less background-children list request (mirror
 // of taskListRequestSchema). Fail-closed on any extra key under .strict().
 export const backgroundChildrenRequestSchema = z
   .object({
@@ -1500,7 +1500,7 @@ export const backgroundChildrenRequestSchema = z
   })
   .strict();
 
-// срез 3 §2(a): untrusted background-child cancel request (mirror
+// slice 3 §2(a): untrusted background-child cancel request (mirror
 // of taskKillRequestSchema). `childSessionId` is capped at CHILD_ID_MAX_CHARS
 // — the exact bound `shared/child-sessions.ts`'s own `isValidChildId` enforces
 // on every childSessionId this system ever mints, reused here rather than

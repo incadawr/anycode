@@ -446,7 +446,7 @@ describe("dispatchTryAgain — W3-FIX entry gate against the live model image ve
     expect(store.getState().retry).toBeNull();
   });
 
-  it("T8 — срез D: a configured recognizer fallback unblocks the retry gate for a blind model, same as the composer's own predicates", () => {
+  it("T8 — slice D: a configured recognizer fallback unblocks the retry gate for a blind model, same as the composer's own predicates", () => {
     const store = createDesktopStore();
     armRetryViaRealPath(store, "look at this", [IMAGE]);
     store.getState().applyHostMessage({

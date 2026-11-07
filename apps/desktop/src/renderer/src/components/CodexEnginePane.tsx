@@ -9,7 +9,7 @@
  * one status-automaton verdict PER PROFILE (signed_out/ready/error), always
  * including the `system` pseudo-profile (cut §2.2: no `CODEX_HOME` override,
  * byte-identical to pre-profile behavior). Every profile is diagnosed
- * SEQUENTIALLY (cut §4.3: "не N параллельных app-server'ов"), never in
+ * SEQUENTIALLY (cut §4.3: "not N parallel app-servers"), never in
  * parallel.
  *
  * DATA FLOW: `bridge` (injectable, defaults to `window.anycode.codex`, same
@@ -113,7 +113,7 @@ export interface CodexManifestRefreshResult {
 const SYSTEM_PROFILE_ID = "system";
 /** Mirrors `MAX_CODEX_PROFILES` (main/codex-profiles.ts, cut §4.3) — disables the create actions client-side before the round trip fails. */
 const MAX_CODEX_PROFILES = 8;
-/** The exact `authLink` target the "Use current account" sugar button writes (amended §A1.1 п.2) — v1 never writes any other literal here. */
+/** The exact `authLink` target the "Use current account" sugar button writes (amended §A1.1 item 2) — v1 never writes any other literal here. */
 const MAIN_AUTH_LINK_TARGET = "~/.codex/auth.json";
 /** The exact phrase `assertAuthLink` (main/codex-profiles.ts, amended §A1.2) puts in BOTH of its non-auto-repairable diagnoses — matched, not guessed, so an unrelated doctor error never surfaces the repair action. */
 const REPAIR_LINK_MARKER = 'use "Re-link credential"';
@@ -198,8 +198,8 @@ export function formatBinarySourceLabel(source: CodexOnboardingSnapshot["source"
  * Only a signed-out-but-otherwise-working profile can start a sign-in — every
  * other status must be fixed (or is already fine) first. An `authLink`
  * profile mirrors an external `CODEX_HOME`'s credential rather than owning
- * one of its own (amended §A1.2: "Login-флоу для authLink-профиля в UI НЕ
- * предлагается") — the server-side `loginStart` gate already refuses it
+ * one of its own (amended §A1.2: "No login flow for an authLink profile in the UI is
+ * offered") — the server-side `loginStart` gate already refuses it
  * (main/codex-ipc.ts), so the button is withheld here too rather than
  * inviting a click that can only fail.
  */
@@ -236,8 +236,8 @@ export function alternateBinaryChoices(snapshot: CodexOnboardingSnapshot | null)
 }
 
 /**
- * The secondary account line (cut §4.4 п.4: "e-mail показывается как
- * ВТОРИЧНАЯ строка ... никогда как единственный идентификатор"). `null` hides
+ * The secondary account line (cut §4.4 item 4: "the e-mail is shown as
+ * a SECONDARY line ... never as the sole identifier"). `null` hides
  * the line entirely — an `apiKey`/`amazonBedrock`/unknown account, or a
  * `chatgpt` account with no email on the wire, has nothing to show here.
  */
@@ -262,7 +262,7 @@ export function canRepairLink(profile: CodexProfileRecord, report: CodexDoctorRe
   return profile.authLink !== undefined && report?.status === "error" && (report.error?.includes(REPAIR_LINK_MARKER) ?? false);
 }
 
-/** Hides the "Use current account" sugar button once a profile already mirrors it (amended §A1.1 п.2: "кнопка скрывается, если профиль с той же целью уже существует"). */
+/** Hides the "Use current account" sugar button once a profile already mirrors it (amended §A1.1 item 2: "the button is hidden if a profile with the same target already exists"). */
 export function hasMainAuthLinkProfile(profiles: readonly CodexProfileRecord[]): boolean {
   return profiles.some((profile) => profile.authLink === MAIN_AUTH_LINK_TARGET);
 }
@@ -312,8 +312,8 @@ export interface CodexAccountRowPlan {
 /**
  * Collapses the "System (current environment)" pseudo-row into a matching
  * saved profile's own card when the two report the SAME signed-in account
- * (owner: "когда мы даём системному аккаунту профиль, то он должен
- * иметь это имя и не дублироваться"). Identity is compared off
+ * (owner: "when we give the system account a profile, it must
+ * have this name and not be duplicated"). Identity is compared off
  * `describeAccountEmailLine`'s already-custody-cleared email (trimmed,
  * case-insensitive) since no stable account id exists on the wire. A `null`
  * email on either side (report still pending, signed out, or a non-chatgpt
@@ -496,7 +496,7 @@ export function formatCodexQuotaReset(resetsAt: number | null | undefined, now: 
   return `resets in ${Math.round(hours / 24)}d`;
 }
 
-/** One quota-window line, or `null` when the window itself is absent (cut §6.2: "Ничего не рисуем, если поле не пришло. Пустая квота = блок скрыт, не «0%»"). */
+/** One quota-window line, or `null` when the window itself is absent (cut §6.2: "We draw nothing if the field is missing. An empty quota = the block is hidden, not '0%'"). */
 export function formatCodexQuotaWindowLine(window: CodexQuotaWindow | null | undefined, limitName: string | null | undefined, now: Date = new Date()): string | null {
   if (window === null || window === undefined) return null;
   const label = deriveCodexQuotaWindowLabel(window, limitName);
@@ -527,7 +527,7 @@ export function codexQuotaLines(rateLimits: CodexRateLimits | undefined, now: Da
 }
 
 /**
- * The cut §4.3 iteration ("не N параллельных app-server'ов") extracted as a
+ * The cut §4.3 iteration ("not N parallel app-servers") extracted as a
  * pure async helper: exactly one `recheck` call in flight at a time, `id` by
  * `id`, in order. `isStale` (checked before each id, not mid-await) lets a
  * caller abandon a superseded chain — a newer `refreshAll` invocation stops
@@ -750,8 +750,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   // mid-flow.
   const refreshEpochRef = useRef(0);
 
-  // Every row diagnosed SEQUENTIALLY (cut §4.3: "не N параллельных
-  // app-server'ов") — `system` first (it always exists), then every
+  // Every row diagnosed SEQUENTIALLY (cut §4.3: "not N parallel
+  // app-servers") — `system` first (it always exists), then every
   // registered profile in registry order.
   // `force` defaults TRUE so every explicit trigger (the "Recheck all"
   // button, a post-mutation refresh) still gets a fresh doctor pass exactly as
@@ -803,7 +803,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   }, [refreshAll, bridge]);
   useEffect(() => bridge.onLoginProgress?.(setDeviceCode), [bridge]);
 
-  // Shell-wide re-check-without-restart (п.5): unrelated to this
+  // Shell-wide re-check-without-restart (item 5): unrelated to this
   // pane's own row refresh above — only keeps the tabs-store's
   // `availableEngines` in sync, the same listener every onboarding surface
   // has always registered. Goes through the shared request ticket: this

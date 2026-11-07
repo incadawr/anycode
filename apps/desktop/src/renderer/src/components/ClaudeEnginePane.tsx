@@ -199,7 +199,7 @@ export interface ClaudeSignInCallbacks {
  * interactive logic is unit-tested through an injected-callback helper like
  * this one, never a rendered DOM). Success hands the caller the fresh
  * snapshot directly — the pane applies it with no separate manual Recheck
- * (cut §3: "статус сам флипается в Ready").
+ * (cut §3: "the status itself flips to Ready").
  */
 export async function runClaudeSignIn(bridge: Pick<ClaudeBridge, "loginStart">, callbacks: ClaudeSignInCallbacks): Promise<void> {
   callbacks.onStart();

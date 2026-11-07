@@ -1,5 +1,5 @@
 /**
- * `catalogFromProfiles` (срез S4, plan §5 S4's one unit-testable
+ * `catalogFromProfiles` (slice S4, plan §5 S4's one unit-testable
  * piece — the rest of `bootClaudeSession`'s wiring is index.ts glue, proven
  * only by the live smoke, project convention).
  */
@@ -21,7 +21,7 @@ function profile(overrides: Partial<PersonaDefinition> = {}): PersonaDefinition 
   };
 }
 
-describe("catalogFromProfiles (срез S4)", () => {
+describe("catalogFromProfiles (slice S4)", () => {
   it("carries name/description/systemPrompt verbatim for a core (no-engine) profile", () => {
     expect(catalogFromProfiles([profile()])).toEqual([
       { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", restrictions: reviewerRestrictions },

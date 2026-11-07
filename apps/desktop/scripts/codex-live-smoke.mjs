@@ -36,7 +36,7 @@
  * checked (e.g. "W6: a shadow-logged command keeps its own place") — that is
  * a description of what was measured, not a claim about whose fault a
  * failure is. It never assigns blame to a lane or suggests a re-run; see
- * codex-fixes-HANDOFF.md's "Уроки этого трека" for the incidents this
+ * codex-fixes-HANDOFF.md's "Lessons from this track" for the incidents this
  * removal is paying down.
  *
  * Plain node >=22, ZERO npm deps (only node:child_process/fs/os/path/url +
@@ -273,8 +273,8 @@ function processGroupMembers(pgid) {
 }
 
 /**
- * Orphan check with a settle window (cut §2(l): "мгновенный pgrep ловит
- * внучатый процесс в момент reap'а"). We spawn the app tree with
+ * Orphan check with a settle window (cut §2(l): "an instant pgrep catches
+ * a grandchild process at the moment of reap"). We spawn the app tree with
  * `detached:true` (Node docs: the child becomes the leader of a NEW process
  * group whose pgid equals its own pid), so EVERY descendant — Electron
  * helpers, the host utility process, and codex-cli plus any vendored

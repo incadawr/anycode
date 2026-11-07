@@ -1,5 +1,5 @@
 /**
- * in-process-server.ts tests (срез S2, план §3.4/§5).
+ * in-process-server.ts tests (slice S2, plan §3.4/§5).
  *
  * `createInProcessMcpServer` is proven the same way manager.test.ts proves the
  * client side — hermetically, over `InMemoryTransport.createLinkedPair()` with

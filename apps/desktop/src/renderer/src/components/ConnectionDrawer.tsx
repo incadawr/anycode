@@ -7,7 +7,7 @@ import { goModelMatchesTransport, isAutomaticGo } from "../../../shared/provider
  * actual form — no dialog chrome) and `ConnectionDrawer` (a native `<dialog>`
  * wrapper around it, same controlled showModal/close + focus-capture/restore
  * pattern as ConsentDialog/SettingsDialog) so WelcomeScreen's first-run flow
- * (cut §"Отдельный first-run empty state": "не тащить туда целиком
+ * ("separate first-run empty state": "do not drag the whole
  * management screen") can embed the SAME fields directly, chrome-free —
  * exactly the precedent `ProviderSettings` itself already set pre-W12.
  *
@@ -19,7 +19,7 @@ import { goModelMatchesTransport, isAutomaticGo } from "../../../shared/provider
  * against that real connection id, identically to editing an existing one. If
  * the secure-storage write fails or needs consent, the tile this drawer feeds
  * honestly stays `Needs credential` rather than pretending to be ready (cut:
- * "созданная плашка честно остаётся в Needs credential"). Editing an existing
+ * "the created tile honestly stays in Needs credential"). Editing an existing
  * connection starts with this same post-creation shape.
  *
  * CUSTODY: the credential input is write-only and never prefilled from a

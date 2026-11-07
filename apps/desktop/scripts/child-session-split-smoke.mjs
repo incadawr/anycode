@@ -7,17 +7,17 @@
  * reach `childLayoutStore`'s new `enterSplit`/`expandRow`/`exitSplit`
  * methods, and that the resulting DOM (`ActiveTabBody`'s third grid column +
  * `ChildSplitPane`) is REALLY on screen, not just present-in-DOM (anti-facade
- * §8 п.1/п.2).
+ * anti-facade check).
  *
  * §6.1 (LAW, not a style choice): the facade's ONLY new surface this slice
  * adds is `childLayoutState` — a READ-ONLY probe (`GET /tabs/:tabId/child/layout`).
  * There is deliberately NO facade driver for `enterSplit`/`exitSplit`/
- * `expandRow` (CUT-S3 §9 п.8) — every layout TRANSITION below is a REAL
+ * `expandRow` (slice 3) — every layout TRANSITION below is a REAL
  * `.click()` on the exact DOM node the product renders, found via the
  * FROZEN §3.5 selector contract. A facade shortcut for these would open a
  * second path around the button→store wiring this smoke exists to pin
  * (S2d's own named grabli: reducers can be green while the buttons are
- * dead — CUT-S3 §8 п.3 predicts this class by name, "RS2-15-3").
+ * dead — slice 3 predicts this class by name, "RS2-15-3").
  *
  * REUSE (same discipline as every script in this directory): every generic
  * process/fs/HTTP/dispatch helper below is IMPORTED, unmodified, from the
@@ -30,19 +30,19 @@
  * (same ~50-line, product-code-free technique every precedent script already
  * establishes for this exact command surface — none of them export one),
  * extended here with `Runtime.enable` + a `Runtime.consoleAPICalled`
- * listener (§6.3 п.10's mandatory console-error grep — no precedent script
+ * listener (the mandatory console-error grep — no precedent script
  * needed this before). The dual-spawn dispatch/stability-poll shape mirrors
  * `child-session-race-smoke.mjs`'s probe A (two, not four, session-tier
  * `Agent` calls in one turn); the steering technique (type via native
  * setter + `input` event, real `.click()` on `.composer-send`, verify via a
  * "echo > proof file" Bash side-effect + `subagent.toolCalls` count) mirrors
- * `child-session-permission-smoke.mjs`'s п.7 steering probe verbatim, just
+ * `child-session-permission-smoke.mjs`'s steering probe verbatim, just
  * re-scoped to the composer INSIDE `.child-split-pane` instead of the bare
- * B-position composer (CUT-S3 §6.3 п.6's own instruction: "переиспользовать
- * ассерт §4.2 п.7 S2d — шов композер→хост в сплит-позиции, не в B-позиции").
+ * B-position composer (the slice 3 instruction: "reuse
+ * assert §4.2 item 7 S2d — the composer→host seam in the split position, not the B position").
  *
- * DEVIATION (honestly named, not hidden — report this under "ШОВ" if this
- * run goes red near it): §6.3 п.7's lossless assert needs transcript-block
+ * DEVIATION (honestly named, not hidden — report this under "SEAM" if this
+ * run goes red near it): item 7's lossless assert needs transcript-block
  * COUNTS for the master AND BOTH children, snapshotted before entering
  * split and after leaving it. The master is always readable via `GET /state`
  * (a root tab). A CHILD's own transcript is NOT — S2d's own invariant is
@@ -52,18 +52,18 @@
  * `child-session-scenario-smoke.mjs`'s `CHILD_PANE_MESSAGE_COUNT_JS`
  * (count-only, no per-block ids — matched here, not strengthened, since no
  * stronger read is available). The accordion (§3.3) mounts at most ONE
- * child surface at a time (a collapsed row is "только строка-заголовок", no
+ * child surface at a time (a collapsed row is "only the header line", no
  * surface), so c2's own count is naturally observable only once (step 4,
  * when it is first opened/expanded). `captureC2FinalCount` below adds ONE
  * small pair of REAL row clicks (transiently re-expand c2, read its count,
  * re-expand c1) between steps 6 and 8 purely to give c2 a genuine two-point
- * "before/after" reading for §6.3 п.7 — still zero facade shortcuts (§6.1
+ * "before/after" reading for item 7 — still zero facade shortcuts (§6.1
  * fully honored, it is the SAME `.child-split-row` click lever step 5
  * already uses), just one extra pair of clicks the 11-item list does not
  * enumerate by number. See `step7LosslessCompare`'s own doc for the exact
  * comparison this produces.
  *
- * §6.3 п.10 (mandatory console/stderr grep) — the CDP half is exact: every
+ * the mandatory console/stderr grep — the CDP half is exact: every
  * `Runtime.consoleAPICalled` event of `type==="error"` is collected from
  * the moment the client connects. The app's OWN stderr is harder: `step1LaunchApp`
  * (out of this slice's fence, reused unmodified) spawns the dev app with
@@ -81,8 +81,8 @@
  * teardown (`reportAppStderr`), so nothing is silently lost, only
  * consolidated to the end of the run. POSIX-only (this repo's actual
  * dev/CI platform is macOS); a redirection failure is an honest step 10
- * FAIL, never a silent skip (`fail`, not `console.warn`+continue) — "не
- * подделывай: доложи честно."
+ * FAIL, never a silent skip (`fail`, not `console.warn`+continue) — "do not
+ * do not fake it: report honestly."
  *
  * Usage:   node apps/desktop/scripts/child-session-split-smoke.mjs [--keep]
  *
@@ -163,7 +163,7 @@ const TERMINAL_WAIT_TIMEOUT_MS = 240_000;
 
 const FLAGS = { keep: process.argv.slice(2).includes("--keep") };
 
-// ── app-stderr redirection (§6.3 п.10 — see this file's own header doc) ──
+// ── app-stderr redirection (see this file's header doc) ──
 
 /**
  * Reopens fd 2 onto `APP_STDERR_LOG`. The dry-run open+close FIRST (before
@@ -199,9 +199,9 @@ function markStartupWindowClosed() {
 }
 
 /**
- * Known-benign noise, explicit + comment-justified per CUT-S3 §6.3 п.10's
- * own allowance ("аллоулист известного шума ... явным списком ... с
- * комментарием-обоснованием"). Anything NOT matched here (nor by the
+ * Known-benign noise, explicit + comment-justified per the slice 3 mandate
+ * own allowance ("an allowlist of known noise ... as an explicit list ... with
+ * a justifying comment"). Anything NOT matched here (nor by the
  * startup-window list below, above the sentinel) fails step 10.
  */
 const APP_STDERR_ALLOWLIST = [
@@ -289,7 +289,7 @@ async function pollUntil(timeoutMs, intervalMs, probe) {
 
 // ── CDP client (Node 22 global WebSocket/fetch, zero deps) — same technique
 // every precedent script in this directory already establishes, extended
-// with Runtime.enable + a live console.error collector (§6.3 п.10). ──
+// with Runtime.enable + a live console.error collector. ──
 
 async function cdpConnect(port, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
@@ -391,7 +391,7 @@ async function cdpConnect(port, timeoutMs = 60_000) {
  * vs roster variant, ⤢/× buttons), every `.child-split-row` (spawn id,
  * expanded modifier, whether/how-tall its own `.child-split-surface` is),
  * and — for the N=1 case, where §3.3 says NO row element exists at all, just
- * "голова-single + поверхность" — a loose surface hanging directly off the
+ * "single head + surface" — a loose surface hanging directly off the
  * pane/head.
  */
 function childSplitStateJs() {
@@ -525,8 +525,8 @@ const CHILD_SPLIT_MESSAGE_COUNT_JS = `(() => {
 
 /**
  * Hit-tests THEN clicks a single element — every real DOM-transition click
- * in this file goes through this one helper (CUT-S3 §6.1, LAW: "ассертит
- * `document.elementFromPoint(cx, cy)` внутри элемента и кликает ЕГО", not a
+ * in this file goes through this one helper (slice 3 §6.1, RULE: "asserts
+ * `document.elementFromPoint(cx, cy)` inside the element and clicks IT", not a
  * bare `el.click()` that would just as happily hit a hidden/covered node).
  * `selectorExprJs` is a JS EXPRESSION (already safely built by the caller)
  * that evaluates to the CSS selector — a `JSON.stringify`'d literal for a
@@ -677,7 +677,7 @@ async function captureMasterSnapshot(ctx, step) {
  * same as the product, so it also counts as still-running. This mirrors
  * `childBadgeKind`'s own priority (`waiting`/`running` are mutually
  * exclusive with a non-null `final`, store.ts's own doc), never a literal —
- * CUT-S3 §6.3 п.4 / §8 п.4's whole point.
+ * slice 3 item 4's whole point.
  */
 async function computeExpectedRosterText(ctx, step, order) {
   const { transcript } = await getTranscriptBlocks(ctx, step, ctx.tabId);
@@ -793,7 +793,7 @@ async function step3EnterSplit(ctx) {
   }
 
   // Lossless baseline (§6.3 step 7 / I4) — captured HERE, right before the
-  // split-entry click, per the cut's own "снята до шага 3" wording. c1's
+  // split-entry click, per the cut's own "taken before step 3" wording. c1's
   // count is read off the CURRENTLY-shown B pane (still mounted at this
   // instant); the master is always readable via /state regardless.
   ctx.losslessBaselineMaster = await captureMasterSnapshot(ctx, step);
@@ -835,7 +835,7 @@ async function step3EnterSplit(ctx) {
   assert(
     step,
     master.hitInside === true,
-    `elementFromPoint at the master panel's own centre (hit=${master.hitTag}) did NOT land inside it — split is only real if BOTH panels are (CUT-S3 §6.3 п.3)`,
+    `elementFromPoint at the master panel's own centre (hit=${master.hitTag}) did NOT land inside it — split is only real if BOTH panels are (slice 3)`,
   );
 
   ctx.pngLayoutC = await saveScreenshot(ctx, "s3-2-layout-C");
@@ -863,7 +863,7 @@ async function step4OpenChild2Accordion(ctx) {
   );
   assert(step, probe.view?.expandedId === ctx.c2ToolCallId, `expected expandedId===c2, got ${JSON.stringify(probe.view)}`);
 
-  // Read BEFORE the DOM snapshot below (§6.3 п.4's own race: a child may go
+  // Read BEFORE the DOM snapshot below (the item 4 race: a child may go
   // terminal between reading the source and reading the DOM) so a re-read
   // after a mismatch below catches UP to the DOM snapshot already taken,
   // rather than uselessly re-fetching a state that already predates it.
@@ -881,11 +881,11 @@ async function step4OpenChild2Accordion(ctx) {
   for (const row of state.rows.filter((r) => !r.expanded)) {
     assert(step, row.hasSurface === false || row.surfaceHeight === 0, `collapsed row ${row.spawnId} unexpectedly has a non-zero-height surface: ${JSON.stringify(row)}`);
   }
-  // Roster text sourced from live data (§8 п.4 anti-facade risk: a hardcoded
+  // Roster text sourced from live data (anti-facade risk: a hardcoded
   // "Subagents · 3 · 2 running" literal would still pass a naive
   // `includes("2")` check — it contains a "2" too). Compared against the
   // independently-computed expectation above; one re-read of the source is
-  // allowed before failing (§6.3 п.4's own race — see the comment above).
+  // allowed before failing (the item 4 race — see the comment above).
   if (state.headText !== rosterExpectation.text) {
     rosterExpectation = await computeExpectedRosterText(ctx, step, probe.view.order);
   }
@@ -1137,7 +1137,7 @@ async function step9BorderSanity(ctx) {
   );
 }
 
-// ── step 10: mandatory console/stderr grep (§6.3 п.10) — see this file's own header doc ──
+// ── step 10: mandatory console/stderr grep — see this file's header doc ──
 
 async function step10ConsoleGrep(ctx) {
   const step = 10;
@@ -1383,7 +1383,7 @@ async function run() {
 
     await step1LaunchApp(ctx);
     // Connect CDP (and with it, `Runtime.enable` + the console-error
-    // collector, §6.3 п.10) immediately after launch — BEFORE waiting on the
+    // collector) immediately after launch — BEFORE waiting on the
     // facade — so a renderer `console.error` during the boot race itself
     // still lands in the count step 10 later asserts is zero. `cdpConnect`
     // tolerates the app not having a page target yet (polls `/json/list` up

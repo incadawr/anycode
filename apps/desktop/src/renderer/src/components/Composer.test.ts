@@ -407,7 +407,7 @@ describe("buildQuotaPopoverView (cut §6.2 — hidden block, never 0%)", () => {
   });
 });
 
-describe("isImageAttachBlockedByModel (W3 — model-level attach gate, layered on the engine-level supportsImages; срез D — a configured recognizer fallback unblocks a blind model)", () => {
+describe("isImageAttachBlockedByModel (W3 — model-level attach gate, layered on the engine-level supportsImages; slice D — a configured recognizer fallback unblocks a blind model)", () => {
   it("blocks on an explicit false verdict when no recognizer fallback is configured", () => {
     expect(isImageAttachBlockedByModel(false, undefined)).toBe(true);
   });
@@ -431,7 +431,7 @@ describe("isImageAttachBlockedByModel (W3 — model-level attach gate, layered o
   });
 });
 
-describe("isSendBlockedByModelImages (W3(c) — attached images on a vision -> non-vision switch block send, never vanish; срез D — recognizer fallback pair)", () => {
+describe("isSendBlockedByModelImages (W3(c) — attached images on a vision -> non-vision switch block send, never vanish; slice D — recognizer fallback pair)", () => {
   it("blocks send only when the model rejects images AND the draft actually has some attached AND no fallback is configured", () => {
     expect(isSendBlockedByModelImages(false, undefined, 1)).toBe(true);
     expect(isSendBlockedByModelImages(false, undefined, 3)).toBe(true);

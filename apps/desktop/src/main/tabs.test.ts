@@ -2191,7 +2191,7 @@ describe("TabHostManager — canSpawn(\"claude\") follows doctor readiness (SLIC
  * spawned child lands at whatever index its fork call landed at.
  */
 describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () => {
-  it("4 synchronous spawns from the SAME parent, no await between them, admit exactly 3 and PARK the 4th (срез 1) — it wakes once a slot frees and reaches its own terminal", () => {
+  it("4 synchronous spawns from the SAME parent, no await between them, admit exactly 3 and PARK the 4th (slice 1) — it wakes once a slot frees and reaches its own terminal", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2211,18 +2211,18 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     const accepted = events.filter((e) => e.kind === "accepted");
     expect(accepted).toHaveLength(CHILD_RUNS_PER_PARENT_MAX);
     expect(accepted.map((e) => e.requestId)).toEqual(["r1", "r2", "r3"]);
-    // срез 1: the cap no longer terminates a 4th request — it
+    // slice 1: the cap no longer terminates a 4th request — it
     // parks. No reply (neither accepted nor rejected) has gone out for it.
     expect(events.some((e) => e.requestId === "r4")).toBe(false);
     // 1 root + 3 admitted children forked; the 4th never reached fork at all.
     expect(hosts).toHaveLength(1 + CHILD_RUNS_PER_PARENT_MAX);
 
     // The parked request already reserved its dedup key, exactly like a
-    // running one would (§10.5 п.3's dedup discipline extends to a waiter).
+    // running one would (§10.5 item 3's dedup discipline extends to a waiter).
     const raw = manager as unknown as { childSpawnQueue: string[]; childSpawnKeys: Map<string, string> };
     expect(raw.childSpawnQueue).toEqual(["r4"]);
     // The dedup key's join character is `childSpawnKey`'s own NUL separator
-    // (§10.5 п.3) — built here via `String.fromCharCode`, not a literal
+    // (§10.5 item 3) — built here via `String.fromCharCode`, not a literal
     // escape, so no NUL byte ever passes through as source text.
     const dedupKey = ["root-atomic", "r4-call"].join(String.fromCharCode(0));
     expect(raw.childSpawnKeys.has(dedupKey)).toBe(true);
@@ -2238,8 +2238,8 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     expect(hosts).toHaveLength(1 + CHILD_RUNS_PER_PARENT_MAX + 1); // r4 forked now
     expect(raw.childSpawnQueue).toEqual([]);
 
-    // ...and it reaches an actual terminal (the DoD's own "доходит до
-    // терминала"), exactly like an immediately-admitted child would.
+    // ...and it reaches an actual terminal (the DoD's own "reaches
+    // a terminal"), exactly like an immediately-admitted child would.
     const r4ChildTabId = r4Accepted?.kind === "accepted" ? r4Accepted.childTabId : "";
     const r4Host = hosts[hosts.length - 1]!;
     r4Host.emit("message", childTerminalMsg({ status: "completed" }));
@@ -2269,7 +2269,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     expect(manager.getTab(childTabId)).toBeUndefined();
   });
 
-  it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) PARKS on limit_global (срез 1) — and wakes when a DIFFERENT parent's slot frees, not just its own", () => {
+  it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) PARKS on limit_global (slice 1) — and wakes when a DIFFERENT parent's slot frees, not just its own", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2291,7 +2291,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     }
 
     // A 9th spawn from the parent that still has per-parent room (2 of 3
-    // used) — blocked purely by the GLOBAL cap. срез 1: it parks,
+    // used) — blocked purely by the GLOBAL cap. slice 1: it parks,
     // it is not told `limit_global` yet.
     rootHosts[2]!.emit("message", spawnRequest({ requestId: "p2-overflow" }));
     expect(childRunEvents(rootHosts[2]!).some((e) => e.requestId === "p2-overflow")).toBe(false);
@@ -2301,8 +2301,8 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     // above, at hosts[3]) — a DIFFERENT parent than the one the parked
     // request belongs to. The global cap is what was blocking it, and a
  // global slot just freed no matter WHOSE child released it (
-    // own "заявка могла ждать из-за ГЛОБАЛЬНОГО кэпа, а освободился слот у
-    // ДРУГОГО родителя — такую тоже надо будить").
+    // own "the request could wait because of the GLOBAL cap, yet a slot freed at
+    // a DIFFERENT parent — such a request must be woken too").
     hosts[3]!.emit("message", childTerminalMsg({ status: "completed" }));
 
     const overflowEvent = childRunEvents(rootHosts[2]!).find((e) => e.requestId === "p2-overflow");
@@ -2560,7 +2560,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     expect(releaseSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays PARKED (срез 1) until the cancelled child actually exits, then wakes it (not whoever asks next)", () => {
+  it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays PARKED (slice 1) until the cancelled child actually exits, then wakes it (not whoever asks next)", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2577,7 +2577,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
     expect(child1Host.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
 
     // Still no slot: cancelling still occupies it, so this parks rather
-    // than being told `limit_parent` (срез 1).
+    // than being told `limit_parent` (slice 1).
     rootHost.emit("message", spawnRequest({ requestId: "too-soon" }));
     expect(childRunEvents(rootHost).some((e) => e.requestId === "too-soon")).toBe(false);
 
@@ -2602,7 +2602,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
 });
 
 /**
- * срез 1: a spawn request exceeding the per-parent/global cap now
+ * slice 1: a spawn request exceeding the per-parent/global cap now
  * parks instead of being refused outright — the tests above (in "…admission
  * is ATOMIC") re-purpose the ORIGINAL cap tests to prove the park-then-wake
  * lifecycle end to end. These tests cover the three properties that lifecycle
@@ -2611,7 +2611,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
  * waiter app-wide (as opposed to `drainChildren`'s per-parent purge, already
  * covered by the "spawn around a root's close" suite below).
  */
-describe("TabHostManager — session-spawn queue (срез 1)", () => {
+describe("TabHostManager — session-spawn queue (slice 1)", () => {
   it("a duplicate (parentSessionId, spawnToolCallId) pair is refused spawn_failed WHILE the first spawn is still queued, not only while it is running", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -2666,7 +2666,7 @@ describe("TabHostManager — session-spawn queue (срез 1)", () => {
 
     // One more, past the queue's own bound: refused outright, with the SAME
     // frozen text a cap-exceeding spawn always got the
-    // "Границы решения" texts stay reachable exactly on this path.
+    // "Decision boundaries" texts stay reachable exactly on this path.
     rootHost.emit("message", spawnRequest({ requestId: "overflow" }));
     expect(childRunEvents(rootHost).find((e) => e.requestId === "overflow")).toEqual({
       type: CHILD_RUN_EVENT_TYPE,
@@ -3259,7 +3259,7 @@ describe("TabHostManager — spawn around a root's close: seal + cascade drain (
     expect(manager.listTabs().some((t) => t.childOf !== undefined)).toBe(false);
   });
 
-  it("close on a root with a QUEUED (not yet admitted) spawn kills the waiter too — rejected closing, no ghosts in childRuns/childrenByParentTab/childSpawnKeys (срез 1)", async () => {
+  it("close on a root with a QUEUED (not yet admitted) spawn kills the waiter too — rejected closing, no ghosts in childRuns/childrenByParentTab/childSpawnKeys (slice 1)", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -3283,8 +3283,8 @@ describe("TabHostManager — spawn around a root's close: seal + cascade drain (
 
     // The waiter never forked (closing purges it before it could) and gets
     // the SAME `rejected closing` reply a spawn arriving after the seal
- // already gets ("отвечай существующим CHILD_CLOSING_MESSAGE
-    // через тот же rejected-путь").
+ // already gets ("reply with the existing CHILD_CLOSING_MESSAGE
+    // through the same rejected path").
     expect(hosts).toHaveLength(hostsBeforeClose);
     expect(childRunEvents(rootHost).find((e) => e.requestId === "close-queued")).toEqual({
       type: CHILD_RUN_EVENT_TYPE,
@@ -3466,7 +3466,7 @@ describe("TabHostManager — child start-deadline (CHILD_START_DEADLINE_MS, CUT-
     expect(terminal).toBeUndefined();
   });
 
-  it("срез 1: the deadline is NOT consumed while a request sits queued — it starts only at the REAL fork, never at park time", () => {
+  it("slice 1: the deadline is NOT consumed while a request sits queued — it starts only at the REAL fork, never at park time", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -3798,14 +3798,14 @@ describe("TabHostManager — child terminal + reap (CUT-S2 §0/§2.6.4)", () => 
 });
 
 /**
- * The B3 relay-test matrix §10.7 п.6d asks for (a fix-job filling a gap the
- * cut itself flags — §10.7 п.0 — the B3 test list originally shipped with
+ * The B3 relay-test matrix §10.7 item 6d asks for (a fix-job filling a gap the
+ * cut itself flags — §10.7 item 0 — the B3 test list originally shipped with
  * ZERO relay tests): each ChildProgress kind relays to exactly the run's OWN
  * requestId; a sender WITHOUT childOf is ignored; a message arriving after
  * the run's terminal transition is dropped; and ChildTerminal.
  * activitySuppressed is copied verbatim into the terminal ChildRunEvent.
  */
-describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (CUT-S2 §10.7 п.6d)", () => {
+describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (CUT-S2 §10.7 item 6d)", () => {
   it("a `progress` message from a live child with childOf relays EXACTLY one ChildRunEvent{kind:\"progress\"} carrying the run's requestId", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -4217,7 +4217,7 @@ describe("TabHostManager — stale-generation child-session messages are ignored
   });
 });
 
-describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup (CUT-S2 §10.5 п.3)", () => {
+describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup (CUT-S2 §10.5 item 3)", () => {
   const DUPLICATE_SPAWN_MESSAGE =
     "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.";
 
@@ -4314,15 +4314,15 @@ describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup 
 });
 
 /**
- * CUT-S2 §10.8.2 п.5: four model-visible texts are now VERBATIM-
+ * CUT-S2 §10.8.2 item 5: four model-visible texts are now VERBATIM-
  * frozen cut members. These pins exist to catch a single wrong character —
  * each asserts the FULL string (`toEqual`/exact `finalText`), not
  * `expect.any(String)` or a substring match, so any drift from the ratified
- * wording (including the two the architect REPLACED, §10.8.2 п.1/п.2) fails
+ * wording (including the two the architect REPLACED, §10.8.2 items 1/2) fails
  * loudly rather than silently degrading to a fact-only, actionless message.
  */
 describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
-  it("a `not_ready` rejection WITHOUT an explicit provider carries EXACTLY the §10.8.2 п.1 ratified text", () => {
+  it("a `not_ready` rejection WITHOUT an explicit provider carries EXACTLY the §10.8.2 item 1 ratified text", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     let ready = true;
@@ -4345,7 +4345,7 @@ describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
     });
   });
 
-  it("a start-deadline miss's terminal carries EXACTLY the §10.8.2 п.2 ratified text", () => {
+  it("a start-deadline miss's terminal carries EXACTLY the §10.8.2 item 2 ratified text", () => {
     vi.useFakeTimers();
     try {
       const { fork, hosts } = shutdownableForkRig();
@@ -4369,7 +4369,7 @@ describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
     }
   });
 
-  it("a cancelled terminal carries EXACTLY the §10.8.2 п.3 text for BOTH an explicit child-run-cancel AND the drain-cascade path", async () => {
+  it("a cancelled terminal carries EXACTLY the §10.8.2 item 3 text for BOTH an explicit child-run-cancel AND the drain-cascade path", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -4407,7 +4407,7 @@ describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
     expect(cascadeTerminal).toMatchObject({ status: "cancelled", finalText: CANCELLED_TEXT });
   });
 
-  it("an in-flight duplicate (parentSessionId, spawnToolCallId) spawn is rejected with EXACTLY the §10.8.2 п.4 ratified text", () => {
+  it("an in-flight duplicate (parentSessionId, spawnToolCallId) spawn is rejected with EXACTLY the §10.8.2 item 4 ratified text", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -5224,14 +5224,14 @@ describe("TabHostManager — drainChildren's deadline branch administratively to
     newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r4", spawnToolCallId: "n2ii-call-3" }));
     expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r3")?.kind).toBe("accepted");
     expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r4")?.kind).toBe("accepted");
-    // ...and a 4th PARKS rather than being refused outright (срез
+    // ...and a 4th PARKS rather than being refused outright (slice
     // 1) — no reply has gone out for it yet.
     newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r5", spawnToolCallId: "n2ii-call-4" }));
     expect(childRunEvents(newRootHost).some((e) => e.requestId === "n2ii-r5")).toBe(false);
   });
 
   it("(iii) the crash-path respawn's own drain deadline (handleExit's THIRD drainChildren call site) tombstones a stuck child too — ledger/dedup-key/quota are all free on the RESPAWNED root", async () => {
-    // Luna review (§10.12.5 п.2): (i) covers closeTab's drainChildren call,
+    // Luna review (§10.12.5 item 2): (i) covers closeTab's drainChildren call,
     // (ii) covers relocateTab's — neither exercises the crash path's own
     // `void this.drainChildren(tab)` in `handleExit` (tabs.ts:1761). A root
     // that stops calling `drainChildren` on crash-respawn would pass both
@@ -5385,7 +5385,7 @@ describe("TabHostManager — shutdownTabHost's trailing tab.proc=null is guarded
  */
 describe("TabHostManager — cancelChildRun's unknown-tab branch also frees the ledger entry, dedup key, and start-deadline timer (Luna R4 MINOR / N5)", () => {
   it("tombstones the ghost childTabId's childRuns entry through finalizeChildRun instead of leaking its quota slot and dedup key", async () => {
-    // Luna review R4 MINOR (N5, §10.12.5 п.1): the original version of this
+    // Luna review R4 MINOR (N5, §10.12.5 item 1): the original version of this
     // test asserted the LEDGER-LEVEL symptoms (childRuns/childSpawnKeys
     // cleared, a terminal relayed) but never asserted the TIMER itself was
     // the thing that cleared — a `clearTimeout(entry.startDeadline)`
@@ -5417,14 +5417,14 @@ describe("TabHostManager — cancelChildRun's unknown-tab branch also frees the 
         cancelChildRun(id: string): Promise<void>;
       };
       // The dedup key's join character is `childSpawnKey`'s own NUL separator
-      // (§10.5 п.3) — built here via `String.fromCharCode`, not a literal
+      // (§10.5 item 3) — built here via `String.fromCharCode`, not a literal
       // escape, so no NUL byte ever passes through as source text.
       const dedupKey = ["root-n5", "n5-call"].join(String.fromCharCode(0));
       raw.tabs.delete(childTabId);
       expect(raw.childRuns.has("n5-req")).toBe(true);
       expect(raw.childSpawnKeys.has(dedupKey)).toBe(true);
 
-      // Discriminator 1 (§10.12.5 п.1): the only fake timer pending right now
+      // Discriminator 1 (§10.12.5 item 1): the only fake timer pending right now
       // is the ledger entry's own start-deadline `setTimeout`. `cancelChildRun`
       // clears it (via `finalizeChildRun`) AND schedules a real macrotask of
       // its own (F1's `setImmediate`, also fake under `vi.useFakeTimers()`) to
@@ -5450,7 +5450,7 @@ describe("TabHostManager — cancelChildRun's unknown-tab branch also frees the 
       const terminal = childRunEvents(rootHost).find((e) => e.requestId === "n5-req" && e.kind === "terminal");
       expect(terminal).toMatchObject({ status: "cancelled" });
 
-      // Discriminator 2 (§10.12.5 п.1): if the start-deadline timer had only
+      // Discriminator 2 (§10.12.5 item 1): if the start-deadline timer had only
       // LEAKED (never cleared) rather than merely misreported by discriminator
       // 1, letting it run all the way out would still fire
       // `handleChildStartTimeout` — a silent no-op against an already-deleted
@@ -6138,8 +6138,8 @@ describe("TabHostManager — follow-up card alias", () => {
 
 // ── / slice 2: LIVE session-capacity limits (settings readers) ──
 
-describe("TabHostManager — live session limits (срез 2)", () => {
-  it("DEFAULT_BREAKER_LIMITS.maxTabs is 20 (п.1)", () => {
+describe("TabHostManager — live session limits (slice 2)", () => {
+  it("DEFAULT_BREAKER_LIMITS.maxTabs is 20 (item 1)", () => {
     expect(DEFAULT_BREAKER_LIMITS.maxTabs).toBe(20);
   });
 

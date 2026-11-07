@@ -132,9 +132,9 @@ export interface HistoryItem {
   turnId?: string;
   step?: number;
   /**
-   * срез 2: marks a `role:"user"` item the human never typed — the
+   * slice 2: marks a `role:"user"` item the human never typed — the
    * host injected it on the model's behalf (a detached background child's
-   * terminal report). `role` stays "user" (owner decision, spec §4bis п.1:
+   * terminal report). `role` stays "user" (owner decision, spec §4bis item 1:
    * the MODEL must not be able to tell the two apart), so this field exists
    * purely for PRESENTATION — a renderer/CLI reading persisted history picks
    * a different view for it without the model-facing role ever lying about

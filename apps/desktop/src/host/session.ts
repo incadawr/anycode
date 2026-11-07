@@ -486,7 +486,7 @@ export interface ChildTerminalReport {
   durationMs: number;
   /**
    * Count of eligible tool_result calls withheld past `SUBAGENT_ACTIVITY_MAX_EVENTS`
-   * over the child's WHOLE turn chain (CUT-S2 §10.7 п.4, parity with
+   * over the child's WHOLE turn chain (CUT-S2 §10.7 item 4, parity with
    * `runner.ts:573`'s inline `activitySuppressed`). Present only when >0.
    */
   activitySuppressed?: number;
@@ -525,7 +525,7 @@ export interface ChildTerminalReport {
 
 /**
  * The child-mode activity/progress report Session hands to
- * `ChildSessionOptions.onProgress` (CUT-S2 §10.7 п.7) — mirrors
+ * `ChildSessionOptions.onProgress` (CUT-S2 §10.7 item 7) — mirrors
  * `ChildProgress`'s (shared/child-sessions.ts) "progress" and "activity"
  * variants minus the `type` discriminant, exactly like `ChildTerminalReport`
  * above mirrors `ChildTerminal`. "attention" is deliberately NOT a variant
@@ -559,7 +559,7 @@ export interface ChildSessionOptions {
   /**
    * Fires exactly once, on this session's FIRST `ui_ready` — never before
    * (the renderer/relay is not listening yet) and never again on a later
-   * reconnect (CUT-S2 §2.6.3: "child-ready host шлёт на ПЕРВЫЙ ui_ready").
+   * reconnect (CUT-S2 §2.6.3: "the child host sends on the FIRST ui_ready").
    */
   onReady: () => void;
   /**
@@ -586,10 +586,10 @@ export interface ChildSessionOptions {
   onTerminal: (report: ChildTerminalReport) => void;
   /**
    * Fires on every activity/progress boundary the child's turn-event loop
-   * crosses (CUT-S2 §10.7 п.7) — a buffered `tool_execution_start`/
+   * crosses (CUT-S2 §10.7 item 7) — a buffered `tool_execution_start`/
    * `tool_result` pair for "activity", and a leading-edge 1000ms-throttled
    * `tool_result`/`turn_end` boundary for "progress". REQUIRED, not
-   * optional: §10.7 п.7 calls out that an easily-forgotten optional seam here
+   * optional: §10.7 item 7 calls out that an easily-forgotten optional seam here
    * is the same defect class as the rejected `includeChildren?` (§0.4) — a
    * host that constructs a child Session and forgets to wire this would lose
    * the whole live activity/progress feed silently instead of a compile
@@ -597,7 +597,7 @@ export interface ChildSessionOptions {
    */
   onProgress: (report: ChildProgressReport) => void;
   /**
-   * DI clock for the progress throttle (CUT-S2 §10.7 п.3): defaults to
+   * DI clock for the progress throttle (CUT-S2 §10.7 item 3): defaults to
    * `Date.now`. Injected by tests for deterministic leading-edge 1000ms
    * boundary assertions; never used outside the progress-throttle path.
    */
@@ -988,7 +988,7 @@ export interface SessionOptions {
     onTaskSettled?(listener: (notice: BackgroundTaskNotice) => void): () => void;
   };
   /**
-   * срез 3 §2/§3: narrow read/cancel seam onto the host's own
+   * slice 3 §2/§3: narrow read/cancel seam onto the host's own
    * detached-children registry (host/child-session-port.ts's `ChildSessionPort`,
    * core-engine-only — absent for a claude/codex-master boot, which never wires
    * `config.sessionSubagents` at all, spec §5). Mirrors the `tasks`/`lsp`
@@ -997,7 +997,7 @@ export interface SessionOptions {
    * it when this seam exists), mirroring `lsp.onStatusChange`'s live-push
    * discipline: a child admitting or reaching its terminal live-pushes an
    * updated `background_children` snapshot to an already-`ui_ready` renderer,
-   * not just on the next reconnect. `cancelAll` backs срез 3 §3 (session
+   * not just on the next reconnect. `cancelAll` backs slice 3 §3 (session
    * shutdown explicitly sweeping every live background child — see
    * `shutdown()` below); it is a distinct, explicit call, never a side effect
    * of `this.abort.abort()`.
@@ -1112,7 +1112,7 @@ export interface SessionOptions {
   /** Multimodal send-path capability gate, mirroring the CLI image staging guard. */
   imageInputEnabled?: () => boolean;
   /**
-   * срез C (plan §1.3/§3/§4): live verdict for the vision fallback —
+   * slice C (plan §1.3/§3/§4): live verdict for the vision fallback —
    * true exactly when a recognizer endpoint is currently configured for this
    * session, independent of `imageInputEnabled` above (a blind model can
    * still accept an attachment through the fallback). Re-evaluated per call,
@@ -1131,7 +1131,7 @@ export interface SessionOptions {
   contextWindowAssumed?: () => boolean;
   modelSettingsConnectionId?: string | null;
   /**
-   * срез C (plan §1.3): host-owned commit for a live recognizer-
+   * slice C (plan §1.3): host-owned commit for a live recognizer-
    * config push (main's RecognizerConfigChanged, E1). Session's own
    * `applyRecognizerConfig` public method decides WHEN to call this (now, if
    * idle; deferred to the next busy->idle boundary, last-value-wins,
@@ -1139,8 +1139,8 @@ export interface SessionOptions {
    * `RecognizerEndpoint`, (de)register InspectImage, and recompose the
    * system prompt when its registration actually changed (host/index.ts).
    * Absent (codex/claude engine boots, and every pre-existing test) makes
-   * `applyRecognizerConfig` a no-op — the plan's "codex/claude НЕ задеты
-   * (замыкание не установлено)".
+   * `applyRecognizerConfig` a no-op — the plan's "codex/claude NOT affected
+   * (the closure is not installed)".
    */
   applyRecognizerConfig?: (endpoint: RecognizerEndpoint | null) => void;
   /**
@@ -1228,13 +1228,13 @@ export interface SessionOptions {
    */
   child?: ChildSessionOptions;
   /**
-   * срез 2: the host-side pending-report queue seam
+   * slice 2: the host-side pending-report queue seam
    * (child-report-queue.ts's `ChildReportQueue`, wired only where a
    * `sessionSubagents` port was also wired — host/index.ts, always the ROOT
    * engine construction site, never a child-mode one, mirroring the
    * non-recursion lock on `config.sessionSubagents` itself). Absent in every
    * legacy test/child-mode Session -> `ui_ready` and `child_report_ack` are
-   * both silent no-ops for this concern, byte-identical to pre-срез-2.
+   * both silent no-ops for this concern, byte-identical to pre-slice-2.
    */
   pendingChildReports?: PendingChildReportsOptions;
   /**
@@ -1260,7 +1260,7 @@ export interface SessionOptions {
 }
 
 /**
- * срез 2: Session's own narrow view of the host's pending
+ * slice 2: Session's own narrow view of the host's pending
  * detached-child-report queue — mirrors the `SessionPersistence`/`tasks`/`lsp`
  * seam posture (a small closure-based interface, not the whole queue object)
  * so Session never needs to import `child-report-queue.ts` itself.
@@ -1378,7 +1378,7 @@ export class Session {
   private readonly tasks: SessionOptions["tasks"];
   /** the renderer's own read cursor per background task (see pushTaskOutput). */
   private readonly uiTaskOutputCursors = new Map<string, number>();
-  /** срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
+  /** slice 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private backgroundChildren: SessionOptions["backgroundChildren"];
   /** §3.7: host callback on every orchestrate transition (loop-config copy). */
   private onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
@@ -1398,14 +1398,14 @@ export class Session {
   /** Slice P7.26/R2: rewind/list seam (undefined -> checkpoints disabled, fail-closed). */
   private checkpoints: SessionOptions["checkpoints"];
   private imageInputEnabled: (() => boolean) | undefined;
-  /** срез C: see SessionOptions.imageFallbackAvailable's own doc. */
+  /** slice C: see SessionOptions.imageFallbackAvailable's own doc. */
   private imageFallbackAvailable: (() => boolean) | undefined;
   private contextWindowAssumed: (() => boolean) | undefined;
   private modelSettingsConnectionId: string | null | undefined;
-  /** срез C: see SessionOptions.applyRecognizerConfig's own doc. */
+  /** slice C: see SessionOptions.applyRecognizerConfig's own doc. */
   private applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
-   * срез C (plan §1.3): the last recognizer-config push received
+   * slice C (plan §1.3): the last recognizer-config push received
    * while `busy` — last-value-wins, applied at the very next busy->idle
    * boundary. `undefined` means nothing is pending (the initial state, and
    * the state right after a commit); wrapped in an object so `{endpoint:
@@ -1742,12 +1742,12 @@ export class Session {
   private advertisedCapabilities: EngineCapabilitiesProjection | undefined;
   /** Slice P7.25/F3: unsubscribes the LSP status listener on shutdown (no leaked listener, no push-after-dispose). */
   private lspUnsubscribe: (() => void) | undefined;
-  /** срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
+  /** slice 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
   private readonly pendingChildReports: PendingChildReportsOptions | undefined;
   private readonly observeFileActivity: SessionOptions["observeFileActivity"];
   /** see SessionOptions.eventTap's own doc — undefined for core (byte-identical to pre-159). */
   private readonly eventTap: SessionOptions["eventTap"];
-  /** срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
+  /** slice 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
   private backgroundChildrenUnsubscribe: (() => void) | undefined;
   /**
    * unsubscribes the tasks port's settled listener on shutdown
@@ -1812,7 +1812,7 @@ export class Session {
   /** Wall-clock start of the child's turn chain, set once by startProgrammaticTurn — the terminal report's durationMs baseline. */
   private childStartedAt = 0;
   /**
-   * DI clock for the progress leading-edge throttle (CUT-S2 §10.7 п.3);
+   * DI clock for the progress leading-edge throttle (CUT-S2 §10.7 item 3);
    * defaults to `Date.now`, overridable via `child.now` for deterministic
    * tests. Inert (never called) whenever `this.child === undefined`.
    */
@@ -1824,11 +1824,11 @@ export class Session {
    * multiple in-flight starts before any result cannot collide.
    */
   private readonly pendingChildCalls = new Map<string, { toolName: string; input: unknown }>();
-  /** Per-child-session activity-event emission counter (CUT-S2 §10.7 п.3), capped at `SUBAGENT_ACTIVITY_MAX_EVENTS` over the WHOLE turn chain — never reset per turn. */
+  /** Per-child-session activity-event emission counter (CUT-S2 §10.7 item 3), capped at `SUBAGENT_ACTIVITY_MAX_EVENTS` over the WHOLE turn chain — never reset per turn. */
   private childActivityEmitted = 0;
-  /** Count of eligible tool_result calls withheld past the activity cap (CUT-S2 §10.7 п.4) — reported on the terminal only when >0. */
+  /** Count of eligible tool_result calls withheld past the activity cap (CUT-S2 §10.7 item 4) — reported on the terminal only when >0. */
   private childActivitySuppressed = 0;
-  /** NEW counter (CUT-S2 §10.7 п.3): count of `turn_end` events over the whole turn chain — the progress report's `turns` field, mirroring inline's local `turnEndCount` (runner.ts). Distinct from `childTurns`, which sums `loop_end.turns`. */
+  /** New counter (CUT-S2 §10.7 item 3): count of `turn_end` events over the whole turn chain — the progress report's `turns` field, mirroring inline's local `turnEndCount` (runner.ts). Distinct from `childTurns`, which sums `loop_end.turns`. */
   private childTurnEndCount = 0;
   /**
    * review F2: model rounds counted via `engine_model_round`
@@ -1963,7 +1963,7 @@ export class Session {
     this.lspUnsubscribe = this.lsp?.onStatusChange?.(() => {
       if (this.uiReady) this.pushLspStatus();
     });
-    // срез 3 §2: live-push background_children on registry change
+    // slice 3 §2: live-push background_children on registry change
     // (a detached child admitted or reaching its terminal), mirroring the LSP
     // subscription immediately above. Absent seam (claude/codex-master boot,
     // or a legacy test) -> no subscription, ui_ready-only pull.
@@ -2750,11 +2750,11 @@ export class Session {
     this.tasksSettledUnsubscribe = undefined;
     this.engineSettingsUnsubscribe?.();
     this.engineSettingsUnsubscribe = undefined;
-    // срез 3 §3: closing this session's tab is a deliberate decision
+    // slice 3 §3: closing this session's tab is a deliberate decision
     // to give up on any detached background child it spawned — nobody
     // remains to receive an eventual report, and an orphaned child process is
     // worse than a lost report. This is now an EXPLICIT registry sweep, not a
-    // side effect of `this.abort.abort()` below: срез 3 disarms a detached
+    // side effect of `this.abort.abort()` below: slice 3 disarms a detached
     // child's abort listener at admit time (child-session-port.ts) precisely
     // so that Stop-cancelling the turn that spawned it no longer cancels the
     // child — shutdown is the one place that still deliberately does.
@@ -2982,7 +2982,7 @@ export class Session {
           // capability. Absent seam (legacy hosts/tests) -> field absent, so
           // the renderer applies no model-level attachment gating.
           ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
-          // срез C: the vision-fallback verdict, same additive-
+          // slice C: the vision-fallback verdict, same additive-
           // optional discipline as imageInput above — absent seam (codex/
           // claude, legacy tests) -> field absent, no fallback-aware gating.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
@@ -3109,7 +3109,7 @@ export class Session {
         this.pushTodoReminderSnapshot();
         for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
         if (this.agentDisplayCards.length) this.outbound.sendDirect({ type: "agent_message_display", cards: this.agentDisplayCards });
-        // срез 2: re-post every still-unacknowledged detached-child
+        // slice 2: re-post every still-unacknowledged detached-child
         // report to the just-(re)attached renderer — covers the race the
         // outer `sendDirect` at delivery time cannot: a renderer that was
         // reloading/disconnected exactly when the report was first sent. See
@@ -3131,7 +3131,7 @@ export class Session {
         this.pushEnvStatus();
         this.pushPendingEngineSettings();
         this.pushClaudeRestartState();
-        // срез 3 §2: always pushed, unconditionally — unlike
+        // slice 3 §2: always pushed, unconditionally — unlike
         // pushTaskList's `supportsTasks` gate (an ENGINE capability), a
         // detached child is a CORE-engine-only feature (spec §5: claude/codex
         // masters have no Agent tool at all) already expressed by the seam's
@@ -3167,14 +3167,14 @@ export class Session {
         // disarms the broker's unattended latch, so a session that went quiet
         // long enough to expire an ask starts asking again once its owner is back.
         //
-        // срезы 2+3 (merged): `message.origin === "system"` marks a
+        // slices 2+3 (merged): `message.origin === "system"` marks a
         // `user_message` the renderer auto-drained from its own prompt queue
         // rather than a human actually typing (today: a detached child's
-        // report, срез 1's `child_report` -> `enqueuePrompt` path). ONE field
+        // report, slice 1's `child_report` -> `enqueuePrompt` path). ONE field
         // carries both meanings the two slices needed independently: how the
-        // block renders in the transcript (срез 2, threaded on to
+        // block renders in the transcript (slice 2, threaded on to
         // `onUserMessage` below) and whether it counts as human presence
-        // (срез 3, the gate here). A background wake-up is NOT proof anyone is
+        // (slice 3, the gate here). A background wake-up is NOT proof anyone is
         // watching the screen, so it must not rearm's unattended
         // latch on an autonomous run nobody is actually attending.
         if (message.origin !== "system") {
@@ -3522,7 +3522,7 @@ export class Session {
         void this.onRewind(message);
         break;
       case "child_report_ack":
-        // срез 2: no reply of its own — the renderer already has
+        // slice 2: no reply of its own — the renderer already has
         // what it needs (the enqueued/deduped item). Undefined seam (child-
         // mode host, legacy test) -> silent no-op, same posture as every
         // other optional seam this switch reads.
@@ -3641,7 +3641,7 @@ export class Session {
       // reflects the switched-to model (upfront re-gate on vision -> non-
       // vision, mirror of the availableEffortLevels re-resolution).
       ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
-      // срез C: same additive-optional discipline as imageInput above.
+      // slice C: same additive-optional discipline as imageInput above.
       ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
       ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
     });
@@ -4024,7 +4024,7 @@ export class Session {
   }
 
   /**
-   * срез 3 §2: mirror of pushTaskList/pushHooksList — a pure read of
+   * slice 3 §2: mirror of pushTaskList/pushHooksList — a pure read of
    * the host's own detached-children registry. Pushed on ui_ready, in
    * response to a background_children_request, on registry change (the
    * `backgroundChildrenUnsubscribe` listener above), and after handling a
@@ -4036,7 +4036,7 @@ export class Session {
   }
 
   /**
-   * срез 3 §2(a): mirror of onTaskKillRequest. `ok:false` covers an
+   * slice 3 §2(a): mirror of onTaskKillRequest. `ok:false` covers an
    * unknown/already-finished childSessionId — not a refusal on the merits,
    * same discipline as task_kill_result's own reason text.
    */
@@ -4202,7 +4202,7 @@ export class Session {
     // Hold busy for the whole rewind (drift-flag-3): concurrent turn-starting /
     // model messages observe busy=true while the store+git spawns run. Since
     // mode messages are no longer in this list (D-S3-4a).
-    // CUT-S2 §10.12.1 (б): rewind is not abort-aware and a
+    // CUT-S2 §10.12.1 (b): rewind is not abort-aware and a
     // destructive two-tree git-restore split in half by shutdown is worse
     // than one shutdown() awaits to completion — routed through
     // `currentTurn`, the session's single wait primitive, via a
@@ -4761,7 +4761,7 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
     }
-    // CUT-S2 §10.10.1 п.5: a completed child is READ-ONLY (§6) —
+    // CUT-S2 §10.10.1 item 5: a completed child is READ-ONLY (§6) —
     // once the terminal has been dispatched there is no live turn chain left
     // for a late message to join. Checked BEFORE the busy gate below because
     // `busy` is already false by the time the terminal has committed (see
@@ -4794,7 +4794,7 @@ export class Session {
   }
 
   /**
-   * срез C (plan §3 gate table): the model-level half of the
+   * slice C (plan §3 gate table): the model-level half of the
    * image-attachment gate — true when the current model can see images
    * itself, OR the vision fallback is available (a recognizer is currently
    * configured for this session). `engine.capabilities.supportsImages` (the
@@ -4928,8 +4928,8 @@ export class Session {
    * direct `onUserMessage` path, the steer-queue drain (`onChildTurnSettled`),
    * and `startProgrammaticTurn` — a child's programmatic initial turn goes
    * through the EXACT same plan-mode-reminder/background-notices machinery a
-   * real user message would (CUT-S2 §2.6.3: "plan-reminder — нужен: mode
-   * может быть plan"), only title derivation is skipped for a child (§5.14 —
+   * real user message would (CUT-S2 §2.6.3: "plan-reminder — needed: mode
+   * may be plan"), only title derivation is skipped for a child (§5.14 —
    * a child never gets a name, on neither its initial turn nor a steer one).
    *
    * Returns whether a turn actually started (§10.11.1 N7): `false` on the
@@ -5090,7 +5090,7 @@ export class Session {
           // boot is supervised by its parent, never supervises anything
           // itself. Absent seam -> no-op, byte-identical turn teardown.
           this.supervisorIdle?.noteTurnSettled(this.lastTurnPublicText ?? "");
-          // срез C (plan §1.3): the ONE pending recognizer-config
+          // slice C (plan §1.3): the ONE pending recognizer-config
           // commit (if any), applied HERE — the exact "busy=false" boundary
           // the plan names, strictly before every teardown await below.
           // Last-value-wins: a push received while this turn ran overwrote
@@ -5291,7 +5291,7 @@ export class Session {
    * §10.12.1/§10.12.3: the drain above only runs while `!this.shuttingDown`
    * — once shutdown has begun, no new turn may start (the engine is already
    * mid-dispose), so this goes straight to `finalizeChildTerminal()`, which
-   * empties the queue in stable posture instead (§10.10.1 O7б). Blocked
+   * empties the queue in stable posture instead (§10.10.1 O7b). Blocked
    * posture retains it and returns `blocked`. `startNextQueuedSteerTurn()`
    * (§10.12.3) is shared with
    * `finalizeChildTerminal`'s own re-check below, so a refusal from
@@ -5336,7 +5336,7 @@ export class Session {
    * the SAME helper the flush-failure path below uses. Shutdown is therefore
    * a SECOND legal path to committing a terminal while the queue was
    * non-empty at some point — symmetric with the flush-failure path
-   * (§10.10.1 O7б): both mean "no more turns will ever run against this
+   * (§10.10.1 O7b): both mean "no more turns will ever run against this
    * child," so both drain honestly instead of leaving messages stranded.
    *
    * §10.12.3: `acceptUserMessage` can itself refuse a queued message
@@ -5393,7 +5393,7 @@ export class Session {
       await this.child.flushHistory();
     } catch (error) {
       if (this.postureBlocked()) { if (this.shuttingDown) this.diagnoseBlockedSteerFrames(); return "blocked"; }
-      // Flush-failure path (§10.10.1 O7б): the durable sink is broken, so
+      // Flush-failure path (§10.10.1 O7b): the durable sink is broken, so
       // running more steer turns against it is pointless — every message
       // parked during the flush is rejected honestly instead of silently
       // lost (the O7 bug), and the error terminal publishes as-is.
@@ -5668,7 +5668,7 @@ export class Session {
 
   /**
    * Resolves a buffered `tool_execution_start` against its paired
-   * `tool_result` into one activity report (CUT-S2 §10.7 п.3, 1:1 with
+   * `tool_result` into one activity report (CUT-S2 §10.7 item 3, 1:1 with
    * `runner.ts:516-529`). Skipped entirely — consuming no cap slot and never
    * incrementing `activitySuppressed` — when there was no matching start
    * (a call that never actually dispatched) or the outcome is
@@ -5696,7 +5696,7 @@ export class Session {
   }
 
   /**
-   * Crosses a progress-report boundary (CUT-S2 §10.7 п.3: `tool_result` and
+   * Crosses a progress-report boundary (CUT-S2 §10.7 item 3: `tool_result` and
    * `turn_end`, mirroring the inline runner's own two `onProgress({kind:
    * "progress",…})` call sites, runner.ts:503/537; additionally
    * `text_delta`/`reasoning_delta`/`tool_execution_start` — streaming and
@@ -5917,7 +5917,7 @@ export class Session {
         ...(carriesWorktreeExitNotice
           ? { systemContext: worktreeExitSystemContext(this.projectRoot) }
           : {}),
-        // срез 2: harmless on the `continueTurn` (text===undefined)
+        // slice 2: harmless on the `continueTurn` (text===undefined)
         // branch below — that path never appends a synthetic user frame at
         // all (its own doc comment), so AgentLoop.continueTurn's forwarded
         // `origin` is simply never read.
@@ -6978,7 +6978,7 @@ export class Session {
   }
 
   /**
-   * Live recognizer-config push from main (срез C, plan §1.3):
+   * Live recognizer-config push from main (slice C, plan §1.3):
    * called by host/index.ts's parentPort handler on every
    * `RecognizerConfigChanged`. Applies immediately while idle; while a turn
    * is running, stashes it as the ONE pending value (overwriting any earlier
@@ -6986,7 +6986,7 @@ export class Session {
    * next busy->idle boundary (this class's own teardown, strictly before any
    * await there). A session with no wiring at all (codex/claude engine
    * boots, and every pre-existing test) is a safe no-op — the plan's
-   * "codex/claude НЕ задеты (замыкание не установлено)".
+   * "codex/claude NOT affected (closure not installed)".
    */
   applyRecognizerConfig(endpoint: RecognizerEndpoint | null): void {
     if (this.applyRecognizerConfigImpl === undefined) {

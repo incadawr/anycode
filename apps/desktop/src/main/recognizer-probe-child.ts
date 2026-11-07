@@ -1,5 +1,5 @@
 /**
- * The Vision panel probe's child entry (срез E2): a plain node
+ * The Vision panel probe's child entry (slice E2): a plain node
  * process (spawned with `ELECTRON_RUN_AS_NODE=1`, see recognizer-probe.ts's
  * module doc) that reads ONE `RecognizerProbeChildInput` from its own stdin,
  * calls `ask()` — the SAME one-shot vision primitive a live host uses

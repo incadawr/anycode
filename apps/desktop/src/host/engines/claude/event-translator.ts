@@ -43,7 +43,7 @@ export interface ClaudeTurnTranslatorOptions {
    */
   onResult?(result: ClaudeResultMessage): void;
   /**
-   * срез S4: looks up (and consumes) the durable subagent-card
+   * slice S4: looks up (and consumes) the durable subagent-card
    * snapshot for one `mcp__anycode__agent` tool_use id, stamped by the MCP
    * bridge's `callTool` handler (host/index.ts) once that child session
    * settled. The MCP `tools/call` response itself carries no room for a card
@@ -197,9 +197,9 @@ export class ClaudeTurnTranslator {
   private readonly openBlocks = new Map<number, OpenBlock>();
   /** Tool calls announced this turn and not yet resulted, keyed by `tool_use_id`. */
   private readonly tools = new Map<string, { toolName: string; input: unknown }>();
-  /** `uuid`s already consumed — dedups the `--replay-user-messages` echo class (CC-B hazard (д)). */
+  /** `uuid`s already consumed — dedups the `--replay-user-messages` echo class (CC-B hazard (e)). */
   private readonly seenUuids = new Set<string>();
-  /** Assistant message ids whose text already streamed as deltas — their final `assistant` text block is then a DUPLICATE, not a fallback (hazard (з)). */
+  /** Assistant message ids whose text already streamed as deltas — their final `assistant` text block is then a DUPLICATE, not a fallback (hazard (h)). */
   private readonly streamedTextMessages = new Set<string>();
   /** Current `message.id` from `message_start`; block ids are `${messageId}:${index}`. */
   private currentMessageId = "claude-message";
@@ -239,7 +239,7 @@ export class ClaudeTurnTranslator {
   /** Feeds one inbound stream frame. Never throws on an unrecognized shape — an unknown subtype is dropped, by design (contract §4 subset semantics). */
   onMessage(message: ClaudeStreamMessage): AgentEvent[] {
     if (this.finished) return [];
-    // Subagent noise (cut §1.4 table + hazard (ж)): a message BELONGING to a
+    // Subagent noise (cut §1.4 table + hazard (g)): a message BELONGING to a
     // subagent is folded away under its parent `Task` tool card. The filter is
     // strictly on the field — the root `Task` tool's own tool_use/tool_result
     // carry `parent_tool_use_id: null` and must survive.
@@ -354,7 +354,7 @@ export class ClaudeTurnTranslator {
       }
       if (block.type === "text") {
         // `--include-partial-messages` delivers this text TWICE: as
-        // `content_block_delta`s and again in this final frame (hazard (з)).
+        // `content_block_delta`s and again in this final frame (hazard (h)).
         // The deltas are the live path; this block is only a fallback for a
         // message that never streamed one.
         if (this.streamedTextMessages.has(messageId)) continue;
@@ -370,7 +370,7 @@ export class ClaudeTurnTranslator {
   }
 
   private onUser(message: ClaudeUserMessage): AgentEvent[] {
-    // Echo class, TWO live sources, one filter (contract §8, hazards (д)/(и)):
+    // Echo class, TWO live sources, one filter (contract §8, hazards (e)/(i)):
     // (1) `--replay-user-messages` returns our own input with `isReplay:true`;
     // (2) a SUCCESSFUL `set_model` emits an unrequested `<local-command-stdout>`
     // user frame — with `isReplay:true` even when the replay flag is OFF.
@@ -396,7 +396,7 @@ export class ClaudeTurnTranslator {
       this.tools.delete(toolUseId);
       const status = toolStatus(block.is_error);
       const modelText = toolResultText(block.content);
-      // срез S4: a snapshot only ever exists for a
+      // slice S4: a snapshot only ever exists for a
       // `mcp__anycode__agent` call (the ONLY caller of `callTool` that ever
       // stamps one) — `takePresentation` returns `undefined` for every other
       // tool_use id, so this spread is a no-op for the other 99% of tool

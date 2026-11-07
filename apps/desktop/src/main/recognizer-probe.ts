@@ -1,5 +1,5 @@
 /**
- * The Vision panel's "Probe" button (срез E2): "does THIS
+ * The Vision panel's "Probe" button (slice E2): "does THIS
  * connection/model pair, resolved the exact way a live run would resolve it,
  * actually answer a vision question?" — answered by spawning a real child
  * process that calls the SAME `ask()` primitive a live host uses
@@ -34,7 +34,7 @@
  * so "try before you save" costs nothing extra in the resolver itself.
  *
  * `toRecognizerEndpoint` below mirrors host/index.ts's own
- * `recognizerEndpointFromFields` (срез C) FIELD FOR FIELD — same
+ * `recognizerEndpointFromFields` (slice C) FIELD FOR FIELD — same
  * transport allow-list, same "anthropic-messages" default for an absent
  * transport, same empty-string-drop for apiKey/providerName. That function is
  * private to host/index.ts (not exported, and host/index.ts is out of this
@@ -96,7 +96,7 @@ export const RECOGNIZER_PROBE_IMAGE_BASE64 =
 // ── candidate resolution (production path, never a second ladder) ──
 
 /**
- * Mirrors host/index.ts's own `RECOGNIZER_TRANSPORT_VALUES` (срез C)
+ * Mirrors host/index.ts's own `RECOGNIZER_TRANSPORT_VALUES` (slice C)
  * verbatim — literal copy, not imported, for the same cross-layer reason
  * every other host/main mirror in this codebase gives (main never imports
  * from `../host/`, host never imports from `../main/`).

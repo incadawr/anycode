@@ -902,7 +902,7 @@
   color: var(--danger);
 }
 
-/* ── срез E2a: Vision panel's on/off state badge, same soft-pill
+/* ── slice E2a: Vision panel's on/off state badge, same soft-pill
    idiom as .settings-secret-status above (neutral at rest, --success once
    the fallback actually resolves — never a hard border, matching the rest of
    this file's status-pill vocabulary) ── */
@@ -935,7 +935,7 @@
   font-style: italic;
 }
 
-/* ── Provider connections grid + tile (W12, cut §"Компактная сетка подключений") ── */
+/* ── Provider connections grid + tile (W12, cut §"Compact connections grid") ── */
 
 .connection-env-banner {
   display: flex;
@@ -973,7 +973,7 @@
   min-width: 0;
 }
 
-/* Responsive fallback to a single column (design §"Компактная сетка": keyboard
+/* Responsive fallback to a single column (design §"Compact grid": keyboard
    nav + a single-column layout on narrow widths). */
 @media (max-width: 30rem) {
   .connection-grid {
@@ -1740,7 +1740,7 @@
   font-size: var(--fs-sm);
 }
 
-/* срез E2a: a successful Vision-panel probe answer is informational,
+/* slice E2a: a successful Vision-panel probe answer is informational,
    not a failure — it must not read in the same danger tint `.settings-notice`
    carries for every other notice in this file. Wraps long model answers. */
 .settings-notice-ok {

@@ -1,5 +1,5 @@
 /**
- * срез 2: `ChildReportQueue` unit tests. A stub `ChildReportOutbound`
+ * slice 2: `ChildReportQueue` unit tests. A stub `ChildReportOutbound`
  * records every `sendDirect` call so delivery attempts (immediate, resend,
  * cap-notice) can be asserted without a real Session/WirePort.
  */
@@ -19,7 +19,7 @@ function stubOutbound(): ChildReportOutbound & { sent: Extract<HostToUiMessage, 
   };
 }
 
-describe("ChildReportQueue (срез 2 §4 point 1)", () => {
+describe("ChildReportQueue (slice 2 §4 item 1)", () => {
   it("add() attempts an immediate best-effort sendDirect", () => {
     const outbound = stubOutbound();
     const queue = new ChildReportQueue(outbound);

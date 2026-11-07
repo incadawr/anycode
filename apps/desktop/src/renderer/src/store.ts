@@ -468,7 +468,7 @@ export type TranscriptBlock =
        * thumbnail shows immediately after send instead of only after a reload.
        */
       images?: readonly ImageAttachment[];
-      /** срез 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
+      /** slice 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
       origin?: "system";
       /** Authenticated agent delivery, distinct from a detached child report. */
       agentMessage?: true;
@@ -644,7 +644,7 @@ export type TranscriptBlock =
    * the model's own remaining list. Kept minimal on purpose: the interactive
    * continuation affordance (a button that lets a human overrule a refusal)
    * is cut-2; cut-1 only needs the grant to be VISIBLE in the feed, never
-   * silent ("Видимость"). The optional `nextAction` rides along only
+   * silent ("Visibility"). The optional `nextAction` rides along only
    * so the cut-2 UI does not need a wire change to show it.
    */
   | {
@@ -1016,7 +1016,7 @@ export interface QueuedPrompt {
   text: string;
   images: readonly QueuedPromptImage[];
   /**
-   * срез 2: presence marks this item as a detached child's terminal
+   * slice 2: presence marks this item as a detached child's terminal
    * report (a SYSTEM-origin queue item), not an ordinary human-typed prompt —
    * absent for every other enqueue call site (Composer, App.tsx's retry
    * offer, automation.ts). Drives two things: `takeQueueHead`'s pause-bypass
@@ -1381,7 +1381,7 @@ export interface DesktopState {
    */
   imageInput: boolean | undefined;
   /**
-   * срез D: whether a recognizer connect is configured, so images can
+   * slice D: whether a recognizer connect is configured, so images can
    * still be attached to a model that cannot see them — the host runs them
    * through the `InspectImage` fallback instead of the model's own vision.
    * `undefined` means the host never sent the field (a legacy host); the
@@ -1664,7 +1664,7 @@ export interface DesktopState {
   setNotice(notice: Notice | null): void;
   /**
    * Appends the local user's message to the transcript (the wire never echoes
-   * user input back, §3). `origin` (срез 2) is `"system"` only when
+   * user input back, §3). `origin` (slice 2) is `"system"` only when
    * this append is draining a queued detached-child report — see
    * `QueuedPrompt.origin`; absent for every ordinary human-typed send.
    * `images` carries the sent attachments onto the
@@ -2114,7 +2114,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         id: `${item.id}:0`,
         text,
         ...(message.images?.length ? { images: message.images } : {}),
-        // срез 2: reload-path parity with the live append (store.ts's
+        // slice 2: reload-path parity with the live append (store.ts's
         // appendUserText) — a persisted `HistoryItem.origin` rehydrates into
         // the SAME system-card view, not the ordinary user bubble.
         ...(item.origin !== undefined ? { origin: item.origin } : {}),
@@ -4407,7 +4407,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     queuePaused: true,
                     // the held-queue banner must name the REAL
                     // reason ("turn limit" vs "cancelled/failed")
-                    // «Работа» §2's honest-held option.
+                    // the "Work" section's honest-held option.
                     queuePauseReason:
                       event.reason === "max_turns" ? "max_turns" : event.reason === "error" ? "error" : "cancelled",
                   }
@@ -5248,7 +5248,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               // wire). Absent on the message -> undefined here -> no
               // model-level gating (today's behavior for a legacy host).
               imageInput: message.imageInput,
-              // срез D: the recognizer verdict rides the same hello.
+              // slice D: the recognizer verdict rides the same hello.
               // Absent -> undefined -> attachment gating falls back to
               // `imageInput` alone.
               imageFallback: message.imageFallback,
@@ -5346,7 +5346,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               // switchModel advances the closure). Absent -> undefined -> no
               // gating, matching host_ready's fallback above.
               imageInput: message.imageInput,
-              // срез D: a model switch re-reads the recognizer verdict
+              // slice D: a model switch re-reads the recognizer verdict
               // too — the fallback is what keeps attachments legal when the new
               // model is blind.
               imageFallback: message.imageFallback,
@@ -6238,7 +6238,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           case "child_report": {
-            // срез 1/2: enqueues the detached child's report through
+            // slice 1/2: enqueues the detached child's report through
             // the SAME P7.14 queue a typed-ahead prompt uses (enqueuePrompt
             // below) — tab-registry's `maybeDrain` fires synchronously on
             // this set() and dispatches it right away (idle, or paused with
@@ -6247,8 +6247,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // turn-start machinery. `images: []`: the notification text is
             // the WHOLE payload, never an attachment carrier.
             //
-            // Dedup by `message.id` (спец §4 point 1: "рендерер дедуплицирует
-            // по нему при постановке в очередь"): the host's pending-report
+            // Dedup by `message.id` (spec §4 point 1: "the renderer dedups
+            // by it when enqueuing"): the host's pending-report
             // queue re-`sendDirect`s an unacknowledged report on every
             // `ui_ready`, so the SAME report can legitimately arrive twice
             // before this renderer's own ack (tab-registry.ts) reaches the
@@ -6397,7 +6397,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             return;
           case "image_fallback_changed":
-            // срез D: fires after the host has COMMITTED a recognizer
+            // slice D: fires after the host has COMMITTED a recognizer
             // config change, so the composer re-gates attachments without a
             // model switch or a host restart.
             set({ imageFallback: message.imageFallback });
@@ -6859,7 +6859,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         if (queueInFlight !== null || promptQueue.length === 0) {
           return null;
         }
-        // срез 2 (spec §4 point 2): `queuePaused` exists to hold
+        // slice 2 (spec §4 point 2): `queuePaused` exists to hold
         // HUMAN-typed prompts after a turn ended anomalously ("don't send
         // silently after an anomaly") — a detached child's system report is
         // not that; it must still leave the queue. While paused, only the

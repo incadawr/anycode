@@ -553,14 +553,14 @@ describe("I1 validity — every reducer returns a valid view on any valid input 
 
 // F12 (review wave R): the self-heal-bounce mechanic this module's `onChildGone`/
 // `childGone` implemented was RATIFIED-SUPERSEDED by CUT-S2 §10.8.1 point 3
-// ("Self-heal-bounce C3 ... заменяется этой веткой" — replaced by the C4
+// ("Self-heal-bounce C3 ... is replaced by this branch" — replaced by the C4
 // read-only branch: a shown child going non-live now stays shown, read-only,
 // instead of bouncing the pane back to master). Nothing in App.tsx/
 // ToolCallCard.tsx/tab-registry.ts ever called either symbol (verified by
 // repo-wide grep) — this is dead code whose own docstring claimed a live
 // "App.tsx's self-heal effect" wiring that was never built, because the
 // design that would have required it was retracted. Per the track's law
-// ("либо код зовётся, либо функция и докстринг уходят"), the code goes.
+// ("either the code is called, or the function and its docstring go"), the code goes.
 describe("F12: the retracted self-heal-bounce mechanic is fully removed, not left dead", () => {
   it("does not export onChildGone", async () => {
     const mod: Record<string, unknown> = await import("./child-layout.js");

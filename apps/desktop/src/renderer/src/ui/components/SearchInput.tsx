@@ -12,7 +12,7 @@ export interface SearchInputProps extends Omit<InputHTMLAttributes<HTMLInputElem
 }
 
 /**
- * SearchInput. Иконка поиска слева, кнопка очистки справа (хит-область 24px).
+ * SearchInput. Search icon on the left, clear button on the right (hit area 24px).
  */
 export function SearchInput({
   value,

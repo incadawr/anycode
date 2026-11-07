@@ -7,22 +7,22 @@ export type ButtonSize = "sm" | "md" | "lg";
 export interface ButtonProps extends Omit<ComponentPropsWithRef<"button">, "disabled"> {
   variant?: ButtonVariant;
   size?: ButtonSize;
-  /** Показывает спиннер, aria-busy=true; ширина кнопки сохраняется. */
+  /** Shows a spinner, aria-busy=true; the button width is preserved. */
   loading?: boolean;
   disabled?: boolean;
-  /** Иконка слева от подписи (aria-hidden). */
+  /** Icon to the left of the label (aria-hidden). */
   icon?: ReactNode;
-  /** Иконка слева от подписи (aria-hidden). Основное имя; `icon` — устаревший синоним. */
+  /** Icon to the left of the label (aria-hidden). Primary name; `icon` is a deprecated alias. */
   leadingIcon?: ReactNode;
   children?: ReactNode;
 }
 
 /**
- * Button. Варианты: primary | secondary | ghost | danger.
- * Размеры: sm | md | lg.
- * disabled → opacity .45, форма не меняется.
- * loading → aria-busy="true", текст заменяется спиннером (дублируется текстом для скринридера).
- * `type` по умолчанию — "button" (кнопка не отправляет форму по случайности).
+ * Button. Variants: primary | secondary | ghost | danger.
+ * Sizes: sm | md | lg.
+ * disabled → opacity .45, shape stays the same.
+ * loading → aria-busy="true", the text is replaced by a spinner (duplicated as text for screen readers).
+ * `type` defaults to "button" (so the button does not submit a form by accident).
  */
 export function Button({
   variant = "secondary",

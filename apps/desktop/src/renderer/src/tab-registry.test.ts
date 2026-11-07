@@ -119,7 +119,7 @@ const HOST_READY = (workspace: string, sessionId: string): Extract<HostToUiMessa
  * A non-core (Codex-shaped) `host_ready` —effort/images dispatch-
  * gate fixtures need `engine.model.effort` (the boot model's resolved
  * effort, compared against a pending pick), `imageInput` (the boot model's
- * live vision verdict), and (срез D) `imageFallback` (a configured
+ * live vision verdict), and (slice D) `imageFallback` (a configured
  * recognizer fallback, which re-opens the same gate for a blind model) —
  * none of which the plain `HOST_READY` fixture above carries (legacy core
  * wire).
@@ -1526,7 +1526,7 @@ describe("tab-registry — queueInitialPrompt images", () => {
     expect(findBlock(transcript, "user_text")).toBeUndefined();
   });
 
-  it("срез D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
+  it("slice D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1571,12 +1571,12 @@ describe("tab-registry — queueInitialPrompt images", () => {
     });
   });
 
-  // срез D: mirrors the boot-time test above, but through the
+  // slice D: mirrors the boot-time test above, but through the
   // already-ready shortcut, which reads the tab's LIVE store field
   // (`state.imageFallback`) rather than the host_ready message directly —
   // depends on store.ts carrying the `imageFallback` slot off `host_ready`
-  // (срез D's store.ts half, gated separately).
-  it("срез D: already-ready shortcut honors a configured recognizer fallback off the tab's LIVE state too", () => {
+  // (slice D's store.ts half, gated separately).
+  it("slice D: already-ready shortcut honors a configured recognizer fallback off the tab's LIVE state too", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -2051,7 +2051,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(userMessages(port).map((m) => m.text)).toEqual(["now"]);
   });
 
-  // срез 1: a detached child's terminal report reaches the renderer
+  // slice 1: a detached child's terminal report reaches the renderer
   // as a `child_report` HostToUiMessage (store.ts's applyHostMessage calls
   // enqueuePrompt for it) — proving end-to-end that an idle parent's own
   // EXISTING queue-drainer opens a brand-new turn for it, with no bespoke
@@ -2063,7 +2063,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     );
   }
 
-  it("a child_report on an IDLE parent is enqueued and drained immediately as a NEW user_message (срез 1: doставка when the parent is free)", () => {
+  it("a child_report on an IDLE parent is enqueued and drained immediately as a NEW user_message (slice 1: delivery when the parent is free)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -2075,12 +2075,12 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     const messages = userMessages(port);
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toBe("<task-notification>...</task-notification>");
-    // срез 2: the wire user_message this drain sent carries the
+    // slice 2: the wire user_message this drain sent carries the
     // system origin — host stamps the persisted HistoryItem with it.
     expect((messages[0] as { origin?: string }).origin).toBe("system");
   });
 
-  it("acks a child_report the instant it is enqueued/deduped — BEFORE the queue actually drains it onto the wire (срез 2 §4 point 1)", () => {
+  it("acks a child_report the instant it is enqueued/deduped — BEFORE the queue actually drains it onto the wire (slice 2 §4 point 1)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -2109,7 +2109,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(userMessages(port).map((m) => m.text)).toEqual(["report while busy"]);
   });
 
-  it("a child_report delivered while queuePaused is true (a PRIOR turn ended anomalously) still drains — the pause is for human-typed prompts, not a background report (срез 2 §4 point 2)", () => {
+  it("a child_report delivered while queuePaused is true (a PRIOR turn ended anomalously) still drains — the pause is for human-typed prompts, not a background report (slice 2 §4 point 2)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();

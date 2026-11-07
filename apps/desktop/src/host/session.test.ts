@@ -1625,7 +1625,7 @@ describe("Session — core steer_message injection", () => {
   });
 });
 
-describe("Session — vision fallback (срез C)", () => {
+describe("Session — vision fallback (slice C)", () => {
   const image: ImageAttachment = { mediaType: "image/png", data: "QUJD", sourcePath: "shot.png" };
 
   it("accepts an image turn on a blind model when the recognizer fallback is available", async () => {
@@ -2134,7 +2134,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     onWorkspaceTransition?: SessionOptions["onWorkspaceTransition"];
     /** an explicit store so a test can assert what a remembered allow appended to it. */
     rules?: SessionPermissionRules;
-    /** срез 3: see SessionOptions.backgroundChildren's own doc. */
+    /** slice 3: see SessionOptions.backgroundChildren's own doc. */
     backgroundChildren?: SessionOptions["backgroundChildren"];
   }): { port: FakeWirePort; session: Session; broker: IpcPermissionBroker } {
     const outbound = new Outbound();
@@ -2225,12 +2225,12 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   });
 
   /**
-   * срезы 2+3 (§4bis п.2/§4ter): a `user_message` normally proves a
+   * slices 2+3 (§4bis item 2/§4ter): a `user_message` normally proves a
    * human is at the keyboard and disarms the unattended latch
    * (route()'s `case "user_message"`). `origin:"system"` — set on a
    * background child's report auto-drained through the renderer's own prompt
-   * queue (срез 1) — must NOT count: it is a system-originated
-   * wake-up, not evidence anyone is watching. The same field срез 2 uses to
+   * queue (slice 1) — must NOT count: it is a system-originated
+   * wake-up, not evidence anyone is watching. The same field slice 2 uses to
    * pick the transcript's system-card rendering is the one read here; the two
    * slices' independent additions were merged onto it.
    */
@@ -2307,14 +2307,14 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   });
 
   /**
-   * срез 3 §2/§3: the `backgroundChildren` seam wiring — a pure host
+   * slice 3 §2/§3: the `backgroundChildren` seam wiring — a pure host
    * unit-test surface, deliberately NOT exercised through a real
    * ChildSessionPort (that registry logic is child-session-port.test.ts's
    * job); here a fake seam proves session.ts's OWN plumbing: ui_ready push,
    * on-demand pull, cancel request/ack, live-push-on-change, and the explicit
    * shutdown sweep (§3).
    */
-  describe("backgroundChildren seam (срез 3 §2/§3)", () => {
+  describe("backgroundChildren seam (slice 3 §2/§3)", () => {
     function fakeBackgroundChildren(initial: WireBackgroundChild[] = []) {
       let children = initial;
       let changeListener: (() => void) | undefined;
@@ -2460,7 +2460,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       expect(backgroundChildrenMessages(port)).toHaveLength(1);
     });
 
-    it("срез 3 §3: session shutdown explicitly calls seam.cancelAll (not a side effect of aborting the turn)", async () => {
+    it("slice 3 §3: session shutdown explicitly calls seam.cancelAll (not a side effect of aborting the turn)", async () => {
       const { seam } = fakeBackgroundChildren([CHILD_A]);
       const { session } = buildTestSession({ backgroundChildren: seam });
 
@@ -4302,7 +4302,7 @@ interface ChildHarness {
  * mirrors `createHarness`'s own construction closely enough that every
  * existing predicate/step-builder helper in this file works unchanged.
  *
- * `now` (CUT-S2 §10.7 п.3 DI clock) defaults to a strictly-increasing fake
+ * `now` (CUT-S2 §10.7 item 3 DI clock) defaults to a strictly-increasing fake
  * clock (2000ms apart per call) rather than `Date.now` — every progress
  * boundary in a test that doesn't care about the throttle is then always
  * >=1000ms after the last, so it always emits; this keeps the throttle
@@ -5213,7 +5213,7 @@ describe("Session — child mode: finalizeChildTerminal once-latch (F7, revised 
   // flushHistory) to immediately before the `onTerminal` call (after the
   // post-flush queue re-check) — required so a settle that finds the queue
   // non-empty can drain into a new turn instead of committing, and so the
-  // NEXT settle re-runs flushHistory from scratch (§10.10.1 п.4а). This
+  // NEXT settle re-runs flushHistory from scratch (§10.10.1 item 4a). This
   // retires the old defense against two CONCURRENT direct calls racing
   // through flushHistory together (the shape F7's window used to produce) —
   // §10.10.1 argues that race no longer exists by construction once `busy`
@@ -5315,7 +5315,7 @@ describe("Session — child mode: teardown contract (CUT-S2 §10.10.1)", () => {
       expect(h.onTerminal).not.toHaveBeenCalled();
 
       releaseFirstFlush();
-      // Discriminator: without the post-flush re-check (§10.10.1 п.4а),
+      // Discriminator: without the post-flush re-check (§10.10.1 item 4a),
       // this steer is never started — turn_started never reaches 2, and
       // whatever terminal a facade eventually publishes reports only turn
       // 1's counters, silently dropping the queued message (the literal O7
@@ -5324,7 +5324,7 @@ describe("Session — child mode: teardown contract (CUT-S2 §10.10.1)", () => {
       await h.waitUntil(() => h.onTerminal.mock.calls.length > 0, 2_000);
 
       // flushHistory ran again for the drained turn's own settle — cheap and
-      // idempotent, exactly as §10.10.1 п.4а specifies.
+      // idempotent, exactly as §10.10.1 item 4a specifies.
       expect(h.flushHistory).toHaveBeenCalledTimes(2);
       expect(h.onTerminal).toHaveBeenCalledTimes(1);
       const report = h.onTerminal.mock.calls[0]?.[0];
@@ -6332,7 +6332,7 @@ const isActivityReport = (r: ChildProgressReport): r is ActivityReport => r.kind
 const isProgressReport = (r: ChildProgressReport): r is ProgressReport => r.kind === "progress";
 
 describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.7)", () => {
-  describe("activity: 1:1 with the inline eligibility rule (§10.7 п.6a.1)", () => {
+  describe("activity: 1:1 with the inline eligibility rule (§10.7 item 6a.1)", () => {
     it("a tool_execution_start+tool_result pair produces exactly one activity report, via summarizeChildToolCall", async () => {
       const h = createChildHarness({ steps: [toolStep("w1", "Write", WRITE_INPUT), finishStep()] });
       try {
@@ -6388,7 +6388,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
     });
   });
 
-  describe("activity cap: SUBAGENT_ACTIVITY_MAX_EVENTS is a whole-session total, not per-turn (§10.7 п.6a.2)", () => {
+  describe("activity cap: SUBAGENT_ACTIVITY_MAX_EVENTS is a whole-session total, not per-turn (§10.7 item 6a.2)", () => {
     it(
       "caps activity at SUBAGENT_ACTIVITY_MAX_EVENTS across the WHOLE turn chain (initial turn + a later steer turn) and reports the honest suppressed count on the terminal",
       async () => {
@@ -6806,7 +6806,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
     });
   });
 
-  describe("progress counters (§10.7 п.6a.4)", () => {
+  describe("progress counters (§10.7 item 6a.4)", () => {
     it("`turns` is the turn_end COUNT across the whole chain (mirrors runner.ts's turnEndCount — NOT the loop_end-summed childTurns); a steer turn keeps counting; `lastTool` updates on an invalid_input result too", async () => {
       const h = createChildHarness({
         steps: [
@@ -6850,7 +6850,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
     });
   });
 
-  describe("ordering: onTerminal is always LAST (§10.7 п.6a.5)", () => {
+  describe("ordering: onTerminal is always LAST (§10.7 item 6a.5)", () => {
     it("no onProgress call is ever observed after onTerminal", async () => {
       const h = createChildHarness({ steps: [toolStep("w1", "Write", WRITE_INPUT), finishStep()] });
       try {
@@ -6872,7 +6872,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
     });
   });
 
-  describe("wire contract: every report round-trips through the REAL parseChildProgress (§10.7 п.6a.6)", () => {
+  describe("wire contract: every report round-trips through the REAL parseChildProgress (§10.7 item 6a.6)", () => {
     it("every report handed to onProgress, wrapped as {type: CHILD_PROGRESS_TYPE, ...report}, parses non-null — the producer and the frozen parser can never silently diverge", async () => {
       const h = createChildHarness({ steps: [toolStep("w1", "Write", WRITE_INPUT), finishStep()] });
       try {
@@ -7049,11 +7049,11 @@ describe("tapChildPermissions (CUT-S2 §0.8/§2.6.3)", () => {
   });
 });
 
-// срез 2: the host-side pending-detached-child-report queue seam
+// slice 2: the host-side pending-detached-child-report queue seam
 // (SessionOptions.pendingChildReports) — resendAll on ui_ready, ack on
 // child_report_ack, and the origin plumbing from a wire user_message through
 // to the appended/persisted HistoryItem.
-describe("Session — срез 2: pendingChildReports seam + origin plumbing", () => {
+describe("Session — slice 2: pendingChildReports seam + origin plumbing", () => {
   const isSessionHistory = (m: HostToUiMessage): m is Of<"session_history"> => m.type === "session_history";
   const isLoopEnd = agentEventOf("loop_end");
 

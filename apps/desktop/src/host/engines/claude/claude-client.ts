@@ -74,7 +74,7 @@ export interface ClaudeSpawnArgsOptions {
    * Omitted entirely (no `--permission-mode` in argv) when undefined. That is
    * the RESUME posture: a resumed native session carries its own surviving
    * `permissionMode` (probe #4), and passing ours would overwrite it before
-   * the first `system/init` can report it (cut §1.5 hazard (б)).
+   * the first `system/init` can report it (hazard (b)).
    */
   permissionModeFlag?: PermissionModeFlag;
   model?: string;
@@ -383,8 +383,8 @@ export function redactHomePaths<T>(value: T, homeDir: string): T {
 // main/claude-binary.ts's reader (same rationale, third occurrence): a
 // host->main import is architecturally forbidden, so each layer re-implements
 // the filesystem read over the SAME engine-agnostic shared/codex-binary-trust.ts
-// policy (cut §1.2: "политика движко-агностична; переименование = запрещённый
-// рефакторинг общего файла").
+// policy ("the policy is engine-agnostic; renaming = a forbidden
+// refactor of a shared file").
 
 function toPathStat(
   path: string,
@@ -512,7 +512,7 @@ export interface ClaudeClientOptions {
    * Handler for CLI->host control_request subtypes (`can_use_tool`,
    * `hook_callback`, `mcp_message`). Absent (or a handler that never settles)
    * means fail-closed: the cut's CC-B scope is transport-only, no approvals UI
-   * (§1.3 "router отвечает fail-closed заглушкой") — CC-C wires a real handler.
+   * ("the router answers with a fail-closed stub") — CC-C wires a real handler.
    */
   onControlRequest?: (request: InboundControlRequest, respond: ControlRequestResponder) => void | Promise<void>;
   spawnImpl?: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
@@ -707,7 +707,7 @@ export class ClaudeClient {
         // An explicit flag always wins. Without one, a FRESH spawn falls back to
         // the fail-closed `manual` (= wire `default`, the Ask preset), while a
         // RESUME sends no `--permission-mode` at all so the native session's own
-        // surviving posture stands (cut §1.5 hazard (б)).
+        // surviving posture stands (hazard (b)).
         ...(this.options.permissionModeFlag !== undefined
           ? { permissionModeFlag: this.options.permissionModeFlag }
           : this.options.resume !== undefined

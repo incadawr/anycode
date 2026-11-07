@@ -959,7 +959,7 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
 });
 
 /**
- * stage 4 («Этап 4»): preview windows open
+ * stage 4 : preview windows open
  * always-on-top, and `wrapWebContents` maps the live-reload `reload()` onto
  * the real webContents. The frozen security webPreferences/partition stay
  * byte-identical (pinned again here — an alwaysOnTop addition must not

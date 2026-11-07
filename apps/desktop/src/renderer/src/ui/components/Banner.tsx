@@ -3,31 +3,31 @@ import { IconButton } from "./IconButton.js";
 import { IconClose, IconDanger, IconInfo, IconSuccess, IconWarning } from "./icons.js";
 
 /**
- * Тон баннера.
+ * Banner tone.
  *
- * Канонические тона (S3, волна W3): `info` | `success` | `warning` | `danger`.
- * Исторические `warn` | `bad` сохранены как синонимы (`warn`→`warning`,
- * `bad`→`danger`), чтобы существующий код и тесты не ломались.
+ * Canonical tones (S3, wave W3): `info` | `success` | `warning` | `danger`.
+ * Legacy `warn` | `bad` are kept as aliases (`warn`→`warning`,
+ * `bad`→`danger`), so existing code and tests keep working.
  */
 export type BannerTone = "info" | "success" | "warning" | "danger" | "warn" | "bad";
 
 export interface BannerProps {
-  /** Тон: цвет + значок + текст; `role` выводится из тона. */
+  /** Tone: color + icon + text; `role` is derived from the tone. */
   tone?: BannerTone;
-  /** Текст сообщения. */
+  /** Message text. */
   children: ReactNode;
-  /** Заголовок отдельной строкой. */
+  /** Title on a separate line. */
   title?: string;
-  /** Дополнительное действие справа. */
+  /** Extra action on the right. */
   action?: ReactNode;
-  /** Показать кнопку закрытия; `onDismiss` обязателен вместе с `closable`. */
+  /** Show the close button; `onDismiss` is required together with `closable`. */
   closable?: boolean;
-  /** Обработчик закрытия. */
+  /** Close handler. */
   onDismiss?: () => void;
   className?: string;
 }
 
-/** Канонический тон для каждого имени. */
+/** Canonical tone for each name. */
 const TONE: Record<BannerTone, "info" | "success" | "warning" | "danger"> = {
   info: "info",
   success: "success",
@@ -45,10 +45,10 @@ const TONE_ICON: Record<"info" | "success" | "warning" | "danger", ReactNode> = 
 };
 
 /**
- * Banner — встроенное сообщение полосой. Тон = цвет + значок + текст.
+ * Banner — an inline message bar. Tone = color + icon + text.
  *
- * Роль выводится из тона: `danger` — `role="alert"` (assertive),
- * остальные тона — `role="status"` (polite). Опционально закрываемый.
+ * The role is derived from the tone: `danger` — `role="alert"` (assertive),
+ * other tones — `role="status"` (polite). Optionally dismissible.
  */
 export function Banner({
   tone = "info",

@@ -1,19 +1,19 @@
 /**
- * Agent MCP-bridge core logic (срез S1, план §3.1-3.4, факт F9).
+ * Agent MCP-bridge core logic (slice S1, plan §3.1-3.4, fact F9).
  *
  * Pulls the request-building and outcome-projection logic OUT of
  * tools/agent.ts so both consumers run through the exact same code: the
  * native Agent tool's session tier (tools/agent.ts's runSessionTier) and the
  * in-process MCP server the desktop host exposes to a claude-CLI child over
- * its control channel (host/engines/claude/mcp-bridge.ts, срез S3+). A
+ * its control channel (host/engines/claude/mcp-bridge.ts, slice S3+). A
  * request built here is byte-identical regardless of which door it came
  * through, and the text a model reads back is the SAME string either way —
  * `outcomeToResult`/`formatResultForModel`/`mapProgressToEvent` below are
  * re-exported from tools/agent.ts rather than duplicated (§3.4).
  *
  * Deliberately import-free of the ai-SDK, Node's runtime APIs and the MCP SDK
- * (§3.4: "Ни SDK, ни Node") — this is a pure logic module the host's
- * transport glue (mcp/in-process-server.ts срез S2, mcp-bridge.ts срез S3)
+ * (§3.4: "neither SDK nor Node") — this is a pure logic module the host's
+ * transport glue (mcp/in-process-server.ts slice S2, mcp-bridge.ts slice S3)
  * wraps, never the other way around.
  */
 
@@ -195,7 +195,7 @@ export interface BuildSessionSubagentRequestParams {
 
 /**
  * Builds ONE SessionSubagentRequest (§3.2), extracted byte-for-byte out of
- * the pre-S1 body of tools/agent.ts's runSessionTier (срез S1):
+ * the pre-S1 body of tools/agent.ts's runSessionTier (slice S1):
  * An explicit provider is forwarded without resolving it; main validates the
  * selected connection and model. Each caller adds its own detach policy.
  */
@@ -279,7 +279,7 @@ export function outcomeToResult(
       ...presentation,
     };
   }
-  // marker (а): the child's own degeneration guard (agent-loop.ts)
+  // marker (a): the child's own degeneration guard (agent-loop.ts)
   // cut its FINAL turn — never the provider, never a budget exhaustion.
   // Repeats the ladder's own precedent (a guard stopped the run => the
   // parent gets a non-success, never a silently-accepted partial): ok:false
@@ -288,9 +288,9 @@ export function outcomeToResult(
   // for one guard is not worth it when the dispatcher's own fallback
   // (`errorKind ?? "error"`, types/tools.ts) already gives the right external
   // status. This is checked AFTER max_turns/cancelled and BEFORE the ok:true
-  // return below, and returns immediately — formatResultForModel's (б)/(в)
+  // return below, and returns immediately — formatResultForModel's (b)/(c)
   // prefixing never runs on an ok:false result (it returns `result.error`
-  // verbatim), so marker (в)'s fact is folded in HERE when it also applies.
+  // verbatim), so marker (c)'s fact is folded in HERE when it also applies.
   //
   // Internally SubagentOutcome.status stays "completed" (loop_end said so —
   // the loop reached its sentinel cleanly); the mismatch between an internal
@@ -307,7 +307,7 @@ export function outcomeToResult(
     // lands entirely in the DISCARDED tail and `partial` is nothing but
     // ordinary head text. An unconditional "ends inside a degenerate loop"
     // claim would then be false for what is actually delivered, so the
-    // claim is hedged (and the byte cap named, same number as marker (в))
+    // claim is hedged (and the byte cap named, same number as marker (c))
     // whenever `truncated` is also set.
     const tailClaim = outcome.truncated
       ? `The subagent's own ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap ALSO trimmed this text before it reached ` +
@@ -339,7 +339,7 @@ export function outcomeToResult(
  * AgentOutput's fields. Explicit rather than `{ ...outcome }`: a
  * SessionSubagentOutcome carries three extra id fields (childSessionId/
  * parentSessionId/spawnToolCallId) that belong on the presentation card's
- * `target` (CUT-S2 §2.1: "core их только копирует в target"), not on the
+ * `target` (CUT-S2 §2.1: "core only copies them into target"), not on the
  * model-visible tool output — EXCEPT childSessionId, which now
  * also rides the output itself so formatResultForModel's follow-up note
  * never depends on a presentation card existing. The authoritative comment
@@ -371,11 +371,11 @@ function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
 }
 
 /**
- * markers (б)/(в) — applied here, never in output.finalText, so the
+ * markers (b)/(c) — applied here, never in output.finalText, so the
  * presentation card and history persistence (which read finalText/output
  * directly) keep the raw text; only what the model itself reads is prefixed.
  * Both can be true on the same outcome at once (the incident was:
- * 131,072 tokens generated, 99,999 bytes delivered) — order is fixed (б)→(в)
+ * 131,072 tokens generated, 99,999 bytes delivered) — order is fixed (b)→(c)
  * so the model reads "the provider cut it" before "and then we cut it more".
  */
 export function formatResultForModel(result: ToolResult<AgentOutput>): string {
@@ -383,7 +383,7 @@ export function formatResultForModel(result: ToolResult<AgentOutput>): string {
     return result.error ?? "Agent: the subagent failed.";
   }
   let prefix = "";
-  // (б): the PROVIDER's own output-token ceiling ended the turn, not this
+  // (b): the PROVIDER's own output-token ceiling ended the turn, not this
   // tool's byte cap — ok:true because the loop itself completed honestly
   // (unlike the guard cutoff in outcomeToResult above, which never reaches
   // here). Owner's measured false-positive rate for this marker: 1 in 902
@@ -393,8 +393,8 @@ export function formatResultForModel(result: ToolResult<AgentOutput>): string {
       "[TRUNCATED SUBAGENT RESULT — the final turn hit the model's output-token ceiling; " +
       "the report below is cut mid-stream and its tail is missing.]\n\n";
   }
-  // (в): this tool's OWN result-byte cap (util/bytes.ts's capUtf8Bytes, spent
-  // in runner.ts) — a distinct truncation from (б) and can follow it.
+  // (c): this tool's OWN result-byte cap (util/bytes.ts's capUtf8Bytes, spent
+  // in runner.ts) — a distinct truncation from (b) and can follow it.
   if (result.output?.truncated === true) {
     prefix += `[TRUNCATED SUBAGENT RESULT — the report exceeded the ${SUBAGENT_OUTPUT_MAX_BYTES}-byte result cap; its tail was dropped.]\n\n`;
   }
@@ -533,7 +533,7 @@ export interface AgentBridgeCallInput {
 }
 
 /**
- * Decodes an MCP `tools/call` request's raw `arguments` object (срез
+ * Decodes an MCP `tools/call` request's raw `arguments` object (slice
  * S4) into `AgentBridgeCallInput`. The wire shape is untyped JSON the CLI
  * builds from the tool's own `inputSchema` (`buildAgentBridgeToolDecl` above)
  * — that schema is advertised, never enforced on THIS side, so a peer that

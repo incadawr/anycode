@@ -104,7 +104,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     // red for the two drifts that matter: a type added to the pin that
     // production does not accept (traffic the client would terminalize on), and
     // a type production accepts that the pin never evidenced (an INVENTED
-    // vocabulary — cut invariant §0.2-5, "не выдумывать wire").
+    // vocabulary — cut invariant §0.2-5, "do not invent wire").
     const pinnedStreamTypes = pinned.messageTypes.live.filter((type) => !CONTROL_ENVELOPE_TYPES.has(type));
     expect(pinnedStreamTypes.length).toBeGreaterThan(0);
 

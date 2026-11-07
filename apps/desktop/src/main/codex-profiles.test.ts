@@ -342,7 +342,7 @@ describe("assertCodexProfileHome (idempotent pre-spawn re-assert, amended §A2 +
   });
 });
 
-describe("repairCodexAuthLink (explicit 'Пересоздать связь' — an IPC action, never automatic)", () => {
+describe("repairCodexAuthLink (explicit 'Recreate link' — an IPC action, never automatic)", () => {
   it("replaces a detached regular file with the symlink, leaving the TARGET untouched", () => {
     const home = freshHome();
     const target = join(home, "fake-auth-target.json");

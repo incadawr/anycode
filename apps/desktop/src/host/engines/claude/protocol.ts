@@ -226,7 +226,7 @@ export type ClaudeStreamMessage =
  * The stream-message vocabulary PRODUCTION accepts. Exported so the drift gate
  * can read it rather than restating it: a hardcoded list in the test cannot go
  * red when production starts accepting a type the pin has no live evidence for
- * (cut invariant §0.2-5 — "не выдумывать wire").
+ * (cut invariant §0.2-5 — "do not invent the wire").
  */
 export const CLAUDE_STREAM_MESSAGE_TYPES = [
   "system",
@@ -251,7 +251,7 @@ export function isClaudeStreamMessageType(type: string): boolean {
  *
  * `tool_progress` — a heartbeat the CLI emits every ~30s while a tool call
  * (observed: an MCP call) is in flight, live evidence in
- * ("Блокер, которого в плане нет").
+ * ("A blocker not in the plan").
  * Before this list existed, this exact frame fell through claude-client.ts's
  * dispatch() to the unrecognized-type branch and terminalized the session
  * thirty seconds into the first long MCP call.

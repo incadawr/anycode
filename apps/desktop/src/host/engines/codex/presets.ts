@@ -65,7 +65,7 @@ export interface CodexPermissionPresetDefinition {
   id: string;
   label: string;
   description: string;
-  /** Sent verbatim on `thread/start` (initial policy, cut §2(d) "Применение"). */
+  /** Sent verbatim on `thread/start` (initial policy, cut §2(d) "Application"). */
   threadParams: { approvalPolicy: CodexApprovalPolicy; approvalsReviewer: CodexApprovalsReviewer; sandbox: CodexThreadSandboxMode };
   /**
    * Pure function of the session workspace — never baked into this frozen table.
@@ -159,7 +159,7 @@ const CODEX_CHILD_ASK_PRESET: CodexPermissionPresetDefinition = {
   }),
 };
 
-/** Current default posture (cut §2(d): "ask (default = текущее поведение)") — matches the pre-existing `createNativeCodexSession` thread/start literals verbatim. */
+/** Current default posture (cut §2(d): "ask (default = current behavior)") — matches the pre-existing `createNativeCodexSession` thread/start literals verbatim. */
 export const DEFAULT_CODEX_PRESET = "ask" as const;
 
 export function findCodexPreset(id: string): CodexPermissionPresetDefinition | undefined {

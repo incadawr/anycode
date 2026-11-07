@@ -1,25 +1,25 @@
 import type { ReactNode } from "react";
 
 export interface EmptyStateProps {
-  /** Что это (заголовок). */
+  /** What it is (the heading). */
   title: string;
-  /** Почему пусто — одна строка. */
+  /** Why it is empty — one line. */
   description?: string;
-  /** Одно главное действие. */
+  /** One primary action. */
   action?: ReactNode;
-  /** Декоративная иконка (скрыта от скринридера). */
+  /** Decorative icon (hidden from screen readers). */
   icon?: ReactNode;
-  /** Уровень заголовка `h*` (2…6). По умолчанию `h3`. */
+  /** Heading level for `h*` (2…6). Defaults to `h3`. */
   headingLevel?: 2 | 3 | 4 | 5 | 6;
   className?: string;
 }
 
 /**
- * EmptyState: что это + почему пусто + что делать.
+ * EmptyState: what it is + why it is empty + what to do.
  *
- * Заголовок рендерится настоящим `h*` нужного уровня (`headingLevel`,
- * по умолчанию `h3`), чтобы структура документа оставалась корректной.
- * Максимум одно главное действие.
+ * The heading renders as a real `h*` of the requested level (`headingLevel`,
+ * defaulting to `h3`), so the document outline stays correct.
+ * At most one primary action.
  */
 export function EmptyState({
   title,

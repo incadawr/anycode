@@ -1,11 +1,11 @@
 export interface ContextRingProps {
-  /** Заполнение 0..1. */
+  /** Fill, 0..1. */
   value: number;
-  /** Диаметр в px (по умолчанию 20 — как в мокапе). */
+  /** Diameter in px (default 20, as in the mockup). */
   size?: number;
-  /** Тон заливки: normal (акцент) | warn | bad. */
+  /** Fill tone: normal (accent) | warn | bad. */
   tone?: "normal" | "warn" | "bad";
-  /** Доступное описание: «42% of context used». */
+  /** Accessible description: «42% of context used». */
   label: string;
   className?: string;
 }
@@ -14,8 +14,8 @@ const RADIUS = 7;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 /**
- * ContextRing — кольцевой индикатор заполнения контекста.
- * Значение обязательно дублируется текстом (label), а не несётся только формой.
+ * ContextRing — a ring indicator of context fill.
+ * The value must be duplicated as text (label), not carried by the shape alone.
  */
 export function ContextRing({
   value,

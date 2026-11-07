@@ -20,7 +20,7 @@ function notificationText(fields: { subagentType: string; status: string; summar
   ].join("\n");
 }
 
-describe("parseChildReportText (срез 2 §4 point 3)", () => {
+describe("parseChildReportText (slice 2 §4 point 3)", () => {
   it("extracts subagentType, status, and summary from a well-formed notification", () => {
     const text = notificationText({ subagentType: "explore", status: "completed", summary: "Found 3 files." });
     const parsed = parseChildReportText(text);

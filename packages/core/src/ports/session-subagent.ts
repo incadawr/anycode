@@ -94,7 +94,7 @@ export interface SessionSubagentRequest {
    */
   routeStamped?: boolean;
   /**
-   * срез 1: `Agent{tier:"session", detach:true}`'s own field,
+   * slice 1: `Agent{tier:"session", detach:true}`'s own field,
    * threaded straight through (tools/agent.ts validates it is only ever set
    * alongside `tier:"session"` before building this request). This flag is
    * whether a run's promise settles at admit vs. terminal is decided by the

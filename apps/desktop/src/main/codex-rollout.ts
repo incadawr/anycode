@@ -389,7 +389,7 @@ class RolloutImporter {
     // mid-turn), so this slot's own late output finds nothing to fold into.
     // There is no safe slot to append it to (its assistant message already
     // rendered), but the loss must be COUNTED, not dropped silently — the
-    // report's honesty mandate ("потери честно посчитаны").
+    // report's honesty mandate ("losses are counted honestly").
     this.stats.droppedUnmatched++;
   }
 

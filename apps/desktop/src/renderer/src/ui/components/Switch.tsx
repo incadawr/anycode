@@ -2,23 +2,23 @@ import { useId } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export interface SwitchProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onChange" | "value"> {
-  /** Текущее состояние — отражается в aria-checked. */
+  /** Current state — reflected in aria-checked. */
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
-  /** Текстовая подпись рядом с переключателем. */
+  /** Text label next to the toggle. */
   label?: string;
-  /** Описание под подписью (id для aria-describedby). */
+  /** Description under the label (id for aria-describedby). */
   describedBy?: string;
   disabled?: boolean;
   children?: ReactNode;
 }
 
 /**
- * Switch. Роль `switch`, состояние — aria-checked.
- * Управляется клавиатурой (Space/Enter) через нативный <button>.
- * Имя: `label` → aria-labelledby на отдельный узел подписи (тот же паттерн,
- * что у Checkbox/Radio), при отсутствии label — aria-label.
- * Геометрия совпадает с .settings-switch приложения: 32×18, ползунок 12px.
+ * Switch. Role `switch`, state — aria-checked.
+ * Keyboard-controlled (Space/Enter) via a native <button>.
+ * Name: `label` → aria-labelledby on a separate label node (same pattern
+ * as Checkbox/Radio); without a label — aria-label.
+ * Geometry matches the app's .settings-switch: 32×18, thumb 12px.
  */
 export function Switch({
   checked,

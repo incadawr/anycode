@@ -269,8 +269,8 @@ export function decodeSubagentCardSnapshot(
 
 /**
  * Straight 1:1 field mapping onto `SubagentSubStatus` (store.ts) — `attention`
- * is S2-reserved and never projected (CUT-S1 §0.3 vердикт 3, §3 W4).
- * `sessionChild` (CUT-S2 §10.8.1 vердикт 1) is the one exception:
+ * is S2-reserved and never projected (CUT-S1 §0.3 verdict 3, §3 W4).
+ * `sessionChild` (CUT-S2 §10.8.1 verdict 1) is the one exception:
  * presence-encoded, set ONLY when `snapshot.target.kind === "session"`. This
  * is a DISCRIMINANT, not the target itself — the three ids on a `"session"`
  * target (childSessionId/parentSessionId/spawnToolCallId) deliberately never

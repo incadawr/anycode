@@ -26,8 +26,8 @@
  *            (3) successful Save + reopen -> field EMPTY;
  *            (4) a Save refusal (non-loopback http baseUrl) KEEPS the field
  *                (best-effort per plan).
- *          Forms 1-3 are GENERATED for real ("зелёный без порождения формы
- *          = ложь"): every field is typed through native-setter + dispatched
+ *          Forms 1-3 are GENERATED for real ("green without generating the form
+ *          = a lie"): every field is typed through native-setter + dispatched
  *          `input` events on the REAL DOM (the same technique the automation
  *          facade's subagents editor/set uses), every button is a REAL
  *          `.click()`.
@@ -918,7 +918,7 @@ async function step10PinFE4RefusalKeeps(ctx) {
 }
 
 async function step11GuiGapProbe(ctx) {
-  // GUI-gap (documented owner-residual, ruling iter-9 residual (в)): the
+  // GUI-gap (documented owner-residual, ruling iter-9 residual (c)): the
   // connections drawer is the ONLY place a user can pick a provider for a
   // connection — probe whether the saved custom provider is offered there.
   const addResult = await apiOk(ctx, 11, "POST", "/settings/provider/add", {});

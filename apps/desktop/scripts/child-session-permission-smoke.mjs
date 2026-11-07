@@ -1,9 +1,9 @@
 /**
- * Live smoke for CUT-S2 §4.2 пп.6, 7, 12 — S2d D3. Drives a REAL
+ * Live smoke for §4.2 items 6, 7, 12 — S2d D3. Drives a REAL
  * Electron dev instance end-to-end and proves, on a real screen and a real
  * SQLite file, what a unit matrix structurally cannot:
  *
- *   п.6  A real permission-ask raised by a RUNNING child: the "waiting for
+ *   item 6  A real permission-ask raised by a RUNNING child: the "waiting for
  *        permission" badge appears on the MASTER's own Agent card (the
  *        always-visible toggle row, ToolCallCard.tsx) while the master's OWN
  *        `PermissionModal` never mounts (its binding is `ConnectedPermissionModal`
@@ -17,7 +17,7 @@
  *        mounted and visible with real content (title/input/allow button);
  *        answering it through the child's OWN tabId continues the child's
  *        turn and clears the badge.
- *   п.7  Steering a RUNNING child: a message typed into the child pane's own
+ *   item 7  Steering a RUNNING child: a message typed into the child pane's own
  *        composer WHILE its turn is running must reach the host's steer
  *        queue (`session.ts`'s `enqueueSteerMessage`/`steerQueue`,
  *        CUT-S2 §1.1/§2.6.3) and get fulfilled BEFORE the parent's Agent
@@ -28,7 +28,7 @@
  *        `.click()` on `.composer-send`), not a facade shortcut — the
  *        automation channel's own `sendPrompt`/`queuePrompt` routes are
  *        proven (by code reading, cited in this run's own report under
- *        "КРАСНОЕ" if this goes red) to be unusable for this exact scenario:
+ *        "RED" if this goes red) to be unusable for this exact scenario:
  *        `sendPrompt` busy-rejects unconditionally (automation.ts, mirrors
  *        Composer's direct-send guard, not its enqueue branch) and
  *        `queuePrompt` writes into the SAME renderer-side `promptQueue`
@@ -36,20 +36,20 @@
  *        (`registerPort`'s `if (child) {...}` branch skips the P7.14
  *        subscription — the child-port comment literally says "not this
  *        renderer-side one").
- *   п.12 SQLite cascade after root deletion: `PersistencePort.deleteSessionTree`
+ *   item 12 SQLite cascade after root deletion: `PersistencePort.deleteSessionTree`
  *        (already exhaustively unit-tested across every dependent table,
  *        `sqlite-persistence.test.ts`) driven for REAL against a live app's
  *        REAL db file via a NEW dev-only automation route (CUT-S2 §6's own
- *        "UI удаления сессий — вне S2 ... automation зовёт его напрямую для
- *        теста" contract) — verified two ways: the live `/child-runs`
+ *        "session-deletion UI is outside S2 ... automation calls it directly for
+ *        test" contract) — verified two ways: the live `/child-runs
  *        maintenance projection (before/after), AND a raw post-quit
  *        `node:sqlite` scan of every table in the actual db FILE for any
  *        trace of the deleted session ids, closing the "cascade proven only
  *        on the sessions row, not history/checkpoints/shadow tables" facade
  *        risk (CUT-S2 §5 point 7) live, not just in the unit suite.
  *
- * Пп.1,2,3,5,8 are covered by `child-session-scenario-smoke.mjs`;
- * пп.9-11 by a parallel job's own file — not duplicated here.
+ * Items 1,2,3,5,8 are covered by `child-session-scenario-smoke.mjs`;
+ * items 9-11 by a parallel job's own file — not duplicated here.
  *
  * REUSE (CUT-S2 §3 D2/D3's own directive): every generic process/fs/HTTP/
  * dispatch-retry helper below is IMPORTED, unmodified, from the already-green
@@ -292,7 +292,7 @@ const CHILD_PANE_MOUNTED_JS = `(() => !!document.querySelector('.child-session-b
 /** True iff Composer.tsx's `running` branch is rendering (`.composer-stop` only exists then) — the child's OWN turn is live, read off the currently-shown pane's DOM (no product-state mirror). */
 const COMPOSER_RUNNING_JS = `(() => !!document.querySelector('.composer-stop'))()`;
 
-/** Snapshot of the currently-shown pane's transcript length + queued-prompt items — the discriminator between "direct-sent" (transcript grows, no queue item) and "renderer-enqueued" (queue item appears, transcript does not grow) for п.7. */
+/** Snapshot of the currently-shown pane's transcript length + queued-prompt items — the discriminator between "direct-sent" (transcript grows, no queue item) and "renderer-enqueued" (queue item appears, transcript does not grow) for item 7. */
 const COMPOSER_OBSERVATION_JS = `(() => ({
   messageCount: document.querySelectorAll('.message-list .message').length,
   queueItems: Array.from(document.querySelectorAll('.prompt-queue-item')).map((el) => el.querySelector('.prompt-queue-text')?.textContent ?? null),
@@ -357,10 +357,10 @@ function hasSessionTierInput(block) {
  * precedents' `findAnyAgentBlock` matches the FIRST `Agent` tool_call in the
  * WHOLE transcript, which is correct for a single-spawn-per-conversation
  * script (both existing harnesses) but wrong here: this script dispatches
- * TWO separate Agent calls on the SAME root tab (п.6 then п.7), and a naive
+ * TWO separate Agent calls on the SAME root tab (items 6 then 7), and a naive
  * find would hand step 7 step 6's own stale, already-terminal block — caught
  * live on this harness's own first full run past step 6 (see this run's own
- * report under "КРАСНОЕ"). `excludeToolCallIds` filters those out; `childRuns`
+ * report under "RED"). `excludeToolCallIds` filters those out; `childRuns`
  * needs no equivalent filter (main-process ledger, self-clearing on
  * finalize — `handlers.ts`'s own doc on `ChildRunSummary`).
  */
@@ -398,7 +398,7 @@ async function attemptNewDispatch(ctx, step, prompt, timeoutMs, excludeToolCallI
 /**
  * Shared spawn-dispatch dance (1 retry then documented SKIP, same discipline
  * as every precedent's own step1Discovery/step2Dispatch) — generalized over
- * the task instruction text since п.6 and п.7 spawn two DIFFERENT children,
+ * the task instruction text since items 6 and 7 spawn two DIFFERENT children,
  * and over `excludeToolCallIds` (see `pollForNewDispatch`'s own doc above).
  */
 async function spawnChild(ctx, step, taskInstruction, dispatchTimeoutMs, excludeToolCallIds) {
@@ -436,7 +436,7 @@ async function rootPermissionState(ctx) {
   return resp.body?.snapshot?.states?.[ctx.tabId]?.permission ?? null;
 }
 
-// ── п.6: real permission-ask on a running child ──
+// ── item 6: real permission-ask on a running child ──
 
 async function step6PermissionAsk(ctx) {
   const step = 6;
@@ -561,7 +561,7 @@ async function step6PermissionAsk(ctx) {
   // Direct SQLite-row proof of mode inheritance (not just the behavioral
   // argument that Write asking at all implies build/edit) — the durable
   // child-session row's own `mode` column (`SessionMeta.mode`, persistence.ts),
-  // read back off the SAME dev-only maintenance route п.12 also uses.
+  // read back off the SAME dev-only maintenance route item 12 also uses.
   const childRuns = await apiOk(ctx, step, "GET", "/child-runs");
   const childRow = (childRuns?.sessions ?? []).find((s) => s.id === ctx.step6ChildSessionId);
   assert(step, childRow !== undefined, `no durable /child-runs row found for childSessionId=${ctx.step6ChildSessionId}: ${JSON.stringify(childRuns)}`);
@@ -577,7 +577,7 @@ async function step6PermissionAsk(ctx) {
   );
 }
 
-// ── п.7: steering a running child ──
+// ── item 7: steering a running child ──
 
 async function step7Steering(ctx) {
   const step = 7;
@@ -594,7 +594,7 @@ async function step7Steering(ctx) {
   // spawn prompt without waiting for that first-run bug (b): `attemptDispatch`
   // -> `sendPrompt` busy-rejected with reason:"busy" outright (caught live on
   // this harness's own first full run past step 6 — see this run's own
-  // report under "КРАСНОЕ"). Fixed by waiting for the shared root tab's own
+  // report under "RED"). Fixed by waiting for the shared root tab's own
   // idle, not by loosening any assertion.
   await waitUntilTab(ctx, step, ctx.tabId, { turnStatus: "idle" }, 30_000);
 
@@ -723,7 +723,7 @@ async function stepHandoff(ctx) {
   pass(step, `handoff displayed elapsed time ${strip.elapsed} while its child was still running`);
 }
 
-// ── п.12: SQLite cascade after root deletion ──
+// ── item 12: SQLite cascade after root deletion ──
 
 async function step12SqliteCascade(ctx) {
   const step = 12;

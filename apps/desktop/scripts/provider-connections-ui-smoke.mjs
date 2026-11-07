@@ -1,6 +1,6 @@
 /**
  * Live GUI smoke for W12 (design/track-43-45-33-47-49-cut.md §"W12 —
- * UI: сетка плашек connection'ов + drawer + Welcome"): drives a REAL Electron
+ * UI: grid of connection tiles + drawer + Welcome"): drives a REAL Electron
  * dev instance end-to-end over the automation HTTP channel (`main/automation/*`,
  * see `automation/README.md`'s "Provider connections pane probe/driver"
  * routes) through the full provider-connections UX: an empty-profile Settings drawer, the compact tile grid, the add/edit drawer, two
@@ -52,7 +52,7 @@
  * came from nothing but `POST /settings/provider/drawer/set` +
  * `connection-create`/`connection-update` IPC, a successful connect-refused
  * failure against it is unambiguous proof the host fork resolved baseUrl+key
- * from the connection-CRUD path — W12's "снятие шва" (removal of
+ * from the connection-CRUD path — W12's "seam removal" (removal of
  * `applyLegacyProviderPatch`/the legacy secret-write translation/the
  * `providerSecretKey` alias, commit e03d0c2) has no other path left to fall
  * back to. Steps 5 and 8 additionally read `secrets.json` straight off disk
@@ -343,7 +343,7 @@ function readJsonDisk(step, path, label) {
   }
 }
 
-/** Every key in secrets.json's `entries` MUST be connection-scoped (`provider.connection.<id>.apiKey|oauth`) — W12's "снятие шва" removed every legacy-shaped key (`provider.apiKey`, `provider.<providerId>.apiKey/oauth`). Values are opaque `{cipher,value}` ciphertext — never read/logged. */
+/** Every key in secrets.json's `entries` MUST be connection-scoped (`provider.connection.<id>.apiKey|oauth`) — W12's "seam removal" removed every legacy-shaped key (`provider.apiKey`, `provider.<providerId>.apiKey/oauth`). Values are opaque `{cipher,value}` ciphertext — never read/logged. */
 function assertOnlyConnectionScopedSecretKeys(step, secretsPath, expectedCount) {
   const disk = readJsonDisk(step, secretsPath, "secrets.json");
   const keys = Object.keys(disk?.entries ?? {});
@@ -745,7 +745,7 @@ async function step9EditConnectionBNoOp(ctx) {
  * This step therefore exercises the REAL end-to-end delete flow instead: a
  * disposable throwaway connection is created, deleted, and both its metadata
  * (settings.json) and its vault entry (secrets.json) are asserted gone —
- * "safe delete order" ("сначала очистить connection secrets, затем
+ * "safe delete order" ("first clear the connection secrets, then
  * metadata") — while connections A and B (created in earlier steps) are
  * asserted completely unaffected.
  */
@@ -1002,7 +1002,7 @@ async function step19EnvBannerIndependentOfConnectionHealth(ctx) {
   assert(19, state.envOverrideVisible === true, "expected the banner to remain visible alongside a now-present stored connection");
 
   await saveScreenshot(ctx, 19, "06-env-override-banner-with-connection");
-  pass(19, `stored connection created alongside the active env-override: banner stays visible, the connection's own health is untouched by the env-key's (separate, unexercised) failure — DoD "Ошибку env-key нельзя приписывать выбранной сохранённой плашке"`);
+  pass(19, `stored connection created alongside the active env-override: banner stays visible, the connection's own health is untouched by the env-key's (separate, unexercised) failure — DoD "an env-key error must not be attributed to the selected saved connection tile"`);
 }
 
 // ── orchestration ──

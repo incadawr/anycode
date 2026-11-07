@@ -1,5 +1,5 @@
 /**
- * Proxy-profile registry contract (редакция 2): the named profiles a
+ * Proxy-profile registry contract (revision 2): the named profiles a
  * user configures ONCE, plus the one-string reference every scope holds instead
  * of its own copy of the configuration.
  *

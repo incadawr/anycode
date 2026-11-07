@@ -1,18 +1,18 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  /** Обязателен: смысл кнопки без подписи. */
+  /** Required: the button's meaning without a visible label. */
   label: string;
   icon: ReactNode;
-  /** Подсвеченное состояние (aria-pressed). */
+  /** Highlighted state (aria-pressed). */
   pressed?: boolean;
   size?: "sm" | "md";
   disabled?: boolean;
 }
 
 /**
- * IconButton. Кнопка только с иконкой.
- * Обязательны `label` (→ aria-label и title) и hit-область ≥24px (--tap-min).
+ * IconButton. A button with an icon only.
+ * `label` is required (→ aria-label and title), and a hit area ≥24px (--tap-min).
  */
 export function IconButton({
   label,

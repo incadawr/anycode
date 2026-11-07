@@ -743,7 +743,7 @@ describe("aggregateProfileStats — S9 poisoned-window fixture: `mode` holding a
     // valid codex preset id but not a member of PERMISSION_MODES
     // (plan|build|edit|auto|yolo) — exactly the shape any file written in
     // that window would have on disk today. stats.ts never reads `.mode`
-    // (§8: "поле `mode` не читает вовсе"), so this must aggregate identically
+    // (§8: "field `mode` is not read at all"), so this must aggregate identically
     // to a record with no `mode` at all — no throw, no skipped line.
     const t0 = Date.UTC(2026, 0, 1, 10, 0, 0);
     const poisoned = file("poisoned.jsonl", [

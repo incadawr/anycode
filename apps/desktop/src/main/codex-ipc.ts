@@ -6,7 +6,7 @@
  * doctor.ts (diagnosis), and main/codex-login.ts (sign-in) together, persists
  * ONLY path/status metadata into settings.codex (never a token — cut §2(g)),
  * and hands the caller a fresh snapshot on every successful step so the
- * renderer can re-render without a restart (п.5).
+ * renderer can re-render without a restart (item 5).
  *
  * CHANNEL NAMES ARE DUPLICATED LITERALS, not `shared/**` exports: every lane
  * in this track froze `shared/**` as read-only after block C0 (design cut §4
@@ -65,7 +65,7 @@ export const CODEX_PROFILE_DELETE_CHANNEL = "anycode:codex-profile-delete";
 export const CODEX_PROFILE_SET_ACTIVE_CHANNEL = "anycode:codex-profile-set-active";
 /** The explicit "Re-link credential" action (amended §A1.2) — the ONLY path that repairs a wrong auth.json entry. */
 export const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
-/** Push: main -> renderer, fired after every snapshot-changing step (п.5). No payload — listeners re-fetch (`listAvailableEngines`/`codex-recheck`), same shape as `updates.onUpdateStatus`/`window.onWindowState`. */
+/** Push: main -> renderer, fired after every snapshot-changing step (item 5). No payload — listeners re-fetch (`listAvailableEngines`/`codex-recheck`), same shape as `updates.onUpdateStatus`/`window.onWindowState`. */
 export const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
 
 // ── wire shapes (duplicated structurally in anycode-window.d.ts; CodexDoctorReport itself is the frozen shared/codex-doctor.ts type, imported read-only) ──
@@ -237,7 +237,7 @@ export interface CodexOnboardingController {
    * persists through the same `picker` source.
    */
   useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
-  /** Runs the native login INTO a profile's home (п.2); an authLink profile refuses `unsupported` (amended §A1). */
+  /** Runs the native login INTO a profile's home (item 2); an authLink profile refuses `unsupported` (amended §A1). */
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   loginCancel(): void;
   /** Opens the verification URL of the device-code login currently pending in main (never a renderer-supplied URL). */
@@ -299,7 +299,7 @@ export interface CodexOnboardingController {
   shutdown(): Promise<void>;
 }
 
-/** Only a freshly CONFIRMED, non-dev-override path is worth remembering — an env override never persists (cut §3.5: "не env-override"), and "nothing found" must not clobber a path that may just be transiently unreachable (e.g. an unmounted volume). */
+/** Only a freshly CONFIRMED, non-dev-override path is worth remembering — an env override never persists (cut §3.5: "not an env-override"), and "nothing found" must not clobber a path that may just be transiently unreachable (e.g. an unmounted volume). */
 function shouldPersistPath(source: CodexBinarySource, binaryPath: string | null): binaryPath is string {
   return binaryPath !== null && source !== "env" && source !== "none";
 }
@@ -984,7 +984,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             signal: controller.signal,
             env: doctorSourceEnv(),
             ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
-            // The login signs INTO the profile's home (п.2): the
+            // The login signs INTO the profile's home (item 2): the
             // runner overwrites any ambient CODEX_HOME with it, so codex
             // writes the credential into the profile tree, never ~/.codex.
             profile,
@@ -1149,7 +1149,7 @@ function forceArg(args: unknown): boolean {
   return (args as { force?: unknown } | undefined)?.force === true;
 }
 
-/** Wires the invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (п.1: discovery must run without the user visiting Settings first) and read `readyFor()` as the per-profile tab gate. */
+/** Wires the invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (item 1: discovery must run without the user visiting Settings first) and read `readyFor()` as the per-profile tab gate. */
 /**
  * the production default for the alternates seam —
  * the same discovery-ladder inputs `discoverAndCheck` walks (env override,

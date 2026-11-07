@@ -132,8 +132,8 @@ export interface SubagentOutcome {
  * Coarse progress events bridged into the parent stream as subagent_*
  * AgentEvents (design §3.3).
  *
- * (owner's ruling, verbatim: "модель никогда не ответит, главное
- * какие запросы мы шлем и что в них фигурирует") fixes the vocabulary for
+ * (owner's ruling, verbatim: "the model never answers, what matters
+ * which requests we send and what they contain") fixes the vocabulary for
  * "which model did the child run on" across `start` and `end` alike:
  *   - `model` is the REQUESTED id — the request override, else the persona's
  *     own `model:`, i.e. what we actually put in the request. This is the

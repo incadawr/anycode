@@ -33,10 +33,10 @@ export const RECOGNIZER_CONFIG_CHANGED_TYPE = "anycode:recognizer-config-changed
 
 /**
  * The resolved recognizer endpoint a host needs to build `ask()` calls
- * (packages/core/src/vision, срез A). Mirrors the five `ANYCODE_RECOGNIZER_*`
+ * (packages/core/src/vision, slice A). Mirrors the five `ANYCODE_RECOGNIZER_*`
  * env vars main's boot-time snapshot carries (main/host-env.ts) — same shape,
  * two delivery paths (fork env vs. live push), so a host's live-update handler
- * (срез C) builds the SAME core `RecognizerEndpoint` from either. `transport`/
+ * (slice C) builds the SAME core `RecognizerEndpoint` from either. `transport`/
  * `baseUrl`/`apiKey`/`providerName` are all optional because a connection may
  * leave any of them unset (a bare/custom connection has no `providerName`, a
  * keyless local server has no `apiKey`); `model` is the user's explicit choice

@@ -123,7 +123,7 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
     expect(reasoningEnds.length).toBe(reasoningStarts.length);
   });
 
-  it("hazard (з): text is NOT doubled — the final assistant frame's text block is dropped when the same message already streamed deltas", () => {
+  it("hazard (h): text is NOT doubled — the final assistant frame's text block is dropped when the same message already streamed deltas", () => {
     const events = translate("w0-01-persistence.jsonl");
     // If the fallback fired alongside the deltas, the same message id would
     // produce both `msg_x:N` and `msg_x:fallback` starts.
@@ -219,7 +219,7 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
     expect(ofType(events, "turn_end")[0]!.finishReason).toBe("other");
   });
 
-  it("hazard (и): the phantom `<local-command-stdout>` user frame after a successful set_model is DROPPED", () => {
+  it("hazard (i): the phantom `<local-command-stdout>` user frame after a successful set_model is DROPPED", () => {
     const events = translate("w0-16-setmodel.jsonl");
     // A phantom reply would surface as transcript content; nothing in this
     // fixture's user frames may project any event.
@@ -250,7 +250,7 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
     expect(translator.onMessage(frame)).toEqual([]);
   });
 
-  it("row: messages with parent_tool_use_id != null are dropped, while the ROOT Task tool's own frames survive (hazard (ж))", () => {
+  it("row: messages with parent_tool_use_id != null are dropped, while the ROOT Task tool's own frames survive (hazard (g))", () => {
     const translator = new ClaudeTurnTranslator({ turn: 1 });
     // Root Task tool_use — parent_tool_use_id null: MUST project.
     const root = translator.onMessage({
@@ -291,7 +291,7 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
   });
 });
 
-describe("ClaudeTurnTranslator — срез S4: takePresentation attaches the MCP bridge's durable card snapshot", () => {
+describe("ClaudeTurnTranslator — slice S4: takePresentation attaches the MCP bridge's durable card snapshot", () => {
   function toolResultFrame(toolUseId: string, content: string, isError = false) {
     return {
       type: "user",
@@ -358,7 +358,7 @@ describe("ClaudeTurnTranslator — finish() guarantees (codex TurnTranslator par
     expect(events[3]).toMatchObject({ type: "loop_end", reason: "cancelled", turns: 1 });
   });
 
-  it("a second terminal frame is a no-op — a doubled `result` never double-reports (CC-B hazard (г))", () => {
+  it("a second terminal frame is a no-op — a doubled `result` never double-reports (CC-B hazard (d))", () => {
     const translator = new ClaudeTurnTranslator({ turn: 1 });
     const result = { type: "result", subtype: "success", is_error: false, num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0 } as unknown as ClaudeStreamMessage;
     expect(translator.onMessage(result).map((event) => event.type)).toEqual(["turn_end", "loop_end"]);
@@ -373,7 +373,7 @@ describe("ClaudeTurnTranslator — resume dedup (SLICE-CC D-min, cut §1.5 DoD-3
    * only a fresh `system/init` + the `--replay-user-messages` echo of the
    * NEW input + a normal new turn — nothing from turn1. So the only dedup
    * unit CC-D needs is that the echo of the new input (`isReplay:true`,
-   * `w0-16-setmodel.jsonl` hazard (д)'s same class) projects nothing, while
+   * `w0-16-setmodel.jsonl` hazard (e)'s same class) projects nothing, while
    * the turn's real content still projects normally.
    */
   it("projects zero events for the echoed new-input user frame, and the real turn content normally, over w0-04-resume-part2.jsonl", () => {
@@ -393,7 +393,7 @@ describe("ClaudeTurnTranslator — resume dedup (SLICE-CC D-min, cut §1.5 DoD-3
   });
 });
 
-describe("ClaudeTurnTranslator — drift-gate contribution (cut §3.3 layer-1 item (в-translator))", () => {
+describe("ClaudeTurnTranslator — drift-gate contribution (cut §3.3 layer-1 item (c-translator))", () => {
   it("chews every inbound stream frame of every committed fixture without an unknown-shape throw", () => {
     const files = readdirSync(FIXTURES_DIR).filter((name) => name.endsWith(".jsonl"));
     expect(files.length).toBeGreaterThanOrEqual(28);

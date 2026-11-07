@@ -1,5 +1,5 @@
 /**
- * child-session-wire (CUT-S2 §3 slice S2b B5): the "полупровод"
+ * child-session-wire (CUT-S2 §3 slice S2b B5): the "half-wire"
  * contract test for the parent-host <-> main half of the session-tier `Agent`
  * wire. `host/index.ts` itself is NOT importable here — it touches
  * `process.parentPort` at module scope (the established host-test idiom, see
@@ -26,7 +26,7 @@
  *
  * Registry/config construction (`buildConfig` below) touches the two
  * host/index.ts wiring points this slice added — non-recursion locks #1
- * and #2 — under the trek's zеркало law (CUT-S2 §10.9.3 A3, first
+ * and #2 — under the trek's mirror law (CUT-S2 §10.9.3 A3, first
  * applied right here): a mirror may reproduce TRANSPORT shape, but a
  * DECISION belongs to production code, imported, never re-typed as a copy:
  *   - lock #1 (the registry ternary) stays a BY-DESIGN mirror of a single
@@ -306,13 +306,13 @@ describe("session-tier Agent call over a fake parentPort (CUT-S2 §3 slice S2b B
       spawnToolCallId: "call-1",
     });
 
-    // §10.7 п.6e (partial — the full activitySuppressed variant is its own test below):
+    // §10.7 item 6e (partial — the full activitySuppressed variant is its own test below):
     // activity/progress reach the PARENT's own AgentEvent wire, not just the RPC client.
     expect(events.some((e) => e.type === "subagent_activity" && e.toolName === "Read")).toBe(true);
     expect(events.some((e) => e.type === "subagent_progress" && e.turns === 1)).toBe(true);
   });
 
-  it("§10.7 п.6e: activity + progress + a terminal carrying activitySuppressed all reach the parent AgentEvent wire, and the S1 snapshot's activity ленту carries the entries plus a dropped count that includes the suppressed count", async () => {
+  it("§10.7 item 6e: activity + progress + a terminal carrying activitySuppressed all reach the parent AgentEvent wire, and the S1 snapshot's activity feed carries the entries plus a dropped count that includes the suppressed count", async () => {
     const channel = fakeParentPort();
     const port = createChildSessionPort({
       parentSessionId: "parent-2",

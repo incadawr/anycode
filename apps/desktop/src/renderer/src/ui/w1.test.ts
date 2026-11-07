@@ -383,7 +383,7 @@ describe("Switch (W1)", () => {
 });
 
 describe("style contract (W1)", () => {
-  // jsdom-окружение меняет import.meta.url, поэтому ищем файл по дереву каталогов.
+  // The jsdom environment changes import.meta.url, so the file is found by walking the directory tree.
   function kitFile(relative: string): string {
     for (const root of [process.cwd(), join(process.cwd(), "apps/desktop")]) {
       const candidate = join(root, "src/renderer/src/ui", relative);

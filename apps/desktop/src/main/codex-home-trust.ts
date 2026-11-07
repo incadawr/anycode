@@ -15,8 +15,8 @@
  *    refused. A linkedHome (external, not ours) with ANY group/other mode
  *    bits is refused too — a foreign directory is diagnosed, never chmod'ed.
  *  - REPAIR rule — what we can fix: OUR OWN profile home found wider than
- *    0700 is flagged for `chmod 0700` and the spawn continues ("чиним и
- *    продолжаем"). The lstat-guard (main/codex-profiles.ts, §A1.2)
+ *    0700 is flagged for `chmod 0700` and the spawn continues ("we fix and
+ *    continue"). The lstat-guard (main/codex-profiles.ts, §A1.2)
  *    independently asserts `auth.json` afterwards, so a swap that happened
  *    while the home was briefly wide is still caught on its own terms.
  *

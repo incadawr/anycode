@@ -34,7 +34,7 @@ import {
  */
 export const CODEX_MANIFEST_URL = "https://raw.githubusercontent.com/incadawr/anycode/master/codex-support.json";
 
-/** Refresh throttle (cut §7.1: "не чаще 1 раза в 6 ч и по кнопке"). */
+/** Refresh throttle ("no more than once per 6 hours, and on button press"). */
 export const CODEX_MANIFEST_REFRESH_INTERVAL_MS = 6 * 3600_000;
 
 /** Network-manifest body cap: policy documents are tiny; anything bigger is refused as garbage. */

@@ -1,12 +1,12 @@
 /**
- * Agent MCP-bridge core logic (срез S1). Covers the three pieces
+ * Agent MCP-bridge core logic (slice S1). Covers the three pieces
  * agent-bridge.ts adds on top of the moved projection helpers (already
  * proven byte-identical by tools/agent.test.ts and tools/agent-session.test.ts,
  * which stay green unmodified — see this file's own parity block below):
  * the catalog->tool-declaration projection (§3.1), the shared session-tier
  * request builder (§3.2), and the call handler `runAgentBridgeCall` (§3.4)
  * that a claude-CLI child eventually reaches through the host's control-
- * channel glue (срез S3, out of this file's scope).
+ * channel glue (slice S3, out of this file's scope).
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -901,7 +901,7 @@ describe("runAgentBridgeCall — childSessionId discoverability", () => {
   });
 });
 
-describe("decodeAgentBridgeCallInput (срез S4)", () => {
+describe("decodeAgentBridgeCallInput (slice S4)", () => {
   it("a well-formed args object decodes verbatim, including the optional model", () => {
     expect(
       decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p", model: "opus" }),

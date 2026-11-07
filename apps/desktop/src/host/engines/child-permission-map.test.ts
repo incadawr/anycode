@@ -6,8 +6,8 @@
  *  - totality against the exact §4.2 table (every `PermissionMode` maps to
  *    the documented preset/posture, no more no less);
  *  - RANGE, not call-sites: for every input, the resolved posture must never
- *    be one of the forbidden print-mode/bypass postures (§4.2's "запрещённые
- *    постуры"), proven by resolving the id through the SAME frozen preset
+ *    be one of the forbidden print-mode/bypass postures (§4.2's "forbidden
+ *    postures"), proven by resolving the id through the SAME frozen preset
  *    tables (`presets.ts`, read-only import) the engine boots actually
  *    consult — not by re-asserting the id strings alone. Since
  *    this proof also covers the child-only `child-ask`

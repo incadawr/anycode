@@ -10,7 +10,7 @@
  * snapshot on every successful step so the renderer can re-render without a
  * restart.
  *
- * OUT OF SCOPE (cut §1.2 "НЕ делаем" / SLICE-CC-LOGIN cut §5): multi-profile
+ * OUT OF SCOPE (cut §1.2 "we do NOT do" / SLICE-CC-LOGIN cut §5): multi-profile
  * CRUD (CC-E) — this controller diagnoses/signs into exactly ONE profile,
  * ambient `~/.claude` by default (owner pivot: `resolveClaudeConfigDir`,
  * shared/claude-config-dir.ts — every `runDoctor`/`runLogin` call below

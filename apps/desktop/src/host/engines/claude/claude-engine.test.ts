@@ -459,7 +459,7 @@ describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
   });
 });
 
-describe("ClaudeEngine — срез S4: takePresentation reaches the turn's translator", () => {
+describe("ClaudeEngine — slice S4: takePresentation reaches the turn's translator", () => {
   it("a tool_result for the bridge's own tool_use id carries the stamped presentation snapshot", async () => {
     const snapshot = { subagent: "opaque" } as never;
     const transport = new FakeTransport({
@@ -2015,14 +2015,14 @@ describe("ClaudeEngine — CLI self-started turns", () => {
 });
 
 /**
- * cut §1.5 hazard (б) — the resumed session's FIRST `system/init` is the truth
+ * hazard (b) — the resumed session's FIRST `system/init` is the truth
  * about model and permission mode, not the row we resumed from. These pin what
  * the engine does with that init: it adopts the native posture into its own
  * settings, translating the CLI's RESOLVED model id back into the catalog
  * `value` the rest of AnyCode selects by, and it announces the init exactly
  * once so the host can materialize/patch the session row at that moment.
  */
-describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 hazard (б))", () => {
+describe("ClaudeEngine — reconciliation from the first system/init (hazard (b))", () => {
   const RESULT: ClaudeStreamMessage = {
     type: "result",
     subtype: "success",

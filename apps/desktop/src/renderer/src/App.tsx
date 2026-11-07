@@ -311,7 +311,7 @@ export function dispatchTryAgain(
   if (pending === null) {
     return "no_offer";
   }
-  // срез D: a configured recognizer fallback (`imageFallback`,
+  // slice D: a configured recognizer fallback (`imageFallback`,
   // mirrored off the same host_ready/model_changed wire as `imageInput`)
   // unblocks this gate too — same pair semantics as the composer's own
   // `isImageAttachBlockedByModel`/`isSendBlockedByModelImages` predicates.
@@ -390,8 +390,8 @@ export interface SessionSurfaceProps {
  * replaced — same `.session-conversation` div, same banners, same
  * `MessageList`/`Composer`/`ConnectedPermissionModal`/`TabNoticeCapture`);
  * `ChildSessionPane` below wraps the SAME component in the child tab's own
- * Provider for layout B's child view (§2.5's "child-view — та же
- * SessionSurface поверх child-store"). S3's split/accordion layouts (§6)
+ * Provider for layout B's child view ("child-view — the same
+ * SessionSurface on top of child-store"). S3's split/accordion layouts (§6)
  * reuse this component unchanged — it is this slice's actual hand-off, not
  * an implementation detail of `ActiveTabBody`.
  */
@@ -906,7 +906,7 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
       : EMPTY_CHILD_SPLIT_ROWS;
 
   // CUT-S3 §3.3: the split stack's expanded row surface — composed here
-  // (not in ChildSplitPane, §3.3's "композиция вместо экстракции") so the
+  // (not in ChildSplitPane, "composition over extraction") so the
   // TabContext.Provider/tabRegistry wiring stays exactly where layout B's
   // own ChildSessionPane/ChildHistoryPane already do it below.
   let childSplitSurface: ReactNode = null;

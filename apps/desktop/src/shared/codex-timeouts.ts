@@ -6,8 +6,8 @@
  * TWO independent call sites spawn and tear down their OWN, separate
  * app-server child: the host engine (host/engines/codex/*) and
  * main's onboarding doctor (main/codex-doctor.ts) — a host->main
- * import is architecturally forbidden (cut §2(g): "межслойный импорт
- * host→main запрещён"), so `main/codex-doctor.ts` deliberately runs its OWN
+ * import is architecturally forbidden (cut §2(g): "cross-layer import
+ * host→main is forbidden"), so `main/codex-doctor.ts` deliberately runs its OWN
  * minimal JSON-RPC client rather than reusing `host/engines/codex/
  * app-server-client.ts`. Two independently-written teardown state machines is
  * exactly the failure mode that produced a >300s-hung child in the original
@@ -28,7 +28,7 @@
 export const CODEX_BOOT_RPC_TIMEOUT_MS = 15_000;
 
 /**
- * `turn/start` response (design §2(b)#2, "Фаза A") — bounds only the
+ * `turn/start` response (design §2(b)#2, "Phase A") — bounds only the
  * request/response round trip that hands back the native turnId, NOT the
  * turn's own duration (which is unbounded and ends via `turn/completed`).
  */
@@ -49,7 +49,7 @@ export const CODEX_MODEL_LIST_MAX_PAGES = 5;
 
 /**
  * Deadline for the notification drain AFTER `sendInterruptOnce()` fires, up to
- * the terminal `turn/completed` (design §2(b)#3, "Фаза B"). The live W1
+ * the terminal `turn/completed` (design §2(b)#3, "Phase B"). The live W1
  * fixture observed interrupt -> completed in 352ms; this is the bounded
  * backstop, not the expected case.
  */

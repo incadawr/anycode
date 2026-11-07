@@ -1770,7 +1770,7 @@ export interface ProfilePaneDom {
 
 /**
  * One row of the Vision pane's recognizer-connection `<select>` (
- * срез E2c) — a DOM read, byte-parity with what `visionConnectionOptions()`
+ * slice E2c) — a DOM read, byte-parity with what `visionConnectionOptions()`
  * (`vision-pane-model.ts`) rendered. `label` is the `<option>`'s own rendered
  * text, which is the DECORATED string `VisionPane.tsx` prints for a
  * non-selectable row (`${label} — OAuth`), never the underlying option's raw
@@ -1789,7 +1789,7 @@ export interface VisionPaneConnectionOption {
 }
 
 /**
- * Real DOM state of the Vision settings panel (срез E2c) — a DOM
+ * Real DOM state of the Vision settings panel (slice E2c) — a DOM
  * probe, same "no mirrored state" discipline as the Profile pane probe above:
  * an unmounted pane (Settings closed, or a different pane selected) reads as
  * the empty defaults, not an error.
@@ -1821,7 +1821,7 @@ export interface VisionPaneState {
 }
 
 /**
- * DOM accessor DI for the Vision pane probe/driver (срез E2c), same
+ * DOM accessor DI for the Vision pane probe/driver (slice E2c), same
  * injectable-for-tests discipline as `ProfilePaneDom` — the real one is the
  * only implementation that touches `document`.
  */
@@ -3022,7 +3022,7 @@ export interface AutomationFacade {
   stop(tabId: string): FacadeResult;
   selectTab(tabId: string): FacadeResult;
   /**
-   * S2d D1 (CUT-S2 §2.5/§4.2 п.5, "Open-клик"): switches `rootTabId`'s
+   * S2d D1 (CUT-S2 §2.5/§4.2 item 5, "Open click"): switches `rootTabId`'s
    * pane onto its `spawnToolCallId` child, the SAME unconditional call
    * ToolCallCard.tsx's Open button makes (`childLayoutStore.open` —
    * child-layout.ts). Composer/permission addressing for the opened child
@@ -3039,7 +3039,7 @@ export interface AutomationFacade {
    * S3c (CUT-S3 §6.2, read-only PROBE — not a driver): thin-forward
    * read of `childLayoutStore.view(rootTabId)`. Deliberately the ONLY
    * facade surface S3 adds for layout state — `enterSplit`/`exitSplit`/
-   * `expandRow` get NO facade drivers (CUT-S3 §6.1/§9 п.8): a driver would
+   * `expandRow` get NO facade drivers (CUT-S3 §6.1/§9 item 8): a driver would
    * open a second path into the store that bypasses the real button ->
    * store-method wiring the smoke exists to pin, so every layout TRANSITION
    * in the smoke is a real DOM `.click()`, and this method only ever reads
@@ -3206,7 +3206,7 @@ export interface AutomationFacade {
   profileToggleModelsExpanded(): Promise<FacadeResult>;
   profileRefresh(): Promise<ProfilePaneRefreshResult>;
   profileRebuild(): Promise<FacadeResult>;
-  // ── Vision pane probe/driver (срез E2c) — a DEDICATED probe, every
+  // ── Vision pane probe/driver (slice E2c) — a DEDICATED probe, every
   // probe above stays byte-untouched. `visionSelectConnection`/`visionSetModel`
   // drive the pane's own local draft fields (a real `<select>` pick / a real
   // keystroke into the model `<input>` — a local `useState`, no IPC round
@@ -3466,7 +3466,7 @@ export interface AutomationFacade {
    * Closes the child pane the root tab currently shows (S8.3), by a
    * REAL `.click()` on the control an operator would use — layout B's master
    * breadcrumb, or the split pane's own close button — never by poking
-   * `childLayoutStore` directly. That is the CUT-S3 §6.1/§9 п.8 ruling quoted
+   * `childLayoutStore` directly. That is the CUT-S3 §6.1/§9 item 8 ruling quoted
    * on `childOpen`'s neighbours above: a second path into the store would
    * bypass the very button→store wiring a smoke exists to pin, so every
    * layout TRANSITION stays a real click.
@@ -5010,7 +5010,7 @@ function realProfilePaneDom(): ProfilePaneDom {
 }
 
 /**
- * The real Vision-pane DOM accessor (срез E2c): queries live at call
+ * The real Vision-pane DOM accessor (slice E2c): queries live at call
  * time, same laziness discipline as `realProfilePaneDom`. `.vision-pane` only
  * ever mounts while Settings is open with the "vision" pane selected
  * (`SettingsScreen.tsx`'s own guard), so `mounted()` is an unambiguous
@@ -6494,14 +6494,14 @@ async function waitForProfilePaneSettled(dom: ProfilePaneDom, deadlineMs: number
   }
 }
 
-/** Deadline for `visionSelectConnection`/`visionSetModel`'s commit polls and `visionTurnOff`'s arm step (срез E2c) — local React `useState` (`connectionId`/`modelId`/`confirmingOff`), no IPC round-trip at all, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
+/** Deadline for `visionSelectConnection`/`visionSetModel`'s commit polls and `visionTurnOff`'s arm step (slice E2c) — local React `useState` (`connectionId`/`modelId`/`confirmingOff`), no IPC round-trip at all, same rationale as `MODEL_PILL_COMMIT_DEADLINE_MS`. */
 const VISION_PANE_COMMIT_DEADLINE_MS = 500;
 
-/** Deadline for `visionSave`/`visionTurnOff`'s confirm-step settle polls (срез E2c) — same rationale as `PROFILE_PANE_APPLY_DEADLINE_MS`: both round-trip the real `recognizerSet` channel, an atomic settings.json write over IPC. */
+/** Deadline for `visionSave`/`visionTurnOff`'s confirm-step settle polls (slice E2c) — same rationale as `PROFILE_PANE_APPLY_DEADLINE_MS`: both round-trip the real `recognizerSet` channel, an atomic settings.json write over IPC. */
 const VISION_PANE_APPLY_DEADLINE_MS = 10_000;
 
 /**
- * Deadline for `visionProbe`'s settle poll (срез E2c) — a genuine
+ * Deadline for `visionProbe`'s settle poll (slice E2c) — a genuine
  * ceiling, not an expected duration, sized against `recognizer-probe.ts`'s OWN
  * worst case rather than reused from an existing constant: the probe spawns a
  * child whose own abort budget is `RECOGNIZER_PROBE_TIMEOUT_MS` (60 000 ms),
@@ -7154,7 +7154,7 @@ export function createAutomationFacade(
   dockDom: DockDom = realDockDom(),
   // slice S4: appended at the END for the same reason.
   workflowStepsDom: WorkflowStepsDom = realWorkflowStepsDom(),
-  // срез E2c: appended at the END for the same reason as every DI
+  // slice E2c: appended at the END for the same reason as every DI
   // param above it — every existing positional call site would shift
   // otherwise.
   visionPaneDom: VisionPaneDom = realVisionPaneDom(),
@@ -7642,7 +7642,7 @@ export function createAutomationFacade(
         // Same W3-FIX gate `tryAgain` already reports as
         // `images_unsupported` below, and `dispatchInitialPrompt`
         // (tab-registry.ts) applies on a tab's first turn — a blind model
-        // with no configured recognizer fallback (срез D) refuses
+        // with no configured recognizer fallback (slice D) refuses
         // the WHOLE send rather than silently stripping the images, so a
         // live smoke asserting on this reason can never be lied to by a
         // facade shortcut.
@@ -10632,7 +10632,7 @@ export function createAutomationFacade(
       }
       if (d.embedded) {
         // The WelcomeScreen first-run embed has no dialog chrome to close
-        // (design §"Отдельный first-run empty state" — App's own readiness
+        // (design §"Separate first-run empty state" — App's own readiness
         // gate is what unmounts it, not a user close action).
         return { ok: false, reason: "no_close_affordance" };
       }

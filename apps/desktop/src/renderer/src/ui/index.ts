@@ -1,6 +1,6 @@
 /**
- * AnyCode UI-kit — публичный API.
- * Все компоненты presentational: без Electron, без API AnyCode, без state-менеджеров.
+ * AnyCode UI-kit — public API.
+ * All components are presentational: no Electron, no AnyCode API, no state managers.
  */
 export { Button } from "./components/Button.js";
 export type { ButtonProps, ButtonVariant, ButtonSize } from "./components/Button.js";

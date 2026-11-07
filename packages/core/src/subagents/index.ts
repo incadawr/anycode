@@ -71,7 +71,7 @@ export { SUBAGENT_ACTIVITY_SUMMARY_MAX_CHARS } from "./summarize-tool.js";
 // summaries with the EXACT SAME sanitizer the in-process inline runner uses
 // (runner.ts:524) — the host imports only @anycode/core's root, never a
 // subpath, so this additive reexport is the only way it can reach a
-// summarize-tool.ts function (§10.7 п.7 explicitly authorizes this).
+// summarize-tool.ts function (§10.7 item 7 explicitly authorizes this).
 export { summarizeChildToolCall } from "./summarize-tool.js";
 // slice 1: the shared stall detector, re-exported so the desktop
 // session-tier host (host/child-session-port.ts) can drive one against its
@@ -79,9 +79,9 @@ export { summarizeChildToolCall } from "./summarize-tool.js";
 // root barrel, same discipline as summarizeChildToolCall above.
 export { SubagentStallClock } from "./stall-clock.js";
 export type { SubagentStallReport, SubagentStallClockOptions } from "./stall-clock.js";
-// срез S1: the MCP agent-bridge's shared logic (request builder,
+// slice S1: the MCP agent-bridge's shared logic (request builder,
 // catalog->tool-declaration projection, outcome->text projection) — re-
-// exported so the desktop host's claude-engine glue (срез S3+) reaches it
+// exported so the desktop host's claude-engine glue (slice S3+) reaches it
 // through the root barrel like every other core surface, never a subpath.
 export {
   buildAgentBridgeToolDecl,

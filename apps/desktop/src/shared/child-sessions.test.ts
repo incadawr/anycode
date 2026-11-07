@@ -1,7 +1,7 @@
 /**
  * Fail-closed shape-validator tests for the child-session protocol (
- * CUT-S2 §2.3/§4.1: "мусор/лишние ключи/не-строки/отсутствующие поля —
- * отвергаются"). Every parser must accept a well-formed message and reject
+ * CUT-S2 §2.3/§4.1: "junk / extra keys / non-strings / missing fields —
+ * are rejected"). Every parser must accept a well-formed message and reject
  * garbage, wrong-typed fields, missing required fields, and objects carrying
  * extra unknown keys — always returning `null`, never throwing.
  */
@@ -628,10 +628,10 @@ describe("parseChildRunEvent", () => {
     expect(parseChildRunEvent(msg)).toBeNull();
   });
 
-  // CUT-S2 §10.7 п.4: additive amendment to this otherwise-frozen
+  // CUT-S2 §10.7 item 4: additive amendment to this otherwise-frozen
   // terminal variant — `activitySuppressed` mirrors `ChildTerminal`'s own
   // field through to the parent-host wire.
-  describe("terminal event activitySuppressed (CUT-S2 §10.7 п.4, additive)", () => {
+  describe("terminal event activitySuppressed (CUT-S2 §10.7 item 4, additive)", () => {
     const validTerminal = {
       type: CHILD_RUN_EVENT_TYPE,
       requestId: "req-1",

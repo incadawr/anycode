@@ -306,7 +306,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     const start = await request('thread/start', { ...common, model: model.id, developerInstructions: baseInstructions, config: baseConfig, dynamicTools: tools });
     const threadId = start.thread.id;
     result.steps.before = await configSnapshot(threadId);
-    currentTurn = await turn(threadId, 'Ответь OK.');
+    currentTurn = await turn(threadId, 'Reply OK.');
     result.steps.firstTurn = recordTurn(currentTurn);
     if (currentTurn.status !== 'completed') {
       result.steps.firstTurn.diagnostics = turnDiagnostics(currentTurn);
@@ -350,7 +350,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     result.steps.resumeOn = { sameThread: onResume.thread?.id === threadId, sandbox: onResume.sandbox?.type ?? null, approval: onResume.approvalPolicy ?? null };
     result.steps.onConfig = await configSnapshot(threadId);
     const inside = join(cwd, 'probe-sentinel-inside'), outside = join(root, 'probe-sentinel-outside');
-    currentTurn = await turn(threadId, `Назови действующий дополнительный маркер из developer-инструкций. Попробуй создать файлы ${inside} и ${outside}. Ответь кратко.`);
+    currentTurn = await turn(threadId, `Name the active additional marker from the developer instructions. Try to create the files ${inside} and ${outside}. Answer briefly.`);
     const onText = currentTurn.messages.join('\n');
     result.steps.onTurn = { ...recordTurn(currentTurn), baseMarkerObserved: onText.includes(baseMarker), additionalMarkerObserved: onText.includes(onMarker), insideSentinelCreated: existsSync(inside), outsideSentinelCreated: existsSync(outside) };
     if (currentTurn.status !== 'completed') throw Error('on-turn-not-completed');
@@ -358,7 +358,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     const offResume = await request('thread/resume', { ...common, threadId, developerInstructions: baseInstructions, config: baseConfig, ...(resumeDynamic ? { dynamicTools: tools } : {}) });
     result.steps.resumeOff = { sameThread: offResume.thread?.id === threadId, sandbox: offResume.sandbox?.type ?? null, approval: offResume.approvalPolicy ?? null };
     result.steps.offConfig = await configSnapshot(threadId);
-    currentTurn = await turn(threadId, 'Назови только действующие сейчас маркеры из developer-инструкций, не используя историю. Если дополнительного маркера нет, ответь NONE.');
+    currentTurn = await turn(threadId, 'Name only the markers currently active in the developer instructions, without using the history. If there is no additional marker, answer NONE.');
     const offText = currentTurn.messages.join('\n');
     result.steps.offTurn = { ...recordTurn(currentTurn), baseMarkerObserved: offText.includes(baseMarker), oldAdditionalMarkerObserved: offText.includes(onMarker), note: 'prior marker remains in conversation history; this is a model observation, not proof of instruction removal' };
     if (currentTurn.status !== 'completed') throw Error('off-turn-not-completed');
@@ -368,7 +368,7 @@ createInterface({ input: process.stdin }).on('line', line => {
       threeTurnIdsPreserved: Array.isArray(turns) && [firstTurnId, onTurnId, currentTurn.id].every((id, index) => !!id && turns[index]?.id === id),
       firstThreeCompleted: Array.isArray(turns) && turns.length >= 3 && turns.slice(0, 3).every(t => t.status === 'completed') };
     if (match[1] === '0.166.0') {
-      const toolPrompt = 'Вызови инструмент anycode_agent с пустым объектом и кратко сообщи его ответ. Если инструмента нет, скажи что он недоступен.';
+      const toolPrompt = 'Call the anycode_agent tool with an empty object and briefly report its answer. If the tool is missing, say it is unavailable.';
       async function toolObservation() {
         const t = await turn(threadId, toolPrompt);
         return { ...recordTurn(t), toolCallObserved: t.agentCalls > 0, fixtureReplyInAssistantText: t.messages.join('\n').includes('FIXTURE_AGENT_RESPONSE_OK') };
@@ -380,15 +380,15 @@ createInterface({ input: process.stdin }).on('line', line => {
       const restartMarker = 'RESTART' + randomBytes(6).toString('hex').toUpperCase();
       try {
         const instructions = `${baseInstructions} Include the additional current marker ${collabMarker} in every final answer.`;
-        const t = await turn(threadId, 'Назови действующие сейчас маркеры из developer-инструкций.', { collaborationMode: { mode: 'default', settings: { model: model.id, reasoning_effort: 'low', developer_instructions: instructions } } });
+        const t = await turn(threadId, 'Name the markers currently active in the developer instructions.', { collaborationMode: { mode: 'default', settings: { model: model.id, reasoning_effort: 'low', developer_instructions: instructions } } });
         const text = t.messages.join('\n');
         result.steps.collaborationOn = { ...recordTurn(t), baseMarkerObserved: text.includes(baseMarker), markerObserved: text.includes(collabMarker), mode: 'default' };
-        const next = await turn(threadId, 'Назови только действующие сейчас маркеры developer-инструкций, игнорируя историю.');
+        const next = await turn(threadId, 'Name only the markers currently active in the developer instructions, ignoring the history.');
         const nextText = next.messages.join('\n');
         result.steps.collaborationOmitted = { ...recordTurn(next), baseMarkerObserved: nextText.includes(baseMarker), oldMarkerObserved: nextText.includes(collabMarker), note: 'model may recall marker from history; omission may preserve sticky mode' };
       } catch (error) { result.steps.collaborationError = /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed'; }
       try {
-        const t = await turn(threadId, 'Назови маркер, переданный в дополнительном контексте.', { additionalContext: { fixture: { kind: 'application', value: `Fixture marker: ${contextMarker}` } } });
+        const t = await turn(threadId, 'Name the marker passed in the additional context.', { additionalContext: { fixture: { kind: 'application', value: `Fixture marker: ${contextMarker}` } } });
         const read = await request('thread/read', { threadId, includeTurns: true });
         const items = read.thread?.turns?.flatMap(x => x.items || []) || [];
         result.steps.additionalContext = { ...recordTurn(t), markerObserved: t.messages.join('\n').includes(contextMarker), markerInNonMessageHistory: items.filter(x => x.type !== 'agentMessage' && x.type !== 'userMessage').some(x => JSON.stringify(x).includes(contextMarker)), markerInAssistantHistory: items.filter(x => x.type === 'agentMessage').some(x => String(x.text || '').includes(contextMarker)), historyAvailable: Array.isArray(read.thread?.turns), kind: 'application', note: 'context is not established as developer-priority instruction' };
@@ -398,7 +398,7 @@ createInterface({ input: process.stdin }).on('line', line => {
         const resumed = await request('thread/resume', { ...common, threadId, developerInstructions: `${baseInstructions} Include the current additional marker ${restartMarker} in every final answer.`, config: onConfig, ...(resumeDynamic ? { dynamicTools: tools } : {}) });
         const snapshot = await configSnapshot(threadId);
         const read = await request('thread/read', { threadId, includeTurns: true });
-        const t = await turn(threadId, 'Назови действующие сейчас маркеры из developer-инструкций.');
+        const t = await turn(threadId, 'Name the markers currently active in the developer instructions.');
         const text = t.messages.join('\n');
         result.steps.restartResume = { ...recordTurn(t), sameThread: resumed.thread?.id === threadId, priorHistoryTurns: read.thread?.turns?.length ?? null, config: snapshot, baseMarkerObserved: text.includes(baseMarker), markerObserved: text.includes(restartMarker) };
       } catch (error) { result.steps.restartResume = { error: /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed' }; }
@@ -429,13 +429,13 @@ createInterface({ input: process.stdin }).on('line', line => {
         const read = await request('thread/read', { threadId, includeTurns: true });
         result.steps.processInstructionsOn = { sameThread: resumed.thread?.id === threadId, historyTurns: read.thread?.turns?.length ?? null, echoedSandbox: resumed.sandbox?.type ?? null, echoedNetworkAccess: resumed.sandbox?.networkAccess ?? null, echoedApproval: resumed.approvalPolicy ?? null, config };
         if (resumed.sandbox?.type !== 'readOnly' || resumed.sandbox?.networkAccess !== false || resumed.approvalPolicy !== 'never') throw Error('process-policy-not-confirmed');
-        const t = await turn(threadId, 'Назови действующие сейчас маркеры из developer-инструкций, не используя историю.', {}, true);
+        const t = await turn(threadId, 'Name the markers currently active in the developer instructions, without using the history.', {}, true);
         const text = t.messages.join('\n');
         Object.assign(result.steps.processInstructionsOn, recordTurn(t), { baseMarkerObserved: text.includes(baseMarker), processMarkerObserved: text.includes(processMarker), note: 'base marker can be recalled from history; observed response is not proof of instruction composition' });
         await restartServer();
         const restored = await request('thread/resume', { threadId, cwd });
         const afterConfig = await configSnapshot(threadId, processMarker);
-        const after = await turn(threadId, 'Назови только действующие сейчас маркеры из developer-инструкций, не используя историю. Если дополнительного нет, ответь NONE.');
+        const after = await turn(threadId, 'Name only the markers currently active in the developer instructions, without using the history. If there is no additional one, answer NONE.');
         const afterText = after.messages.join('\n');
         result.steps.processInstructionsOff = { ...recordTurn(after), sameThread: restored.thread?.id === threadId, config: afterConfig, baseMarkerObserved: afterText.includes(baseMarker), oldProcessMarkerObserved: afterText.includes(processMarker), note: 'old marker remains in history, so its repetition is not proof of a still-active instruction' };
       } catch (error) { result.steps.processInstructionsError = /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed'; }

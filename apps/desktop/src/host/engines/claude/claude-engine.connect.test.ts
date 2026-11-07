@@ -57,7 +57,7 @@ const MODELS = [{ value: "model-a", resolvedModel: "model-a", displayName: "A" }
  * object, so callers can exercise the sign-in predicate against the exact
  * shapes the live CLI returns (default mirrors a plain OAuth session).
  *
- * срез S4 (probes.md P0): when the outbound `initialize` body
+ * slice S4 (probes.md P0): when the outbound `initialize` body
  * carries a non-empty `sdkMcpServers`, this fake reproduces the ONE ordering
  * fact P0 measured against the REAL CLI — the CLI drives its OWN mcp
  * handshake (wrapped as a `mcp_message` control_request FROM the CLI TO the
@@ -292,7 +292,7 @@ describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
 
 /**
  * the initial `--effort` spawn flag. Unlike model/permissionMode
- * (suppressed on resume, see the hazard (б) describe block below), effort
+ * (suppressed on resume, see the hazard (b) describe block below), effort
  * rides EVERY spawn: `system/init` carries no effort field at all, so there
  * is no surviving native truth a resend could clobber.
  */
@@ -461,7 +461,7 @@ describe("connect: a requested model reaches the engine by alias OR by full reso
 });
 
 /**
- * cut §1.5 hazard (б) — a resume must not APPLY a persisted posture before it
+ * cut §1.5 hazard (b) — a resume must not APPLY a persisted posture before it
  * has read the one that survived. A native Claude session keeps its own model
  * and `permissionMode` across process death (probe #4), and our row can be
  * stale: it may have been written from a change the CLI rejected, or edited by
@@ -473,7 +473,7 @@ describe("connect: a requested model reaches the engine by alias OR by full reso
  * A FRESH spawn is the opposite case: there is no prior posture to protect, so
  * the requested one must ride the spawn exactly as before.
  */
-describe("connect: a resume applies no posture ahead of the first system/init (cut §1.5 hazard (б))", () => {
+describe("connect: a resume applies no posture ahead of the first system/init (cut §1.5 hazard (b))", () => {
   it("resume sends NO --permission-mode flag, even with a persisted preset", async () => {
     const { spawnImpl, capturedArgs } = fakeSpawn();
     const connected = await resumeClaudeEngine({
@@ -569,7 +569,7 @@ describe("connect: sign-in detection from the initialize response", () => {
 });
 
 /**
- * срез S4 — the MCP bridge's own ordering requirement (probes.md
+ * slice S4 — the MCP bridge's own ordering requirement (probes.md
  * P0's correction #1): `ClaudeMcpBridge` must be routed through
  * `ClaudeApprovalBridge` BEFORE `client.initialize()` is ever sent, because
  * the CLI drives its OWN mcp handshake (`mcp_message` control_requests) FROM
@@ -581,7 +581,7 @@ describe("connect: sign-in detection from the initialize response", () => {
  * cannot see, and this test can: it inspects what the fake CLI's OWN nested
  * request received, not what the finished engine looks like afterward.
  */
-describe("срез S4 — the MCP bridge is wired BEFORE initialize is sent (probes.md P0)", () => {
+describe("slice S4 — the MCP bridge is wired BEFORE initialize is sent (probes.md P0)", () => {
   /** A minimal stand-in satisfying exactly what ClaudeApprovalBridge.route reads off `options.bridge` — never a real MCP round trip (that is mcp-bridge.test.ts's job). */
   function fakeBridge(): { bridge: ClaudeMcpBridge; routedCount: () => number } {
     let routed = 0;

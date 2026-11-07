@@ -337,7 +337,7 @@ export function heatmapMonthLabels(weeks: HeatmapCell[][]): (string | null)[] {
 // `topTools`/`topModels` top-N/single-map fields no longer exist on the wire
 // at all (removed S10; see the module doc on ProfileStatsView). The 5-tile
 // row and the heatmap's *window* stay global by design (§158 DoD:
-// "ряд из пяти плиток остаётся общим"); everything BELOW the heatmap —
+// "the row of five tiles stays shared"); everything BELOW the heatmap —
 // Activity insights, the tools list, and the full models list — is a pure
 // re-slice of `days` governed by the selected period. No IPC round-trip is
 // ever involved in a period switch.
@@ -616,7 +616,7 @@ export function profileBusyNoteText(state: ProfileLoadState): string | null {
 
 /**
  * Whether the pane must flag `longestSessionMs` as provisional (S4,
- * plan §2 "Блокер 1"): main has not finished its exact second pass over the
+ * plan §2 "Blocker 1"): main has not finished its exact second pass over the
  * sessions whose activity spans several files. A named predicate rather than
  * an inline comparison, so the renderer reads this wire field in exactly one
  * place.
@@ -891,7 +891,7 @@ function ProfileBody({ result, now, onToggle, onReveal, telemetryBusy, backlogPr
   // computed once in `ProfilePane` and threaded down as a resolved prop, a
   // click after the last data fetch would keep reusing that stale timestamp:
   // pane opened 23:58, left open, "Today" clicked at 00:05 next day would
-  // still resolve yesterday's dayKey — exactly the bug the plan's "Отвергнуто"
+  // still resolve yesterday's dayKey — exactly the bug the plan's "Rejected"
   // section rejected building-in-main to avoid. Reading `new Date()` HERE
   // means every one of those re-renders (period click, expand click, a fresh
   // fetch) sees the real current instant.

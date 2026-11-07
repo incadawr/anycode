@@ -7,7 +7,7 @@
  *
  * OWN MINIMAL JSON-RPC CLIENT, deliberately not a reuse of host/engines/codex/
  * app-server-client.ts: a host->main import is architecturally forbidden
- * (cut §2(g), "межслойный импорт host→main запрещён" — the host and main
+ * (cut §2(g), "cross-layer import host→main is forbidden" — the host and main
  * processes have different lifecycle/bundle boundaries). Duplicating ~150
  * lines here is a conscious tradeoff documented at the single spot that makes
  * it dangerous: teardown. `shared/codex-timeouts.ts` is the shared contract
@@ -237,7 +237,7 @@ function raceExitOrTimeout(exited: Promise<void>, ms: number): Promise<boolean> 
 
 /**
  * The minimal JSON-RPC line client itself. Exported so main/codex-login.ts
- * (the native login flow, п.3) can reuse the exact same spawn/
+ * (the native login flow, item 3) can reuse the exact same spawn/
  * request/notify/close machinery — one teardown implementation for every
  * main-side Codex child, not two independently drifting ones.
  */

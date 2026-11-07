@@ -2829,7 +2829,7 @@ describe("buildHostEnv — vision-fallback recognizer (E1)", () => {
     expect(second.ANYCODE_RECOGNIZER_MODEL).toBe("model-b");
   });
 
-  // ⚠ Хвост от E1: resolveRecognizerConfig read
+  // ⚠ Tail from E1: resolveRecognizerConfig read
   // connection.baseUrl/a connection-scoped vault key directly and never
   // followed a `custom:<slug>` providerId to its CustomProviderRecord the
   // way buildHostEnv's own customId branch does above (line ~942) — a

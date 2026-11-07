@@ -1,5 +1,5 @@
 /**
- * The `Network` settings pane (§3 / лейн C item 1): the named proxy
+ * The `Network` settings pane (§3 / lane C item 1): the named proxy
  * registry — the list of profiles, create / edit / rename / delete — hosting
  * the ONE editor plaque (`ProxySection`). Nothing about a proxy is configured
  * anywhere else in the product: every scope (a connection, an engine, the app)

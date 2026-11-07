@@ -1,6 +1,6 @@
 /**
  * Host-side pending queue for a detached child's terminal report (
- * срез 2, spec §4 point 1). Closes the gap left by срез 1's bare
+ * slice 2, spec §4 point 1). Closes the gap left by slice 1's bare
  * `outbound.sendDirect({type:"child_report", ...})`: a direct send writes to
  * whatever port is CURRENTLY attached and is silently lost if the renderer
  * has disconnected/is mid-reload at the exact moment a detached child's
@@ -22,8 +22,8 @@
  * durably enqueued renderer-side (store.ts dedupes a re-delivered id against
  * its own `promptQueue`/`queueInFlight` before ever acking twice).
  *
- * Bounded at `CHILD_REPORT_QUEUE_MAX_PENDING` (spec §4 point 4: "тихо резать
- * нельзя" — a cap must never silently drop). Overflow does not evict any
+ * Bounded at `CHILD_REPORT_QUEUE_MAX_PENDING` (spec §4 point 4: "silently cutting
+ * is not allowed" — a cap must never silently drop). Overflow does not evict any
  * already-pending REAL report (each one's own content stays intact and
  * eventually delivered); instead it reserves exactly one extra pending slot
  * for a single coalescing "N reports dropped" notice (child-notification.ts's

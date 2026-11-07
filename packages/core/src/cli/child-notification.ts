@@ -1,5 +1,5 @@
 /**
- * Detached-child terminal report formatting (срез 1, design §4bis/§7).
+ * Detached-child terminal report formatting (slice 1, design §4bis/§7).
  * Pure string helper — no I/O, no state — mirroring background-notice.ts's
  * role for background bash tasks, but for a `Agent tier:"session" detach:true`
  * child session instead: the desktop host (host/index.ts's
@@ -7,11 +7,11 @@
  * text it delivers to the parent's prompt queue once the detached child
  * reaches a terminal status.
  *
- * Form is taken verbatim from ZCode 3.x (owner decision 22.08, spec §4bis п.3
+ * Form is taken verbatim from ZCode 3.x (owner decision 22.08, spec §4bis item 3
  * / §7): the anti-spoofing header + the three explanatory lines are
  * REQUIRED, byte-for-byte — they are the only defense a model has against
  * mistaking this synthetic system event for the user's own words, since the
- * injected turn's role is `user` (design §4bis п.1, no `role:"tool"` variant
+ * injected turn's role is `user` (design §4bis item 1, no `role:"tool"` variant
  * exists for a tool call that already returned at admit time). The
  * `<task-notification>` field set is narrowed from ZCode's superset to what
  * this system actually tracks (spec §7 permits this): no `output-file`
@@ -198,10 +198,10 @@ export function formatChildTaskNotification(input: ChildTaskNotificationInput): 
 }
 
 /**
- * срез 2: the honest "overflow" notice a host's pending-report queue
+ * slice 2: the honest "overflow" notice a host's pending-report queue
  * (apps/desktop/src/host/child-report-queue.ts) substitutes for a detached
- * child's real report once its bounded cap is reached — "тихо резать нельзя"
- * (spec §8's "занятый родитель" cut): a dropped report must still surface
+ * child's real report once its bounded cap is reached — "silent cutting is not allowed"
+ * (spec §8's "busy parent" cut): a dropped report must still surface
  * SOMETHING to the model rather than vanish with no trace. Reuses the SAME
  * anti-spoofing header as a real task-notification (this is just as much a
  * synthetic system event, not user input) but carries no `<task-notification>`

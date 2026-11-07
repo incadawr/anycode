@@ -1,7 +1,7 @@
 /**
  * The draft (pre-session) Codex model/preset choice, carried from main into the
- * forked host as argv (cut §3.8: "Драфт-выбор передаётся в host аддитивными
- * argv-флагами `--engine-model` / `--engine-preset`").
+ * forked host as argv ("draft selection is passed to the host as additive
+ * argv flags `--engine-model` / `--engine-preset`").
  *
  * argv is UNTRUSTED input as far as this module is concerned — it originates in
  * the renderer's draft picker. Nothing here interprets, resolves or applies a

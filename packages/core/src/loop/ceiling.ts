@@ -145,7 +145,7 @@ export function buildCeilingDecisionPrompt(
  * cannot finish converges instead of drifting. Rounds 1-2 are floored at 1 so
  * a small budget still produces a meaningful (if tiny) grant rather than a
  * silent zero; round 3 is floored at 5 per the owner's table (
- * "круг 3 → N/8, но не меньше 5") — the last extension is not allowed to
+ * "round 3 → N/8, but not less than 5") — the last extension is not allowed to
  * shrink to a token amount even when N/8 rounds down to nothing. The SUM
  * clamps in ceilingGrant() are what actually bound the total regardless.
  */
@@ -307,8 +307,8 @@ export function acceptCeilingVerdict(params: {
   }
   if (round >= 2) {
     if (adaptive === true) {
-      // "Не считать любое успешное чтение файла прогрессом и не
-      // требовать механического уменьшения количества пунктов плана" — the
+      // "Do not count any successful file read as progress, and do not
+      // require a mechanical reduction in the number of plan items" — the
       // round must contain at least one productive (non-read-only) success,
       // and an unchanged/grown remaining list is NOT by itself a refusal.
       if (productiveToolCalls <= 0) {
