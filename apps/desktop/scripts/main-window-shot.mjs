@@ -39,7 +39,7 @@ try {
   await poll(async () => { const result = await api('POST', `/tabs/${tab.tabId}/git/panel`, { open: true }); return result.ok; });
   const md = await api('POST', `/tabs/${tab.tabId}/previews`, { path: join(root, 'README.md') });
   if (!md.ok) throw Error(`Markdown preview: ${JSON.stringify(md)}`);
-  const web = await api('POST', `/tabs/${tab.tabId}/previews`, { path: join(root, 'mini-presentation.html') });
+  const web = await api('POST', `/tabs/${tab.tabId}/previews`, { path: join(root, 'apps/desktop/scripts/fixtures/sample-presentation.html') });
   if (!web.ok) console.log('Local web preview unavailable:', JSON.stringify(web));
   await call('Page.reload');
   await poll(() => evaluate(`!!document.querySelector('.sidebar-settings')`));
@@ -67,7 +67,7 @@ try {
       let shot = await call('Page.captureScreenshot', { format: 'png' });
       if (name === '-web') {
         const targets = (await call('Target.getTargets')).targetInfos;
-        const target = targets.find(t => t.type === 'page' && t.url.includes('mini-presentation.html'));
+        const target = targets.find(t => t.type === 'page' && t.url.includes('sample-presentation.html'));
         if (!target) throw Error('Web preview CDP target unavailable');
         const {sessionId} = await call('Target.attachToTarget', {targetId: target.targetId, flatten: true});
         try {

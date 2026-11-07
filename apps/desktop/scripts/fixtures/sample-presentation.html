@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AnyCode — мини-презентация</title>
+<title>AnyCode — sample presentation</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -214,84 +214,84 @@
 </head>
 <body>
 
-<!-- Слайд 1: Титул -->
+<!-- Slide 1: Title -->
 <section class="slide active">
   <div class="content">
     <h1>AnyCode</h1>
-    <p class="subtitle">Одно рабочее пространство поверх нескольких AI-агентов</p>
+    <p class="subtitle">One workspace on top of several AI coding agents</p>
     <div class="badge-wrap"><span class="badge">0.0.8 · alpha</span></div>
   </div>
 </section>
 
-<!-- Слайд 2: Что это -->
+<!-- Slide 2: What it is -->
 <section class="slide">
   <div class="content">
-    <h2>Оболочка, <span class="accent">а не агент</span></h2>
-    <p class="lead">AnyCode — единое десктопное рабочее пространство поверх уже установленных AI-кодовых агентов: Claude Code CLI, Codex CLI или собственного мульти-провайдерного агент-цикла. Воркспейс одинаковый для любого движка.</p>
-    <p class="lead"><span class="hl-blue">Bring your own agent:</span> профиль запускает ваш CLI под вашей учёткой и на условиях вашего провайдера. AnyCode не хранит и не проксирует креды — процесс работает на вашей машине.</p>
+    <h2>A workspace, <span class="accent">not an agent</span></h2>
+    <p class="lead">AnyCode is one desktop workspace on top of the AI coding agents you already have: Claude Code CLI, Codex CLI, or its own multi-provider agent loop. The workspace is the same for every engine.</p>
+    <p class="lead"><span class="hl-blue">Bring your own agent:</span> a profile runs your CLI under your account and your provider's terms. AnyCode does not store or proxy credentials — the process runs on your machine.</p>
     <div class="chips">
-      <span class="chip">транскрипт</span>
-      <span class="chip">вызовы инструментов</span>
-      <span class="chip">запросы разрешений</span>
-      <span class="chip">файловые действия</span>
-      <span class="chip">терминал</span>
-      <span class="chip">контекст</span>
-      <span class="chip">MCP-серверы</span>
-      <span class="chip">скиллы</span>
-      <span class="chip">саб-агенты</span>
-      <span class="chip">Git-ревью</span>
+      <span class="chip">transcript</span>
+      <span class="chip">tool calls</span>
+      <span class="chip">permission requests</span>
+      <span class="chip">file actions</span>
+      <span class="chip">terminal</span>
+      <span class="chip">context</span>
+      <span class="chip">MCP servers</span>
+      <span class="chip">skills</span>
+      <span class="chip">subagents</span>
+      <span class="chip">Git review</span>
     </div>
   </div>
 </section>
 
-<!-- Слайд 3: Три профиля движков -->
+<!-- Slide 3: Three engine profiles -->
 <section class="slide">
   <div class="content">
-    <h2>Три профиля <span class="accent-blue">движков</span></h2>
+    <h2>Three engine <span class="accent-blue">profiles</span></h2>
     <div class="cards">
       <div class="card c-green">
         <h3>Claude Code</h3>
-        <p>Официальный CLI в headless-стриме: <b>вложения-изображения</b>, reasoning effort, индикатор контекста, режимы разрешений.</p>
+        <p>The official CLI in headless streaming mode: <b>image attachments</b>, reasoning effort, context meter, permission modes.</p>
       </div>
       <div class="card c-blue">
         <h3>Codex</h3>
-        <p>OpenAI Codex CLI по протоколу app-server: <b>профили аккаунтов</b>, квоты и панель плана, импорт сессий, управляемый бинарник.</p>
+        <p>OpenAI Codex CLI over the app-server protocol: <b>account profiles</b>, quotas and plan panel, session import, managed binary.</p>
       </div>
       <div class="card c-white">
         <h3>Native</h3>
-        <p>Собственный цикл: Anthropic, Z.AI/GLM, OpenAI, OpenRouter, DeepSeek, Moonshot, Kimi — и <b>любые OpenAI-/Anthropic-совместимые эндпоинты</b>, включая локальные.</p>
+        <p>Its own loop: Anthropic, Z.AI/GLM, OpenAI, OpenRouter, DeepSeek, Moonshot, Kimi — and <b>any OpenAI- or Anthropic-compatible endpoint</b>, including local ones.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Слайд 4: Саб-агенты и надёжность -->
+<!-- Slide 4: Subagents and reliability -->
 <section class="slide">
   <div class="content">
-    <h2>Саб-агенты и <span class="accent">надёжность</span></h2>
+    <h2>Subagents and <span class="accent">reliability</span></h2>
     <div class="cols">
       <div class="col">
-        <h3>Кросс-движковые саб-агенты</h3>
-        <p>Саб-агенты <b>не привязаны к движку сессии</b>: профиль <code>.anycode/agents/*.md</code> может указать <code>engine: codex</code> или <code>engine: claude</code> — дочерний агент пойдёт как настоящий процесс соответствующего CLI.</p>
-        <p>Недоступный движок — <b>громкая ошибка</b>, а не тихий фолбэк.</p>
+        <h3>Cross-engine subagents</h3>
+        <p>Subagents are <b>not tied to the session engine</b>: a <code>.anycode/agents/*.md</code> profile can set <code>engine: codex</code> or <code>engine: claude</code>, and the child runs as a real process of that CLI.</p>
+        <p>An unavailable engine is a <b>loud error</b>, not a silent fallback.</p>
       </div>
       <div class="col">
-        <h3>Протокольные фикстуры</h3>
-        <p>Оба CLI-профиля закреплены фикстурами: адаптер, <b>теряющий или выдумывающий сообщение, роняет сборку</b>. Сверка пина со свежим CLI — отдельный opt-in прогон.</p>
-        <p>Возможности следуют движку: то, что бэкенд не умеет, <b>отключено, а не имитировано</b>.</p>
+        <h3>Protocol fixtures</h3>
+        <p>Both CLI profiles are pinned by recorded fixtures: an adapter that <b>drops or invents a message fails the build</b>. Checking the pin against a new CLI is a separate opt-in run.</p>
+        <p>Features follow the engine: what the backend cannot do is <b>disabled, not imitated</b>.</p>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Слайд 5: Статус и старт -->
+<!-- Slide 5: Status and getting started -->
 <section class="slide">
   <div class="content">
-    <h2>Статус и <span class="accent-blue">старт</span></h2>
-    <p class="lead"><span class="hl">0.0.8 · alpha.</span> Хранилище, API и UI могут меняться без обратной совместимости; сборки не подписаны (подпись — с бетой).</p>
-    <p class="lead">Установщики для <span class="hl-blue">macOS · Windows · Linux</span> — на GitHub Releases.</p>
+    <h2>Status and <span class="accent-blue">getting started</span></h2>
+    <p class="lead"><span class="hl">0.0.8 · alpha.</span> Storage, API and UI may change without backward compatibility; builds are unsigned (signing comes with the beta).</p>
+    <p class="lead">Installers for <span class="hl-blue">macOS · Windows · Linux</span> are on GitHub Releases.</p>
     <div class="cmd">
-      <span class="c"># из исходников: Node.js 22+, pnpm 10</span><br>
+      <span class="c"># from source: Node.js 22+, pnpm 10</span><br>
       <span class="g">$</span> pnpm install --frozen-lockfile<br>
       <span class="g">$</span> pnpm --filter @anycode/desktop dev
     </div>
@@ -299,7 +299,7 @@
 </section>
 
 <div id="counter">1 / 5</div>
-<div class="hint">← → или клик по краям</div>
+<div class="hint">← → or click the edges</div>
 
 <script>
   (function () {

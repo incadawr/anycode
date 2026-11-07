@@ -8,7 +8,7 @@
  *
  * The origin of the download artifact is a COMPILATION-TIME constant here,
  * never something a network-fetched manifest can carry or override (cut
- * §7.1: "Подделанный манифест не может перенаправить загрузку" — a forged
+ * §7.1: "A forged manifest cannot redirect the download" — a forged
  * manifest's worst-case damage is lying about which VERSIONS are supported,
  * never redirecting the download itself).
  */
@@ -66,7 +66,7 @@ export const BUNDLED_CODEX_MANIFEST: CodexSupportManifest = {
     {
       "range": ">=0.144.0 <0.168.0",
       "status": "tested-and-contract-verified",
-      "note": "0.144.x: живой смоук 10/10, codex-fixes. 0.145–0.154: contract-verified against the real 0.147.0, 0.149.0, 0.150.1, 0.151.0, 0.152.1, 0.153.4 and 0.154.0 binaries — consumed methods and decision enums byte-identical, no union variant removed; 0.160.0: real contract verified and live GUI smoke 10/10 (Allow/Deny, Stop, restart/resume, zero orphans), 2026-10-03; 0.161.0: real contract verified (additive only, new writeStdin command-approval kind handled) and live GUI smoke 10/10, 2026-10-08; 0.162.0: real contract verified (additive only: MessagePhase partial_answer, rootTurnId/parentTurnId — none consumed) and live GUI smoke 10/10, 2026-10-09; 0.163.x: covered by contract diff only (real 0.163.0 binary: additive only, TurnToolOutput.retain — not consumed), not individually live-smoked; 0.164.0: real contract verified (imageGeneration result moved into a result-or-fileId alternative — display-only, missing field already tolerated; PlanType gained values — read as a free string) and live GUI smoke 10/10, 2026-10-24; 0.165.0: real contract verified (gcp account variant and modelNotFound error code added); live GUI smoke pending; 0.166.0: real contract verified (additive fields and policyCapacityUnavailable error code); live GUI smoke pending; 0.167.0: real contract verified (humanCommand gated by an unrequested capability; audio source alternative not used); live GUI smoke pending"
+      "note": "0.144.x: live smoke 10/10, codex fixes. 0.145–0.154: contract-verified against the real 0.147.0, 0.149.0, 0.150.1, 0.151.0, 0.152.1, 0.153.4 and 0.154.0 binaries — consumed methods and decision enums byte-identical, no union variant removed; 0.160.0: real contract verified and live GUI smoke 10/10 (Allow/Deny, Stop, restart/resume, zero orphans), 2026-10-03; 0.161.0: real contract verified (additive only, new writeStdin command-approval kind handled) and live GUI smoke 10/10, 2026-10-08; 0.162.0: real contract verified (additive only: MessagePhase partial_answer, rootTurnId/parentTurnId — none consumed) and live GUI smoke 10/10, 2026-10-09; 0.163.x: covered by contract diff only (real 0.163.0 binary: additive only, TurnToolOutput.retain — not consumed), not individually live-smoked; 0.164.0: real contract verified (imageGeneration result moved into a result-or-fileId alternative — display-only, missing field already tolerated; PlanType gained values — read as a free string) and live GUI smoke 10/10, 2026-10-24; 0.165.0: real contract verified (gcp account variant and modelNotFound error code added); live GUI smoke pending; 0.166.0: real contract verified (additive fields and policyCapacityUnavailable error code); live GUI smoke pending; 0.167.0: real contract verified (humanCommand gated by an unrequested capability; audio source alternative not used); live GUI smoke pending"
     }
   ],
   "recommended": "0.167.0",
