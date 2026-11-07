@@ -9,14 +9,14 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
 
 ## Engine tabs (Claude and Codex)
 
-1. Same tools, same approval rules, same **Full browser access** switch and
-   domain policy as native tabs.
+1. Same tools, **Full browser access** switch and domain policy as native tabs.
+   Engine tabs request approval directly for calls marked as needing it.
 2. Approvals always apply in these tabs (there is no auto/yolo mode that
    skips them): a remote navigation and `remote:true` click/type ask first
    unless Full browser access is on; `BrowserEval` asks always, even with it
    on, and no saved always-allow rule exempts it.
-3. `BrowserOpen` of a remote url asks even with Full browser access on, as in
-   native tabs.
+3. `BrowserOpen` of a remote URL asks even with Full browser access on. In
+   Native tabs it remains high-risk and follows the permission mode.
 4. A Codex session resumed after an app restart gets the browser tools back
    (the declarations ride `thread/resume`); a Codex session created before
    this version keeps its old tool set — start a new Codex session to get the
@@ -35,13 +35,13 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
 
 | tool | what it does | approval |
 |---|---|---|
-| `BrowserNavigate` | opens an `http(s)` url in the preview, or goes back, forward or reloads | a non-localhost url asks first |
+| `BrowserNavigate` | opens an `http(s)` url in the preview, or goes back, forward or reloads | remote URL escalates unless Full browser access is on |
 | `BrowserSnapshot` | lists the page's interactive and labelled elements, each with a ref such as `e12` | none |
-| `BrowserClick` | clicks an element by `ref` (preferred) or CSS `selector` | `remote: true` asks first |
-| `BrowserType` | types text into an input, textarea or contenteditable | `remote: true` asks first |
+| `BrowserClick` | clicks an element by `ref` (preferred) or CSS `selector` | `remote: true` escalates unless Full browser access is on |
+| `BrowserType` | types text into an input, textarea or contenteditable | `remote: true` escalates unless Full browser access is on |
 | `BrowserWaitFor` | waits until some text or a selector appears (or, with `gone`, disappears) | none |
 | `BrowserConsole` | returns the page's recent console output and uncaught errors (default 50 lines) | none |
-| `BrowserEval` | runs arbitrary JavaScript in the page; the script has the page's own reach and can read that page's cookies and storage | always asks |
+| `BrowserEval` | runs arbitrary JavaScript in the page; the script has the page's own reach and can read that page's cookies and storage | fresh approval whenever allowed |
 
 The existing `BrowserOpen`, `BrowserRead` and `BrowserScreenshot` tools are
 unchanged.
@@ -79,8 +79,8 @@ takes a new snapshot.
   refused, and nothing is clicked.
 - A snapshot is capped (about 1 500 elements and 30 000 characters by default,
   60 000 at most). The output says how many nodes were left out.
-- Password fields are never typed into and their values never appear in a
-  snapshot. File inputs cannot be typed into.
+- Password fields can be typed into only with Full browser access on; their
+  values never appear in a snapshot. File inputs cannot be typed into.
 - `BrowserEval` runs arbitrary page JavaScript, so the script can read the
   shown page's cookies and storage, and anything else the page can see,
   including values typed into its fields (a non-HttpOnly login cookie and a
@@ -93,29 +93,30 @@ takes a new snapshot.
 
 ## Approval
 
-- Loopback pages (`localhost`, `127.0.0.1`, `[::1]`) and local files: no prompt
-  for snapshot, click, type, wait or history navigation.
-- A non-localhost origin: `BrowserNavigate` to it asks first. Clicking or
-  typing on a page from that origin asks again (`remote: true`). If you decline,
-  the agent does not retry around the refusal.
-- `BrowserEval` always asks, on every origin — in every mode, and no saved
-  always-allow rule exempts it. The expression runs as page
-  code: it can read the shown page's cookies and storage, and anything else
-  the page can see, including values typed into its fields. HttpOnly cookies,
-  other preview partitions and OS or browser-stored credentials stay out of
-  reach; there is no keyword filter, the script's reach is simply the page's
-  own reach.
-- Modes `auto` and `yolo` do not escalate approvals, so a `remote: true` call
-  runs without a prompt there. This matches how `BrowserOpen` already treats
-  remote URLs. `BrowserEval` is the exception: it asks in those modes too.
+Browser actions in Native tabs follow the [permission mode](permissions.md#the-mode-ladder)
+and saved rules: plan denies side-effecting actions, build and edit ask, auto
+asks for high-risk actions, and yolo allows them. Remote `BrowserOpen` is
+high-risk regardless of Full browser access. Remote `BrowserNavigate` and
+click/type marked `remote: true` are high-risk when Full browser access is off;
+with it on they do not receive that escalation. Local navigation, click and type
+still follow the mode's ordinary side-effect rules. Engine tabs instead ask for
+calls marked as needing approval, regardless of mode. Saved rules may resolve
+ordinary asks.
+
+`BrowserEval` requires a fresh approval whenever it is allowed to run; no mode,
+Full browser access switch or saved rule bypasses it. Native plan mode denies
+it. Its script has the page's own reach, including non-HttpOnly cookies,
+storage and values typed into fields. If you decline an action, the agent must
+not retry around the refusal.
 
 ## Full browser access (per session)
 
 Each session has a **Full browser access** switch in its environment menu
 (the folder/branch menu in the header). While it is on, the agent can open any
 http(s) site, click and type (including passwords) in that session's preview
-without asking; `BrowserEval` keeps asking on every call — modes and saved
-rules never exempt it. Turning it on asks
+without the remote-action escalation. The session mode can still require approval;
+remote `BrowserOpen` remains high-risk, and `BrowserEval` still requires a fresh
+approval whenever allowed. Turning it on asks
 you first; turning it off is immediate and takes effect on the next navigation
 or action.
 

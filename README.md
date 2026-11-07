@@ -18,8 +18,8 @@ machine.
 **How it differs from other agent desktops** (Conductor, Superset, vendor
 GUIs): one shell over *several* engines rather than one vendor's runtime;
 subagents can run on a different engine than their parent session; the CLI
-adapters are pinned against recorded protocol fixtures, so engine drift fails
-the build instead of your session; and a sandboxed preview window the agent
+adapters are checked against recorded protocol fixtures in the build, with
+new CLI versions checked separately in an opt-in run; and a sandboxed preview window the agent
 drives itself (open a page, read its console, take a screenshot).
 
 **Your keys stay yours.** Provider keys are encrypted through Electron's

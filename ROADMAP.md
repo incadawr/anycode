@@ -90,14 +90,18 @@ separate task or research item._
 - **Multi-agent orchestration.** _Available now in Native and Codex tabs._
   Orchestrate keeps the parent read-only and routes built-in child roles through
   Settings → Roles; see [the guide](docs/user/orchestration.md).
-  Still ahead: Claude Code Orchestrate
-  ([#35](https://github.com/incadawr/anycode/issues/35)) and worktree isolation
-  for session-tier children ([#7](https://github.com/incadawr/anycode/issues/7)).
+  New Core session children can use separate Git worktrees; these separate
+  working folders, not security permissions. Isolation for external-engine
+  children remains planned ([#7](https://github.com/incadawr/anycode/issues/7)),
+  as does Claude Code Orchestrate ([#35](https://github.com/incadawr/anycode/issues/35)).
 - **Native inter-session communication.** The [Sessions API](docs/user/sessions-api.md)
   serves external clients today; communication between engine sessions is tracked
   in [#39](https://github.com/incadawr/anycode/issues/39).
 - **Skills in engine tabs.** Forward AnyCode skills into Claude Code and Codex
-  tabs ([#12](https://github.com/incadawr/anycode/issues/12)).
+  tabs: three app built-ins are available to root Claude and Codex processes,
+  subject to CLI compatibility; Windows forwarding is unavailable. File-based
+  skills are not forwarded. Broader skill support remains planned
+  ([#12](https://github.com/incadawr/anycode/issues/12)).
 - **Deep research mode.** Multi-step research sessions (web search and fetch,
   source tracking, a final report with citations) built as an orchestration
   preset rather than a separate agent.

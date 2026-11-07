@@ -15,7 +15,7 @@ Pick the mode from the mode chip in the composer. A new tab starts in `build`.
 | `build` | read-only tools; shell commands AnyCode's classifier proves read-only | writes and other side effects | nothing |
 | `edit` | read-only tools; Write and Edit inside the session workspace; the read-only shell commands above | writes outside the workspace; other side effects | nothing |
 | `auto` | everything except high-risk tools | high-risk tools | nothing |
-| `yolo` | everything | nothing | nothing |
+| `yolo` | everything except `BrowserEval` | `BrowserEval` | nothing |
 
 The composer names the modes: "Read-only planning", "Ask before edits", "Edit
 files in this project without asking", "Ask only for risky actions", and "Never
@@ -23,7 +23,8 @@ ask".
 
 > **Warning.** In `auto`, a tool the classifier marks high-risk still asks, but
 > other shell commands run unprompted, including destructive ones. In `yolo`
-> nothing asks. A wrong command or a force-push executes. Use `yolo` only in
+> `BrowserEval` still requires approval, but a wrong command or a force-push
+> executes. Use `yolo` only in
 > disposable environments, such as a throwaway worktree, a container or a VM.
 
 ## Always-allow rules
@@ -114,15 +115,15 @@ writes or runs a shell command runs, whatever the rules say. For more causes, se
 
 ## Browser control
 
-`BrowserNavigate`, `BrowserClick` and `BrowserType` ask for approval when they
-reach a non-localhost origin (a remote url, or a click or type the agent marks
-`remote: true`). `BrowserEval` always asks — in every mode, and
-always-allow rules never exempt it (an older saved rule for it no longer
-applies). Snapshot, wait and console calls,
-and anything on a localhost page or a local file, do not prompt. See
-[browser.md](browser.md).
+In Native tabs browser actions follow the mode table. Remote `BrowserOpen`
+is high-risk even with Full browser access on. Remote `BrowserNavigate` and
+`BrowserClick` / `BrowserType` marked `remote: true` are high-risk when Full
+browser access is off; the switch removes that escalation, but does not bypass
+the mode's ordinary rules for side effects. Thus `auto` asks for high-risk
+calls, while `yolo` allows them. In `plan`, side-effecting browser calls are
+denied. Engine tabs ask directly for calls marked as needing approval.
 
-A session's **Full browser access** switch (off by default) removes these
-prompts for that session only, while it is on — except `BrowserEval`, which
-keeps asking. Folders you have not trusted never get it. See
-[browser.md](browser.md#full-browser-access-per-session).
+`BrowserEval` requires a fresh approval whenever it is allowed to run, including
+in `auto` and `yolo`; saved always-allow rules and Full browser access cannot
+exempt it. In Native `plan` it is denied. See [browser.md](browser.md) for
+the complete browser policy and [Full browser access](browser.md#full-browser-access-per-session).

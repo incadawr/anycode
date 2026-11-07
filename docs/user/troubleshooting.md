@@ -67,8 +67,16 @@ Work down this list:
 5. **Large body.** A body over 64 KiB still appears in the list, but it is cut
    off when loaded. Split it.
 6. **No new session yet.** Discovery runs when a session starts.
-7. **Engine tab.** Codex and Claude tabs do not receive AnyCode skills. Use a
-   Native tab.
+7. **Engine tab.** Root Claude and Codex processes can receive the three app
+   built-ins `anycode-setup`, `using-browser-preview`, and `control-browser`;
+   browser skills require browser tools. Enable them and start a new process.
+   Windows forwarding is unavailable, and CLI compatibility or preparation
+   failures can leave them unavailable. Recognition does not guarantee model use.
+   User and plugin filesystem skills are not forwarded; use a Native tab for
+   those, or install skills independently under the CLI's own rules. File-based
+   skills in a separate worktree are discovered from that worktree, not the main
+   checkout. Child worktree isolation currently applies to new Core session
+   children only; it separates working folders, not security permissions.
 
 Reference: [skills.md](skills.md).
 

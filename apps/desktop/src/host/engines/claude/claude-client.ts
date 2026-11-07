@@ -96,7 +96,7 @@ export interface ClaudeSpawnArgsOptions {
    * evidence, no API turn): the option is yargs-registered as
    * `--max-turns <turns>` "Maximum number of agentic turns in non-interactive
    * mode. This will early exit the conversation after the specified number of
-   * turns" with hideHelp() — which is why W0-FINDINGS.md:50 correctly saw it
+   * turns" with hideHelp() — which is why W0-FINDINGS.md (probe 13) correctly saw it
    * ABSENT from `-p --help`; hidden ≠ unregistered. The binary's own embedded
    * SDK harness spawns itself with `["-p","--output-format","stream-json",
    * "--verbose","--max-turns",String(n),...]`, i.e. the flag is exercised in
