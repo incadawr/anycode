@@ -206,7 +206,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Environment: ${label}`}
-        title={showWorkspace ? undefined : workspacePath}
+        title={workspacePath}
         onClick={toggle}
       >
         <Folder />

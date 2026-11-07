@@ -649,7 +649,7 @@ it("hides a matching header folder and keeps differing titles", async () => {
       expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBe("/fixture/repo");
       await act(async () => useTabsStore.setState({ tabs: [{ tabId: "tab", title: "Fix login" }] as typeof previous }));
       expect(host.querySelector(".environment-workspace")?.textContent).toContain("repo");
-      expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBeNull();
+      expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBe("/fixture/repo");
     } finally { await act(async () => useTabsStore.setState({ tabs: previous })); }
   });
 });
@@ -663,7 +663,7 @@ it("keeps the folder name when it equals the title and nothing else would show i
     }, { placement: "composer" });
     await branchMenu(async (host) => {
       expect(host.querySelector(".environment-workspace")?.textContent).toContain("repo");
-      expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBeNull();
+      expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBe("/fixture/repo");
     }, { branch: false });
   } finally { await act(async () => useTabsStore.setState({ tabs: previous })); }
 });
