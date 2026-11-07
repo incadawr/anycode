@@ -5526,7 +5526,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               notice: {
                 kind: "turn_rejected",
                 text:
-                  message.reason === "input_not_sent"
+                  message.queuePauseReason && (restore || restoreDirect)
+                    ? `Message returned to the queue: ${message.queuePauseReason === "max_turns"
+                      ? "the turn hit the turn limit"
+                      : message.queuePauseReason === "cancelled"
+                        ? "the turn was cancelled"
+                        : "the turn failed"}.`
+                    : message.reason === "input_not_sent"
                     ? "Message was not sent. Restore the saved message before sending again."
                     : message.reason === "busy"
                     ? "Message rejected: the agent is still running the current turn."
@@ -5535,6 +5541,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     : "Message rejected: the host is not ready yet.",
               },
               ...(restore ?? restoreDirect ?? {}),
+              ...((restore || restoreDirect) ? { continueOffer: null } : {}),
               ...((restore || restoreDirect || rejectedSystem) ? {
                 transcript: get().transcript.filter(block => block.kind !== "user_text" || block.id !== message.requestId),
               } : {}),

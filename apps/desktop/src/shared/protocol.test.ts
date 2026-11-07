@@ -364,6 +364,22 @@ describe("user_message images protocol", () => {
   });
 });
 
+describe("user_message.fromQueue protocol", () => {
+  const message = { type: "user_message", requestId: "r1", text: "queued" };
+
+  it("accepts true and preserves the queue marker", () => {
+    expect(uiToHostMessageSchema.parse({ ...message, fromQueue: true })).toEqual({ ...message, fromQueue: true });
+  });
+
+  it("accepts an absent marker for legacy renderers", () => {
+    expect(uiToHostMessageSchema.parse(message)).toEqual(message);
+  });
+
+  it.each([false, "yes"])("rejects fromQueue=%s", fromQueue => {
+    expect(uiToHostMessageSchema.safeParse({ ...message, fromQueue }).success).toBe(false);
+  });
+});
+
 describe("reserved orchestration wire forms", () => {
   it("keeps legacy forms valid and rejects new fields on the prior strict schema", () => {
     const legacyTask = { type: "user_message", requestId: "r", text: "task" };
