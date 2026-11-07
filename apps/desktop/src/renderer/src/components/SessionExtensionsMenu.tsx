@@ -33,19 +33,26 @@ export function SessionExtensionsMenu() {
   const rows = useRef<(HTMLButtonElement | null)[]>([]);
   const details = useRef<HTMLDivElement>(null);
   const categoryList = useRef<HTMLDivElement>(null);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const lastCategory = useRef(new Map<string, number>());
   const returnTo = useRef<number | null>(null);
   const tabExit = useRef(false);
   const [selection, setSelection] = useState<{ index: number; focus: boolean } | null>(null);
   const [narrow, setNarrow] = useState(window.innerWidth < 600);
   const roving = useRovingTabindex({ count: core ? 5 : 4, onActiveIndexChange: (index) => rows.current[index]?.focus() });
   useOverlayFlag(open);
-  const cancelHover = () => { clearTimeout(hoverTimer.current); hoverTimer.current = undefined; };
-  const select = (index: number, focus = true) => { cancelHover(); setSelection({ index, focus }); };
+  const select = (index: number, focus = true) => {
+    lastCategory.current.set(tabId, index);
+    setSelection({ index, focus });
+  };
+  const initialIndex = () => Math.min(lastCategory.current.get(tabId) ?? 0, core ? 4 : 3);
+  const show = () => {
+    roving.setActiveIndex(initialIndex());
+    setSelection(narrow ? null : { index: initialIndex(), focus: false });
+    setOpen(true);
+  };
   const back = () => {
-    cancelHover();
     returnTo.current = selection?.index ?? 0;
-    setSelection(null);
+    setSelection(narrow ? null : { index: selection?.index ?? 0, focus: false });
   };
   const exitOnBlur = (event: FocusEvent<HTMLElement>) => {
     if (!tabExit.current) return;
@@ -55,7 +62,6 @@ export function SessionExtensionsMenu() {
   useEffect(() => {
     tabExit.current = false;
     if (!open) setSelection(null);
-    return cancelHover;
   }, [open]);
   useLayoutEffect(() => {
     if (selection?.focus) details.current?.focus();
@@ -70,7 +76,7 @@ export function SessionExtensionsMenu() {
       if (next && !narrow && selection && categoryList.current?.contains(document.activeElement)) {
         setSelection({ ...selection, focus: true });
       }
-      cancelHover();
+      if (!next && !selection) setSelection({ index: initialIndex(), focus: false });
       setNarrow(next);
     };
     window.addEventListener("resize", resize);
@@ -79,7 +85,7 @@ export function SessionExtensionsMenu() {
 
   useLayoutEffect(() => {
     if (!open) return;
-    rows.current[0]?.focus();
+    rows.current[initialIndex()]?.focus();
   }, [open]);
   useLayoutEffect(() => {
     if (!open) return;
@@ -87,13 +93,13 @@ export function SessionExtensionsMenu() {
       if (!panel.current || !trigger.current) return;
       const anchor = trigger.current.getBoundingClientRect();
       const rect = panel.current.getBoundingClientRect();
-      panel.current.style.left = `${Math.max(8, Math.min(anchor.left, window.innerWidth - rect.width - 8))}px`;
+      panel.current.style.left = `${Math.max(8, Math.min(anchor.right - rect.width, window.innerWidth - rect.width - 8))}px`;
       panel.current.style.top = `${Math.max(8, Math.min(anchor.bottom + 4, window.innerHeight - rect.height - 8))}px`;
     };
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [open, selection, narrow, reads]);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -119,7 +125,6 @@ export function SessionExtensionsMenu() {
   }, [open, setOpen]);
 
   const manage = (pane: SettingsPaneSelection["pane"], scope: "project" | "user") => {
-    cancelHover();
     flushSync(() => setOpen(false));
     trigger.current?.focus();
     window.dispatchEvent(new CustomEvent(SETTINGS_SELECT_PANE_EVENT, { detail: { pane, tabId, scope } }));
@@ -138,12 +143,11 @@ export function SessionExtensionsMenu() {
       aria-describedby={failed ? warningId : undefined}
       aria-label="Extensions" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
       onBlur={exitOnBlur}
-      onClick={() => { if (!open) roving.setActiveIndex(0); setOpen(!open); }}
+      onClick={() => { if (open) setOpen(false); else show(); }}
       onKeyDown={(event) => {
         if (event.key === "ArrowDown") {
           event.preventDefault();
-          roving.setActiveIndex(0);
-          setOpen(true);
+          show();
         }
       }}>
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
@@ -166,13 +170,6 @@ export function SessionExtensionsMenu() {
         aria-expanded={selection?.index === index} aria-controls={selection?.index === index ? `${id}-details` : undefined}
         tabIndex={roving.tabIndexFor(index)} onFocus={() => roving.setActiveIndex(index)}
         onClick={() => select(index)}
-        onMouseEnter={() => {
-          cancelHover();
-          if (narrow) return;
-          hoverTimer.current = setTimeout(() => {
-            if (categoryList.current?.contains(document.activeElement) || document.activeElement === trigger.current) select(index, false);
-          }, 150);
-        }} onMouseLeave={cancelHover}
         onKeyDown={(event) => {
           if (["ArrowRight", "Enter", " "].includes(event.key)) { event.preventDefault(); select(index); }
           else roving.onKeyDown(index)(event);
@@ -182,9 +179,9 @@ export function SessionExtensionsMenu() {
       </Button>)}
       </div>
       {selection && <div ref={details} id={`${id}-details`} className="session-extensions-details" tabIndex={-1}
-        role="region" aria-label={categories[selection.index]![0]} onFocus={cancelHover}
+        role="region" aria-label={categories[selection.index]![0]}
         onKeyDown={(event) => { if (event.key === "ArrowLeft") { event.preventDefault(); back(); } }}>
-        <Button type="button" className="session-extensions-back" onClick={back}>Back</Button>
+        {narrow && <Button type="button" className="session-extensions-back" onClick={back}>Back</Button>}
         <h3>{categories[selection.index]![0]}</h3>
         {selection.index === 3 && <SessionExtensionsLspSummary servers={lspServers} core={engine === null}
           ready={connection === "ready"} onRestart={() => {

@@ -68,7 +68,7 @@ it("opens one portal dialog with scoped configured counts and returns focus on E
   expect(panel.getAttribute("aria-modal")).toBe("false");
   expect(trigger().getAttribute("aria-controls")).toBe(panel.id);
   expect(isOverlayOpen()).toBe(true);
-  const rows = [...panel.querySelectorAll("button")];
+  const rows = [...panel.querySelectorAll(".session-extensions-category")];
   expect(rows.map((row) => row.textContent)).toEqual(["MCP2›", "Plugins1›", "Skills3›", "LSP2›", "HooksNone›"]);
   expect(document.activeElement).toBe(rows[0]);
   expect(panel.querySelector("button button, button input")).toBeNull();
@@ -171,14 +171,14 @@ it("does not mount Extensions in the child breadcrumb view", async () => {
 
 it("clamps the portal to viewport edges and recalculates on resize", async () => {
   await render();
-  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ left: 900, bottom: 750 } as DOMRect);
+  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ left: 900, right: 1180, bottom: 750 } as DOMRect);
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     return { width: 280, height: 180 } as DOMRect;
   });
   await click(trigger());
   expect(dialog()!.style.left).toBe(`${window.innerWidth - 288}px`);
   expect(dialog()!.style.top).toBe(`${window.innerHeight - 188}px`);
-  vi.mocked(trigger().getBoundingClientRect).mockReturnValue({ left: -20, bottom: 10 } as DOMRect);
+  vi.mocked(trigger().getBoundingClientRect).mockReturnValue({ left: -20, right: 60, bottom: 10 } as DOMRect);
   await act(async () => { window.dispatchEvent(new Event("resize")); });
   expect(dialog()!.style.left).toBe("8px");
   expect(dialog()!.style.top).toBe("14px");
@@ -207,7 +207,7 @@ it("opens read-only lists with click, Enter, Space and Right, and returns with L
     expect(categories[index]!.getAttribute("aria-controls")).toBe(details()!.id);
     expect(details()!.querySelectorAll("li").length).toBe([4, 1, 3, 2][index]);
     await key(details()!, "ArrowLeft");
-    expect(details()).toBeNull();
+    expect(details()!.getAttribute("aria-label")).toBe(name);
     expect(document.activeElement).toBe(categories[index]);
   }
   await click(categories[0]!);
@@ -216,38 +216,52 @@ it("opens read-only lists with click, Enter, Space and Right, and returns with L
   expect(details()!.textContent).toContain("Saved: disabled");
   expect(dialog()!.querySelector('input, button button')).toBeNull();
   expect(dialog()!.querySelectorAll('[role="switch"]')).toHaveLength(2);
-  await click(details()!.querySelector("button")!);
+  expect(details()!.querySelector(".session-extensions-back")).toBeNull();
+  await key(details()!, "ArrowLeft");
   expect(document.activeElement).toBe(categories[0]);
   expect(document.querySelectorAll('[role="dialog"][aria-label="Extensions"]').length).toBe(1);
 });
 
-it("delays hover, cancels on leave, and never steals focus or replaces focused details", async () => {
+it("keeps the category during diagonal hover regardless of focus", async () => {
   vi.useFakeTimers();
   await render();
   await click(trigger());
   const categories = categoryButtons();
-  await hover(categories[1]!);
-  await act(async () => { vi.advanceTimersByTime(149); });
-  expect(details()).toBeNull();
-  await act(async () => { vi.advanceTimersByTime(1); });
-  expect(details()!.getAttribute("aria-label")).toBe("Plugins");
-  expect(document.activeElement).toBe(categories[0]);
-  await hover(categories[2]!);
-  await hover(categories[2]!, false);
-  await act(async () => { vi.advanceTimersByTime(200); });
-  expect(details()!.getAttribute("aria-label")).toBe("Plugins");
-  await click(categories[1]!);
-  const back = details()!.querySelector("button")!;
-  await act(async () => back.focus());
-  await hover(categories[2]!);
-  await act(async () => { vi.advanceTimersByTime(200); });
-  expect(details()!.getAttribute("aria-label")).toBe("Plugins");
-  expect(document.activeElement).toBe(back);
-  await key(back, "Escape");
-  expect(document.activeElement).toBe(trigger());
-  expect(isOverlayOpen()).toBe(false);
-  await act(async () => { vi.advanceTimersByTime(0); });
-  expect(vi.getTimerCount()).toBe(0);
+  expect(details()!.getAttribute("aria-label")).toBe("MCP");
+  for (const focus of [categories[0]!, details()!]) {
+    await act(async () => focus.focus());
+    for (const [index, x, y] of [[1, 100, 40], [2, 140, 60], [3, 180, 80]]) {
+      await act(async () => categories[index!]!.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y })));
+      await hover(categories[index!]!);
+      await act(async () => vi.advanceTimersByTime(200));
+      expect(details()!.getAttribute("aria-label")).toBe("MCP");
+      expect(document.activeElement).toBe(focus);
+    }
+  }
+  await click(categories[2]!);
+  expect(details()!.getAttribute("aria-label")).toBe("Skills");
+  await key(details()!, "Escape");
+  await click(trigger());
+  expect(details()!.getAttribute("aria-label")).toBe("Skills");
+  expect(document.activeElement).toBe(categoryButtons()[2]);
+});
+
+it("keeps column geometry through selection and data arrival, with no Back button", async () => {
+  let finish!: (value: never) => void;
+  vi.mocked(window.anycode.skills.list).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  await render();
+  vi.spyOn(trigger(), "getBoundingClientRect").mockReturnValue({ left: 900, right: 1000, bottom: 50 } as DOMRect);
+  const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 520, height: 480 } as DOMRect);
+  await click(trigger());
+  const panel = dialog()!;
+  const before = { left: panel.style.left, width: panel.getBoundingClientRect().width };
+  expect(before).toEqual({ left: "480px", width: 520 });
+  measure.mockClear();
+  await click(categoryButtons()[2]!);
+  await act(async () => finish({ rows: [], problems: [] } as never));
+  expect(measure).not.toHaveBeenCalled();
+  expect({ left: panel.style.left, width: panel.getBoundingClientRect().width }).toEqual(before);
+  expect(panel.querySelector(".session-extensions-back")).toBeNull();
 });
 
 it("uses drill-down below 600px, keeps focus through resize and restores the category", async () => {
@@ -272,7 +286,7 @@ it("uses drill-down below 600px, keeps focus through resize and restores the cat
   expect(dialog()!.querySelector<HTMLElement>(".session-extensions-categories")!.hidden).toBe(false);
   expect(document.activeElement).toBe(details());
   await key(details()!, "ArrowLeft");
-  expect(document.activeElement).toBe(categoryButtons()[1]);
+  expect(document.activeElement).toBe(categoryButtons()[2]);
 });
 
 it("renders sanitized names as plain text and excludes private DTO fields", async () => {

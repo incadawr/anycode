@@ -121,14 +121,16 @@ async function main() {
     await key("ArrowDown"); await focused(".session-extensions-category:first-child");
     await key("ArrowDown"); await focused(".session-extensions-category:nth-child(2)");
     await key("ArrowUp"); await key("ArrowRight"); await focused(".session-extensions-details");
-    await key("Tab"); await focused(".session-extensions-back");
+    assert.equal(await evaluate("!!document.querySelector('.session-extensions-back')"), false, "Columns have no Back button");
     await key("Tab"); await focused('[role="switch"]');
-    await key("Tab", true); await focused(".session-extensions-back");
+    await key("Tab", true); await focused(".session-extensions-category:first-child");
+    await key("ArrowRight"); await focused(".session-extensions-details");
     await key("ArrowLeft"); await focused(".session-extensions-category:first-child");
-    // Pointer hover may change selection, but must preserve keyboard focus.
+    // Hover only highlights; selection and focus remain stable.
     const rect = await evaluate(`(() => {const r=document.querySelector('.session-extensions-category:nth-child(2)').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await cdp.call("Input.dispatchMouseEvent", { type: "mouseMoved", ...rect });
     await sleep(250); await focused(".session-extensions-category:first-child");
+    assert.equal(await evaluate("document.querySelector('.session-extensions-details').getAttribute('aria-label')"), "MCP");
     await escape(); await focused(trigger);
     await key("ArrowDown");
     await key("Tab", true);
@@ -148,7 +150,7 @@ async function main() {
     }
     assert.equal(await evaluate(`!!document.querySelector('${panel}')`), false, "Forward Tab exits menu");
     assert.equal(await evaluate(`document.activeElement?.matches('${trigger}')`), false, "Forward exit preserves focus");
-    results.checks.push("keyboard-arrows-switch-back-escape-shift-tab", "hover-preserves-focus");
+    results.checks.push("keyboard-arrows-switch-left-escape-shift-tab", "hover-preserves-selection-and-focus");
   }
   async function layouts() {
     // Electron does not expose Chrome's Browser.setWindowBounds. Exercise the
@@ -170,6 +172,10 @@ async function main() {
               triggerVisible:a.width>0 && a.left>=0 && a.right<=innerWidth,
               warning:!!t.querySelector('.session-extensions-warning') };
           })()`));
+          const geometry = () => evaluate(`(() => { const r=document.querySelector('${panel}').getBoundingClientRect(); return {left:r.left, top:r.top, width:r.width}; })()`);
+          const before = await geometry();
+          await click(".session-extensions-category:nth-child(3)");
+          assert.deepEqual(await geometry(), before, "Category selection keeps panel geometry");
           await shot(`layout-${width}-${theme}`); await escape();
         }
       }
