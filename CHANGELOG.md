@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.91] - 2026-11-08
+
 ### Added
 
 - Connection icons in the model picker and the composer model chip, with an editable monogram and color for each connection.
