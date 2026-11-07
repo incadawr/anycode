@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep open settings and connection edits when a newly available engine moves the app past the welcome screen.
+
 ## [0.0.90] - 2026-11-07
 
 ### Changed

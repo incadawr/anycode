@@ -1317,6 +1317,15 @@ export const CLOSE_TAB_CONFIRM = {
 } as const;
 
 export function App() {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Keep the dialog and its in-flight edits mounted across Welcome/shell changes.
+  return <>
+    <AppContent settingsOpen={settingsOpen} setSettingsOpen={setSettingsOpen} />
+    <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+  </>;
+}
+
+function AppContent({ settingsOpen, setSettingsOpen }: { settingsOpen: boolean; setSettingsOpen: (open: boolean) => void }) {
   const tabs = useTabsStore((state) => state.tabs);
   const activeTabId = useTabsStore((state) => state.activeTabId);
   const draftActive = useTabsStore((state) => state.draftActive);
@@ -1330,7 +1339,6 @@ export function App() {
     () => resolveKeymap(settingsSnapshot?.settings.keybindings?.overrides),
     [settingsSnapshot],
   );
-  const [settingsOpen, setSettingsOpen] = useState(false);
   // pending close-tab confirm (tabId of the tab awaiting the user's
   // verdict) — replaces the blocking window.confirm in handleCloseTab.
   const [closeTabConfirm, setCloseTabConfirm] = useState<string | null>(null);
@@ -1343,7 +1351,6 @@ export function App() {
       const state = useTabsStore.getState();
       state.openDraft();
       state.setDraftEngine(settingsSnapshot?.providerReady ? "core" : welcomeEngineRef.current);
-      setSettingsOpen(false);
     }
     wasWelcomeVisible.current = welcomeVisible;
   }, [welcomeVisible, settingsSnapshot?.providerReady, hasExternalEngine, tabs.length]);
@@ -1785,7 +1792,6 @@ export function App() {
         <WelcomeScreen onOpenSettings={() => setSettingsOpen(true)} settingsOpen={settingsOpen}
           onSelectEngine={(engine) => { welcomeEngineRef.current = engine; }} />
         <div className="account-budget-floating"><AccountBudgetCard collapsed onSettings={() => setSettingsOpen(true)} /></div>
-        <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {window.anycode?.platform !== "darwin" && <WindowControls maximized={windowState.maximized} />}
       </main>
     );
@@ -1914,8 +1920,6 @@ export function App() {
         {/* The active tab's terminal must not float over the start screen (§4.6). */}
         <TerminalPanel tabId={activeTab?.tabId ?? null} open={!draftActive && (activeTab?.terminalOpen ?? false)} />
       </div>
-
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       {/* close-with-running-turn confirm (replaces window.confirm). */}
       <ConfirmDialog

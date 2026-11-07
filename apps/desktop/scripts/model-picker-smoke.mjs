@@ -431,20 +431,7 @@ async function step2CreateMainConnection(ctx) {
   const submitResult = await apiOk(ctx, step, "POST", "/settings/provider/drawer/submit", {});
   assert(step, submitResult.ok === true, `drawer/submit rejected: ${JSON.stringify(submitResult)}`);
 
-  let afterCreate = await pollProviderState(ctx, step, (s) =>
-    s.drawer.stage === "credential" || (!s.mounted && (readJsonDisk(step, ctx.settingsPath, "settings.json")?.provider?.connections ?? []).length === 1));
-  if (!afterCreate.mounted) {
-    // A Welcome-to-shell transition can unmount Settings during creation.
-    // Resume editing the persisted connection in the shell's Settings dialog.
-    const connections = readJsonDisk(step, ctx.settingsPath, "settings.json").provider.connections;
-    const connection = connections[0];
-    assert(step, connection.providerId === PROVIDER_ID && connection.label === "Main", "unexpected connection after Settings unmounted");
-    await apiAction(ctx, step, "/settings/open", {});
-    await apiAction(ctx, step, "/settings/pane", { paneId: "provider" });
-    await pollProviderState(ctx, step, (s) => s.rows.some((row) => row.connectionId === connection.id));
-    await apiAction(ctx, step, "/settings/provider/menu", { connectionId: connection.id, action: "edit" });
-    afterCreate = await pollProviderState(ctx, step, (s) => s.drawer.stage === "credential");
-  }
+  const afterCreate = await pollProviderState(ctx, step, (s) => s.drawer.stage === "credential");
   assert(step, afterCreate.drawer.providerId === PROVIDER_ID, `expected providerId="${PROVIDER_ID}" to survive creation, got ${afterCreate.drawer.providerId}`);
 
   // The Model field only renders post-creation (ConnectionDrawer.tsx:761,
@@ -532,8 +519,12 @@ async function step5OpenDraftAndModelMenu(ctx) {
   writeFileSync(join(ctx.workspace, "seed.txt"), "hello from model-picker smoke\n");
 
   await apiAction(ctx, step, "/start-screen/open", { workspace: ctx.workspace });
+  // A discovered subscription engine may have preselected itself on Welcome.
+  // This smoke exercises Core's connection-scoped model picker.
+  await apiAction(ctx, step, "/start-screen/engine", { engineId: "core" });
   const draft = await getStartScreenState(ctx, step);
   assert(step, draft.active === true, `expected active:true after open, got ${JSON.stringify(draft)}`);
+  assert(step, draft.engine === "core", `expected Core draft, got ${JSON.stringify(draft.engine)}`);
 
   const openResult = await apiOk(ctx, step, "POST", "/start-screen/model-menu", { open: true });
   assert(step, openResult.ok === true, `open model-menu rejected: ${JSON.stringify(openResult)}`);
