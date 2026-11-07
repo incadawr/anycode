@@ -31,6 +31,10 @@ it("keeps Identity controls at their own height when the icon field grows", () =
   const controls = rules.find(rule => rule.selectorText === ".connection-drawer-identity > .settings-field > :is(.settings-field-input, .settings-field-select)");
   expect(identity?.style.getPropertyValue("align-items")).toBe("start");
   expect(controls?.style.flex).toBe("0 0 auto");
+  const appCss = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+  const appRules = Array.from(new JSDOM(`<style>${appCss}</style>`).window.document.styleSheets[0].cssRules) as CSSStyleRule[];
+  const palette = appRules.find(rule => rule.selectorText === ".connection-icon-swatches");
+  expect(palette?.style.getPropertyValue("flex-wrap")).toBe("wrap");
 });
 
 it("shows and clears a saved vocabulary without a reasoning support flag", async () => {
@@ -919,6 +923,7 @@ it("edits and resets the connection icon", async () => {
     expect(update).toHaveBeenCalledWith(expect.objectContaining({iconText:"WX", iconColor:"#5E9E6E"}));
     const automatic = container.querySelector<HTMLButtonElement>('button[aria-label="Automatic icon color"]')!;
     expect(automatic.nextElementSibling?.textContent).toBe("Auto");
+    expect(automatic.parentElement?.className).toBe("connection-icon-auto-choice");
     expect(automatic.getAttribute("aria-pressed")).toBe("false");
     await act(async () => automatic.click());
     expect(automatic.getAttribute("aria-pressed")).toBe("true");
