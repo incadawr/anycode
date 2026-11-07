@@ -1,73 +1,73 @@
 # AnyCode user documentation
 
-This tree describes how to configure and use AnyCode as a user. It is
-packaged with the app and read by the built-in `anycode-setup` skill. For
-developer-facing material (building, automation, release policy) see
-[../development/README.md](../development/README.md).
+## Start here
 
-## Topics
+AnyCode runs coding sessions in tabs, each with its own host process.
+A tab uses Native (the built-in loop), Codex CLI or Claude Code as its engine.
+Native uses provider connections; Codex and Claude use their CLI accounts.
+App settings live in `~/.anycode/settings.json`; enter credentials through Settings.
+Secrets live separately in `~/.anycode/secrets.json`; never read or share that file.
+Shared config lives in `<project>/.anycode/config.json` and `~/.anycode/config.json`.
+A project `.anycode/` beats the user `~/.anycode/` by name for profiles and skills;
+config sections have their own [merge rules](configuration.md#shared-config-anycodeconfigjson).
+Skills, profiles, plugins and workflows have separate directories.
+Most changes need a new session; start with the page for your question below.
 
-- [Configuration files](configuration.md): the two config worlds, the app
-  settings in `~/.anycode/settings.json` and the shared `.anycode/config.json`
-  (project and user), which file each need maps to, and how to verify a change.
-- [Engines](engines.md): the Native, Codex and Claude engines, binary discovery
-  and trust, sign-in, per-engine proxy, and the engine-versus-provider split.
-- [Subagents](subagents.md): the built-in personas and your own
-  `.anycode/agents/*.md` profiles, with the frontmatter reference and examples.
-- [Skills](skills.md): skill folders, roots and precedence, the `Skill` tool,
-  disabling, and the built-in skills the app ships.
-- [MCP servers](mcp.md): declaring stdio and HTTP servers, the `${env:NAME}`
-  secret pattern, failure behaviour, and how to verify a server came up.
-- [Language servers](lsp.md): the `lspServers` entries that give the agent
-  go-to-definition and diagnostics, the Settings pane's catalog and PATH
-  detection, and when changes apply.
-- [Browser control](browser.md): operating a page in the built-in preview
-  (navigate, snapshot, click, type, wait), the ref workflow, limits and approval.
-- [Permissions](permissions.md): the mode ladder (`plan`, `build`, `edit`,
-  `auto`, `yolo`), always-allow rules and patterns, workspace confinement,
-  trusted binaries, and the approval prompt.
-- [Orchestration](orchestration.md): a supervisor session that dispatches work
-  to subagent profiles, built from the pieces above.
-- [Proxy and network](proxy.md): proxy profiles, the application default,
-  per-connection and per-engine proxies, and no-proxy lists.
-- [Sessions API](sessions-api.md): enabling the local MCP endpoint from
-  Settings → Sessions API, sharing a session, connecting Claude Code or Codex,
-  and the token and folder rules.
-- [Plugins](plugins.md): what plugins are, where they live, the trust tiers,
-  two-phase install, MCP-server consent, updates, rollback and pinning.
-- [Remote control from a chat app](remote-control.md): the example plugin that lets you
-  reach your shared sessions from a private Telegram chat.
-- [Troubleshooting](troubleshooting.md): checklists for a missing MCP server,
-  orchestration roles, and a missing skill, and where problems are shown.
+## I want to… / Symptom
 
-## The precedence contract, in one line
-
-A project `.anycode/` beats the user `~/.anycode/` for config keys, skills, and
-subagent profiles alike.
-
-## Secrets
-
-Secrets, including provider API keys, OAuth tokens and proxy passwords, live in
-`~/.anycode/secrets.json` (mode 0600, owner-only). They never sit in
-`~/.anycode/settings.json` (mode 0644, human-editable) or in a project config.
-Tokens reach MCP servers through `${env:NAME}` references.
-
-## Where the Settings panes map in this tree
-
-| Settings pane | Page |
+| I want to… / Symptom | Page |
 |---|---|
-| Profile | Usage statistics from local telemetry; no configuration file. |
-| Provider | [configuration.md](configuration.md), [engines.md](engines.md) |
-| Codex, Claude | [engines.md](engines.md) |
-| Permissions | [permissions.md](permissions.md) |
-| Tools | [configuration.md](configuration.md) |
-| Vision | [configuration.md](configuration.md) |
-| Network | [proxy.md](proxy.md) |
-| MCP | [mcp.md](mcp.md) |
-| Language servers | [lsp.md](lsp.md) |
-| Sessions API | [sessions-api.md](sessions-api.md) |
-| Skills | [skills.md](skills.md) |
-| Subagents | [subagents.md](subagents.md) |
-| Plugins | [plugins.md](plugins.md) |
-| Environment | [configuration.md](configuration.md) (telemetry, repo map) |
-| Appearance, Keyboard shortcuts, About | App-only; no configuration file. |
+| Set up my first connection and project | [Getting started](getting-started.md#connect-and-open-a-project) |
+| Add an API key, subscription or local endpoint | [Providers](providers.md#add-a-connection) |
+| Find available models and change effort | [Models and effort](providers.md#models-and-effort) |
+| Send images or configure Vision fallback | [Image-input](providers.md#image-input) |
+| Check remaining quota | [Quotas and usage](providers.md#quotas-and-usage) |
+| Export a setup without credentials | [Export and import](providers.md#export-and-import) |
+| Use Codex or Claude Code | [Engines](engines.md) |
+| Locate or trust an engine binary | [Binary trust](engines.md#trust-for-the-engine-binaries) |
+| Understand which config file to edit | [Configuration](configuration.md#which-file-do-i-edit) |
+| A setting has no effect | [Environment overrides](configuration.md#environment-overrides) |
+| Understand workspace trust | [Workspace trust](getting-started.md#workspace-trust) |
+| Choose a permission mode | [Mode ladder](permissions.md#the-mode-ladder) |
+| Stop repeated approval prompts | [Always-allow rules](permissions.md#always-allow-rules) |
+| Configure automatic command review | [Ask classifier](permissions.md#ask-classifier) |
+| Delegate work to another session | [Subagents](subagents.md) |
+| Define a named subagent profile | [Profile files](subagents.md#your-own-profiles) |
+| Run a parent that plans and delegates | [Orchestrate](orchestration.md#orchestrate-mode) |
+| Choose planner, executor and reviewer routes | [Roles](roles.md#configure-roles) |
+| A role is refused or falls back | [Role routing](roles.md#fallbacks-and-read-only-roles) |
+| A child session limit is reached | [Parallel children](roles.md#parallel-children) |
+| Use separate git checkouts | [Worktrees](worktrees.md) |
+| Recover changes from a child worktree | [Recovery](worktrees.md#recover-changes) |
+| Add or import a skill | [Skills](skills.md) |
+| A skill or profile is missing | [Troubleshooting](troubleshooting.md#skill-or-profile-missing) |
+| Add or import an MCP server | [MCP](mcp.md) |
+| An MCP server does not start | [MCP troubleshooting](troubleshooting.md#mcp-server-missing) |
+| Install a plugin | [Plugins](plugins.md) |
+| Run commands at tool or prompt events | [Hooks](hooks.md) |
+| Run a fixed sequence of subagent steps | [Workflows](workflows.md) |
+| Enable language diagnostics after edits | [Language servers](lsp.md) |
+| Open or operate a page | [Browser](browser.md) |
+| Configure a proxy | [Proxy and network](proxy.md) |
+| Share sessions with another client | [Sessions API](sessions-api.md) |
+| Control shared sessions from Telegram | [Remote control](remote-control.md) |
+| Use terminal flags, slash commands or shortcuts | [CLI and commands](cli.md) |
+| Undo file edits and conversation | [Checkpoints](getting-started.md#checkpoints-and-rewind) |
+| Reduce context or understand compaction | [Compaction](getting-started.md#compaction) |
+| Find data files, logs or crash dumps | [Files and paths](files-and-paths.md) |
+| Diagnose provider errors and timeouts | [Provider errors](troubleshooting.md#provider-errors) |
+
+## Find a Settings pane
+
+Provider → [providers](providers.md); Codex / Claude → [engines](engines.md);
+Roles → [roles](roles.md); Permissions → [permissions](permissions.md);
+Tools / Vision / Environment → [configuration](configuration.md);
+Network → [proxy](proxy.md); Sessions API → [sessions-api](sessions-api.md).
+MCP, Skills, Subagents, Plugins and Language servers each have their own page.
+The session **Extensions** menu opens these surfaces; Native sessions also show Hooks.
+Profile shows usage statistics. Appearance and Keyboard shortcuts save to
+`ui.theme` and `keybindings.overrides` in app settings. About contains update controls.
+
+This guide ships with the app and is read by the `anycode-setup` skill.
+Developer documentation is available on
+[GitHub](https://github.com/incadawr/anycode/blob/master/docs/development/README.md).
