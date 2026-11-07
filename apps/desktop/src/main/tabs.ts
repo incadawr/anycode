@@ -1089,6 +1089,9 @@ export interface ChildRunSummary {
   childSessionId: string;
   state: "starting" | "running" | "cancelling";
   pid: number | null;
+  /** Effective stamped budget and model override for dev automation. */
+  maxTurns?: number;
+  model?: string;
   /**
    * GitHub #17 slice F: the child tab's ACTUAL fork time on
    * this manager's injected clock (`tabs.get(...).spawnedAt`), so the live
@@ -1414,6 +1417,8 @@ export class TabHostManager {
       state: e.state,
       pid: this.tabs.get(e.childTabId)?.proc?.pid ?? null,
       forkedAt: this.tabs.get(e.childTabId)?.spawnedAt ?? null,
+      ...(this.tabs.get(e.childTabId)?.childOf?.maxTurns !== undefined ? { maxTurns: this.tabs.get(e.childTabId)!.childOf!.maxTurns } : {}),
+      ...(this.tabs.get(e.childTabId)?.modelOverride !== undefined ? { model: this.tabs.get(e.childTabId)!.modelOverride } : {}),
     }));
   }
 

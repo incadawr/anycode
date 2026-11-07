@@ -657,7 +657,7 @@ export async function step1LaunchApp(ctx) {
     version: 2,
     provider: {
       activeConnectionId: CONNECTION_ID,
-      connections: [{ id: CONNECTION_ID, providerId: PROVIDER_ID, model: MODEL_A }],
+      connections: [{ id: CONNECTION_ID, providerId: PROVIDER_ID, model: ctx.connectionModel ?? MODEL_A }],
     },
     tools: {},
     permissions: { alwaysAllow: [{ toolName: "Agent" }, { toolName: "Read" }, { toolName: "Glob" }, { toolName: "Grep" }, { toolName: "Bash" }] },
@@ -678,6 +678,7 @@ export async function step1LaunchApp(ctx) {
     ANYCODE_SECRETS_PATH: ctx.secretsPath,
     ANYCODE_WORKSPACE: ctx.tmpWorkspace,
   };
+  if (ctx.proxyBaseUrl) env.ANYCODE_BASE_URL = ctx.proxyBaseUrl;
   // Same anti-false-green discipline as subagent-card-smoke.mjs: an env-level
   // model override would mask the settings.json-seeded connection's model.
   delete env.ANYCODE_MODEL;

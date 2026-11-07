@@ -4078,9 +4078,20 @@ describe("TabHostManager — children are invisible outside the manager (CUT-S2 
       childSessionId,
       state: "starting",
       pid: childHost.pid,
+      maxTurns: 150,
       // GitHub #17 slice F: the child tab's real fork stamp on the clock.
       forkedAt: expect.any(Number),
     });
+  });
+
+  it("listChildRuns exposes the model override and accepted child budget", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    expect(manager.createTab({ workspace: "/ws", sessionId: "root-model-budget", resume: false }).ok).toBe(true);
+    hosts[0]!.emit("message", spawnRequest({ requestId: "model-budget", model: "glm-5.2" }));
+    expect(manager.listChildRuns()).toEqual([expect.objectContaining({ model: "glm-5.2", maxTurns: 150 })]);
+    expect(childRunEvents(hosts[0]!).find((event) => event.kind === "accepted")).toMatchObject({ model: "glm-5.2", maxTurns: 150 });
   });
 
   // GitHub #17 slice F: the automation projection carries the
