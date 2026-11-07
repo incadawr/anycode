@@ -18,6 +18,12 @@ function denied(reason: BuiltinPolicyReason): BuiltinPolicy {
   return Object.fromEntries(ids.map(id => [id, { enabled: false, reason }])) as BuiltinPolicy;
 }
 
+/** Both entries and shared chunks resolve the standalone worker beside host.js. */
+export function builtinPolicyWorkerUrl(moduleUrl = import.meta.url): URL {
+  return new URL(new URL(".", moduleUrl).pathname.endsWith("/chunks/")
+    ? "../builtin-policy-worker.js" : "./builtin-policy-worker.js", moduleUrl);
+}
+
 /** Fresh launch decision only. No discovery, config bytes or raw errors leave the worker.
  * Leaf checks do not prove ancestor containment or protect against same-UID writers.
  */
@@ -41,7 +47,7 @@ export async function readBuiltinPolicy(input: BuiltinPolicyInput): Promise<Buil
     };
     const timer = setTimeout(() => finish(denied("timeout")), 5000);
     try {
-      worker = new Worker(new URL("./builtin-policy-worker.js", import.meta.url), {
+      worker = new Worker(builtinPolicyWorkerUrl(), {
         workerData: { paths, ids }, stdout: true, stderr: true,
       });
       // Discard output; never forward a worker's raw diagnostic or config field.

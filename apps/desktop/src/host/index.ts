@@ -1,3 +1,6 @@
+import { readBuiltinPolicy } from "./skills/builtin-policy.js";
+import { prepareBuiltinSnapshot } from "./skills/builtin-snapshot.js";
+import { ENGINE_BUILTIN_SKILLS } from "../shared/engine-skills.js";
 import { modelReplayPolicy } from "../shared/model-overrides.js";
 import { createFileActivityTaps } from "./file-activity.js";
 import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
@@ -2290,6 +2293,7 @@ async function bootClaudeSession(
   let stamp: ReturnType<typeof createBridgePresentationStamp> | undefined;
   // hoisted (same cell shape as `stamp`) — set by the non-child
   // boot block below, read by the `options` wiring further down.
+  let builtinBrowser: Parameters<typeof prepareBuiltinSnapshot>[0]["browser"];
   let claudeBrowserToolNames: Set<string> | undefined;
   let claudePeerToolNames: ReadonlySet<string> | undefined;
   let agentCatalogNonEmpty = false;
@@ -2389,6 +2393,7 @@ async function bootClaudeSession(
     // the CLI names the approval bridge auto-allows (one per
     // browser spec, `mcp__anycode__<claudeName>`), and the catalog switch
     // that alone gates `agentBridgePrompt` in the options wiring below.
+    builtinBrowser = engineBrowserBridge;
     claudeBrowserToolNames = new Set<string>(
       engineBrowserBridge.specs.map((spec) => `mcp__anycode__${spec.claudeName}`),
     );
@@ -2466,7 +2471,18 @@ async function bootClaudeSession(
     return mcpForward;
   };
 
-  const options = { bootstrap, ...buildClaudeLaunchOptions({
+  const options = { bootstrap, ...(args.child ? {} : { prepareBuiltinSkills: async () => {
+    const home = hostProfileHome();
+    const ids = ENGINE_BUILTIN_SKILLS.map(entry => entry.id);
+    const policy = await readBuiltinPolicy({ userConfigPath: join(home, ".anycode/config.json"),
+      projectConfigPath: join(workspace, ".anycode/config.json"), projectTrusted: hostWorkspaceTrust.projectTrusted, ids });
+    const failure = ids.map(id => policy[id]).find(value => !value.enabled && value.reason !== "disabled");
+    if (failure) throw new Error(failure.reason);
+    const disabled = ids.filter(id => !policy[id].enabled);
+    if (disabled.length === ids.length) return undefined;
+    return prepareBuiltinSnapshot({ hostProfileHome: home, workspace, engine: "claude", browser: builtinBrowser,
+      disabled, excludedRoots: [resolveClaudeConfigDir(), process.env.CLAUDE_CONFIG_DIR, process.env.CODEX_HOME].filter((p): p is string => !!p) });
+  } }), ...buildClaudeLaunchOptions({
     broker: claudeClassifierBroker, workspace, binaryPath, child: args.child,
     orchestrationFeatureEnabled: claudeCompositionEnabled,
     projectTrusted: hostWorkspaceTrust.projectTrusted, profileDir: resolveClaudeConfigDir(),

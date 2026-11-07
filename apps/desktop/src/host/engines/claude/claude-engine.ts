@@ -663,8 +663,10 @@ async function connectClaudeEngine(
   // no native state a resend could clobber on resume — unlike model, where a
   // stale row could overwrite a session's own surviving choice, an omitted
   // `--effort` here would simply forget ours for no benefit.
-  const createClient = (approvals: ClaudeApprovalBridge, next: TransportSpawn, path: string | undefined, current: () => boolean, bridge: ClaudeMcpBridge | undefined) => new ClaudeClient({
+  const createClient = (approvals: ClaudeApprovalBridge, next: TransportSpawn, path: string | undefined, current: () => boolean, bridge: ClaudeMcpBridge | undefined, disableBuiltins = false) => new ClaudeClient({
     ...options,
+    ...(disableBuiltins ? { pluginDir: undefined, prepareBuiltinSkills: undefined } : {}),
+    onBuiltinSkillNotice: reason => notices.push(warning(`App builtins unavailable: ${reason}.`)),
     ...(next.resume !== undefined ? { permissionModeFlag: undefined } : { permissionModeFlag: permissionModeToFlag(preset.mode) }),
     effort: engine === null ? requestedEffort : engine.snapshot().effort,
     ...next,
@@ -693,7 +695,7 @@ async function connectClaudeEngine(
   let firstTransport = true;
   let initialForward: ClaudeForward | undefined;
   let recoveryProblem: string | undefined;
-  const openTransport = async (next: TransportSpawn, current: () => boolean, signal?: AbortSignal) => {
+  const openTransport = async (next: TransportSpawn, current: () => boolean, signal?: AbortSignal, disableBuiltins = false): Promise<TransportBinding & { initialized: Awaited<ReturnType<ClaudeClient["initialize"]>> }> => {
     const resolving = next.orchestrationSpawn ? undefined : next.forward ? Promise.resolve(next.forward) : options.resolveMcpForward?.();
     const abort = signal === undefined ? undefined : watchAbort(signal);
     void resolving?.then(forward => { if (!current()) forward.cleanupFile(); }, () => {});
@@ -725,7 +727,7 @@ async function connectClaudeEngine(
       if (firstTransport) initialForward = forward;
       firstTransport = false;
       const approvals = createApprovals(bridge);
-      client = createClient(approvals, next, next.orchestrationSpawn ? undefined : forward !== undefined ? forward.claudeConfigPath ?? undefined : options.mcpConfigPath, () => live && current(), bridge);
+      client = createClient(approvals, next, next.orchestrationSpawn ? undefined : forward !== undefined ? forward.claudeConfigPath ?? undefined : options.mcpConfigPath, () => live && current(), bridge, disableBuiltins);
       signal?.addEventListener("abort", onAbort, { once: true });
       await client.start();
       const initialized = await client.initialize(bridge?.announceOn());
@@ -736,6 +738,10 @@ async function connectClaudeEngine(
     } catch (error) {
       await close();
       forward?.cleanupFile();
+      if (!disableBuiltins && client?.hasBuiltinPlugin && !signal?.aborted && current()) {
+        notices.push(warning("App builtins unavailable: plugin-start-failed. Retrying without the adapter."));
+        return openTransport(next, current, signal, true);
+      }
       throw signal?.aborted ? transportAbortError(signal) : error;
     } finally {
       signal?.removeEventListener("abort", onAbort);

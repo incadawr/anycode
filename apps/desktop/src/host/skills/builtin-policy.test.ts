@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import ts from "typescript";
 import { ENGINE_BUILTIN_SKILLS } from "../../shared/engine-skills.js";
-import { readBuiltinPolicy } from "./builtin-policy.js";
+import { builtinPolicyWorkerUrl, readBuiltinPolicy } from "./builtin-policy.js";
 
 const harness = vi.hoisted(() => ({ entry: "", stall: false, script: "", terminated: 0, data: [] as unknown[], output: "" }));
 vi.mock("node:worker_threads", async () => {
@@ -94,7 +94,9 @@ it("accepts depth 64 and refuses depth 65", async () => {
 it("terminates a stalled worker after five seconds", async () => {
   vi.useFakeTimers(); harness.stall = true;
   const before = harness.terminated;
-  const pending = read(); await vi.advanceTimersByTimeAsync(5000);
+  const pending = read(); await vi.advanceTimersByTimeAsync(4999);
+  expect(harness.terminated).toBe(before);
+  await vi.advanceTimersByTimeAsync(1);
   expect(enabled(await pending)).toEqual([false, false, false]);
   expect((await pending)[ids[0]!].reason).toBe("timeout");
   expect(harness.terminated).toBe(before + 1); vi.useRealTimers();
@@ -125,4 +127,14 @@ it("rejects invalid UTF-8 without leaking bytes", async () => {
 it("still refuses invalid user config with untrusted project", async () => {
   await writeFile(user, '{');
   expect(enabled(await read(false))).toEqual([false, false, false]);
+});
+
+it("resolves worker from either build entry or shared chunk", () => {
+  expect(String(builtinPolicyWorkerUrl("file:///app/out/main/host.js"))).toBe("file:///app/out/main/builtin-policy-worker.js");
+  expect(String(builtinPolicyWorkerUrl("file:///app/out/main/chunks/shared.js"))).toBe("file:///app/out/main/builtin-policy-worker.js");
+});
+it("ignores a valid-shaped untrusted project while retaining user policy", async () => {
+  await writeFile(project, JSON.stringify({ skills: { disabled: ids } }));
+  expect(enabled(await read(false))).toEqual([true, true, true]);
+  expect(JSON.stringify(harness.data)).not.toContain(project);
 });

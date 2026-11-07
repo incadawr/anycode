@@ -1585,3 +1585,28 @@ it.each([undefined, {}, { nativeBase: { version: 99 } }])("boots legacy recovery
   try { expect(engine.orchestrationState).toBe("off"); }
   finally { await engine.dispose("session-close"); }
 });
+
+it.each([false, true])("passes pluginDir through engine fresh/resume=%s", async resume => {
+  const fake = fakeSpawn();
+  const options = { ...baseOptions(fake.spawnImpl), pluginDir: "/synthetic/sealed-plugin" };
+  const connected = await (resume ? resumeClaudeEngine({ ...options, externalSessionRef: "persisted" }) : startClaudeEngine(options));
+  try {
+    const args = fake.capturedArgs()!;
+    expect(args.filter(arg => arg === "--plugin-dir")).toHaveLength(1);
+    expect(args[args.indexOf("--plugin-dir") + 1]).toBe(options.pluginDir);
+  } finally { await connected.engine.dispose("session-close"); }
+});
+it("retries a failed plugin boot once without a writable fallback", async () => {
+  const failing = fakeSpawn({}); const ordinary = fakeSpawn();
+  let attempts = 0;
+  const spawnImpl = (command: string, args: readonly string[]) => {
+    if (!args.includes("--version")) attempts++;
+    return (attempts <= 1 ? failing : ordinary).spawnImpl(command, args);
+  };
+  const connected = await startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/synthetic/sealed-plugin" });
+  try {
+    expect(attempts).toBe(2);
+    expect(failing.capturedArgs()).toContain("--plugin-dir");
+    expect(ordinary.capturedArgs()).not.toContain("--plugin-dir");
+  } finally { await connected.engine.dispose("session-close"); }
+});
