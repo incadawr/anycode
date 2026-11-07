@@ -169,6 +169,8 @@ export interface ToolContext {
    * this; `tier:"inline"` (default) always uses `subagents` instead.
    */
   sessionSubagents?: SessionSubagentPort;
+  /** Root-only peer capability; omitted from inline child configs. */
+  sessionPeers?: import("../ports/session-peers.js").SessionPeersPort;
   /**
    * Discovered-skills entry (design §2.2/§3.3). Optional by design: its absence
    * is the fail-closed lock — the Skill tool returns a "skills unavailable"

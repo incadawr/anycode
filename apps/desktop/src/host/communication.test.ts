@@ -34,6 +34,28 @@ function fixture(saveTurnError?: SessionOptions["saveTurnError"]) {
   return { h, engine, inputs, signals, finishes, make };
 }
 describe("authenticated session inbox", () => {
+  it("replays display snapshots without delivery feedback, inbox entries or model history", async () => {
+    const { h, inputs, make } = fixture();
+    const observe = vi.fn();
+    h.session.observeAgentDeliveries(observe);
+    const card = { envelope: { ...make("display"), recipientSessionId: "other" }, state: "queued" as const, direction: "outgoing" as const };
+    const displays = () => h.received.filter(m => m.type === "agent_message_display");
+    try {
+      h.session.restoreAgentDisplay([card]);
+      h.session.restoreAgentDisplay([{ ...card, state: "acknowledged" }]);
+      await h.waitUntil(() => displays().length === 2);
+      for (let i = 0; i < 2; i++) {
+        const before = displays().length;
+        h.send({ type: "ui_ready" });
+        await h.waitUntil(() => displays().length > before);
+        expect(displays().at(-1)).toEqual({ type: "agent_message_display", cards: [{ ...card, state: "acknowledged" }] });
+      }
+      expect(h.session.agentMessageStatus("display")).toBeUndefined();
+      expect(observe).not.toHaveBeenCalled();
+      expect(inputs).toEqual([]);
+      expect(JSON.stringify(h.received.filter(m => m.type === "session_history"))).not.toContain("Follow this clarification");
+    } finally { h.close(); }
+  });
   it("starts idle next-turn exactly once and drains a busy queue only after settlement", async () => {
     const { h, inputs, finishes, make } = fixture();
     try {
@@ -1057,3 +1079,233 @@ function coreEffortResolution(entry: CatalogProviderEntry): NonNullable<SessionO
     effective: (id, tier) => resolveReasoningEffort(id, entry, tier),
   };
 }
+
+
+describe("peer turn publication", () => {
+  it("publishes context before engine dispatch and pins public terminal to the consumed message", async () => {
+    const events: import("../shared/session-peers.js").SessionPeerTurnPublication[] = [];
+    const h = createHarness({ steps: [[
+      { type: "reasoning_start", id: "secret" }, { type: "reasoning_delta", id: "secret", text: "PRIVATE_REASONING" }, { type: "reasoning_end", id: "secret" },
+      ...textStep("PUBLIC_ANSWER"),
+    ], textStep("LATER_ANSWER")] });
+    const run = h.engine.runTurn.bind(h.engine);
+    vi.spyOn(h.engine, "runTurn").mockImplementation((...args) => {
+      expect(events.at(-1)?.type).toBe("session_peer_turn");
+      return run(...args);
+    });
+    try {
+      h.session.observePeerTurns(event => events.push(event));
+      await h.session.receiveAgentMessage({ ...envelope("message"), recipientSessionId: h.session.communicationStatus().sessionId });
+      await h.waitUntil(() => events.some(e => e.type === "session_peer_terminal"));
+      const terminal = structuredClone(events.find(e => e.type === "session_peer_terminal"));
+      expect(terminal).toMatchObject({ deliveredMessageIds: ["message"], result: { publicAnswer: "PUBLIC_ANSWER", requestId: "message", source: "live_turn" } });
+      expect(events[0]).toMatchObject({ requestId: "message", turnId: terminal!.turnId, deliveredMessageIds: ["message"] });
+      await h.waitUntil(() => !h.session.communicationResult().activeTurnId);
+      h.send({ type: "user_message", requestId: "later", text: "next" });
+      await h.waitUntil(() => events.filter(e => e.type === "session_peer_terminal").length === 2);
+      expect(events.find(e => e.type === "session_peer_terminal")).toEqual(terminal);
+      expect(JSON.stringify(events)).not.toContain("PRIVATE_REASONING");
+    } finally { h.close(); }
+  });
+});
+
+
+it("peer terminals exclude tool output and pre-tool commentary even on a quiet cancel", async () => {
+  const { h, engine, make } = fixture();
+  const events: import("../shared/session-peers.js").SessionPeerTurnPublication[] = [];
+  vi.spyOn(engine, "runTurn").mockImplementation(async function* () {
+    yield { type: "text_start", id: "comment" };
+    yield { type: "text_delta", id: "comment", text: "PRIVATE_COMMENTARY" };
+    yield { type: "text_end", id: "comment" };
+    yield { type: "tool_execution_start", toolCallId: "call", toolName: "Read", input: { file_path: "/workspace/a" } };
+    yield { type: "tool_result", outcome: { toolCallId: "call", toolName: "Read", status: "success", modelText: "PRIVATE_TOOL_OUTPUT", durationMs: 1 } };
+    yield { type: "loop_end", reason: "cancelled", turns: 1 };
+  });
+  try {
+    h.session.observePeerTurns(event => events.push(event));
+    await h.session.receiveAgentMessage(make("quiet"));
+    await h.waitUntil(() => events.some(e => e.type === "session_peer_terminal"));
+    expect(events.at(-1)).toMatchObject({ result: { terminalReason: "cancelled", publicAnswer: null } });
+    expect(JSON.stringify(events)).not.toMatch(/PRIVATE_COMMENTARY|PRIVATE_TOOL_OUTPUT/);
+  } finally { h.close(); }
+});
+
+
+describe("registered peer drain admission", () => {
+  function pending(f: ReturnType<typeof fixture>) {
+    let resolve!: (value: import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null) => void;
+    const request = vi.fn((_messageId: string) => new Promise<import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null>(r => { resolve = r; }));
+    const port = { request, consume: vi.fn(() => true), discard: vi.fn(() => true) };
+    f.h.session.configurePeerDrain(port);
+    const permit = { type: "session_peer_drain_permit" as const, messageId: "peer", nonce: "n", recipientSessionId: f.make("peer").recipientSessionId, generation: 1 };
+    return { port, finish: (allow = true) => resolve(allow ? { ...permit, messageId: request.mock.calls.at(-1)![0] } : null) };
+  }
+  it("rechecks a busy queued delivery after revoke without a new engine run", async () => {
+    const f = fixture(), p = pending(f);
+    try {
+      await f.h.session.receiveAgentMessage(f.make("human"));
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      expect(p.port.request).not.toHaveBeenCalled();
+      f.finishes.shift()!(); await f.h.waitUntil(() => p.port.request.mock.calls.length === 1);
+      p.finish(false); await f.h.flush();
+      expect(f.inputs).toHaveLength(1);
+      expect(f.h.session.agentMessageStatus("peer")?.state).toBe("rejected");
+    } finally { f.h.close(); }
+  });
+  it("single flights competing drains and consumes once immediately before admission", async () => {
+    const f = fixture(), p = pending(f);
+    try {
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      expect(f.inputs).toHaveLength(0); expect(p.port.request).toHaveBeenCalledTimes(1);
+      p.finish(); await f.h.waitUntil(() => f.inputs.length === 1);
+      expect(p.port.consume).toHaveBeenCalledTimes(1);
+      f.finishes.shift()!(); await f.h.flush(); expect(f.inputs).toHaveLength(1);
+    } finally { f.h.close(); }
+  });
+  it.each(["busy", "currentTurn", "shuttingDown", "relocating", "childTerminalFinalized", "posture"] as const)("discards authorization if %s changes during await", async state => {
+    const f = fixture(), p = pending(f);
+    try {
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      const internals = f.h.session as unknown as Record<string, unknown>;
+      const prior = internals[state];
+      const posture = state === "posture" ? vi.spyOn(f.h.session as unknown as { postureBlocked(): boolean }, "postureBlocked").mockReturnValue(true) : undefined;
+      if (!posture) internals[state] = true;
+      p.finish(); await f.h.flush();
+      expect(f.inputs).toHaveLength(0); expect(p.port.consume).not.toHaveBeenCalled();
+      expect(p.port.discard).toHaveBeenCalledTimes(1);
+      posture?.mockRestore();
+      if (!posture) internals[state] = prior;
+      if (state === "busy") {
+        const drain = f.h.session as unknown as { drainAgentInbox(): boolean };
+        drain.drainAgentInbox(); expect(p.port.request).toHaveBeenCalledTimes(2);
+        p.finish(false); await f.h.flush();
+      }
+    } finally { f.h.close(); }
+  });
+});
+
+it("exhaustion publishes one unknown/null terminal and releases main context before hydrate", async () => {
+  const { createSessionPeerTurns } = await import("../main/session-peer-turns.js");
+  const f = fixture(), turns = createSessionPeerTurns(), proc = {};
+  const events: import("../shared/session-peers.js").SessionPeerTurnPublication[] = [];
+  let release!: () => void;
+  const hydrate = vi.fn(() => new Promise<void>(r => { release = r; }));
+  vi.spyOn(f.engine, "runTurn").mockImplementation(async function* () {
+    yield { type: "text_start", id: "x" }; yield { type: "text_delta", id: "x", text: "UNFINISHED" };
+    yield { type: "text_end", id: "x" };
+    yield { type: "reasoning_delta", id: "r", text: "PRIVATE_REASONING" };
+    yield { type: "tool_execution_start", toolCallId: "call", toolName: "Read", input: { file_path: "/workspace/a" } };
+    yield { type: "tool_result", outcome: { toolCallId: "call", toolName: "Read", status: "success", modelText: "PRIVATE_TOOL", durationMs: 1 } };
+  (f.h.session as unknown as { runtimeHistory: unknown }).runtimeHistory = { hydrate, recoveries: () => [] };
+  });
+  turns.expectMessage(proc, "exhausted");
+  f.h.session.observePeerTurns(event => {
+    events.push(event); turns.accept({ proc, generation: 1 }, proc, { ...event, generation: 1 });
+  });
+  try {
+    await f.h.session.receiveAgentMessage(f.make("exhausted"));
+    await f.h.waitUntil(() => hydrate.mock.calls.length > 0);
+    expect(events.filter(e => e.type === "session_peer_terminal")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ result: { terminalReason: "unknown", publicAnswer: null } });
+    expect(turns.active(proc)).toBeUndefined(); expect(JSON.stringify(events)).not.toMatch(/UNFINISHED|PRIVATE_REASONING|PRIVATE_TOOL/);
+    release(); await f.h.flush();
+  } finally { release?.(); f.h.close(); }
+});
+
+it("terminal drain refusal releases the inbox head and admits the following peer", async () => {
+  const f = fixture();
+  let answer!: (value: import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null) => void;
+  const request = vi.fn((_id: string) => new Promise<import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null>(r => { answer = r; }));
+  f.h.session.configurePeerDrain({ request, consume: () => true, discard: () => true });
+  try {
+    await f.h.session.receiveAgentMessage(f.make("refused"), true);
+    await f.h.session.receiveAgentMessage(f.make("allowed"), true);
+    answer(null); await f.h.waitUntil(() => request.mock.calls.length === 2);
+    expect(f.h.session.agentMessageStatus("refused")?.state).toBe("rejected");
+    answer({ type: "session_peer_drain_permit", messageId: "allowed", nonce: "n", recipientSessionId: f.make("allowed").recipientSessionId, generation: 1 });
+    await f.h.waitUntil(() => f.inputs.length === 1);
+    expect(f.h.session.agentMessageStatus("allowed")?.state).toBe("acknowledged");
+    f.finishes.shift()!(); await f.h.flush();
+  } finally { f.h.close(); }
+});
+
+
+it.each([false, true])("settled real child rejects registered peers before latching its terminal (pending: %s)", async inFlight => {
+  const f = fixture(), terminal = vi.fn();
+  const child = new Session({ outbound: new Outbound(), engine: f.engine,
+    broker: new IpcPermissionBroker(() => {}), fs: new MemFs(), workspace: "/workspace",
+    projectRoot: "/workspace", model: "fixture", sessionId: "child-drain",
+    bootHistory: [], rules: new SessionPermissionRules(),
+    child: { onReady: () => {}, onProgress: () => {}, flushHistory: async () => {}, onTerminal: terminal },
+  });
+  let resolve!: (permit: import("../shared/session-peer-drain.js").SessionPeerDrainPermit) => void;
+  const port = { request: vi.fn(() => new Promise<import("../shared/session-peer-drain.js").SessionPeerDrainPermit>(r => { resolve = r; })),
+    consume: vi.fn(() => false), discard: vi.fn(() => true) };
+  child.configurePeerDrain(port);
+  try {
+    if (inFlight) await child.receiveAgentMessage({ ...envelope("pending-peer"), recipientSessionId: "child-drain" }, true);
+    expect(child.startProgrammaticTurn("initial")).toEqual({ ok: true });
+    await f.h.waitUntil(() => f.inputs.length === 1);
+    for (const id of ["first-peer", "second-peer"]) {
+      expect((await child.receiveAgentMessage({ ...envelope(id), recipientSessionId: "child-drain" }, true)).state).toBe("queued");
+    }
+    f.finishes.shift()!();
+    await vi.waitFor(() => expect(terminal).toHaveBeenCalledTimes(1));
+    for (const id of ["first-peer", "second-peer"]) expect(child.agentMessageStatus(id)?.state).toBe("rejected");
+    expect((child as unknown as { childTerminalFinalized: boolean }).childTerminalFinalized).toBe(true);
+    expect(f.inputs).toHaveLength(1);
+    expect(port.request).toHaveBeenCalledTimes(inFlight ? 1 : 0); expect(port.consume).not.toHaveBeenCalled();
+    if (inFlight) {
+      expect(child.agentMessageStatus("pending-peer")?.state).toBe("rejected");
+      resolve({ type: "session_peer_drain_permit", messageId: "pending-peer", nonce: "late", recipientSessionId: "child-drain", generation: 1 });
+      await vi.waitFor(() => expect(port.discard).toHaveBeenCalledTimes(1));
+      expect(f.inputs).toHaveLength(1);
+    }
+  } finally { await child.shutdown(); f.h.close(); }
+});
+
+it.each(["idle", "busy", "revoked"])("terminal auto delivery through the real Session drain: %s", async mode => {
+  const { createCommunicationBroker } = await import("../main/communication-broker.js");
+  const { createSessionPeerReplies } = await import("../main/session-peer-replies.js");
+  const { createSessionPeerReplyCoordinator } = await import("../main/session-peer-reply-coordinator.js");
+  const { createSessionPeerDrain } = await import("../main/session-peer-drain.js");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const dir = await mkdtemp("/tmp/terminal-drain-");
+  const f = fixture(), id = f.make("x").recipientSessionId;
+  const hosts = [id, "b"].map(sessionId => ({ sessionId, tabId: sessionId, proc: {}, generation: 1, workspace: dir,
+    workspaceKey: dir, live: true, root: true, restricted: false, readOnly: false, engine: "core" as const, activity: "idle" as const }));
+  const tabs = hosts.map(h => ({ sessionId: h.sessionId, workspace: dir, state: "running", pid: 1 }));
+  let terminal!: (id: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void;
+  let allowed = true;
+  const broker = await createCommunicationBroker({ ledgerFile: `${dir}/ledger`, realpath: async path => path, manager: { listTabs: () => tabs,
+    onSessionPeerTerminal: fn => { terminal = fn; return () => {}; }, communicationRequest: async (recipient, operation, payload) => {
+      if (recipient === "b") return { state: "acknowledged" };
+      const record = broker.ledger.messages.get((payload as AgentEnvelope).messageId)!;
+      expect(registry.register(record, hosts[1]!, hosts[0]!)).toBe(true);
+      return f.h.session.receiveAgentMessage(payload as AgentEnvelope, true);
+    } } });
+  const registry = createSessionPeerDrain({ lookup: key => broker.ledger.messages.get(key), current: key => hosts.find(h => h.sessionId === key),
+    prepare: async () => {}, access: { canAccess: () => allowed } });
+  f.h.session.configurePeerDrain({ request: messageId => registry.request(hosts[0]!.proc, { type: "session_peer_drain_request",
+    messageId, nonce: "permit", recipientSessionId: id, generation: 1 }), consume: () => true, discard: () => true });
+  const authorize = async (key: string) => tabs.find(t => t.sessionId === key)!;
+  const coordinator = createSessionPeerReplyCoordinator(broker, { current: key => hosts.find(h => h.sessionId === key),
+    sendAuto: (caller, source, payload) => replies.auto(caller, source, payload, authorize) });
+  const replies = createSessionPeerReplies(broker, Date.now, coordinator);
+  try {
+    if (mode !== "idle") await f.h.session.receiveAgentMessage(f.make("human"));
+    const source = await replies.send(hosts[0]!, { sessionId: "b", payload: "question", reply: "on_turn_end" }, authorize);
+    const event = { type: "session_peer_terminal" as const, generation: 1, sequence: 1, turnId: "turn", requestId: source.envelope.messageId,
+      deliveredMessageIds: [source.envelope.messageId], result: { source: "live_turn" as const, turnId: "turn", requestId: source.envelope.messageId,
+        nativeTurnId: null, terminalReason: "completed" as const, publicAnswer: "answer", truncated: false, completedAt: 1 } };
+    terminal("b", event); terminal("b", event);
+    await vi.waitFor(() => expect([...broker.ledger.messages.values()].some(r => r.envelope.kind === "task_result" && r.detail !== "Dispatch pending")).toBe(true));
+    const auto = [...broker.ledger.messages.values()].find(r => r.envelope.kind === "task_result")!;
+    if (mode !== "idle") { allowed = mode !== "revoked"; f.finishes.shift()!(); }
+    await vi.waitFor(() => expect(f.h.session.agentMessageStatus(auto.envelope.messageId)?.state).toBe(mode === "revoked" ? "rejected" : "acknowledged"));
+    expect(f.inputs).toHaveLength(mode === "busy" ? 2 : 1);
+    if (mode !== "revoked") f.finishes.shift()!();
+    await f.h.flush();
+  } finally { registry.dispose(); await broker.dispose(); f.h.close(); await rm(dir, { recursive: true, force: true }); }
+});

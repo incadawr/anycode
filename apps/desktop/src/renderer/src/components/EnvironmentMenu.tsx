@@ -3,6 +3,7 @@
  * it keeps the current workspace/branch quiet in the chrome and funnels the
  * rare, detailed work into the existing Git inspector drawer.
  */
+import { NativeSessionAccess } from "./NativeSessionAccess.js";
 import { SessionAccessRow } from "./SessionAccessRow.js";
 import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
 import { BrowserAccessRow } from "./BrowserAccessRow.js";
@@ -326,6 +327,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
           )}
           {/* the per-session Sessions API switch (any engine; main owns the state). */}
           <SessionAccessRow />
+          {tabId && <NativeSessionAccess key={tabId} tabId={tabId} />}
           {/* the per-session "Full browser access" switch (asks before turning ON). */}
           <BrowserAccessRow />
           {/* GitHub #18: export THIS session's tree (session + children) as an

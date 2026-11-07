@@ -12,6 +12,8 @@
  * quietly running the engine's default.
  */
 
+import { creationAdmissionFor, type CreatorAdmissionPolicy } from "./communication-creation-admission.js";
+import { normalizePeerWorkspaceKey } from "./session-peer-policy.js";
 import type { WorkspaceTrustStore } from "@anycode/core/workspace-trust";
 import { canonicalWorkspaceKey } from "@anycode/core/workspace-trust";
 import type { CreateSessionOutcome, CreateSessionRequest } from "./communication-server.js";
@@ -45,6 +47,7 @@ export interface CreateSessionByAgentDeps {
   sessions(): SessionAccessStore | null;
   /** Node realpath used to canonicalise the workspace trust key. */
   realpathSync(path: string): string;
+  platform?: NodeJS.Platform;
   /** Reads the workspace trust store (fail-soft on the caller's side). */
   readTrustStore(): Promise<WorkspaceTrustStore>;
   /** Primes the MCP secret fork cache for a canonical workspace key. */
@@ -75,6 +78,7 @@ export interface CreateSessionByAgentDeps {
   listCodexAccounts?(): Promise<CodexAccountOption[]>;
   randomUUID(): string;
   agentOpenedSessions: Set<string>;
+  agentSessionOpeners?: Map<string, string>;
   agentSessionTitles: Map<string, string>;
   /**
    * Retains the accepted handle as the tab's durable title: pushes it to the
@@ -125,13 +129,31 @@ function remaining(deadline: number): number {
 export async function createSessionForAgent(
   request: CreateSessionRequest,
   deps: CreateSessionByAgentDeps,
+  policy: CreatorAdmissionPolicy = { kind: "external" },
 ): Promise<CreateSessionOutcome> {
+  let deliver: (() => Promise<{ state: string; messageId?: string }>) | undefined;
+  const outcome = await creationAdmissionFor(deps.agentOpenedSessions, deps.listTabs).run(() =>
+    createAdmittedSession(request, deps, policy, callback => { deliver = callback; }));
+  return outcome.ok && deliver ? { ...outcome, delivery: await deliver() } : outcome;
+}
+
+async function createAdmittedSession(request: CreateSessionRequest, deps: CreateSessionByAgentDeps,
+  policy: CreatorAdmissionPolicy, afterCreation: (deliver: () => Promise<{ state: string; messageId?: string }>) => void): Promise<CreateSessionOutcome> {
   const projects = deps.projects;
   const tabs = deps.manager();
   const sessions = deps.sessions();
   if (projects === null || tabs === null || sessions === null) return { ok: false, reason: "not_ready" };
-  const key = canonicalWorkspaceKey(request.workspace, deps.realpathSync);
-  if (!projects.isAllowed(key)) return { ok: false, reason: "not_allowed" };
+  let key: string;
+  try {
+    key = policy.kind === "native" ? deps.realpathSync(request.workspace) : canonicalWorkspaceKey(request.workspace, deps.realpathSync);
+  } catch { return { ok: false, reason: "folder_not_found" }; }
+  const peerKey = normalizePeerWorkspaceKey(key, deps.platform);
+  const authorized = async () => {
+    try {
+      return policy.kind === "native" ? peerKey !== null && await policy.authorize(request.workspace, peerKey, projects.isAllowed(key)) : projects.isAllowed(key);
+    } catch { return false; }
+  };
+  if (!await authorized()) return { ok: false, reason: "not_allowed" };
   const trust = await deps.readTrustStore();
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
@@ -220,6 +242,10 @@ export async function createSessionForAgent(
       : { ok: false, reason: "not_ready", detail: pin.detail };
   }
   const releasePin = pin.release;
+  if (!await authorized()) {
+    releasePin();
+    return { ok: false, reason: "not_allowed" };
+  }
   const sessionId = deps.randomUUID();
   let handle: string | undefined;
   /**
@@ -234,8 +260,9 @@ export async function createSessionForAgent(
    */
   const registerAttribution = (): void => {
     deps.agentOpenedSessions.add(sessionId);
-    // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
-    sessions.set(sessionId, true);
+    // Native creation preserves the access default registered by createTab.
+    if (policy.kind === "external") sessions.set(sessionId, true);
+    else deps.agentSessionOpeners?.set(sessionId, policy.openerSessionId);
     if (request.handle === undefined) return;
     const normalized = normalizeHandle(request.handle);
     if (!normalized.ok || normalized.handle === null) return;
@@ -320,7 +347,7 @@ export async function createSessionForAgent(
       }
     };
     await tabs.abortPreparedTab(tab.tabId, deleteRow);
-    return { ok: false, reason, ...(detail !== undefined ? { detail } : {}) };
+    return { ok: false, reason, ...(policy.kind === "native" ? { sessionId, tabId: tab.tabId } : {}), ...(detail !== undefined ? { detail } : {}) };
   };
 
   if (wantsPreparation) {
@@ -419,6 +446,16 @@ export async function createSessionForAgent(
   if (created.deferred !== true || wantsPreparation) {
     registerAttribution();
     tabs.deliverTabPort(tab);
+  }
+  if (policy.kind === "native" && request.firstMessage !== undefined) {
+    const payload = request.firstMessage;
+    // Delivery may wait on a host indefinitely; it must not retain the creation slot.
+    afterCreation(async () => {
+      try {
+        return await authorized() && policy.deliverFirstMessage
+          ? await policy.deliverFirstMessage(sessionId, payload) : { state: "rejected" };
+      } catch { return { state: "unknown" }; }
+    });
   }
   return { ok: true, sessionId, tabId: tab.tabId, ...(handle !== undefined ? { handle } : {}) };
 }

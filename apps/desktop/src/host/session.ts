@@ -5,7 +5,8 @@ import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
+import type { SessionPeerTurnPublication } from "../shared/session-peers.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type AgentDisplayCard, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -1255,6 +1256,7 @@ export interface SessionOptions {
    * `new Session({...})` call sites.
    */
   eventTap?: (event: AgentEvent) => void;
+  observeFileActivity?: (event: AgentEvent) => void;
 }
 
 /**
@@ -1484,6 +1486,19 @@ export class Session {
 
   private busyValue = false;
   private activityListener?: (state: SessionActivityState) => void;
+  private permissionModeListener?: (mode: PermissionMode) => void;
+  private orchestrateListener?: (enabled: boolean) => void;
+  /** Host control-plane authority, independent of renderer connect/replay. */
+  observePermissionMode(listener: (mode: PermissionMode) => void, orchestrateListener?: (enabled: boolean) => void): void {
+    this.permissionModeListener = listener;
+    this.orchestrateListener = orchestrateListener;
+    this.publishPermissionAuthority();
+  }
+  private publishPermissionAuthority(): void {
+    if (this.engine.id !== "core") return;
+    this.permissionModeListener?.(this.engine.mode());
+    this.orchestrateListener?.(this.orchestrate);
+  }
   private get busy(): boolean { return this.busyValue; }
   private set busy(value: boolean) {
     this.busyValue = value;
@@ -1729,6 +1744,7 @@ export class Session {
   private lspUnsubscribe: (() => void) | undefined;
   /** срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
   private readonly pendingChildReports: PendingChildReportsOptions | undefined;
+  private readonly observeFileActivity: SessionOptions["observeFileActivity"];
   /** see SessionOptions.eventTap's own doc — undefined for core (byte-identical to pre-159). */
   private readonly eventTap: SessionOptions["eventTap"];
   /** срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
@@ -1846,6 +1862,10 @@ export class Session {
   constructor(options: SessionOptions) {
     this.outbound = options.outbound;
     this.outbound.observeEmissions((message) => {
+      if (this.engine.id === "core") {
+        if (message.type === "mode_changed") this.permissionModeListener?.(message.mode);
+        if (message.type === "orchestrate_changed") this.orchestrateListener?.(message.enabled);
+      }
       if (message.type === "file_snapshot" && this.turnId !== null) this.presentationJournal.recordFileSnapshot(this.turnId, message);
     });
     this.engine = options.engine;
@@ -1913,6 +1933,7 @@ export class Session {
     this.child = options.child;
     this.pendingChildReports = options.pendingChildReports;
     this.eventTap = options.eventTap;
+    this.observeFileActivity = options.observeFileActivity;
     this.now = options.child?.now ?? Date.now;
     const initialTitle = typeof options.initialTitle === "string" ? options.initialTitle.trim() : "";
     this.currentTitle = initialTitle.length > 0 ? options.initialTitle : undefined;
@@ -2469,10 +2490,22 @@ export class Session {
     return this.broker.respondExternal(input.approvalId, input.decision);
   }
 
+  private peerDrain?: Pick<ReturnType<typeof import("./session-peer-drain.js").createSessionPeerDrainTransport>, "request" | "consume" | "discard">;
+  private readonly registeredPeerMessages = new Set<string>();
+  private peerDrainPending = false;
+  configurePeerDrain(port: NonNullable<Session["peerDrain"]>): void { this.peerDrain = port; }
+  private peerTurnSequence = 0;
+  private peerTurnObserver?: (event: SessionPeerTurnPublication) => void;
+  observePeerTurns(observer: (event: SessionPeerTurnPublication) => void): void { this.peerTurnObserver = observer; }
+  private publishPeerTurn(event: SessionPeerTurnPublication): void {
+    try { this.peerTurnObserver?.(event); } catch { /* observation cannot interrupt the turn */ }
+  }
+
   private agentDeliveryObserver?: (delivery: AgentDelivery) => void;
   observeAgentDeliveries(observer: (delivery: AgentDelivery) => void): void { this.agentDeliveryObserver = observer; }
 
   private publishAgentDelivery(delivery: AgentDelivery): void {
+    if (delivery.state === "rejected") this.registeredPeerMessages.delete(delivery.envelope.messageId);
     this.agentDeliveries.set(delivery.envelope.messageId, { ...delivery });
     this.outbound.emit({ type: "agent_message", delivery: { ...delivery } });
     try { this.agentDeliveryObserver?.({ ...delivery }); } catch { /* persistence observation cannot affect delivery */ }
@@ -2546,7 +2579,7 @@ export class Session {
       });
   }
 
-  async receiveAgentMessage(envelope: AgentEnvelope): Promise<AgentDelivery> {
+  async receiveAgentMessage(envelope: AgentEnvelope, mainRegistered = false): Promise<AgentDelivery> {
     const existing = this.agentDeliveries.get(envelope.messageId);
     if (existing) return existing;
     if (this.postureBlocked(false)) {
@@ -2589,10 +2622,18 @@ export class Session {
       delivery.detail = "Inbox full";
       this.publishAgentDelivery(delivery);
     } else {
+      if (mainRegistered) this.registeredPeerMessages.add(envelope.messageId);
       this.agentInbox.push(envelope);
       this.drainAgentInbox();
     }
     return this.agentDeliveries.get(envelope.messageId)!;
+  }
+
+  private agentDisplayCards: AgentDisplayCard[] = [];
+
+  restoreAgentDisplay(cards: AgentDisplayCard[]): void {
+    this.agentDisplayCards = cards;
+    this.outbound.sendDirect({ type: "agent_message_display", cards });
   }
 
   restoreAgentMessages(deliveries: AgentDelivery[]): void {
@@ -2608,6 +2649,38 @@ export class Session {
   private drainAgentInbox(settledChild = false): boolean {
     if (this.postureBlocked()) return false;
     if ((!settledChild && (this.busy || this.currentTurn !== null)) || this.shuttingDown || this.relocating || this.childTerminalFinalized) return false;
+    // Settlement must finish synchronously before the child terminal is latched.
+    // Refuse marked heads rather than leave work awaiting a future idle boundary.
+    while (settledChild && this.agentInbox[0] && this.registeredPeerMessages.has(this.agentInbox[0].messageId)) {
+      const envelope = this.agentInbox.shift()!;
+      this.registeredPeerMessages.delete(envelope.messageId);
+      this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session unavailable before peer drain" });
+    }
+    if (this.peerDrainPending && !settledChild) return false;
+    const head = this.agentInbox[0];
+    if (head && this.registeredPeerMessages.has(head.messageId)) {
+      this.peerDrainPending = true;
+      const port = this.peerDrain;
+      void (async () => {
+        const permit = await port?.request(head.messageId).catch(() => null);
+        this.peerDrainPending = false;
+        const retained = this.agentInbox[0] === head;
+        if (!retained || this.busy || this.currentTurn !== null || this.shuttingDown || this.relocating || this.childTerminalFinalized || this.postureBlocked()) {
+          if (permit) port?.discard(permit);
+          if (retained && !this.busy && this.currentTurn === null) {
+            this.agentInbox.shift(); this.registeredPeerMessages.delete(head.messageId);
+            this.publishAgentDelivery({ envelope: head, state: "rejected", detail: "Session unavailable before peer drain" });
+          }
+          return;
+        }
+        this.agentInbox.shift(); this.registeredPeerMessages.delete(head.messageId);
+        const started = !!permit && !!port?.consume(permit) && this.acceptUserMessage(head.messageId, agentMessageText(head), undefined, "system");
+        if (started) this.messageTurns.set(head.messageId, { hostTurnId: this.turnId });
+        this.publishAgentDelivery({ envelope: head, state: started ? "acknowledged" : "rejected", detail: started ? "Host started a next turn; model application unverified" : "Peer drain authorization refused" });
+        if (!started) this.drainAgentInbox();
+      })();
+      return false;
+    }
     const envelope = this.agentInbox.shift();
     if (!envelope) return false;
     if (settledChild) this.busy = false;
@@ -2747,6 +2820,8 @@ export class Session {
       console.error(`[host] compaction record flush failed: ${describeError(error)}`);
     }
     this.outbound.observeEmissions(undefined);
+    this.permissionModeListener = undefined;
+    this.orchestrateListener = undefined;
     this.presentationJournal.clear();
     this.detachedCardStates.clear();
   }
@@ -3033,6 +3108,7 @@ export class Session {
         }
         this.pushTodoReminderSnapshot();
         for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
+        if (this.agentDisplayCards.length) this.outbound.sendDirect({ type: "agent_message_display", cards: this.agentDisplayCards });
         // срез 2: re-post every still-unacknowledged detached-child
         // report to the just-(re)attached renderer — covers the race the
         // outer `sendDirect` at delivery time cannot: a renderer that was
@@ -4637,6 +4713,8 @@ export class Session {
       if (nextMode !== previousMode) {
         this.outbound.emit({ type: "mode_changed", mode: nextMode });
       }
+      // Main cleared authority at identity commit; republish even if the display mode is unchanged.
+      this.publishPermissionAuthority();
       // Dispose ONLY after the new engine is live and the notice emitted.
       try { await previousEngine.dispose("session-close"); }
       catch (error) { console.error(`[host] previous engine dispose threw: ${describeError(error)}`); }
@@ -4968,6 +5046,7 @@ export class Session {
         turnInput = withBackgroundTaskNotices(turnInput, notices);
       }
     }
+    if (this.peerTurnObserver && this.agentDeliveries.has(requestId)) this.messageTurns.set(requestId, { hostTurnId: turnId });
     this.busy = true;
     const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice, origin, pendingTurnIdHolder).finally(
       async () => {
@@ -5732,8 +5811,13 @@ export class Session {
     // turn_started re-assertion (see ui_ready) — the ring copy alone is not
     // survivable past REPLAY_BUFFER_CAP overflow.
     this.lastTurnRequest = { requestId, turnId };
+    const peerSequence = this.peerTurnObserver ? ++this.peerTurnSequence : 0;
+    const peerDeliveredMessageIds = this.peerTurnObserver
+      ? [...this.messageTurns].filter(([, identity]) => identity.hostTurnId === turnId).map(([id]) => id) : [];
+    if (this.peerTurnObserver) this.publishPeerTurn({ type: "session_peer_turn", sequence: peerSequence, turnId, requestId, deliveredMessageIds: peerDeliveredMessageIds });
     const publicText = new Map<string, { text: string; truncated: boolean }>();
     let lastCompletedText: { text: string; truncated: boolean } | null = null;
+    let peerTextIsFinal = true;
     let nativeTurnId: string | null = null;
     let turnErrorText: string | null = null;
     let turnError: { name: string; message: string; code?: string } | undefined;
@@ -5746,9 +5830,16 @@ export class Session {
       const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), ...(afterItemId ? { afterItemId } : {}), ...(nativeTurnId ? { nativeTurnId } : {}), ...(afterNativeTurnId ? { afterNativeTurnId } : {}), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
       try { await this.saveTurnError(record, text); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
     };
+    let peerTerminalPublished = false;
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? ((this.engine.id === "codex" || this.engine.id === "core") && terminalReason === "error" ? turnErrorText : null), truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
       this.rememberTurnResult(turnId, this.latestPublicResult);
+      if (this.peerTurnObserver && !peerTerminalPublished) {
+        peerTerminalPublished = true;
+        this.publishPeerTurn({ type: "session_peer_terminal", sequence: peerSequence, turnId, requestId,
+        deliveredMessageIds: peerDeliveredMessageIds,
+        result: { ...this.latestPublicResult, publicAnswer: peerTextIsFinal ? this.latestPublicResult.publicAnswer : null, source: "live_turn", turnId, requestId, completedAt: this.latestPublicResult.completedAt! } });
+      }
       // thread this turn's final assistant text OUT of runTurn
       // for the supervisor idle-watchdog's noteTurnSettled call — the accept
       // -UserMessage teardown (outside this method) reads the private field.
@@ -5768,7 +5859,10 @@ export class Session {
         });
       }
       // This turn already owns admission; only policy state can block it here.
-      if (this.postureBlocked(false)) return;
+      if (this.postureBlocked(false)) {
+        if (this.peerTurnObserver) recordResult("cancelled");
+        return;
+      }
       if (controller.signal.aborted || this.shuttingDown) {
         recordResult("cancelled");
         if (this.engine.id === "claude" && text !== undefined) {
@@ -5843,6 +5937,10 @@ export class Session {
       for await (const event of stream) {
         nativeTurnId ??= this.engine.steeringStatus?.().nativeTurnId ?? null;
         if (this.engine.id === "codex" && nativeTurnId !== null) this.lastNativeTurnId = nativeTurnId;
+        if (this.peerTurnObserver) {
+          if (event.type === "tool_execution_start") peerTextIsFinal = false;
+          if (event.type === "text_end" || (event.type === "finish" && publicText.size > 0)) peerTextIsFinal = true;
+        }
         if (event.type === "text_start") publicText.set(event.id, { text: "", truncated: false });
         if (event.type === "text_delta") {
           const current = publicText.get(event.id) ?? { text: "", truncated: false };
@@ -5872,6 +5970,7 @@ export class Session {
           recordResult(event.reason);
           if (event.reason === "error") await persistTurnError();
         }
+        try { this.observeFileActivity?.(event); } catch { /* isolated observer */ }
         // the foreign-engine telemetry seam — see SessionOptions.
         // eventTap's own doc/invariant comment. Fires for every event this
         // loop observes (covers continueTurn too, since it drives the same
@@ -6134,6 +6233,10 @@ export class Session {
       await persistTurnError();
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     } finally {
+      if (this.peerTurnObserver && !peerTerminalPublished) {
+        lastCompletedText = null; peerTextIsFinal = false;
+        recordResult("unknown");
+      }
       if (this.runtimeHistory) {
         try { await this.runtimeHistory.hydrate(this.engine); }
         catch { /* An unavailable native mirror is unresolved delivery, not session death. */ }

@@ -1,3 +1,4 @@
+import { createCommunicationController } from "./communication-controller.js";
 import { mkdtemp, mkdir, writeFile, readFile, stat, rm, realpath } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -276,6 +277,14 @@ describe("production communication MCP over real SDK HTTP", () => {
       expect(records[0].state).toBe("unknown");
     }, { timeout: 2500, interval: 30 });
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
+  });
+  it("projects malformed host delivery details to an unknown HTTP outcome", async () => {
+    const f = await fixture();
+    f.request.mockResolvedValueOnce({ state: "acknowledged", detail: { secret: "PRIVATE_SENTINEL" } } as never);
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "hello", mode: "next_turn" } }));
+    expect(record.state).toBe("unknown");
+    expect(record.detail).toBe("Host response unavailable; do not blindly resend");
+    expect(JSON.stringify(record)).not.toContain("PRIVATE_SENTINEL");
   });
   it("reports uncertain transport delivery without automatic retry", async () => {
     const f = await fixture(); f.request.mockRejectedValue(new Error("Host died after applying message"));
@@ -1132,6 +1141,7 @@ describe("Sessions API create_session", () => {
     const manager = { listTabs: () => tabs, communicationRequest: request };
     const service = await startCommunicationServer({
       manager, userData: dir, config: { workspaces: options.workspaces ?? [], discoveryFile },
+      creatorOwnsAdmission: false,
       createSessionByAgent: (input) => creator(input, tabs),
       ...(options.projects ? { listAgentProjects: () => options.projects! } : {}),
       ...(options.opened ? { agentOpenedSessions: options.opened } : {}),
@@ -1593,6 +1603,7 @@ describe("Sessions API create_session", () => {
       manager,
       userData: dir,
       config: { workspaces: [dir], discoveryFile },
+      creatorOwnsAdmission: true,
       createSessionByAgent: (request) => createSessionForAgent(request, deps),
       isSessionExposed: (sessionId) => sessions.isExposed(sessionId),
       agentOpenedSessions,
@@ -1835,7 +1846,8 @@ describe("Sessions API create_session", () => {
         queueMicrotask(() => host.emit("message", { type: "communication_response", requestId: message.requestId, result: undefined }));
       }
     };
-    const manager = { tabs: new Map([["tab-1", { sessionId: "agent-1", workspace: f.dir, state: "running", proc: host }]]) } as unknown as TabHostManager;
+    // Prototype calls still need the dependency bag when peer hooks are disabled.
+    const manager = { deps: {}, tabs: new Map([["tab-1", { sessionId: "agent-1", workspace: f.dir, state: "running", proc: host }]]) } as unknown as TabHostManager;
     let hostOutcome: Promise<unknown> | undefined;
     f.request.mockImplementation((session, op, payload) => {
       const request = TabHostManager.prototype.communicationRequest.call(manager, session, op, payload, f.dir);
@@ -2069,4 +2081,35 @@ describe("Sessions API create_session", () => {
     expect(text).toMatch(/next_turn/);
     expect(text.startsWith("[")).toBe(false);
   });
+});
+
+it("HTTP rotation and disable leave the native broker observer and ledger alive", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "communication-shared-"));
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  const tab = { sessionId: "peer", workspace: dir, state: "running", pid: 1 };
+  const listeners = new Set<unknown>();
+  const manager = { listTabs: () => [tab],
+    onCommunicationDelivery: (fn: unknown) => { listeners.add(fn); return () => { listeners.delete(fn); }; },
+    communicationRequest: vi.fn(async (_id: string, op: string) => op === "send_message" ? { state: "acknowledged" } : undefined),
+  };
+  const controller = createCommunicationController({ manager: () => manager, userData: dir, env: () => undefined,
+    isSessionExposed: () => true, logger: { error: vi.fn() } });
+  cleanups.push(() => controller.dispose());
+  const broker = await controller.broker();
+  broker.observe({ tabs: async () => [tab], requireSession: async () => tab });
+  await controller.apply({ enabled: true, workspaces: [] });
+  expect(controller.status().state).toBe("listening");
+  const client = await reconnect(controller.discoveryFile()!);
+  await client.callTool({ name: "send_message", arguments: { sessionId: "peer", payload: "http", mode: "next_turn" } });
+  expect((await controller.regenerateToken()).ok).toBe(true);
+  await controller.apply({ enabled: true, workspaces: [dir], port: 0 });
+  expect(listeners.size).toBe(2);
+  await controller.apply({ enabled: false, workspaces: [] });
+  expect(listeners.size).toBe(1);
+  await broker.send({ kind: "session", sessionId: "sender", tabId: "sender-tab" },
+    { sessionId: "peer", payload: "native", mode: "next_turn", kind: "agent_message" }, async () => tab);
+  const records = JSON.parse(await readFile(join(dir, "communication.json.messages"), "utf8"));
+  expect(records.map((r: AgentDelivery) => r.envelope.payload)).toEqual(["http", "native"]);
+  await controller.dispose();
+  expect(listeners.size).toBe(0);
 });

@@ -1,4 +1,8 @@
 import { REASONING_REPLAY_REJECTED } from "../shared/reasoning-replay.js";
+import { createSessionPeerTurns } from "./session-peer-turns.js";
+import type { PeerHost } from "./session-peers.js";
+import type { SessionPeerResponse } from "../shared/session-peers.js";
+import { normalizePeerWorkspaceKey } from "./session-peer-policy.js";
 import { CLAUDE_ORCHESTRATE_ARG } from "../shared/claude-orchestration-feature.js";
 import { EngineSwitchCoordinator } from "./engine-switch-coordinator.js";
 import { ENGINE_SWITCH_CONTROL, type EngineSwitchIdentity, type EngineSwitchLaunch } from "../shared/engine-switch-control.js";
@@ -395,6 +399,10 @@ export interface TabHost {
   tabId: string;
   /** = host cwd, known before fork. */
   workspace: string;
+  peerWorkspaceKey?: string;
+  /** Last validated permission mode reported by the current host incarnation. */
+  permissionMode?: PermissionMode;
+  orchestrate?: boolean;
   /**
    * GitHub #6: the workspace folder was gone when a host spawn was attempted,
    * so no host was forked. Sticky until a later spawn actually reaches a fork;
@@ -889,6 +897,12 @@ export interface TabHostManagerDeps {
     Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => string | void;
+  onFileActivityLifecycle?: (tabId: string) => void;
+  onFileActivity?: (tabId: string, proc: UtilityProcess, message: unknown) => boolean;
+  registerPeerDrain?: (envelope: AgentDelivery["envelope"], recipient: PeerHost) => boolean;
+  onSessionPeerDrain?: (proc: UtilityProcess, request: unknown) => Promise<unknown>;
+  releasePeerDrain?: (proc: UtilityProcess, request: unknown) => void;
+  onSessionPeerRequest?: (tabId: string, proc: UtilityProcess, request: unknown) => Promise<SessionPeerResponse | null>;
   /**
    * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5,
    * 96-A): main routes a host's `PREVIEW_REQUEST_TYPE`/`PREVIEW_ARTIFACTS_TYPE`
@@ -1246,6 +1260,12 @@ export class TabHostManager {
    * (S2d, not this slice) needs to see children too, tagged via `childOf`, to
    * project the child-run ledger next to the renderer's (child-blind) store.
    */
+  private readonly peerTurns = createSessionPeerTurns();
+  private readonly peerTerminalListeners = new Set<(sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void>();
+  onSessionPeerTerminal(listener: (sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void): () => void {
+    this.peerTerminalListeners.add(listener);
+    return () => { this.peerTerminalListeners.delete(listener); };
+  }
   private readonly communicationListeners = new Set<(sessionId: string, delivery: AgentDelivery) => void>();
   onCommunicationDelivery(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void {
     this.communicationListeners.add(listener);
@@ -1271,6 +1291,11 @@ export class TabHostManager {
     const stateOk = tab !== undefined && (requestOptions?.allowNonRunning === true || tab.state === "running");
     if (!tab?.proc || !stateOk || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
     const proc = tab.proc;
+    if (this.deps.onSessionPeerRequest && operation === "send_message") {
+      const envelope = payload as AgentDelivery["envelope"];
+      if (envelope?.recipientSessionId === sessionId && typeof envelope.messageId === "string") this.peerTurns.expectMessage(proc, envelope.messageId);
+    }
+    const peerDrainRegistered = operation === "send_message" && this.deps.registerPeerDrain?.(payload as AgentDelivery["envelope"], this.peerHost(tab.tabId)!) === true;
     const requestId = randomUUID();
     const timeoutMs = requestOptions?.timeoutMs !== undefined ? Math.max(1, requestOptions.timeoutMs) : 20000;
     return new Promise((resolve, reject) => {
@@ -1296,7 +1321,7 @@ export class TabHostManager {
       };
       proc.on("message", onMessage);
       proc.once("exit", onExit);
-      try { proc.postMessage({ type: "communication_request", requestId, operation, payload }); }
+      try { proc.postMessage({ type: "communication_request", requestId, operation, payload, ...(peerDrainRegistered ? { peerDrainRegistered: true } : {}) }); }
       catch (error) { finish(error instanceof Error ? error : new Error("Host unavailable")); }
     });
   }
@@ -1309,6 +1334,25 @@ export class TabHostManager {
     const effort = tab.effortOverride ?? (!tab.initialResume ? tab.engineEffort : null);
     return { engine: tab.engine, ...(model != null ? { model } : {}),
       ...(effort != null ? { effort } : {}), ...tab.lastCommunicationStatus };
+  }
+
+  peerHost(tabId: string): PeerHost | undefined {
+    const tab = this.tabs.get(tabId);
+    if (!tab || this.unpublishedTabs.has(tabId)) return undefined;
+    return { tabId, sessionId: tab.sessionId, proc: tab.proc, generation: tab.hostGeneration,
+      turnContext: tab.proc ? this.peerTurns.active(tab.proc) : undefined,
+      workspace: tab.workspace, workspaceKey: tab.peerWorkspaceKey ?? "",
+      live: tab.state === "running" && tab.proc !== null, root: !tab.childOf,
+      // Core write modes and orchestrate roots still pass through the Core tool gate.
+      // Claude/Codex mode() is display-only "build", including read-only presets.
+      // Their native preset authority is not carried here: keep both closed.
+      restricted: !!tab.childOf, readOnly: tab.engine !== "core" ||
+        !(tab.orchestrate === true || tab.permissionMode === "build" || tab.permissionMode === "edit" ||
+          tab.permissionMode === "auto" || tab.permissionMode === "yolo"),
+      title: this.deps.agentTitleOf?.(tab.sessionId),
+      model: tab.modelOverride ?? (!tab.initialResume ? tab.engineModel : undefined) ?? undefined,
+      effort: tab.effortOverride ?? (!tab.initialResume ? tab.engineEffort : undefined) ?? undefined,
+      engine: tab.engine, activity: tab.activityState ?? "idle" };
   }
 
   listTabs(): ReadonlyArray<TabSummary> {
@@ -1724,7 +1768,12 @@ export class TabHostManager {
       delete tab.hostFailure;
       tab.state = "crash_looped";
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       return;
+    }
+    if (this.deps.onSessionPeerRequest || this.deps.onFileActivity) {
+      try { tab.peerWorkspaceKey = normalizePeerWorkspaceKey(realpathSync(tab.workspace)) ?? ""; }
+      catch { tab.peerWorkspaceKey = ""; }
     }
     delete tab.missingWorkspace;
     const attempt = (this.spawnAttempts.get(tab) ?? 0) + 1;
@@ -1872,6 +1921,7 @@ export class TabHostManager {
       // (the 0.0.45 crash_looped tab left only an inherited-stdio log line).
       this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       tab.state = "crash_looped";
       tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
@@ -1895,6 +1945,7 @@ export class TabHostManager {
         `[main] tab ${tab.tabId} engine ${tab.engine} but the composed fork env omits/mismatches ANYCODE_ENGINE; refusing to spawn`,
       );
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       tab.state = "crash_looped";
       tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
@@ -1949,6 +2000,7 @@ export class TabHostManager {
       });
     } catch (error) {
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       tab.state = "crash_looped";
       tab.hostFailure = hostFailure("spawn_refused");
       this.logger.error(`[main] tab ${tab.tabId} host spawn failed`, error);
@@ -1970,10 +2022,13 @@ export class TabHostManager {
       try { logStderr?.(chunk); } catch { /* logging is best effort */ }
       startupStderr = (startupStderr + chunk.toString()).slice(-16384);
     });
+    delete tab.permissionMode;
+    delete tab.orchestrate;
     tab.proc = child;
     delete tab.hostFailure;
     tab.spawnedAt = this.now();
     tab.state = "running";
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     delete tab.pendingWorktreeCleanup;
     this.stormForks += 1;
 
@@ -2005,6 +2060,53 @@ export class TabHostManager {
     // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
     // export. Never the payload — noteWireMessage reads those two fields.
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
+    if (data.type === "orchestrate_changed") {
+      const enabled = (message as { enabled?: unknown }).enabled;
+      if (tab.proc === child && tab.engine === "core" && typeof enabled === "boolean") tab.orchestrate = enabled;
+      return;
+    }
+    if (data.type === "mode_changed") {
+      const mode = (message as { mode?: unknown }).mode;
+      if (tab.proc === child && tab.engine === "core" &&
+        (mode === "plan" || mode === "build" || mode === "edit" || mode === "auto" || mode === "yolo")) tab.permissionMode = mode;
+      return;
+    }
+    if (data.type === "file_activity" || data.type === "shell_activity") {
+      if (tab.proc === child) this.deps.onFileActivity?.(tab.tabId, child, message);
+      return;
+    }
+    if (data.type === "session_peer_turn" || data.type === "session_peer_terminal") {
+      if (!this.deps.onSessionPeerRequest) return;
+      const event = this.peerTurns.accept({ proc: tab.proc, generation: tab.hostGeneration }, child, message);
+      if (event?.type === "session_peer_terminal") for (const listener of this.peerTerminalListeners) {
+        try { listener(tab.sessionId, event); } catch { /* independent observers */ }
+      }
+      return;
+    }
+    if (data.type === "session_peer_drain_release") {
+      if (tab.proc === child) this.deps.releasePeerDrain?.(child, message);
+      return;
+    }
+    if (data.type === "session_peer_drain_request") {
+      if (tab.proc !== child || !this.deps.onSessionPeerDrain) return;
+      const generation = tab.hostGeneration, workspace = tab.workspace;
+      const permit = await this.deps.onSessionPeerDrain(child, message);
+      if (permit && tab.proc === child && tab.hostGeneration === generation && tab.workspace === workspace) {
+        try { child.postMessage(permit); } catch { /* disconnected origin */ }
+      }
+      return;
+    }
+    if (data.type === "session_peers_request") {
+      if (tab.proc !== child || !this.deps.onSessionPeerRequest) return;
+      const generation = tab.hostGeneration;
+      const request = (message as { request?: unknown }).request;
+      const result = await this.deps.onSessionPeerRequest(tab.tabId, child, request);
+      if (result && tab.proc === child && tab.hostGeneration === generation) {
+        try { child.postMessage({ type: "session_peers_response", requestId: (request as { requestId: string }).requestId, result }); }
+        catch { /* disconnected host */ }
+      }
+      return;
+    }
     if (data.type === "session_activity") {
       const state = (message as { state?: unknown }).state;
       if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;
@@ -2047,6 +2149,8 @@ export class TabHostManager {
           tab.engineProcess = candidates.at(-1) ?? null;
           tab.candidateEngineProcesses?.delete(requestId);
           tab.activeRuntimeId = requestId;
+          delete tab.permissionMode;
+          delete tab.orchestrate;
           tab.engine = target.engine;
           tab.engineModel = identity.model;
           tab.enginePreset = identity.mode;
@@ -3597,6 +3701,7 @@ export class TabHostManager {
     }
     const wasClosing = tab.state === "closing";
     tab.proc = null;
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     tab.state = "closing";
     const requestId = tab.childOf?.requestId;
     if (requestId === undefined) {
@@ -3814,6 +3919,7 @@ export class TabHostManager {
       return;
     }
     tab.proc = null;
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     tab.activityState = "idle";
 
     if (this.unpublishedTabs.has(tab.tabId)) {
@@ -4122,6 +4228,7 @@ export class TabHostManager {
   async shutdownTabHost(tab: TabHost): Promise<void> {
     const child = tab.proc;
     tab.state = "closing";
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     if (child === null) {
       return;
     }
@@ -4174,6 +4281,7 @@ export class TabHostManager {
         // that a respawn/relocate already installed while this call was
         // still waiting on its own, now-irrelevant deadline.
         tab.proc = null;
+        this.deps.onFileActivityLifecycle?.(tab.tabId);
       }
     } else {
       this.logger.log(`[main] tab ${tab.tabId} host exited gracefully within deadline`);
@@ -4181,6 +4289,7 @@ export class TabHostManager {
       // own `child` is still the tab's CURRENT process may clear it.
       if (tab.proc === child) {
         tab.proc = null;
+        this.deps.onFileActivityLifecycle?.(tab.tabId);
       }
     }
     if (tab.proc === null) tab.activityState = "idle";

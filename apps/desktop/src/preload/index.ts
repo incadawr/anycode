@@ -1,3 +1,4 @@
+import { AGENT_MESSAGE_LOOKUP_CHANNEL, AGENT_MESSAGE_FOCUS_CHANNEL, type AgentMessageLinksBridge } from "../shared/agent-message-links.js";
 /**
 
  * concerns:
@@ -16,6 +17,7 @@
  *
  * Sandboxed CJS build — nothing else belongs here.
  */
+import { SESSION_PEER_VIEW_CHANNEL, SESSION_PEER_SET_CHANNEL, type SessionPeerBridge } from "../shared/session-peer-view.js";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { isRendererUrl } from "../main/main-navigation.js";
 import { ACCOUNT_SOURCES_BIND_CHANNEL, ACCOUNT_SOURCES_CATALOG_CHANGED_CHANNEL, ACCOUNT_SOURCES_CHANGED_CHANNEL, ACCOUNT_SOURCES_GET_CHANNEL, ACCOUNT_SOURCES_PREVIEW_CHANNEL, ACCOUNT_SOURCES_REFRESH_CHANNEL, ACCOUNT_SOURCES_RESET_CHANNEL, ACCOUNT_SOURCES_UNBIND_CHANNEL, type AccountSourceKey, type AccountSourcePreviewResult, type AccountSourcesSnapshot, type AccountSourceCandidateView } from "../shared/account-sources.js";
@@ -1206,6 +1208,14 @@ contextBridge.exposeInMainWorld("anycode", {
     customUpsert: (req: LspCustomUpsertRequest): Promise<LspMutationResult> =>
       ipcRenderer.invoke(LSP_CUSTOM_UPSERT_CHANNEL, req) as Promise<LspMutationResult>,
   },
+  agentMessageLinks: {
+    lookup: request => ipcRenderer.invoke(AGENT_MESSAGE_LOOKUP_CHANNEL, request),
+    focus: request => ipcRenderer.invoke(AGENT_MESSAGE_FOCUS_CHANNEL, request),
+  } satisfies AgentMessageLinksBridge,
+  sessionPeers: {
+    get: (tabId) => ipcRenderer.invoke(SESSION_PEER_VIEW_CHANNEL, { tabId }),
+    set: (change) => ipcRenderer.invoke(SESSION_PEER_SET_CHANNEL, change),
+  } satisfies SessionPeerBridge,
   // `communication.*` — the Sessions API (local MCP for external
   // agents) control plane. The renderer names folders only by asking for the
   // native dialog (`addWorkspace` takes NO arguments) and sends a tabId for the

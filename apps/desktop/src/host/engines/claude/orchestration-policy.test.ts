@@ -36,6 +36,11 @@ describe("Claude orchestration admission", () => {
     const snapshot = { version: fixture.version, permissionMode: "default" as const };
     const init = fixture.frames.init;
     expect(() => assertClaudeOrchestrationReadback(init, snapshot)).not.toThrow();
+    const peerNames = new Set(["mcp__anycode__sessions_list", "mcp__anycode__session_send"]);
+    const withPeers = { ...init, tools: [...init.tools, ...peerNames] };
+    expect(() => assertClaudeOrchestrationReadback(withPeers, snapshot, peerNames)).not.toThrow();
+    expect(() => assertClaudeOrchestrationReadback(withPeers, snapshot)).toThrow("drift");
+    expect(() => assertClaudeOrchestrationReadback({ ...withPeers, tools: [...withPeers.tools, "Bash"] }, snapshot, peerNames)).toThrow("drift");
     for (const patch of [{ permissionMode: "plan" }, { tools: [...init.tools, "Bash"] }, { tools: init.tools.slice(1) }, { skills: ["execute"] }, { slash_commands: ["run"] }, { mcp_servers: [{ name: "external" }] }, { claude_code_version: "unknown" }]) {
       expect(() => assertClaudeOrchestrationReadback({ ...init, ...patch }, snapshot)).toThrow("drift");
     }
@@ -52,7 +57,7 @@ describe("early approval denial", () => {
     expect(success).toHaveBeenCalledWith(expect.objectContaining({ behavior: "deny", toolUseID: "use" }));
     expect(requestPermission).not.toHaveBeenCalled();
   });
-  it.each(["mcp__anycode__agent", "mcp__anycode__agent_status"])("allows only exact owned %s", async tool => {
+  it.each(["mcp__anycode__agent", "mcp__anycode__agent_status", "mcp__anycode__list_connections"])("allows only exact owned %s", async tool => {
     const requestPermission = vi.fn();
     const bridge = new ClaudeApprovalBridge({ broker: { requestPermission, denyAll: vi.fn(), isUnattended: false, isAwaitingApproval: false }, activePresetId: () => "ask", orchestrationRestricted: () => true, bridge: {} as ClaudeMcpBridge });
     const success = vi.fn();

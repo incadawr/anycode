@@ -10451,3 +10451,41 @@ describe("detached subagent wire events", () => {
     } finally { h.close(); }
   });
 });
+
+
+it("publishes authoritative permission mode at boot and after changes without a UI handshake", async () => {
+  const h = createHarness({ steps: [], mode: "plan" });
+  const modes: string[] = [];
+  const orchestrate: boolean[] = [];
+  try {
+    h.session.observePermissionMode(mode => modes.push(mode), enabled => orchestrate.push(enabled));
+    expect(orchestrate).toEqual([false]);
+    expect(modes).toEqual(["plan"]);
+    h.send({ type: "set_mode", mode: "build" });
+    await h.waitUntil(() => modes.length === 2);
+    h.send({ type: "set_mode", mode: "plan" });
+    await h.waitUntil(() => modes.length === 3);
+    expect(modes).toEqual(["plan", "build", "plan"]);
+    h.send({ type: "set_orchestrate", enabled: true });
+    await h.waitUntil(() => orchestrate.length === 2);
+    expect(orchestrate).toEqual([false, true]);
+    h.send({ type: "set_orchestrate", enabled: false });
+    await h.waitUntil(() => orchestrate.length === 3);
+    expect(orchestrate).toEqual([false, true, false]);
+  } finally { h.close(); }
+});
+
+
+it.each(["claude", "codex"] as const)("does not publish %s display mode as permission authority", engineId => {
+  const engine = { id: engineId, mode: () => "build", capabilities: {},
+    reasoningEffort: () => undefined, historyItems: () => [], dispose: async () => {} } as unknown as SessionOptions["engine"];
+  const h = createHarness({ steps: [], engine });
+  const mode = vi.fn(), orchestrate = vi.fn();
+  try {
+    h.session.observePermissionMode(mode, orchestrate);
+    h.outbound.emit({ type: "mode_changed", mode: "build" });
+    h.outbound.emit({ type: "orchestrate_changed", enabled: true });
+    expect(mode).not.toHaveBeenCalled();
+    expect(orchestrate).not.toHaveBeenCalled();
+  } finally { h.close(); }
+});

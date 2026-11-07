@@ -1,3 +1,4 @@
+import { NATIVE_SESSIONS_ENV } from "../shared/session-peers.js";
 import type { ProviderConnection } from "../shared/settings.js";
 import { automaticGoRoute } from "./go-route.js";
 /**
@@ -1033,7 +1034,14 @@ export interface ResolvedProviderSelection {
   defaultTransport?: string;
 }
 
+/** Development opt-in only; packaged builds stay off until native acceptance. */
+export function nativeSessionsEnabledForBoot(bootEnv: NodeJS.ProcessEnv, isPackaged: boolean): boolean {
+  return !isPackaged && bootEnv[NATIVE_SESSIONS_ENV] === "1";
+}
+
 export interface HostEnvParams {
+  /** Trusted main decision; the ambient boot value is never forwarded directly. */
+  nativeSessionsEnabled?: boolean;
   /* */
   bootEnv: NodeJS.ProcessEnv;
   settings: AnycodeSettings;
@@ -1123,6 +1131,8 @@ export interface RecognizerCatalogInfo {
 export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.ProcessEnv> {
   const { bootEnv, settings, getSecret, resolveSelection, resolveActiveCredential } = params;
   const env: NodeJS.ProcessEnv = { ...bootEnv };
+  delete env[NATIVE_SESSIONS_ENV];
+  if (params.nativeSessionsEnabled === true) env[NATIVE_SESSIONS_ENV] = "1";
   // F1: the engine-proxy carriers are main-authored, and this spread is
   // the structural hole they would otherwise ride through — same reasoning as
   // `applyCodexProfilesHomeOverride`'s delete branch above. Repeated here rather

@@ -534,6 +534,7 @@ export interface HarnessOptions {
   switchEngineFactory?: SessionOptions["switchEngineFactory"];
   engineSwitchCoordinator?: SessionOptions["engineSwitchCoordinator"];
   runtimeHistory?: SessionOptions["runtimeHistory"];
+  observeFileActivity?: SessionOptions["observeFileActivity"];
   backgroundChildren?: SessionOptions["backgroundChildren"];
   /**
    * a SkillPort + skills prompt-section text threaded into
@@ -798,6 +799,7 @@ export function createHarness(options: HarnessOptions): Harness {
         ? { onOrchestrateChanged: (enabled: boolean) => spawnModeCell.onOrchestrateChanged(enabled) }
         : {}),
     ...(options.orchestratorRouteCheck !== undefined ? { orchestratorRouteCheck: options.orchestratorRouteCheck } : {}),
+    ...(options.observeFileActivity ? { observeFileActivity: options.observeFileActivity } : {}),
     ...(options.runtimeHistory ? {runtimeHistory: options.runtimeHistory} : {}),
     ...(options.engineSwitchCoordinator ? { engineSwitchCoordinator: options.engineSwitchCoordinator } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),

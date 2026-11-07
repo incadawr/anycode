@@ -172,6 +172,8 @@ export interface ClaudeApprovalBridgeOptions {
    * Any other `mcp__anycode__*` name keeps the generic ask path below.
    */
   browserToolNames?: ReadonlySet<string>;
+  /** Owned peer names delegate every call to the input-aware host gate. */
+  peerToolNames?: ReadonlySet<string>;
 }
 
 export class ClaudeApprovalBridge {
@@ -219,11 +221,15 @@ export class ClaudeApprovalBridge {
       responder.error("Malformed can_use_tool request");
       return;
     }
+    if (this.options.bridge !== undefined && this.options.peerToolNames?.has(approval.toolName)) {
+      responder.success(allowResponse(approval));
+      return;
+    }
     if (claudeOrchestrationDeniesTool(this.options.orchestrationRestricted?.() === true, approval.toolName, this.options.bridge !== undefined)) {
       responder.success(denyResponse(approval, "Orchestration parents may only delegate; this permission request is denied."));
       return;
     }
-    if (this.options.bridge !== undefined && (approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent` || approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent_status`)) {
+    if (this.options.bridge !== undefined && (approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent` || approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent_status` || approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}list_connections`)) {
       // AnyCode's own MCP door (S3), not a third-party tool: the
       // child session spawned behind it has its own broker for whatever it
       // actually does (plan §2.6). Allowed before the pending latch below so

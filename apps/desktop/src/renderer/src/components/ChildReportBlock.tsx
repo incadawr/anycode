@@ -11,12 +11,16 @@
  * machinery — a report's text is static from the moment it lands, never a
  * growing stream.
  */
-import { useId, useState } from "react";
+import { useContext, useEffect, useId, useState } from "react";
+import { Button } from "../ui/index.js";
+import { TabContext } from "../tab-context.js";
+import { useTabsStore } from "../tabs-store.js";
+import type { AgentMessageLinkTarget } from "../../../shared/agent-message-links.js";
 import type { TranscriptBlock } from "../store.js";
 import { Chevron } from "./icons.js";
 import { formatBlockTime } from "../block-time.js";
 import { parseChildReportText, childReportCardLabel } from "../child-report-format.js";
-import { agentMessageBody, agentMessagePreview, agentMessageStatusLabel, isAuthenticatedAgentMessage } from "../agent-message-format.js";
+import { agentMessageDirection, agentMessageTitle, agentMessageBody, agentMessagePreview, agentMessageStatusLabel, isAuthenticatedAgentMessage } from "../agent-message-format.js";
 
 type UserTextBlock = Extract<TranscriptBlock, { kind: "user_text" }>;
 
@@ -38,9 +42,34 @@ export function ChildReportBlock({ block, enter = false, defaultExpanded = false
   const time = formatBlockTime(block.at, Date.now());
   const isAgentMessage = isAuthenticatedAgentMessage(block);
 
+  const tab = useContext(TabContext);
+  const card = block.agentMessageCard;
+  const [target, setTarget] = useState<AgentMessageLinkTarget | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const messageId = card?.envelope.messageId;
+  const side = card?.direction;
+  const tabId = tab?.tabId;
+  useEffect(() => {
+    let active = true;
+    setTarget(null); setUnavailable(false);
+    if (messageId && side && tabId && card?.envelope.principal?.kind === "session") {
+      void window.anycode?.agentMessageLinks.lookup({ messageId, side, tabId })
+        .then(value => { if (active) setTarget(value); }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [messageId, side, tabId, card?.envelope.principal?.kind]);
+  async function focusPeer() {
+    if (!messageId || !side || !tabId) return;
+    try {
+      const live = await window.anycode.agentMessageLinks.focus({ messageId, side, tabId });
+      if (live) { useTabsStore.getState().setActiveTab(live.tabId); return; }
+    } catch { /* An unavailable peer stays a plain label. */ }
+    setUnavailable(true);
+  }
+
   return (
     <div data-block-id={block.id} className={`message message-child-report${block.agentMessage ? " minimap-turn" : ""}${enter ? " message-enter" : ""}`}>
-      <button
+      <Button variant="ghost"
         type="button"
         className="child-report-toggle"
         aria-expanded={expanded}
@@ -51,13 +80,17 @@ export function ChildReportBlock({ block, enter = false, defaultExpanded = false
           <Chevron />
         </span>
         <span className={`child-report-status child-report-status-${parsed.status}`} aria-hidden="true" />
-        {isAgentMessage ? `Agent message · ${agentMessageStatusLabel(block)}` : childReportCardLabel(parsed)}
+        {isAgentMessage ? `${agentMessageDirection(block) ? `${agentMessageDirection(block)} · ` : ""}Agent message · ${agentMessageStatusLabel(block)}` : childReportCardLabel(parsed)}
         {time && (
           <time className="block-time" title={time.title}>
             {time.label}
           </time>
         )}
-      </button>
+      </Button>
+      {card && <div className="agent-message-identity">
+        {target && !unavailable ? <Button variant="ghost" size="sm" onClick={() => void focusPeer()}>{agentMessageTitle(target.title) || "Session"}</Button>
+          : <span>{agentMessageTitle(target?.title ?? (card.direction === "incoming" ? card.envelope.principal?.sessionId ?? "Session" : card.envelope.recipientSessionId)) || "Session"}{unavailable && <span role="status"> · Session unavailable</span>}</span>}
+      </div>}
       {/* Outside the expanded body on purpose: the preview is what makes the
           collapsed transcript readable after a reload. Plain text, never
           Markdown/HTML — an agent payload is untrusted content. Hidden while

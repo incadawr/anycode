@@ -382,6 +382,8 @@ export interface AgentLoopConfig {
    * reference — the loop never imports the RPC client that implements it.
    */
   sessionSubagents?: SessionSubagentPort;
+  /** Root-only peer capability; omitted from inline child configs. */
+  sessionPeers?: import("../ports/session-peers.js").SessionPeersPort;
   /**
    * Discovered-skills entry (design §2.2/§3.3). Placed into the DispatchContext
    * so the Skill tool can load a body lazily. Attached by the CLI/host wiring;
@@ -1176,6 +1178,7 @@ export class AgentLoop {
       ports: this.config.ports,
       cwd: this.config.cwd,
       subagents: this.config.subagents,
+      sessionPeers: this.config.sessionPeers,
       sessionSubagents: this.config.sessionSubagents,
       skills: this.config.skills,
       workflows: this.config.workflows,

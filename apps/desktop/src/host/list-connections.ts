@@ -1,14 +1,19 @@
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { openCodeGoCatalogEntry, resolveEffortLevels, resolveImageInput, type ConnectionTargets } from "@anycode/core";
+import { projectConnectionTargets, openCodeGoCatalogEntry, resolveEffortLevels, resolveImageInput, type ConnectionTargets } from "@anycode/core";
 import { connectionRoutingSettings } from "../shared/child-model.js";
 import { migrateModelOverrides } from "../shared/model-overrides.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 
-/** Project only routing information; never return connection records themselves. */
-export function listConnectionTargets(settings: AnycodeSettings, connectionId?: string, model?: string, manualEnvironment = false): ConnectionTargets {
+/** Full in-process routing inventory; model-facing limits belong to the tool. */
+export function listConnectionTargets(settings: AnycodeSettings, connectionId?: string, model?: string, manualEnvironment = false, current?: ConnectionTargets["current"]): ConnectionTargets {
+  // Normalize current metadata without applying display caps to the inventory.
+  const native = current?.engine ? current.engine !== "core" : current?.routeKind === "native_cli";
+  const route = projectConnectionTargets({
+    current: native ? current! : { connectionId, model, ...current }, connections: [],
+  }).current;
   return {
-    current: { connectionId, model },
+    current: route,
     connections: connectionRoutingSettings(settings, connectionId, model, manualEnvironment).provider.connections.map(rawConnection => {
       const connection = migrateModelOverrides(rawConnection);
       const catalog = getBuiltinCatalog().providers.find(p => p.id === connection.providerId);

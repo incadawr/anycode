@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveInlineRoute } from "../../../../packages/core/src/routing/inline-route.js";
 import { createListConnectionsTool } from "@anycode/core";
 import type { ToolContext } from "@anycode/core";
 import { connectionFixture, providerV2Multi } from "../shared/provider-v2-fixture.js";
@@ -51,4 +52,53 @@ it("reports each routable Go model's own declared context and levels", () => {
   expect(models.find(model => model.id === "grok-4.7")?.contextWindow).toBe(500000);
   expect(models.find(model => model.id === "hy4")?.effortLevels).toEqual(["off", "high"]);
   expect(models.some(model => model.id === "gemini-4-argon")).toBe(false);
+});
+
+
+it("projects native current independently of the active API route before tool output", async () => {
+  const connection = Object.assign(connectionFixture({ id: "custom:fixture", connectionId: "api", model: "api-model" }), { label: "x".repeat(20000), apiKey: "host-secret" });
+  const settings = { version: 2, provider: providerV2Multi("api", [connection]) } as AnycodeSettings;
+  for (const engine of ["codex", "claude"] as const) {
+    const targets = listConnectionTargets(settings, "api", "api-model", false, { engine, model: "native-model", effort: "high", provenance: "unknown" });
+    expect(targets.current).toEqual({ engine, routeKind: "native_cli", model: "native-model", effort: "high", provenance: "unknown" });
+    expect(targets.connections[0]?.id).toBe("api");
+    const result = await createListConnectionsTool(() => targets).handler({}, {} as ToolContext);
+    expect(result.ok && result.output?.connections[0]?.label?.length).toBeLessThanOrEqual(256);
+    expect(JSON.stringify(targets)).not.toContain("host-secret");
+    const unknown = listConnectionTargets(settings, "api", "api-model", false, { engine, provenance: "unknown" });
+    expect(unknown.current.connectionId).toBeUndefined();
+    expect(unknown.current.model).toBeUndefined();
+  }
+});
+
+
+it("keeps the full inventory routable beyond display caps", async () => {
+  const models = Array.from({ length: 300 }, (_, i) => `model-${i}`);
+  const connections = Array.from({ length: 70 }, (_, i) => ({
+    ...connectionFixture({ id: "custom:fixture", connectionId: `c-${i}`, model: "model-280" }), models,
+  }));
+  const settings = { version: 2, provider: providerV2Multi("c-69", connections) } as AnycodeSettings;
+  const targets = listConnectionTargets(settings, "c-69", "model-280");
+  expect(resolveInlineRoute(targets, "c-0", "model-280").ok).toBe(false);
+  expect(resolveInlineRoute(listConnectionTargets(settings, "c-0", "model-280"), "c-0", "model-280"))
+    .toEqual({ ok: true, model: "model-280" });
+  expect(resolveInlineRoute(targets, "c-69", "model-280")).toEqual({ ok: true, model: "model-280" });
+  expect(resolveInlineRoute(targets, "c-69", "model-299")).toEqual({ ok: true, model: "model-299" });
+  expect(targets.connections).toHaveLength(70);
+  expect(targets.connections[69]?.models).toHaveLength(300);
+  const result = await createListConnectionsTool(() => targets).handler({}, {} as ToolContext);
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error("expected success");
+  expect(result.output?.connections.length).toBeLessThanOrEqual(64);
+  expect(result.output?.connections[0]?.models.length).toBeLessThanOrEqual(256);
+  expect(result.output?.connections[0]?.models).toContainEqual(expect.objectContaining({ id: "model-280", default: true }));
+});
+
+it("normalizes contradictory current metadata before routing and tool output", async () => {
+  const connection = connectionFixture({ id: "custom:fixture", connectionId: "c", model: "m" });
+  const settings = { version: 2, provider: providerV2Multi("c", [connection]) } as AnycodeSettings;
+  const targets = listConnectionTargets(settings, "c", "m", false, { engine: "core", routeKind: "native_cli" });
+  expect(targets.current).toMatchObject({ engine: "core", routeKind: "api_connection", connectionId: "c", model: "m" });
+  const result = await createListConnectionsTool(() => targets).handler({}, {} as ToolContext);
+  expect(result.ok && result.output?.current).toEqual(targets.current);
 });

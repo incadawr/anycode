@@ -1,4 +1,4 @@
-import type { AgentDelivery } from "./communication.js";
+import type { AgentDelivery, AgentDisplayCard } from "./communication.js";
 /**
  * Wire protocol between the sandboxed renderer and the host utilityProcess
  * (design/phase-mvp.md §3). FROZEN by task MVP.1 — do not change shapes here
@@ -668,6 +668,7 @@ export type HostToUiMessage =
   // history is non-empty. The renderer mapping into transcript blocks is task
   // 2.1.5; task 2.1.1 adds only the type + a no-op reducer branch.
   | { type: "agent_message"; delivery: AgentDelivery }
+  | { type: "agent_message_display"; cards: AgentDisplayCard[] }
   /**
    * rework (Opus defect 1): a UI steer_message whose frame
    * could NOT be delivered into the running turn (idle/pre-loop, Stop,

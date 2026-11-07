@@ -1,5 +1,15 @@
 import { recordReasoningReplayRejection } from "./reasoning-replay.js";
 import { registerSettingsIpcWithProbe } from "./connection-probe.js";
+import { registerAgentMessageLinks } from "./agent-message-links.js";
+import { createSessionPeerDrain } from "./session-peer-drain.js";
+import { createSessionPeerReplyCoordinator } from "./session-peer-reply-coordinator.js";
+import { createSessionPeerReplies } from "./session-peer-replies.js";
+import { createFileActivityIngress } from "./file-activity-ingress.js";
+import { createSessionPeersHandler } from "./session-peers.js";
+import { createSessionPeerAccess } from "./session-peer-access.js";
+import { registerSessionPeerIpc } from "./session-peer-ipc.js";
+import { createSessionPeerPolicyStore } from "./session-peer-policy.js";
+import { nativeSessionsEnabledForBoot } from "./host-env.js";
 import { claudeOrchestrationEnabled } from "./claude-orchestration-feature.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
@@ -69,7 +79,7 @@ import {
   registerWorkspaceTrustIpc,
   workspaceTrustOnceFor,
 } from "./workspace-trust-ipc.js";
-import { canonicalWorkspaceKey, defaultTrustStorePath, migrateTrustStoreKeys, readTrustStore } from "@anycode/core/workspace-trust";
+import { canonicalWorkspaceKey, defaultTrustStorePath, migrateTrustStoreKeys, readTrustStore, resolveWorkspaceTrust } from "@anycode/core/workspace-trust";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -134,6 +144,8 @@ import {
 // `create_session {engine:"core", model}` resolves to a provider
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
 import { primeNewSessionPin } from "./session-pin.js";
+import { forgetClosedAgentOpeners } from "./communication-creation-admission.js";
+import { createSessionPeerOpener } from "./session-peer-open.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister, type AgentTitlePushes, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
 import type { CreateSessionRequest } from "./communication-server.js";
@@ -586,6 +598,7 @@ let communicationApprovals: SessionAccessStore | null = null;
 /** per-project "Allow agents to open tasks here" switch (default OFF everywhere) and the sessions an agent opened (drives the "agent" marker). */
 let communicationAgentProjects: AgentProjectsStore | null = null;
 const agentOpenedSessions = new Set<string>();
+const agentSessionOpeners = new Map<string, string>();
 /**
  * The handle a session's tab is titled with. Kept for the tab's lifetime (the
  * sidebar reads it), and mirrored into the session row by `agentTitlePushes`
@@ -1730,6 +1743,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
       getAccessToken: getAccessTokenFor,
     });
   const env = await buildHostEnv({
+    nativeSessionsEnabled: nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
     bootEnv,
     settings: current,
     getSecret,
@@ -2616,6 +2630,7 @@ void app.whenReady().then(async () => {
     console.warn("[main] network hint forwarders not attached", error);
   }
   communicationController = createCommunicationController({
+    nativeSessionsEnabled: nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
     manager: () => manager,
     userData: app.getPath("userData"),
     logger: { warn: (message) => console.warn(message), error: (message) => console.error(message) },
@@ -2624,6 +2639,7 @@ void app.whenReady().then(async () => {
     handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),
     countExposed: () => communicationSessions?.exposedCount() ?? 0,
     isExternalApprovalEnabled: (sessionId) => communicationApprovals?.isExposed(sessionId) ?? false,
+    creatorOwnsAdmission: true,
     createSessionByAgent: (request) => createSessionForAgent(request),
     listAgentProjects: () => communicationAgentProjects?.allowedKeys() ?? [],
     agentOpenedSessions,
@@ -2658,6 +2674,7 @@ void app.whenReady().then(async () => {
     randomUUID,
     agentOpenedSessions,
     agentSessionTitles,
+    agentSessionOpeners,
     pushAgentTitle: (sessionId) => agentTitlePushes.retain(sessionId),
     listTabs: () => manager?.listTabs() ?? [],
     // A prepared creation that fails after the host forked drops the row it
@@ -2685,12 +2702,98 @@ void app.whenReady().then(async () => {
         return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
       }
     };
+  const peerEnabled = nativeSessionsEnabledForBoot(bootEnv, app.isPackaged);
+  const peerPolicy = createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-policy.json") });
+  const peerTrusted = async (workspace: string) => (await resolveWorkspaceTrust(new NodeLspConfigFs(), {
+    workspace, home: selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
+    storePath: defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()),
+    realpathSync, onceHash: workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
+  })).projectTrusted;
+  const preparePeerTrust = async () => {};
+  const peerAccess = peerEnabled ? createSessionPeerAccess({ enabled: () => peerEnabled, policy: peerPolicy, isTrusted: peerTrusted, realpathSync, statSync }) : undefined;
+  const currentPeer = (id: string) => {
+    const tab = manager?.listTabs().find(t => t.sessionId === id);
+    return tab ? manager?.peerHost(tab.tabId) : undefined;
+  };
+  const peerSnapshots = new WeakMap<object, { sender: import("./session-peers.js").PeerHost; recipient: import("./session-peers.js").PeerHost }>();
+  let peerDrain: ReturnType<typeof createSessionPeerDrain> | undefined;
+  let peerReplies: ReturnType<typeof createSessionPeerReplies> | undefined;
+  let peerBroker: Awaited<ReturnType<CommunicationController["broker"]>> | undefined;
+  if (peerEnabled) app.once("before-quit", () => peerDrain?.dispose());
+  const fileActivity = createFileActivityIngress(peerEnabled, tabId => manager?.peerHost(tabId));
+  if (fileActivity) app.on("before-quit", () => fileActivity.dispose());
+  const peerHandler = peerEnabled ? createSessionPeersHandler({
+    open: createSessionPeerOpener(createSessionDeps),
+    files: fileActivity?.index,
+    send: async (caller, input, authorize) => {
+      const broker = await communicationController!.broker();
+      peerBroker = broker;
+      peerDrain ??= createSessionPeerDrain({ lookup: id => broker.ledger.messages.get(id), current: currentPeer,
+        prepare: preparePeerTrust, access: peerAccess! });
+      const pin = (record: import("./communication-ledger.js").CommunicationRecord, sender: import("./session-peers.js").PeerHost, recipient: import("./session-peers.js").PeerHost) => {
+        for (const pinned of [sender, recipient]) {
+          const live = currentPeer(pinned.sessionId);
+          if (!live?.live || !live.root || live.restricted || (pinned === sender && live.readOnly) ||
+              live.proc !== pinned.proc || live.generation !== pinned.generation || live.tabId !== pinned.tabId ||
+              live.workspace !== pinned.workspace || live.workspaceKey !== pinned.workspaceKey) throw new Error("Peer generation changed");
+        }
+        peerSnapshots.set(record, { sender: { ...sender }, recipient: { ...recipient } });
+      };
+      if (!peerReplies) {
+        const coordinator = createSessionPeerReplyCoordinator(broker, { current: currentPeer, sendAuto: async (sender, source, payload) => {
+          await preparePeerTrust();
+          let autoRecipient: import("./session-peers.js").PeerHost | undefined;
+          const authorizeAuto = async (id: string) => {
+            const now = currentPeer(sender.sessionId), target = currentPeer(id);
+            if (!now || now.proc !== sender.proc || now.generation !== sender.generation || now.workspace !== sender.workspace ||
+                now.workspaceKey !== sender.workspaceKey || !target || !await peerAccess!.canAccess(now, target, "send")) throw new Error("Peer access refused");
+            if (currentPeer(sender.sessionId)?.proc !== sender.proc || currentPeer(id)?.proc !== target.proc) throw new Error("Peer generation changed");
+            autoRecipient = target;
+            return target;
+          };
+          return peerReplies!.auto(sender, source, payload, async id => {
+            const host = await authorizeAuto(id);
+            const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
+            if (!tab) throw new Error("Peer unavailable");
+            return tab;
+          }, undefined, record => pin(record, sender, autoRecipient!));
+        } });
+        peerReplies = createSessionPeerReplies(broker, Date.now, coordinator);
+      }
+      let recipient: import("./session-peers.js").PeerHost | undefined;
+      return peerReplies.send(caller, input, async id => {
+        const host = await authorize(id);
+        recipient = host;
+        const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
+        if (!tab) throw new Error("Peer unavailable");
+        return tab;
+      }, undefined, record => pin(record, caller, recipient!));
+    },
+    current: tabId => manager?.peerHost(tabId),
+    targets: () => (manager?.listTabs() ?? []).flatMap(tab => {
+      const host = manager?.peerHost(tab.tabId); return host ? [host] : [];
+    }),
+    prepare: preparePeerTrust,
+    access: peerAccess!,
+  }) : undefined;
   manager = new TabHostManager({
+    onFileActivity: fileActivity?.accept,
+    onFileActivityLifecycle: fileActivity?.sync,
+    onSessionPeerRequest: peerHandler,
+    registerPeerDrain: peerEnabled ? (envelope, recipient) => {
+      const record = peerBroker?.ledger.messages.get(envelope.messageId);
+      const pinned = record && peerSnapshots.get(record);
+      if (!record?.peer) return false;
+      if (record.envelope !== envelope || !pinned || !recipient || pinned.recipient.proc !== recipient.proc || !peerDrain?.register(record, pinned.sender, pinned.recipient)) throw new Error("Peer drain registration refused");
+      return true;
+    } : undefined,
+    onSessionPeerDrain: peerEnabled ? async (proc, raw) => peerDrain?.request(proc, raw) : undefined,
+    releasePeerDrain: peerEnabled ? (proc, raw) => { peerDrain?.release(proc, raw); } : undefined,
     diagnosticsRing: mainDiagnosticsRing,
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     // Every spawn, respawn and resume delivers a fresh port: that is the moment a
     // title push that lost its host gets another chance.
-    onTabPortDelivered: (tab) => agentTitlePushes.retry(tab.sessionId),
+    onTabPortDelivered: (tab) => { fileActivity?.sync(tab.tabId); agentTitlePushes.retry(tab.sessionId); },
     isAgentOpenedSession: (sessionId) => agentOpenedSessions.has(sessionId),
     onSessionRegistered: (info) => {
       const sessionsAdded = communicationSessions?.register(info);
@@ -3010,6 +3113,7 @@ void app.whenReady().then(async () => {
     // and neither do the tab's artifact consent grants.
     onTabClosed: (tabId) => {
       const liveSessions = new Set(manager?.listTabs().map((tab) => tab.sessionId));
+      forgetClosedAgentOpeners(agentSessionOpeners, liveSessions);
       for (const id of agentOpenedSessions) {
         if (!liveSessions.has(id)) {
           agentOpenedSessions.delete(id);
@@ -3831,6 +3935,22 @@ void app.whenReady().then(async () => {
     },
   });
 
+  registerAgentMessageLinks({
+    enabled: () => peerEnabled,
+    record: async messageId => (await communicationController?.broker())?.ledger.messages.get(messageId),
+    tabs: () => manager?.listTabs() ?? [],
+    title: async sessionId => agentSessionTitles.get(sessionId) ?? (await persistence?.getRootSession(sessionId))?.title,
+  });
+
+  registerSessionPeerIpc({
+    policy: peerPolicy,
+    enabled: () => nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
+    tabs: () => manager?.listTabs() ?? [],
+    realpath: realpathSync,
+    isDirectory: path => statSync(path).isDirectory(),
+    isTrusted: peerTrusted,
+  });
+
   // Language-server config management control plane: same
   // home/workspace wiring as the MCP registration above. `projectTrusted`
   // rides the SAME once-approval map workspace-trust-ipc uses (never a second
@@ -4298,7 +4418,6 @@ void app.whenReady().then(async () => {
     await controller.apply(applyInputFromBlock(settings?.communication));
     // the first Sessions-API state is known now — services may start with it.
     reconcileServices();
-    app.on("before-quit", () => { void controller.dispose(); }); // dispose is idempotent
   }
 
   // Dev-only automation channel: the compile-time gate is false in a release
@@ -4401,6 +4520,7 @@ async function shutdownEverything(): Promise<void> {
       },
     );
   }
+  await communicationController?.dispose().catch(() => { console.error("[main] communication shutdown failed"); });
   await Promise.allSettled([
     activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
     activeOnboarding?.shutdown() ?? Promise.resolve(),

@@ -63,9 +63,19 @@ export function createForeignOrchestrationComposition(options: {
     const entry = deps.catalog.find(e => e.name === input.agent_type);
     const context = entry && facts.get(entry);
     let snapshot: RoleRouteResolution | undefined;
-    const resolver = (role: import("@anycode/core").RoleRouteName): RoleRouteResolution => {
-      const roles = context?.settings ? resolveProfileRoles(context.settings, options.projectRoot) : undefined;
+    const roles = context?.settings ? resolveProfileRoles(context.settings, options.projectRoot) : undefined;
+    const configuredRoleRoutes = new Map<string, RoleRouteEntry[]>();
+    for (const role of ["planner", "executor", "reviewer", "explore"] as const) {
       const config = context?.claimed ? undefined : roles?.[role];
+      const targets = config ? [config.primary, ...(config.fallbacks ?? [])].filter(item =>
+        [item.engine, item.connection, item.provider, item.model].some(value => value?.trim())) : [];
+      if (targets.length) configuredRoleRoutes.set(role, targets);
+    }
+    const resolver = (role: import("@anycode/core").RoleRouteName): RoleRouteResolution | undefined => {
+      const config = context?.claimed ? undefined : roles?.[role];
+      // An explicit selector belongs to main's shared resolver. The active
+      // connection synthesized below is only the default for omitted selectors.
+      if (input.provider !== undefined && !configuredRoleRoutes.has(role) && entry?.engine === undefined && entry?.connection === undefined && entry?.provider === undefined) return undefined;
       const source: RoleRouteEntry[] = config ? [config.primary, ...(config.fallbacks ?? [])] : [{
         ...(entry?.engine ? { engine: entry.engine } : {}), ...(entry?.connection ? { connection: entry.connection } : {}),
         ...(entry?.provider ? { provider: entry.provider } : {}), ...(entry?.model ? { model: entry.model } : {}),
@@ -108,7 +118,7 @@ export function createForeignOrchestrationComposition(options: {
       run(req, opts) {
         if (snapshot && req.routeStamped) options.routed.snapshot(req, snapshot);
         // Custom core profiles cannot inherit a Codex model as an API model.
-        if (!isRoleRouteName(req.agentType) && !req.engine && !req.resumeChildSessionId) {
+        if (!isRoleRouteName(req.agentType) && input.provider === undefined && !req.engine && !req.resumeChildSessionId) {
           const resolved = target({ ...(req.connectionId ? { connection: req.connectionId } : {}), ...(req.provider ? { provider: req.provider } : {}), ...(req.model ? { model: req.model } : {}) }, context?.settings);
           if (!resolved) return Promise.resolve({ status: "error" as const, finalText: "Agent: no usable API connection or model. Configure the agent profile.", turns: 0, toolCalls: 0, durationMs: 0, truncated: false, childSessionId: "", parentSessionId: "", spawnToolCallId: req.spawnToolCallId });
           const { provider: _provider, ...rest } = req;
@@ -118,7 +128,7 @@ export function createForeignOrchestrationComposition(options: {
       },
       send: original.send.bind(original),
     };
-    const result = await runAgentBridgeCall(input, { ...deps, claimedRoles: context?.claimed ? new Set([input.agent_type]) : undefined, port, policy: { resolveRoleRoute: resolver, defaultDetach: enabled } });
+    const result = await runAgentBridgeCall(input, { ...deps, claimedRoles: context?.claimed ? new Set([input.agent_type]) : undefined, port, policy: { resolveRoleRoute: resolver, configuredRoleRoutes, defaultDetach: enabled } });
     const selected: RoleRouteResolution | undefined = snapshot;
     if (selected && selected.entries[0] && selected.skipped.length && !result.isError) {
       return { ...result, text: `Role ${input.agent_type} ran on ${entryLabel(selected.entries[0])} because ${selected.skipped[0]!.reason}.\n${result.text}` };

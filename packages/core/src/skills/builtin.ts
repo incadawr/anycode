@@ -187,9 +187,16 @@ way you read what comes back.
 \`provider\`, \`detach\`, \`continue_session\` and \`send_to\` are
 session-tier-only fields; on any other tier the call fails fast.
 
-\`provider\` takes the CATALOG provider id of that connection
-(\`connection.providerId\` in \`~/.anycode/settings.json\` — e.g. \`z-ai\`, \`custom:<uuid>\`),
-never the \`conn-…\` connection id; a \`model\` passed with it must belong to that connection.
+Use \`ListConnections\` (Core), \`anycode_list_connections\` (Codex), or
+\`mcp__anycode__list_connections\` (Claude) to discover safe connection/model targets; do not read settings or credentials for discovery.
+\`provider\` accepts an exact connection id, label, provider id, offered model
+id, or \`providerId/model\`. Unknown or ambiguous selectors return candidates;
+choose one explicitly. A separate \`model\` must belong to that connection.
+Native Claude/Codex sessions can use this selector for a NEW unpinned core
+child, including a role with no configured route. It cannot override a pinned
+profile or configured role/fallback chain, select a CLI account, or combine
+with \`continue_session\`. Observed catalog health is not a readiness guarantee;
+a runtime refusal does not authorize switching to another connection.
 
 ## Models
 

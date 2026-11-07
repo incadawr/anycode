@@ -1,3 +1,5 @@
+import { createSessionPeersHandler } from "./session-peers.js";
+import { createSessionPeerAccess } from "./session-peer-access.js";
 /**
  * Unit tests for the TabHostManager's pure breaker/accounting logic (design
 
@@ -16,6 +18,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } fro
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { recordHostFailure } from "../host/error-diagnostics.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
@@ -5857,6 +5860,42 @@ describe("TabHostManager — recognizer live-config broadcast (E1 §1.2)", () =>
 });
 
 describe("model admission before fork", () => {
+  it.each(["claude", "codex"] as const)("admits a selected API route from a %s parent and refuses stale readiness without fallback", async engine => {
+    const { fork, hosts } = liveForkRig();
+    const connections = [
+      { id: "first", providerId: "api", model: "first-model" },
+      { id: "second", providerId: "api", model: "default-model", models: ["second-model"], label: "Second API" },
+    ];
+    const prepare = vi.fn(async (_connectionId: string) => ({ ok: true as boolean, release: () => {} }));
+    const validate = vi.fn();
+    const manager = childManager(fork, windowRig().window, {
+      engineReady: () => true,
+      resolveChildRoute: value => resolveCoreConnectionForModel({ provider: { connections } }, value),
+      prepareChildConnection: prepare,
+      validateChildModel: validate,
+    });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "native-root", resume: false, engine }).ok).toBe(true);
+    for (const provider of ["unknown", "api"]) {
+      hosts[0]!.emit("message", spawnRequest({ requestId: provider, spawnToolCallId: provider, provider }));
+      await flush();
+      expect(hosts).toHaveLength(1);
+      expect(childRunEvents(hosts[0]!).at(-1)).toMatchObject({ kind: "rejected", message: expect.stringContaining("second") });
+    }
+    hosts[0]!.emit("message", spawnRequest({ requestId: "selected", spawnToolCallId: "selected", provider: "second-model" }));
+    await flush();
+    expect(validate).toHaveBeenCalledWith("second-model", "second");
+    expect(prepare.mock.calls[0]![0]).toBe("second");
+    expect(hosts).toHaveLength(2);
+    prepare.mockClear();
+    prepare.mockResolvedValueOnce({ ok: false, release: () => {} });
+    hosts[0]!.emit("message", spawnRequest({ requestId: "stale", spawnToolCallId: "stale", provider: "Second API" }));
+    await flush();
+    expect(hosts).toHaveLength(2);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(prepare.mock.calls[0]![0]).toBe("second");
+    expect(childRunEvents(hosts[0]!).at(-1)).toMatchObject({ kind: "rejected", reason: "not_ready" });
+  });
+
   it("returns route candidates for an ambiguous provider before forking", () => {
     const { fork, hosts } = liveForkRig();
     const manager = childManager(fork, windowRig().window, {
@@ -8949,5 +8988,302 @@ describe("TabHostManager — replay rejection binding", () => {
     retired.emit("message", rejection);
     hosts[1]!.emit("message", rejection);
     expect(seen).toEqual([{ connectionId: "conn-a", message: rejection }]);
+  });
+});
+
+it("peer control plane authenticates the process and suppresses late replies", async () => {
+  const { fork, hosts } = liveForkRig();
+  let answer: (value: { status: "unknown" }) => void = () => {};
+  const onSessionPeerRequest = vi.fn(() => new Promise<{ status: "unknown" }>(resolve => { answer = resolve; }));
+  const manager = childManager(fork, windowRig().window, { onSessionPeerRequest });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  await flush();
+  const request = { requestId: "r", operation: "list", input: {} };
+  hosts[0]!.emit("message", { type: "session_peers_request", request });
+  await flush();
+  expect(onSessionPeerRequest).toHaveBeenCalledWith(created.tab.tabId, hosts[0], request);
+  answer({ status: "unknown" });
+  await flush();
+  expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "r", result: { status: "unknown" } });
+  hosts[0]!.postMessage.mockClear();
+  hosts[0]!.emit("message", { type: "session_peers_request", request });
+  await flush();
+  const tab = manager.getTab(created.tab.tabId)!;
+  tab.proc = new FakeHost() as unknown as UtilityProcess;
+  answer({ status: "unknown" });
+  await flush();
+  expect(hosts[0]!.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "session_peers_response" }));
+  onSessionPeerRequest.mockClear();
+  hosts[0]!.emit("message", { type: "session_peers_request", request });
+  await flush();
+  expect(onSessionPeerRequest).not.toHaveBeenCalled();
+  tab.proc = null;
+  await manager.shutdownAllTabHosts();
+});
+
+it("file metadata ingress receives only the live host process", async () => {
+  const { fork, hosts } = liveForkRig();
+  const onFileActivity = vi.fn(() => true);
+  const onFileActivityLifecycle = vi.fn();
+  const manager = childManager(fork, windowRig().window, { onFileActivity, onFileActivityLifecycle });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "writer", resume: false });
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  await flush();
+  const wire = { type: "file_activity", generation: 1, report: { filePath: "a", toolCallId: "c", toolName: "Write" } };
+  hosts[0]!.emit("message", wire);
+  await flush();
+  expect(onFileActivity).toHaveBeenCalledWith(created.tab.tabId, hosts[0], wire);
+  expect(onFileActivityLifecycle).toHaveBeenCalledWith(created.tab.tabId);
+  const shell = { type: "shell_activity", generation: 1, phase: "start", toolCallId: "shell" };
+  hosts[0]!.emit("message", shell);
+  await flush();
+  expect(onFileActivity).toHaveBeenCalledWith(created.tab.tabId, hosts[0], shell);
+  onFileActivity.mockClear();
+  const tab = manager.getTab(created.tab.tabId)!;
+  tab.proc = new FakeHost() as unknown as UtilityProcess;
+  hosts[0]!.emit("message", wire);
+  hosts[0]!.emit("message", shell);
+  await flush();
+  expect(onFileActivity).not.toHaveBeenCalled();
+  tab.proc = null;
+  onFileActivityLifecycle.mockClear();
+  await manager.shutdownAllTabHosts();
+  expect(onFileActivityLifecycle).toHaveBeenCalledWith(created.tab.tabId);
+});
+
+it.each([false, true])("pins peer context and publishes one terminal only when enabled=%s", async enabled => {
+  const { fork, hosts } = liveForkRig();
+  const manager = childManager(fork, windowRig().window, enabled ? { onSessionPeerRequest: async () => null } : {});
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  await flush();
+  const tab = manager.getTab(created.tab.tabId)!;
+  const host = hosts[0]!;
+  const listener = vi.fn();
+  manager.onSessionPeerTerminal(listener);
+  const envelope = { messageId: "m", recipientSessionId: "s1", sender: "session:sender", payload: "question" };
+  const pending = manager.communicationRequest("s1", "send_message", envelope);
+  const packet = host.postMessage.mock.calls.at(-1)![0] as { requestId: string };
+  const context = { type: "session_peer_turn", generation: tab.hostGeneration, sequence: 1, turnId: "t", requestId: "m", deliveredMessageIds: ["m"] };
+  host.emit("message", context);
+  expect(manager.peerHost(tab.tabId)?.turnContext).toEqual(enabled ? { sequence: 1, turnId: "t", requestId: "m", deliveredMessageIds: ["m"] } : undefined);
+  expect(manager.peerHost(tab.tabId)?.readOnly).toBe(true);
+  host.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "acknowledged" } });
+  await pending;
+  const terminal = { ...context, type: "session_peer_terminal", result: { source: "live_turn", turnId: "t", requestId: "m", nativeTurnId: null, terminalReason: "completed", publicAnswer: "answer", truncated: false, completedAt: 1 } };
+  host.emit("message", { ...terminal, turnId: "unknown" });
+  host.emit("message", terminal);
+  host.emit("message", terminal);
+  expect(listener).toHaveBeenCalledTimes(enabled ? 1 : 0);
+  expect(manager.peerHost(tab.tabId)?.turnContext).toBeUndefined();
+  tab.proc = new FakeHost() as unknown as UtilityProcess;
+  host.emit("message", { ...context, turnId: "stale" });
+  expect(manager.peerHost(tab.tabId)?.turnContext).toBeUndefined();
+  tab.proc = null;
+  await manager.shutdownAllTabHosts();
+});
+
+it.each(["none", "off", "unregistered", "registered"] as const)("peer drain wire marker: %s", async mode => {
+  const { fork, hosts } = liveForkRig();
+  const registerPeerDrain = vi.fn(() => mode === "registered");
+  const manager = childManager(fork, windowRig().window, mode === "none" ? {} : {
+    ...(mode === "off" ? {} : { onSessionPeerRequest: async () => null, registerPeerDrain }),
+  });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  await flush();
+  const envelope = { messageId: "m", recipientSessionId: "s1", sender: "session:sender", payload: "question" };
+  const pending = manager.communicationRequest("s1", "send_message", envelope);
+  const packet = hosts[0]!.postMessage.mock.calls.at(-1)![0] as { requestId: string };
+  // Compare serialized wire, normalizing only the randomly generated RPC id.
+  expect(JSON.stringify({ ...packet, requestId: "rpc" })).toBe(JSON.stringify({
+    type: "communication_request", requestId: "rpc", operation: "send_message", payload: envelope,
+    ...(mode === "registered" ? { peerDrainRegistered: true } : {}),
+  }));
+  expect(registerPeerDrain).toHaveBeenCalledTimes(mode === "registered" || mode === "unregistered" ? 1 : 0);
+  hosts[0]!.emit("message", { type: "communication_response", requestId: packet.requestId, result: {} });
+  await pending;
+  manager.getTab(created.tab.tabId)!.proc = null; await manager.shutdownAllTabHosts();
+});
+
+it.each(["current", "process", "workspace", "generation"] as const)("peer drain answers only the originating current host after await: %s", async change => {
+  const { fork, hosts } = liveForkRig();
+  let answer!: (value: object) => void;
+  const onSessionPeerDrain = vi.fn(() => new Promise<object>(r => { answer = r; }));
+  const releasePeerDrain = vi.fn();
+  const manager = childManager(fork, windowRig().window, { onSessionPeerDrain, releasePeerDrain });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  await flush();
+  const tab = manager.getTab(created.tab.tabId)!;
+  const host = hosts[0]!;
+  const request = { type: "session_peer_drain_request", messageId: "m" };
+  host.emit("message", request); await flush();
+  expect(onSessionPeerDrain).toHaveBeenCalledWith(host, request);
+  host.postMessage.mockClear();
+  if (change === "process") tab.proc = new FakeHost() as unknown as UtilityProcess;
+  if (change === "workspace") tab.workspace = "/elsewhere";
+  if (change === "generation") tab.hostGeneration++;
+  const permit = { type: "session_peer_drain_permit" };
+  answer(permit); await flush();
+  expect(host.postMessage).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
+  if (change === "current") expect(host.postMessage).toHaveBeenCalledWith(permit);
+  tab.proc = new FakeHost() as unknown as UtilityProcess;
+  onSessionPeerDrain.mockClear();
+  host.emit("message", request);
+  host.emit("message", { type: "session_peer_drain_release" }); await flush();
+  expect(onSessionPeerDrain).not.toHaveBeenCalled(); expect(releasePeerDrain).not.toHaveBeenCalled();
+  tab.proc = null; await manager.shutdownAllTabHosts();
+});
+
+
+describe("peer host permission authority", () => {
+  it("tracks only live host reports, closes unknown modes and preserves child restrictions", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const manager = childManager(fork, windowRig().window);
+    const created = manager.createTab({ workspace: "/ws", sessionId: "root", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    const readOnly = () => manager.peerHost(created.tab.tabId)?.readOnly;
+    const report = (mode: unknown, type = "mode_changed") => hosts[0]!.emit("message", { type, mode });
+    expect(readOnly()).toBe(true);
+    report("build"); expect(readOnly()).toBe(false);
+    report("plan"); expect(readOnly()).toBe(true);
+    report("yolo", "set_mode"); expect(readOnly()).toBe(true);
+    report("forged"); expect(readOnly()).toBe(true);
+    report("yolo"); expect(readOnly()).toBe(false);
+    report("forged"); expect(readOnly()).toBe(false);
+    report("plan"); expect(readOnly()).toBe(true);
+    for (const mode of ["edit", "auto"]) {
+      report(mode); expect(readOnly()).toBe(false);
+    }
+    report("plan");
+    const orchestrate = (enabled: unknown, host = hosts[0]!) => host.emit("message", { type: "orchestrate_changed", enabled });
+    hosts[0]!.emit("message", { type: "set_orchestrate", enabled: true });
+    expect(readOnly()).toBe(true);
+    orchestrate("true"); expect(readOnly()).toBe(true);
+    orchestrate(true); expect(readOnly()).toBe(false);
+    orchestrate(0); expect(readOnly()).toBe(false);
+    orchestrate(false); expect(readOnly()).toBe(true);
+    orchestrate(true);
+    const old = hosts[0]!;
+    const restarting = manager.restartTabHost(created.tab.tabId);
+    await restarting;
+    expect(readOnly()).toBe(true);
+    old.emit("message", { type: "orchestrate_changed", enabled: true });
+    old.emit("message", { type: "mode_changed", mode: "yolo" });
+    expect(readOnly()).toBe(true);
+    hosts[1]!.emit("message", spawnRequest({ requestId: "peer-child" }));
+    const child = manager.listTabs().find(t => t.childOf);
+    expect(child).toBeDefined();
+    hosts[2]!.emit("message", { type: "mode_changed", mode: "plan" });
+    hosts[2]!.emit("message", { type: "orchestrate_changed", enabled: true });
+    expect(manager.peerHost(child!.tabId)).toMatchObject({ root: false, restricted: true });
+    await manager.shutdownAllTabHosts();
+  });
+
+  it("closes authority across core plan → codex → core commits", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const manager = childManager(fork, windowRig().window, {
+      engineReady: () => true, engineSwitchEnabled: () => true,
+      prepareEngineSwitch: async target => ({ launch: { target, env: {} } }),
+      commitEngineSwitchIdentity: vi.fn(),
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "switch-peer", resume: false });
+    if (!root.ok) throw new Error("create failed");
+    const host = hosts[0]!;
+    const readOnly = () => manager.peerHost(root.tab.tabId)?.readOnly;
+    const switchTo = async (engine: "core" | "codex", requestId: string) => {
+      const send = (phase: string, extra = {}) => host.emit("message", {
+        type: "anycode:engine-switch", generation: 1, requestId, phase, ...extra,
+      });
+      send("prepare", { target: { engine, model: "model", ...(engine === "codex" ? { codexProfileId: "account" } : { connectionId: "connection" }) } });
+      await vi.waitFor(() => expect(root.tab.switchCoordinator?.acceptsCandidate(requestId)).toBe(true));
+      if (engine === "codex") host.emit("message", { type: "anycode:engine-process", generation: 1,
+        hostPid: host.pid, enginePid: 202, pgid: 202, runtimeId: requestId });
+      send("commit", { identity: { model: "model", mode: engine === "core" ? "plan" : "read-only", externalSessionRef: "ref" } });
+      await vi.waitFor(() => expect(root.tab.engine).toBe(engine));
+      send("retire");
+      await vi.waitFor(() => expect(root.tab.switchCoordinator?.pending).toBe(false));
+    };
+    try {
+      host.emit("message", { type: "mode_changed", mode: "plan" });
+      expect(readOnly()).toBe(true);
+      host.emit("message", { type: "orchestrate_changed", enabled: true });
+      expect(readOnly()).toBe(false);
+      await switchTo("codex", "to-native");
+      host.emit("message", { type: "mode_changed", mode: "build" });
+      host.emit("message", { type: "orchestrate_changed", enabled: true });
+      expect(readOnly()).toBe(true);
+      await switchTo("core", "to-core");
+      expect(readOnly()).toBe(true);
+      host.emit("message", { type: "mode_changed", mode: "plan" });
+      expect(readOnly()).toBe(true);
+      host.emit("message", { type: "mode_changed", mode: "build" });
+      expect(readOnly()).toBe(false);
+    } finally { await manager.shutdownAllTabHosts(); }
+  });
+
+  it.each(["claude", "codex"] as const)("fails closed for %s display-only mode reports", async engine => {
+    const { fork, hosts } = shutdownableForkRig();
+    const manager = childManager(fork, windowRig().window, { engineReady: () => true });
+    const created = manager.createTab({ workspace: "/ws", sessionId: engine, resume: false, engine });
+    if (!created.ok) throw new Error("create failed");
+    hosts[0]!.emit("message", { type: "mode_changed", mode: "build" });
+    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: true });
+    expect(manager.peerHost(created.tab.tabId)?.readOnly).toBe(true);
+    await manager.shutdownAllTabHosts();
+  });
+
+  it.each(["build", "edit", "auto", "orchestrate"])("admits %s sends through the real main handler and refuses plan and forged bypass", async posture => {
+    const { fork, hosts } = shutdownableForkRig();
+    const access = createSessionPeerAccess({ enabled: () => true,
+      policy: { isNativeEnabled: () => true, hasPairGrant: () => false } as never,
+      isTrusted: () => true, realpathSync: p => p, statSync: () => ({ isDirectory: () => true }) });
+    const send = vi.fn(async (_caller, input, authorize) => {
+      await authorize(input.sessionId);
+      return { envelope: { messageId: "m" }, state: "acknowledged" as const };
+    });
+    const manager = childManager(fork, windowRig().window, {
+      onSessionPeerRequest: (id, proc, request) => handler(id, proc, request),
+    });
+    const handler = createSessionPeersHandler({ current: id => manager.peerHost(id),
+      targets: () => manager.listTabs().map(t => manager.peerHost(t.tabId)!), access,
+      prepare: async () => {}, send });
+    const a = manager.createTab({ workspace: "/ws", sessionId: "a", resume: false });
+    const b = manager.createTab({ workspace: "/ws", sessionId: "b", resume: false });
+    if (!a.ok || !b.ok) throw new Error("create failed");
+    manager.getTab(a.tab.tabId)!.peerWorkspaceKey = "/ws";
+    manager.getTab(b.tab.tabId)!.peerWorkspaceKey = "/ws";
+    const request = { requestId: "send", operation: "send", input: { sessionId: "b", payload: "hello" } };
+    hosts[0]!.emit("message", { type: "mode_changed", mode: posture === "orchestrate" ? "plan" : posture });
+    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: posture === "orchestrate" });
+    hosts[0]!.emit("message", { type: "session_peers_request", request });
+    await flush();
+    expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "send",
+      result: { status: "sent", messageId: "m", state: "acknowledged" } });
+    expect(send).toHaveBeenCalledTimes(1);
+    hosts[0]!.postMessage.mockClear();
+    hosts[0]!.emit("message", { type: "mode_changed", mode: "plan" });
+    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: false });
+    hosts[0]!.emit("message", { type: "session_peers_request", request });
+    await flush();
+    expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "send", result: { status: "refused" } });
+    hosts[0]!.emit("message", { type: "session_peers_request", request: { ...request, bypassApproval: true } });
+    await flush();
+    expect(send).toHaveBeenCalledTimes(1);
+    hosts[0]!.emit("message", spawnRequest({ requestId: "peer-send-child" }));
+    const child = manager.listTabs().find(t => t.childOf);
+    expect(child).toBeDefined();
+    manager.getTab(child!.tabId)!.peerWorkspaceKey = "/ws";
+    hosts[2]!.emit("message", { type: "mode_changed", mode: "plan" });
+    hosts[2]!.emit("message", { type: "orchestrate_changed", enabled: true });
+    hosts[2]!.emit("message", { type: "session_peers_request", request });
+    await flush();
+    expect(hosts[2]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "send", result: { status: "refused" } });
+    expect(send).toHaveBeenCalledTimes(1);
+    await manager.shutdownAllTabHosts();
   });
 });

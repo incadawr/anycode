@@ -75,3 +75,11 @@ export function agentMessagePreview(block: UserTextBlock): string {
 export function agentMessageStatusLabel(block: UserTextBlock): AgentDelivery["state"] | "received" {
   return block.agentMessageState ?? "received";
 }
+
+/** Direction comes only from the main display projection, never a wrapper. */
+export function agentMessageDirection(block: UserTextBlock): string {
+  return block.agentMessageCard ? (block.agentMessageCard.direction === "incoming" ? "Incoming" : "Outgoing") : "";
+}
+export function agentMessageTitle(title: string): string {
+  return title.replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "").trim().slice(0, 200);
+}

@@ -503,6 +503,11 @@ function deadline(ms: number): SettleDeadline {
   };
 }
 
+export function claudeRestrictedForkToolNames(peerToolNames: ReadonlySet<string> = new Set()): Set<string> {
+  return new Set(["agent", "agent_status", "list_connections",
+    ...[...peerToolNames].map(name => name.replace("mcp__anycode__", ""))]);
+}
+
 type TransportSpawn = Pick<ClaudeSpawnArgsOptions, "sessionId" | "resume" | "model" | "effort" | "permissionModeFlag" | "orchestrationSpawn"> & { forward?: ClaudeForward; verify?: (client: ClaudeTransport) => Promise<void> };
 type ClaudeForward = Pick<import("../mcp-forward-boot.js").PreparedEngineMcpForward, "claudeConfigPath" | "notices" | "cleanupFile"> & Partial<Pick<import("../mcp-forward-boot.js").PreparedEngineMcpForward, "claudeJson" | "claudeNames" | "loaderProblems" | "forwardProblems">>;
 interface TransportBinding { client: ClaudeTransport; approvals: ClaudeApprovalBridge; close(): Promise<void> }
@@ -550,6 +555,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    * `callTool` through the same broker — one prompt, canonical title).
    */
   browserToolNames?: ReadonlySet<string>;
+  peerToolNames?: ReadonlySet<string>;
   /**
    * cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, re-declared
    * here only to carry the engine-level contract — the host supplies it
@@ -636,6 +642,7 @@ async function connectClaudeEngine(
     // the workspace root the approval bridge's fact minting anchors against.
     workspace: options.cwd,
     ...(bridge !== undefined ? { bridge } : {}),
+    ...(options.peerToolNames !== undefined ? { peerToolNames: options.peerToolNames } : {}),
     ...(options.browserToolNames !== undefined ? { browserToolNames: options.browserToolNames } : {}),
   });
   // The catalog is not known until after the handshake, so a draft model cannot
@@ -714,7 +721,7 @@ async function connectClaudeEngine(
     };
     const onAbort = () => { void close(); };
     try {
-      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? new Set(["agent", "agent_status"]) : undefined);
+      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? claudeRestrictedForkToolNames(options.peerToolNames) : undefined);
       if (firstTransport) initialForward = forward;
       firstTransport = false;
       const approvals = createApprovals(bridge);
@@ -1076,7 +1083,7 @@ export class ClaudeEngine implements SessionEngine {
           const verify = async (client: ClaudeTransport) => {
             const init = await evidence.readPosture(client);
             if (init.session_id !== this.sessionRef || !this.settings!.catalog.readBackMatches(saved.model, init.model)) throw new Error("Claude identity or model drift");
-            if (snapshot) assertClaudeOrchestrationReadback({ ...init, mcp_servers: init.mcp_servers as { name: string }[] }, snapshot);
+            if (snapshot) assertClaudeOrchestrationReadback({ ...init, mcp_servers: init.mcp_servers as { name: string }[] }, snapshot, options.peerToolNames);
             else if (init.permissionMode !== saved.mode || JSON.stringify([...init.tools].sort()) !== JSON.stringify(saved.tools) || JSON.stringify((init.mcp_servers ?? []).map(s => (s as { name: string }).name).sort())
               !== JSON.stringify([...(forward?.claudeNames ?? []), ...(options.mcpBridge ? ["anycode"] : [])].sort())) throw new Error("Claude OFF posture drift");
           };

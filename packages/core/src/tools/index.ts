@@ -142,5 +142,7 @@ export type {
 
 export { agentStatusTool, agentStatusSchema, agentStatusBridgeDecl, runAgentStatusBridge } from "./agent-status.js";
 
-export { createListConnectionsTool } from "./list-connections.js";
+export { createListConnectionsTool, projectConnectionTargets } from "./list-connections.js";
 export type { ConnectionTarget, ConnectionTargets } from "./list-connections.js";
+export { createSessionPeerTools, sessionPeerRequestSchema, parseSessionPeerRequest, parseSessionPeerResponse } from "./session-peers.js";
+export type { SessionPeerAuthority, SessionPeerRequest, SessionPeerCall, SessionPeerResponse } from "./session-peers.js";

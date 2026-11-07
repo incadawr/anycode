@@ -1,4 +1,9 @@
 import { modelReplayPolicy } from "../shared/model-overrides.js";
+import { createFileActivityTaps } from "./file-activity.js";
+import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
+import { createSessionPeerDrainTransport } from "./session-peer-drain.js";
+import { createSessionPeersPort } from "./session-peers-port.js";
+import { takeNativeSessionsCarrier } from "../shared/session-peers.js";
 import { mapProgressToEvent } from "@anycode/core";
 import { savedNativeRecovery } from "./native-base.js";
 import { claudeOrchestrationBootEnabled } from "../shared/claude-orchestration-feature.js";
@@ -19,6 +24,7 @@ import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 import { engineChildPrompt } from "./engine-child-prompt.js";
+import { createConnectionTargetsBridge } from "./engines/connection-targets-bridge.js";
 import { listConnectionTargets } from "./list-connections.js";
 import { claudeHistoryOnlyEngine } from "./engines/claude/history-only.js";
 import { SET_SESSION_FAST_OPERATION } from "../shared/communication.js";
@@ -246,6 +252,7 @@ import {
   createDefaultToolRegistry,
   ToolRegistry,
   createListConnectionsTool,
+  createSessionPeerTools,
   createMediaProjectionPort,
   createWebSearchTool,
   loadArchMapEnabled,
@@ -1259,8 +1266,19 @@ function buildChildSessionOptions(
   };
 }
 
+/** Boot capability only; peer tools are registered by a separate adapter. */
+export const nativeSessionsEnabled = takeNativeSessionsCarrier(process.env);
+export const sessionPeersPort = nativeSessionsEnabled
+  ? createSessionPeersPort(message => process.parentPort.postMessage(message)) : undefined;
+if (sessionPeersPort) {
+  process.once("disconnect", () => sessionPeersPort.dispose());
+  process.once("exit", () => sessionPeersPort.dispose());
+}
+
 const engineSwitchEnabled = process.env.ANYCODE_ENGINE_SWITCH_ENABLED === "1";
+// Main stamps this on EVERY engine fork, independently of the engine-switch flag.
 const switchHostGeneration = Number(process.env.ANYCODE_HOST_GENERATION);
+const fileActivity = createFileActivityTaps(nativeSessionsEnabled, switchHostGeneration, message => process.parentPort.postMessage(message));
 const switchClient = engineSwitchEnabled ? createEngineSwitchClient(switchHostGeneration, message => process.parentPort.postMessage(message)) : undefined;
 
 function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, rules: SessionPermissionRules, secrets: McpSecretResolver): SessionOptions["engineSwitchCoordinator"] {
@@ -1284,6 +1302,19 @@ function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, r
 
 /** The routing ledger is session-owned; ports, bridge callbacks and subscriptions belong to the candidate. */
 const childStatusStore = createChildStatusStore();
+
+function nativeConnectionBridge(engine: "codex" | "claude", snapshot: () => { model: string; effort?: string } | undefined,
+  settingsPath = hostSettingsPathOverride() ?? defaultSettingsPath()) {
+  return createConnectionTargetsBridge(() => {
+    const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+    if (parsed.status !== "ok") throw new Error("Invalid settings");
+    const current = snapshot();
+    return listConnectionTargets(parsed.settings, undefined, undefined, false, {
+      engine, routeKind: "native_cli", model: current?.model, effort: current?.effort,
+      provenance: current ? (engine === "codex" ? "applied" : "selected") : "unknown",
+    });
+  });
+}
 
 async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, env: NodeJS.ProcessEnv, home: string) {
   let runtime: SwitchRuntime | undefined;
@@ -1395,7 +1426,10 @@ function hostSwitchFactory(
       const mcp = await forward("codex");
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
       let candidate: SwitchRuntime | undefined;
-      const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call);
+      const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call,
+        sessionPeersPort ? createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+          authority: () => ({ root: candidate !== undefined && session?.ownsRuntime(candidate.engine) === true,
+            mode: routing.foreign.childMode(), orchestrate: routing.foreign.isEnabled() }) }) : undefined, nativeConnectionBridge("codex", () => (candidate?.engine as CodexEngine | undefined)?.snapshot(), settingsPath));
       return { options: {
         ...buildCodexLaunchOptions({
           workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules, agentBridge, processOwnership: ownership,
@@ -1421,7 +1455,12 @@ function hostSwitchFactory(
       if (!binaryPath?.trim()) return undefined;
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
       let raw: ClaudeEngine | undefined;
-      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser, onEvent: event => raw?.pushBridgeEvent(event) });
+      let adopted: SwitchRuntime | undefined;
+      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser, connections: nativeConnectionBridge("claude", () => raw?.snapshot(), settingsPath),
+        ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+          authority: () => ({ root: adopted !== undefined && session?.ownsRuntime(adopted.engine) === true,
+            mode: claudeAgentPermissionMode(raw?.snapshot().activePresetId ?? "read-only"), orchestrate: routing.foreign.isEnabled() }) }) } : {}),
+        onEvent: event => raw?.pushBridgeEvent(event) });
       const mcpBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: stamp.listTools, callTool: stamp.callTool });
       return { options: {
         ...buildClaudeLaunchOptions({
@@ -1429,11 +1468,13 @@ function hostSwitchFactory(
           orchestrationFeatureEnabled: launch?.claudeOrchestrateEnabled === true,
           profileDir: resolveClaudeConfigDir(), resolveMcpForward: () => forward("claude"),
           bootNotices: [], agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
+          peerToolNames: stamp.peerToolNames,
           browserToolNames: new Set(routing.browser.specs.map(spec => `mcp__anycode__${spec.claudeName}`)),
           binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
         }),
         selection: { presetId: "read-only", origin: "draft" },
       }, configure: runtime => {
+        adopted = runtime;
         raw = runtime.engine as ClaudeEngine;
         routing.configure(runtime);
         runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
@@ -1665,7 +1706,10 @@ async function bootCodexSession(
       routed.attach(port);
       codexChildPort = port;
     }
-    codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge, foreignComposition.call);
+    codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge, foreignComposition.call,
+      sessionPeersPort ? createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+        authority: () => ({ root: codexParentEngine !== undefined && session?.ownsRuntime(codexParentEngine) === true,
+          mode: foreignComposition.childMode(), orchestrate: foreignComposition.isEnabled() }) }) : undefined, nativeConnectionBridge("codex", () => codexParentEngine?.snapshot()));
   }
   if (args.child !== undefined) {
     prepareChildPrompt = (prompt) => engineChildPrompt(prompt, codexChildPort !== undefined);
@@ -1987,6 +2031,7 @@ async function bootCodexSession(
   if (codexChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:connected.sessionMeta.id,port:codexChildPort,baseMode:() => codexChildAuthority(selectedCodexPreset(connected.engine)),capture:mode => codexForeignComposition?.captureMode(mode),clear:() => codexForeignComposition?.clearBaseAuthority()});
   bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null);
   session = new Session({
+    ...(fileActivity ? { observeFileActivity: fileActivity.observe } : {}),
     switchEngineFactory: hostSwitchFactory(connected.sessionMeta.id, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(connected.sessionMeta.id, broker, rules, mcpSecrets),
     runtimeHistory: createRuntimeSessionHistory(persistence!,connected.sessionMeta.id,engineSwitchEnabled,args.child !== undefined),
@@ -2246,6 +2291,7 @@ async function bootClaudeSession(
   // hoisted (same cell shape as `stamp`) — set by the non-child
   // boot block below, read by the `options` wiring further down.
   let claudeBrowserToolNames: Set<string> | undefined;
+  let claudePeerToolNames: ReadonlySet<string> | undefined;
   let agentCatalogNonEmpty = false;
   const claudeCompositionEnabled = args.child === undefined && claudeOrchestrationBootEnabled(process.argv.slice(2));
   let claudeForeign: ReturnType<typeof createForeignOrchestrationComposition> | undefined;
@@ -2359,8 +2405,14 @@ async function bootClaudeSession(
       ...(claudeForeign ? { callAgent: claudeForeign.call, restricted: claudeForeign.isEnabled } : {}),
       ...(childPort !== undefined ? { port: childPort } : {}),
       browser: engineBrowserBridge,
+      ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+        authority: () => ({ root: claudeParentEngine !== undefined && session?.ownsRuntime(booted.engine) === true,
+          mode: claudeAgentPermissionMode(claudeParentEngine?.snapshot().activePresetId ?? "read-only"),
+          orchestrate: claudeForeign?.isEnabled() === true }) }) } : {}),
+      connections: nativeConnectionBridge("claude", () => claudeParentEngine?.snapshot()),
       onEvent: (event) => pushBridgeEvent?.(event),
     });
+      claudePeerToolNames = door.peerToolNames;
       stamp = door;
       mcpBridge = new ClaudeMcpBridge({
         serverName: "anycode",
@@ -2421,7 +2473,7 @@ async function bootClaudeSession(
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
     binaryTrust: (path) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     processOwnership, resolveMcpForward, bootNotices: [],
-    mcpBridge, stamp, agentCatalogNonEmpty, browserToolNames: claudeBrowserToolNames,
+    mcpBridge, stamp, agentCatalogNonEmpty, browserToolNames: claudeBrowserToolNames, peerToolNames: claudePeerToolNames,
   }) };
 
   // The factory cleans failures before client adoption; bootstrap disposal
@@ -2767,6 +2819,7 @@ async function bootClaudeSession(
   if (claudeChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:rowId,port:claudeChildPort,baseMode:() => claudeAgentPermissionMode(claudeEngine.snapshot().activePresetId), capture: mode => claudeForeign?.captureMode(mode), clear: () => claudeForeign?.clearBaseAuthority(), ...(claudeCompositionEnabled ? { cleanup: () => { claudeRoutingDisposed = true; claudeRoutingSubscriptions.splice(0).forEach(stop => stop()); } } : {})});
   bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null, connected.model);
   session = new Session({
+    ...(fileActivity ? { observeFileActivity: fileActivity.observe } : {}),
     switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(rowId, broker, rules, mcpSecrets),
     runtimeHistory: createRuntimeSessionHistory(persistence!,rowId,engineSwitchEnabled || claudeCompositionEnabled,args.child !== undefined),
@@ -3577,6 +3630,10 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
     const isChildSession = isChildSessionBoot(args, sessionMeta);
+    let peerAuthority: () => import("@anycode/core").SessionPeerAuthority = () => ({ mode: "plan" });
+    if (sessionPeersPort && !isChildSession) {
+      for (const tool of createSessionPeerTools(() => peerAuthority())) registry.register(tool);
+    }
     const resolveSessionEffort = isChildSession ? resolveChildReasoningEffort : resolveReasoningEffort;
     const runtimeState = persistence.loadRuntimeSession(sessionMeta.id);
     const runtimeEffort = runtimeState?.segments.find(segment => segment.id === runtimeState.activeSegmentId)?.selected.effort;
@@ -4197,10 +4254,12 @@ async function boot(): Promise<void> {
       // does not carry a `let`-narrowing (module-level `telemetry`) across a
       // closure boundary. The loop never calls this itself; only
       // subagents/runner.ts's buildChildConfig reads it, once per spawn.
-      ...(subagentTelemetry !== null
+      ...(subagentTelemetry !== null || fileActivity
         ? {
-            subagentEventTap: (spawn: { agentType: string; model?: string }) =>
-              buildSubagentTelemetryTap(subagentTelemetry.port, subagentTelemetry.session, spawn),
+            subagentEventTap: (spawn: { agentType: string; model?: string }) => {
+              const tap = subagentTelemetry ? buildSubagentTelemetryTap(subagentTelemetry.port, subagentTelemetry.session, spawn) : undefined;
+              return fileActivity ? fileActivity.inline(tap) : tap!;
+            },
           }
         : {}),
       // Context window (design §2.5 + slice 6.4): resolved above — mirrors cli/main.ts.
@@ -4566,8 +4625,13 @@ async function boot(): Promise<void> {
     };
     const coreServices = await createCoreRuntimeServices({...coreServiceDependencies,config});
     compactionRecordSeam = coreServices.callbacks.compactionRecords;
+    if (sessionPeersPort && !isChildSessionBoot(args, sessionMeta)) {
+      config.sessionPeers = sessionPeersPort;
+      peerAuthority = () => ({ mode: config.mode, orchestrate: config.orchestrate });
+    }
     if (childSessionPortHandle) bindRuntimeOrchestration(engine,{ownerSessionId:sessionId,port:childSessionPortHandle,baseMode:() => engine.mode()});
     session = new Session({
+      ...(fileActivity ? { observeFileActivity: fileActivity.observe } : {}),
       ...coreServices.callbacks,
       engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),
       runtimeHistory: createRuntimeSessionHistory(persistence!,sessionId,engineSwitchEnabled,isChildSession),
@@ -4588,6 +4652,10 @@ async function boot(): Promise<void> {
           onRegistrationChanged:() => {
             candidateConfig.systemPrompt=buildSystemPrompt({toolNames:candidateRegistry.list(),env:{...systemPromptEnv,modelId:model},visionFallbackEnabled:candidateRegistry.has("InspectImage")})+composeSystemPromptComponents().map(component => component.text).join("");
           }});
+        if (candidateConfig.sessionPeers) {
+          for (const tool of createSessionPeerTools(() => ({ mode: candidateConfig.mode, orchestrate: candidateConfig.orchestrate })))
+            candidateRegistry.register(tool, { silentDuplicateWarning: true });
+        }
         candidateConfig.media=candidateMedia;candidateConfig.recognizer=candidateMedia.recognizer;
         candidateMedia.recompute();
         return { model, options: buildCoreLaunchOptions({ config: candidateConfig, loop: new AgentLoop(candidateConfig) }),
@@ -4936,10 +5004,33 @@ async function boot(): Promise<void> {
 }
 
 const ready = startHostWithActivity(boot, () => session, (message) => process.parentPort.postMessage(message));
+// Initial authority comes from the booted engine, including resume settings;
+// subsequent reports precede any peer request made under the changed mode.
+void ready.then(() => session?.observePermissionMode(mode => {
+  process.parentPort.postMessage({ type: "mode_changed", mode });
+}, enabled => {
+  process.parentPort.postMessage({ type: "orchestrate_changed", enabled });
+}));
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
+let peerDrainTransport: ReturnType<typeof createSessionPeerDrainTransport> | undefined;
+if (nativeSessionsEnabled) void ready.then(() => {
+  if (!session) return;
+  peerDrainTransport = createSessionPeerDrainTransport(message => process.parentPort.postMessage(message), {
+    recipientSessionId: session.communicationStatus().sessionId, generation: switchHostGeneration,
+  });
+  session.configurePeerDrain(peerDrainTransport);
+  session.observePeerTurns(event => process.parentPort.postMessage({ ...event, generation: switchHostGeneration }));
+});
+if (nativeSessionsEnabled) {
+  process.once("disconnect", () => peerDrainTransport?.disconnect());
+  process.once("exit", () => peerDrainTransport?.dispose());
+}
+
 async function handleShutdown(): Promise<void> {
+  sessionPeersPort?.dispose();
   await ready;
+  peerDrainTransport?.dispose();
 
   // CUT-S2 §10.14.3 BLOCKER-1: arm the admission funnel before any
   // teardown step below runs — the whole teardown window was previously
@@ -5019,6 +5110,8 @@ async function handleShutdown(): Promise<void> {
 }
 
 process.parentPort.on("message", (event) => {
+  if (peerDrainTransport?.handle(event.data)) return;
+  if (sessionPeersPort?.handle(event.data)) return;
   if (switchClient?.handle(event.data)) return;
   const port = event.ports[0];
   if (port) {
@@ -5080,7 +5173,7 @@ process.parentPort.on("message", (event) => {
     return;
   }
 
-  const communication = event.data as { type?: string; requestId?: string; operation?: string; payload?: unknown } | undefined;
+  const communication = event.data as { type?: string; requestId?: string; operation?: string; payload?: unknown; peerDrainRegistered?: boolean } | undefined;
   if (communication?.type === "communication_request") {
     void ready.then(async () => {
       try {
@@ -5119,7 +5212,8 @@ process.parentPort.on("message", (event) => {
           // published. An id this account does not offer is a structured
           // `invalid_model` result, so the code survives the IPC boundary.
           case "set_session_model": result = await session.communicationSetModel(communication.payload); break;
-          case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
+          case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope, nativeSessionsEnabled && communication.peerDrainRegistered === true); break;
+          case "restore_agent_display": if (nativeSessionsEnabled) session.restoreAgentDisplay(communication.payload as import("../shared/communication.js").AgentDisplayCard[]); result = {}; break;
           case "restore_agent_messages": session.restoreAgentMessages(communication.payload as import("../shared/communication.js").AgentDelivery[]); result = {}; break;
           case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;
           case "get_message_result": result = session.communicationMessageResult(String(communication.payload)); break;

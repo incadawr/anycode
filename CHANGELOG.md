@@ -7,6 +7,22 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Native Claude and Codex Agent calls can select an API connection for unpinned core children, with explicit refusals for ambiguous selectors and pinned routes.
+
+- Claude and Codex root sessions can list API connections and models, alongside their own native model route.
+
+- Connection listings limit oversized display text and filter unexpected nested data from tool responses.
+
+### Fixed
+
+- Core root sessions can send messages and open sessions in Edit, Auto and Orchestrate modes after required approval.
+
+- Sessions API reports the created session and tab ids when first-message delivery is interrupted.
+
+- Sessions API shows an unknown delivery status when a session cannot confirm receipt, keeping unexpected internal data out of the response.
+
 ## [0.0.86] - 2026-11-07
 
 ### Changed
