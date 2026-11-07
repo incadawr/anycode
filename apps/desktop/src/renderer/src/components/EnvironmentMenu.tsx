@@ -138,6 +138,17 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     };
   }, [open]);
 
+  useEffect(() => {
+    function openBranches(event: Event) {
+      if ((event as CustomEvent<string>).detail !== tabId || !workspace || !gitAvailable) return;
+      setBranchesOpen(true);
+      setOpen(true);
+      rootRef.current?.querySelector<HTMLInputElement>(".environment-branch-picker input")?.focus();
+    }
+    window.addEventListener("anycode:switch-branch", openBranches);
+    return () => window.removeEventListener("anycode:switch-branch", openBranches);
+  }, [tabId, workspace, gitAvailable]);
+
   if (!workspace) {
     return null;
   }
@@ -207,7 +218,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     <div ref={rootRef} className={`environment-control environment-control-${placement}`}>
       <button
         type="button"
-        className="environment-trigger"
+        className={`environment-trigger${branch ? " environment-trigger-has-branch" : ""}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Environment: ${label}`}

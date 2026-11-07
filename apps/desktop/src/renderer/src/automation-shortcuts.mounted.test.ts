@@ -24,6 +24,7 @@ it("drives add and reset on the rendered shortcuts panel", async () => {
   const dom = realShortcutsPaneDom();
   try {
     await act(async () => root.render(createElement(KeyboardShortcutsPane, { store })));
+    expect(dom.rows().find(row => row.action === "branch.switch")).toBeDefined();
     expect(dom.rows().find((row) => row.action === "session.new")?.overridden).toBe(true);
     await act(async () => { expect(dom.clickAdd("session.new")).toBe(true); });
     expect(dom.rows().find((row) => row.action === "session.new")?.recording).toBe(true);

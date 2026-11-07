@@ -1547,6 +1547,8 @@ body {
 }
 @container session-header (width < 720px) {
   .session-extensions-label { display: none; }
+  .environment-control-header .environment-trigger-has-branch .environment-workspace,
+  .environment-control-header .environment-trigger-has-branch .environment-separator { display: none; }
 }
 
 /* Custom titlebar (design/ui-track custom-titlebar §2): macOS-only traffic-
@@ -1756,10 +1758,14 @@ body {
   align-items: center;
   min-width: 0;
   flex-shrink: 1;
+  max-width: 100%;
   -webkit-app-region: no-drag;
 }
 
 .environment-trigger {
+  white-space: nowrap;
+  flex-wrap: nowrap;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   min-width: 0;
@@ -1795,6 +1801,8 @@ body {
   /* п.6: room for the session cwd. workspaceLabel() already
      head-ellipsizes it to ≤44 chars, so it stays on one line; the base
      end-ellipsis only kicks in if the bar is narrower than that. */
+  flex: 0 100 auto;
+  min-width: 0;
   max-width: 44ch;
   color: var(--text-1);
   font-weight: var(--w-medium);
@@ -1813,7 +1821,9 @@ body {
 }
 
 .environment-branch {
-  max-width: 16ch;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 32ch;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
 }

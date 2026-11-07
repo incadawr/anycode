@@ -452,3 +452,49 @@ it("clears a branch-list error when reopening the menu", async () => {
     expect(host.textContent).toContain("Loading branches…");
   });
 });
+
+it("offers creation last only without an exact name and Enter creates and switches", async () => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    for (const query of ["", "main", "topic/a"]) {
+      await filterBranches(host, query);
+      expect(host.textContent).not.toContain("Create branch “");
+    }
+    await filterBranches(host, "topic");
+    expect(host.querySelector('[role="option"]:last-child')).not.toBeNull();
+    expect(Array.from(host.querySelectorAll('[role="option"]')).at(-1)?.textContent).toBe('Create branch “topic”');
+    await filterBranches(host, "new/topic");
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "new/topic", switch: true } }));
+    expect(host.textContent).toContain("Creating…");
+    const requestId = Object.keys(store.getState().git.pending)[0]!;
+    await act(async () => store.getState().applyHostMessage({ type: "git_result", requestId, outcome: { ok: false, reason: "Creation refused" } }));
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Creation refused");
+    await clickText(host, "Retry");
+    expect(send).toHaveBeenLastCalledWith("tab", expect.objectContaining({ command: { op: "create_branch", name: "new/topic", switch: true } }));
+  });
+});
+it.each(["bad name", "-flag", "a..b", "a@{b", "a.lock", "a/.hidden", "a//b", "a?b", "a/", "@", "HEAD"])("refuses invalid branch %s inline without sending", async name => {
+  await branchMenu(async (host, store, send) => {
+    await readyBranches(store);
+    await filterBranches(host, name);
+    const count = send.mock.calls.length;
+    await act(async () => host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Invalid branch name");
+    expect(send.mock.calls).toHaveLength(count);
+  });
+});
+it("opens the branch screen directly from a tab-scoped command and focuses its filter", async () => {
+  await branchMenu(async (host) => {
+    await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "another-tab" })));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
+    expect(host.textContent).toContain("Switch branch");
+    expect(document.activeElement).toBe(host.querySelector("input"));
+    host.querySelector("input")!.blur();
+    await act(async () => window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: "tab" })));
+    expect(document.activeElement).toBe(host.querySelector("input"));
+  });
+});

@@ -1535,6 +1535,9 @@ export function App() {
         case "settings.open":
           setSettingsOpen(true);
           break;
+        case "branch.switch":
+          runSwitchBranch();
+          break;
         case "sidebar.toggle":
           handleToggleSidebarCollapsed();
           break;
@@ -1704,6 +1707,10 @@ export function App() {
     useTabsStore.getState().setTerminalOpen(currentTabId, !tab.terminalOpen);
   }
 
+  function runSwitchBranch(): void {
+    window.dispatchEvent(new CustomEvent("anycode:switch-branch", { detail: useTabsStore.getState().activeTabId }));
+  }
+
   function runFocusModeMenu(): void {
     // R7 seam (slice-R7-cut §3): broadcast to the single mounted ModeMenu,
     // which owns its own focus/open response — replaces the R5 `.mode-chip`
@@ -1805,6 +1812,13 @@ export function App() {
       hint: hintFor("sidebar.toggle"),
       enabled: true,
       run: () => handleToggleSidebarCollapsed(),
+    },
+    {
+      id: "branch.switch",
+      label: "Switch branch…",
+      hint: hintFor("branch.switch"),
+      enabled: activeStore?.getState().git.status != null,
+      run: () => runSwitchBranch(),
     },
     {
       id: "mode.focus",
