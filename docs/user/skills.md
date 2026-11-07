@@ -83,7 +83,7 @@ Either config can disable a builtin: enabling it in the workspace does not undo
 a personal disable. These IDs are shared with Native: disabling one also disables
 the same-name Native builtin. Other Native builtins can be disabled through config.
 
-Disabled names do not count toward the cap. A session loads at most **64 skills**
+In Native tabs, disabled names do not count toward the cap. A session loads at most **64 skills**
 after deduplication; overflow drops from the lowest precedence first. The list of
 skills in the system prompt is capped at about **8,000 characters**. Lines that do
 not fit are dropped, and the prompt says how many.
@@ -136,7 +136,9 @@ body. Model-use acceptance is a separate check in a fresh profile.
 Codex uses process-local extra skill roots, including orchestration replacements.
 A native CLI skill with the same Codex alias suppresses that app copy. Catalog
 errors leave ordinary Codex available: changed roots must be removed and verified,
-or the process is restarted once without app roots. Claude uses a session plugin.
+or the process is restarted once without app roots. Claude uses a session plugin
+and retries an unknown startup failure once without it; sign-in, verification
+and cancellation failures retain their original error.
 Codex discovery has been checked with a synthetic catalog on CLI 0.166.0;
 real-template/model use and packaged compatibility still require acceptance.
 
@@ -148,7 +150,7 @@ launches while ordinary chat remains available.
 
 ## How to verify it applied
 
-The Skills pane has a scope dropdown at the top. The scope dropdown at the top picks **User · This computer** (your user files) or a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip next to the dropdown shows how many entries the pane lists. Skills are discovered when a session starts. Start a **new
+The scope dropdown at the top of the Skills pane picks **User · This computer** (your user files) or a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip next to the dropdown shows how many entries the pane lists. Skills are discovered when a session starts. Start a **new
 session** after adding or editing a skill. Then open **Settings → Skills**: filesystem skills are listed
 with their source, and a strip shows any skill that failed to load. If the skill
 is missing, see [troubleshooting.md](troubleshooting.md).

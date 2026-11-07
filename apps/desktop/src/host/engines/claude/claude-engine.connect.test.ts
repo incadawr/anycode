@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { materializeMcpForwardFile } from "./mcp-forward-file.js";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { CLAUDE_NOT_SIGNED_IN, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
+import { CLAUDE_NOT_SIGNED_IN, ClaudeEngine, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
 import { IpcPermissionBroker } from "../../permission-broker.js";
 import * as overlayPolicy from "./orchestration-policy.js";
 import { EngineVersionError, type ClaudeSystemInitMessage } from "./protocol.js";
@@ -1330,7 +1330,7 @@ describe("explicit OFF recovery boot", () => {
 });
 
 // Protocol fixtures exercise lifecycle contracts without qualifying a native version.
-async function overlayContractRig(withBuiltins = false) {
+async function overlayContractRig(withBuiltins = false, overrides: Pick<Parameters<typeof startClaudeEngine>[0], "resolveMcpForward"> = {}) {
   const fixture = JSON.parse(readFileSync(new URL("../../../../scripts/claude-orchestrate-fixture.json", import.meta.url), "utf8"));
   const fake = fakeSpawn();
   let failSpawn = false, holdAck = false;
@@ -1376,7 +1376,7 @@ async function overlayContractRig(withBuiltins = false) {
     ({ engine } = await startClaudeEngine({ ...baseOptions(spawnImpl), ...(withBuiltins ? { pluginDir: "/sealed" } : {}), orchestrationFeatureEnabled: true,
       resolveMcpForward: async () => ({ claudeConfigPath: null, claudeJson: '{"mcpServers":{}}', claudeNames: [], loaderProblems: [], forwardProblems: [], notices: [], cleanupFile: () => {} }),
       mcpBridge: new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: () => ["agent", "agent_status"].map(name => ({ name, description: name, inputSchema: { type: "object" as const, properties: {} } })), callTool: async () => ({ text: "ok", isError: false }) }),
-      orchestrationEvidence: { version: fixture.version, facts: fixture.facts, readPosture } }));
+      orchestrationEvidence: { version: fixture.version, facts: fixture.facts, readPosture }, ...overrides }));
     await engine.selectPreset("workspace");
   } catch (error) { mocks.forEach(mock => mock.mockRestore()); throw error; }
   return { engine, fake, children, lateAcks, policy: engine.orchestrationPolicy!,
@@ -1662,4 +1662,73 @@ it.each([new EngineVersionError("missing required capability"), new Orchestratio
     expect(fake.capturedArgs()).toContain("--plugin-dir");
     expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(1);
   } finally { initialize.mockRestore(); }
+});
+
+
+it("re-resolves the cleaned MCP config on an OFF transition plugin retry", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "claude-off-retry-")), paths: string[] = [];
+  const resolveMcpForward = async () => {
+    const file = materializeMcpForwardFile('{"mcpServers":{}}', { tmpDir: dir, pid: process.pid });
+    paths.push(file.path);
+    return { claudeConfigPath: file.path, claudeJson: '{"mcpServers":{}}', claudeNames: [],
+      loaderProblems: [], forwardProblems: [], notices: [], cleanupFile: () => rmSync(file.path, { force: true }) };
+  };
+  const r = await overlayContractRig(true, { resolveMcpForward });
+  let initialize: ReturnType<typeof vi.spyOn> | undefined;
+  try {
+    await r.policy.apply(true, {});
+    initialize = vi.spyOn(ClaudeClient.prototype, "initialize").mockRejectedValueOnce(new Error("unknown boot failure"));
+    await r.policy.apply(false, {});
+    const args = r.fake.capturedArgs()!;
+    const path = args[args.indexOf("--mcp-config") + 1]!;
+    expect(args).not.toContain("--plugin-dir");
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe('{"mcpServers":{}}');
+    expect(paths).toHaveLength(3);
+    expect(path).toBe(paths[2]);
+    expect(existsSync(paths[1]!)).toBe(false);
+    await r.policy.apply(true, {});
+    await r.policy.apply(false, {});
+  } finally {
+    initialize?.mockRestore(); await r.close();
+    expect(paths.every(path => !existsSync(path))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("preserves an ordinary verify error after successful initialize without retry", async () => {
+  const fake = fakeSpawn(), spawnImpl = vi.fn(fake.spawnImpl);
+  const { engine, sessionRef } = await startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" });
+  const error = new Error("post-initialize verification failed");
+  const verify = vi.fn(async () => { throw error; });
+  try {
+    await expect(engine.replaceTransport({ resume: sessionRef, verify })).rejects.toBe(error);
+    expect(verify).toHaveBeenCalledOnce();
+    expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version") && !args.includes("--help"))).toHaveLength(2);
+  } finally { await engine.dispose("session-close"); }
+});
+
+it("keeps the successful retry forward and bridge for later transports", async () => {
+  const failing = fakeSpawn(undefined, MODELS, { error: "unknown boot failure" }), ordinary = fakeSpawn();
+  let attempts = 0, resolutions = 0;
+  const spawnImpl = (command: string, args: readonly string[]) => {
+    if (!args.includes("--version") && !args.includes("--help")) attempts++;
+    return (attempts <= 1 ? failing : ordinary).spawnImpl(command, args);
+  };
+  const bridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: () => [], callTool: async () => ({ text: "ok", isError: false }) });
+  const fork = vi.spyOn(ClaudeMcpBridge.prototype, "fork");
+  const install = vi.spyOn(ClaudeEngine.prototype, "installOrchestration");
+  let engine: ClaudeEngine | undefined;
+  try {
+    ({ engine } = await startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed", mcpBridge: bridge,
+      resolveMcpForward: async () => {
+        const name = ++resolutions === 1 ? "failed" : "running";
+        return { claudeConfigPath: null, claudeJson: JSON.stringify({ mcpServers: { [name]: { command: "node" } } }),
+          claudeNames: [name], loaderProblems: [], forwardProblems: [], notices: [], cleanupFile() {} };
+      } }));
+    expect(install.mock.calls[0]![1]?.claudeNames).toEqual(["running"]);
+    const runningBridge = fork.mock.results[0]!.value as ClaudeMcpBridge;
+    await engine.replaceTransport({ resume: engine.sessionRef });
+    expect(fork.mock.contexts.at(-1)).toBe(runningBridge);
+  } finally { await engine?.dispose("session-close"); fork.mockRestore(); install.mockRestore(); }
 });
