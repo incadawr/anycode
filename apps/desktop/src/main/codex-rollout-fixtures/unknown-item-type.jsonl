@@ -1,0 +1,5 @@
+{"timestamp":"2025-01-02T10:00:00.000Z","type":"session_meta","payload":{"id":"id-027","timestamp":"2025-01-02T10:00:00.000Z","cwd":"/Users/example/projects/todo-cli","originator":"cli","cli_version":"1.2.3","source":"cli","model_provider":"example"}}
+{"timestamp":"2025-01-02T10:00:00.000Z","type":"turn_context","payload":{"turn_id":"id-028","cwd":"/Users/example/projects/todo-cli","model":"example-model-1","effort":"high"}}
+{"timestamp":"2025-01-02T10:00:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Add a --done flag to todo-cli."}]}}
+{"timestamp":"2025-01-02T10:00:00.000Z","type":"response_item","payload":{"type":"future_streaming_delta","call_id":"id-029","payload":{"opaque":"UNKNOWN-PAYLOAD-LEAK-MARKER"}}}
+{"timestamp":"2025-01-02T10:00:00.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Added the --done flag."}]}}

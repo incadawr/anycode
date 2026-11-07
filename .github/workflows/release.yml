@@ -1,4 +1,4 @@
-# Release workflow (design working-docs/build/design/slice-2.6-cut.md §7, task 2.6.3).
+# Release workflow.
 #
 # A `v*` tag push builds all four platform artifacts and assembles them into a
 # single DRAFT GitHub release for that tag. A tag push therefore never ships to

@@ -1,8 +1,7 @@
 # Codex app-server contract (pinned)
 
 This directory pins the CONSUMED subset of the Codex app-server JSON-RPC
-protocol AnyCode's Codex adapter is built against (design
-`working-docs/build/design/slice-codex-fixes-cut.md` §2(h)).
+protocol AnyCode's Codex adapter is built against.
 
 - `pinned-contract.json` — canonicalized (sorted keys) extract of exactly the
   methods/types AnyCode's adapter speaks: `initialize`, `account/read`,

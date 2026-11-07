@@ -151,7 +151,6 @@ const ALLOW: Entry[] = [
   { path: "packages/core/src/tools/worktrees.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
 
   // dotted plan / slice numbering carried by the prose, not a card number
-  { path: ".github/workflows/release.yml", value: " 2.6.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "apps/desktop/src/host/index.test.ts", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "apps/desktop/src/host/index.test.ts", value: " 3.3.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "apps/desktop/src/host/index.test.ts", value: " 3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },

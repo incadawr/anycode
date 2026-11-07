@@ -19,7 +19,7 @@
  * over this channel (no DOM-event facade exists, design §7 residual) — the
  * scrollTop-assignment proxy is the accepted substitute since both paths funnel
  * through the identical onScroll handler; a real-wheel sanity check is a
- * manual note in PROGRESS.md, not something this script can honestly assert.
+ * manual check, not something this script can assert.
  *
  * Plain node >=22, ZERO npm deps (only node:child_process/fs/os/path/url +
  * the global `fetch`), matching the `scripts/` precedent (assert-package.mjs,

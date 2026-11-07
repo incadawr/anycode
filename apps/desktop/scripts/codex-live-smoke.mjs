@@ -15,9 +15,7 @@
  * (mid-run quit AND the final quit).
  *
  * Allow/deny are verified against REAL DISK SIDE EFFECTS (a `touch <file>`
- * sentinel each), not just wire status — the project's own durable lesson
- * ("run a real artifact, not a green mock", `working-docs/build/PROGRESS.md`)
- * applies doubly hard to protocol behavior nobody has smoke-tested live yet.
+ * sentinel each), not just wire status.
  *
  * Gated behind an explicit env var (`ANYCODE_CODEX_LIVE_SMOKE=1`) so it can
  * never run in the default suite (it is not a vitest file and nothing
