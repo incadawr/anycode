@@ -3,6 +3,7 @@ import { act, createElement, Fragment, useEffect, useState, type ReactNode } fro
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionHeader } from "./SessionHeader.js";
+import { HooksPanel } from "./HooksPanel.js";
 import { LspPanel } from "./LspPanel.js";
 import { tabRegistry } from "../tab-registry.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
@@ -68,17 +69,17 @@ it("opens one portal dialog with scoped configured counts and returns focus on E
   expect(trigger().getAttribute("aria-controls")).toBe(panel.id);
   expect(isOverlayOpen()).toBe(true);
   const rows = [...panel.querySelectorAll("button")];
-  expect(rows.map((row) => row.textContent)).toEqual(["MCP2›", "Plugins1›", "Skills3›", "LSP2›"]);
+  expect(rows.map((row) => row.textContent)).toEqual(["MCP2›", "Plugins1›", "Skills3›", "LSP2›", "HooksNone›"]);
   expect(document.activeElement).toBe(rows[0]);
   expect(panel.querySelector("button button, button input")).toBeNull();
   for (const call of [window.anycode.mcpConfig.get, window.anycode.plugins.list, window.anycode.skills.list, window.anycode.lspConfig.status]) {
     expect(call).toHaveBeenCalledExactlyOnceWith({ tabId: "a" });
   }
   await key(rows[0]!, "End");
+  expect(document.activeElement).toBe(rows[4]);
+  await key(rows[4]!, "ArrowUp");
   expect(document.activeElement).toBe(rows[3]);
-  await key(rows[3]!, "ArrowUp");
-  expect(document.activeElement).toBe(rows[2]);
-  await key(rows[2]!, "Home");
+  await key(rows[3]!, "Home");
   expect(document.activeElement).toBe(rows[0]);
   await key(rows[0]!, "Escape");
   expect(dialog()).toBeNull();
@@ -1134,14 +1135,15 @@ it("keeps last reported crashes visible but disables Restart without a host", as
   expect(send).not.toHaveBeenCalled();
 });
 
-it("keeps Hooks in Environment and removes its duplicate LSP row and actions", async () => {
+it("removes Hooks and LSP rows and actions from Environment", async () => {
   store.setState({ connection: "ready", lspServers: [lspStatus("crashed")] });
   const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
   await render("a", createElement(EnvironmentMenu, { placement: "header" }));
   await click(container.querySelector<HTMLButtonElement>('[aria-label="Open environment menu"]')!);
   expect(container.querySelector('[aria-label="Language servers"]')).toBeNull();
   expect(container.querySelector('[data-environment-action^="lsp-"]')).toBeNull();
-  expect(container.querySelector('[aria-label="Hooks"]')).not.toBeNull();
+  expect(container.querySelector('[aria-label="Hooks"]')).toBeNull();
+  expect(container.querySelector('[data-environment-action^="hooks-"]')).toBeNull();
   expect(send).not.toHaveBeenCalled();
 });
 
@@ -1156,4 +1158,45 @@ it("offers language server management in the new-session composer without host r
   await click(categoryButtons()[3]!);
   expect(detailButton("Manage language servers")).toBeDefined();
   expect(send).not.toHaveBeenCalled();
+});
+
+it.each(["header", "composer"] as const)("opens the existing Hooks drawer from the fifth category in %s without requests", async (placement) => {
+  store.setState({ connection: "ready", hookDeclarations: [{ event: "PostToolUse", command: "echo ok" }] });
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  let content: ReactNode = createElement(SessionHeader, props);
+  if (placement === "composer") {
+    window.anycode.listSessions = vi.fn(async () => []);
+    store.setState({ transcript: [] });
+    const { Composer } = await import("./Composer.js");
+    content = createElement(Composer);
+  }
+  await render("a", createElement(Fragment, null, content, createElement(HooksPanel)));
+  await click(trigger());
+  expect(categoryButtons()[4]!.dataset.extensionCategory).toBe("hooks");
+  expect(categoryButtons()[4]!.textContent).toContain("1 hook (PostToolUse 1)");
+  await click(categoryButtons()[4]!);
+  expect(details()!.textContent).toContain("1 hook (PostToolUse 1)");
+  await click(details()!.querySelector<HTMLButtonElement>('[data-extension-action="hooks-details"]')!);
+  expect(dialog()).toBeNull();
+  expect(container.querySelector("aside.hooks-panel")!.textContent).toContain("echo ok");
+  expect(send).not.toHaveBeenCalled();
+});
+
+it("hides Hooks Details for None but preserves access to configuration errors", async () => {
+  await render("a", createElement(Fragment, null, createElement(SessionHeader, props), createElement(HooksPanel)));
+  await click(trigger());
+  await click(categoryButtons()[4]!);
+  expect(details()!.textContent).toContain("None");
+  expect(detailButton("Details")).toBeUndefined();
+  await act(async () => store.setState({ hookConfigError: "Invalid hooks configuration" }));
+  await click(detailButton("Details")!);
+  expect(container.querySelector("aside.hooks-panel [role=alert]")!.textContent).toContain("Invalid hooks configuration");
+});
+
+it.each(["codex", "claude"])("hides the Hooks category for %s even with stale Core hooks", async (id) => {
+  store.setState({ engine: { id, capabilities: { supportsTasks: false } } as never, hookDeclarations: [{ event: "Stop", command: "echo ok" }] });
+  await render();
+  await click(trigger());
+  expect(categoryButtons()).toHaveLength(4);
+  expect(dialog()!.querySelector('[data-extension-category="hooks"]')).toBeNull();
 });

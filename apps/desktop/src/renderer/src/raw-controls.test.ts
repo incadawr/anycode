@@ -30,7 +30,7 @@ const BASELINE: Record<string, number> = {
   "components/DiffView.tsx": 3,
   "components/DockPanel.tsx": 4,
   "components/EngineControls.tsx": 9,
-  "components/EnvironmentMenu.tsx": 11,
+  "components/EnvironmentMenu.tsx": 7,
   "components/GitConfirmDialog.tsx": 3,
   "components/GitPanel.tsx": 23,
   "components/HooksPanel.tsx": 1,

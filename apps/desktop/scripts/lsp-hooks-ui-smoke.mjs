@@ -587,13 +587,14 @@ async function step6LspPanelClose(ctx) {
   pass(step, "LSP panel closed after toggle");
 }
 
-// ── step 7: toggle Hooks panel open -> the fixture hook, grouped ──
+// ── step 7: Extensions → Hooks → Details -> the fixture hook, grouped ──
 
 async function step7HooksPanelOpen(ctx) {
   const step = 7;
   const closed = await getHooksPanelState(ctx, step);
   assert(step, closed.open === false, `expected open:false before any toggle, got ${JSON.stringify(closed)}`);
 
+  // Driver clicks Extensions, data-extension-category="hooks", then hooks-details.
   await apiAction(ctx, step, "/panels/hooks/toggle", { tabId: ctx.tabId });
   const state = await getHooksPanelState(ctx, step);
   assert(step, state.open === true, `expected open:true after toggle, got ${JSON.stringify(state)}`);
@@ -629,6 +630,7 @@ async function step9CorruptConfig(ctx) {
 
   await waitUntilTab(ctx, step, ctx.corruptTabId, { connection: "ready" });
   await apiAction(ctx, step, `/tabs/${ctx.corruptTabId}/select`, {});
+  // Details remains available for a config error even without declarations.
   await apiAction(ctx, step, "/panels/hooks/toggle", { tabId: ctx.corruptTabId });
 
   const state = await getHooksPanelStateFor(ctx, step, ctx.corruptTabId);

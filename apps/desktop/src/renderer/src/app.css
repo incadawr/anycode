@@ -1513,6 +1513,13 @@ body {
 .session-extensions-categories, .session-extensions-details { min-width: 0; overflow: auto; }
 .session-extensions-category > span:first-child { flex: 1; text-align: left; }
 .session-extensions-category > span:last-child { margin-left: var(--sp-2); }
+/* Hook summaries can be longer than the category column. */
+.session-extensions-category[data-extension-category="hooks"] > span[aria-live] {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-extensions-status .session-extensions-dot { margin: 0; }
 .session-extensions-category[aria-expanded="true"] { background: var(--bg-hover); }
 .session-extensions-details { padding: var(--sp-2); border-left: 1px solid var(--border); }
 .session-extensions-details h3 { margin: var(--sp-2) 0; font-size: inherit; }

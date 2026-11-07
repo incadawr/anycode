@@ -9,14 +9,11 @@ import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
 import { BrowserAccessRow } from "./BrowserAccessRow.js";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { GitCommand } from "../../../shared/protocol.js";
-import type { CommandHookDeclaration } from "@anycode/core";
 import type { GitPendingRequest } from "../store.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import { useTabsStore } from "../tabs-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Ellipsis, Folder, GitBranch, HookIcon } from "./icons.js";
+import { Ellipsis, Folder, GitBranch } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
-import { groupHooksByEvent } from "./HooksPanel.js";
 
 type EnvironmentPlacement = "header" | "composer";
 
@@ -52,14 +49,6 @@ function changesLabel(count: number): string {
   return count === 0 ? "Working tree clean" : `${count} change${count === 1 ? "" : "s"}`;
 }
 
-/** "3 hooks (PreToolUse 1, PostToolUse 2)" / "None" — reuses HooksPanel's stable event order. */
-export function formatEnvironmentHooksDetail(hooks: readonly CommandHookDeclaration[]): string {
-  if (hooks.length === 0) return "None";
-  const groups = groupHooksByEvent(hooks);
-  const parts = groups.map((g) => `${g.event} ${g.count}`).join(", ");
-  return `${hooks.length} ${hooks.length === 1 ? "hook" : "hooks"} (${parts})`;
-}
-
 export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement }) {
   const tabStore = useTabStoreApi();
   const send = useTabSend();
@@ -68,10 +57,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const branches = useTabStore((state) => state.git.branches);
-  // Hooks status row (core engines only — `engine === null`
-  // mirrors the old header-button gate and the panels' mount gate in App.tsx).
-  const engine = useTabStore((state) => state.engine);
-  const hookDeclarations = useTabStore((state) => state.hookDeclarations);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
   // D8 overlay wiring: the preview WebContentsView must hide while this
@@ -140,18 +125,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     tabStore.getState().gitSetView("changes");
     tabStore.getState().gitSetPanelOpen(true);
     setOpen(false);
-  }
-
-  // cross-review F4: a missing TabContext must not look like a
-  // working Details click — the menu still closes, so say so in the console.
-  function openPanel(apply: (id: string) => void): void {
-    if (tabId) apply(tabId);
-    else console.warn("EnvironmentMenu: no tab context, panel not opened");
-    setOpen(false);
-  }
-
-  function openHooksDetails(): void {
-    openPanel((id) => useTabsStore.getState().setHooksPanelOpen(id, true));
   }
 
   function switchBranch(name: string): void {
@@ -258,20 +231,6 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
                 </span>
                 <span className="environment-menu-open">Open</span>
               </button>
-            </>
-          )}
-          {engine === null && (
-            <>
-              <div className="environment-menu-row" role="group" aria-label="Hooks">
-                <HookIcon />
-                <span className="environment-menu-row-main">
-                  <span>Hooks</span>
-                  <span className="environment-menu-row-detail">{formatEnvironmentHooksDetail(hookDeclarations)}</span>
-                </span>
-                <span className="environment-menu-actions">
-                  <button type="button" className="environment-menu-open" data-environment-action="hooks-details" onClick={openHooksDetails}>Details</button>
-                </span>
-              </div>
             </>
           )}
           {/* the per-session Sessions API switch (any engine; main owns the state). */}

@@ -32,18 +32,18 @@ interface FakeButton {
 /** Each click schedules a separate React commit; removed selectors never resolve. */
 function installFakeMenus(): { clicks: string[] } {
   let pendingCommit: (() => void) | undefined;
-  let environmentMounted = false;
   let extensionsMounted = false;
   let lspSelected = false;
+  let hooksSelected = false;
   const clicks: string[] = [];
   const button = (name: string, update: () => void): FakeButton => ({ click: () => {
     clicks.push(name);
     pendingCommit = update;
     queueMicrotask(() => commit.run());
   } });
-  const environment = button("environment", () => { environmentMounted = true; });
   const extensions = button("extensions", () => { extensionsMounted = true; });
   const lsp = button("lsp", () => { lspSelected = true; });
+  const hooks = button("hooks", () => { hooksSelected = true; });
   const lspDetails = button("lsp-details", () => {});
   const hooksDetails = button("hooks-details", () => {});
   commit.run = () => {
@@ -53,11 +53,11 @@ function installFakeMenus(): { clicks: string[] } {
   };
   vi.stubGlobal("document", {
     querySelector: (selector: string): FakeButton | null => {
-      if (selector === ".environment-trigger") return environment;
       if (selector === ".session-extensions-trigger") return extensions;
       if (extensionsMounted && selector === '[data-extension-category="lsp"]') return lsp;
       if (lspSelected && selector === '[data-extension-action="lsp-details"]') return lspDetails;
-      if (environmentMounted && selector === '[data-environment-action="hooks-details"]') return hooksDetails;
+      if (extensionsMounted && selector === '[data-extension-category="hooks"]') return hooks;
+      if (hooksSelected && selector === '[data-extension-action="hooks-details"]') return hooksDetails;
       return null;
     },
   });
@@ -95,6 +95,6 @@ describe("Menu panel drivers (cross-review F1)", () => {
   it("realHooksPanelDom.toggle() reaches the Details action in the same task", () => {
     const env = installFakeMenus();
     realHooksPanelDom().toggle();
-    expect(env.clicks).toEqual(["environment", "hooks-details"]);
+    expect(env.clicks).toEqual(["extensions", "hooks", "hooks-details"]);
   });
 });

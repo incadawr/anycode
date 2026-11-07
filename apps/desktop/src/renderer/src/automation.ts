@@ -2182,9 +2182,9 @@ export interface HooksPanelState {
  * injectable-for-tests discipline as `LspPanelDom`. `panel()` returns `null`
  * when `<aside class="hooks-panel">` isn't in the DOM at all (closed).
  * Since the header toggle button was removed, `toggle()` drives the
- * Environment menu's `hooks-details` action (close via the panel's own
- * `aria-label="Close hooks"` button, open via `.environment-trigger` +
- * Details) — same shape as the LSP driver above.
+ * Extensions menu's `hooks-details` action (close via the panel's own
+ * `aria-label="Close hooks"` button, open via `.session-extensions-trigger` +
+ * Hooks category + Details) — same shape as the LSP driver above.
  */
 export interface HooksPanelDom {
   panel(): { configError: string | null; groups: Array<{ event: string; count: number }> } | null;
@@ -5483,21 +5483,19 @@ export function realHooksPanelDom(): HooksPanelDom {
       return { configError, groups };
     },
     toggle() {
-      // the header button is gone — toggle via the Environment
-      // menu's Details action (same shape as the LSP driver above; the close
-      // button lives at HooksPanel.tsx's `aria-label="Close hooks"`).
       const el = aside();
       if (el) {
         el.querySelector<HTMLButtonElement>('button[aria-label="Close hooks"]')?.click();
         return;
       }
-      // cross-review F1: React 19 commits a click-driven update in
-      // a microtask, AFTER .click() returns. flushSync commits the menu now so
-      // its Details action exists for the query below (without it the click
-      // was silently lost).
-      const trigger = document.querySelector<HTMLButtonElement>(".environment-trigger");
-      if (trigger) flushSync(() => trigger.click());
-      document.querySelector<HTMLButtonElement>('[data-environment-action="hooks-details"]')?.click();
+      // Commit both menu and category before querying their mounted controls.
+      if (!document.querySelector('[data-extension-category="hooks"]')) {
+        const trigger = document.querySelector<HTMLButtonElement>(".session-extensions-trigger");
+        if (trigger) flushSync(() => trigger.click());
+      }
+      const category = document.querySelector<HTMLButtonElement>('[data-extension-category="hooks"]');
+      if (category) flushSync(() => category.click());
+      document.querySelector<HTMLButtonElement>('[data-extension-action="hooks-details"]')?.click();
     },
   };
 }
