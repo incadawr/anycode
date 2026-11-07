@@ -5491,6 +5491,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           case "turn_rejected": {
+            // For untracked requests, a stale busy response must not restore
+            // an already started queue item or Claude's pending native echo.
+            // Tracked deliveries must still reconcile contradictory outcomes.
+            if (message.reason === "busy" && get().turn.status === "running" && get().turn.requestId === message.requestId && !get().orchestrationDeliveries.some(item => item.requestId === message.requestId)) return;
             // Slice P7.14: if the host rejected the very drain we just sent (the
             // race in §0/§2.3 — busy/unsupported_images), return the item to the
             // HEAD of the queue and pause so it isn't re-sent silently. The
@@ -5522,7 +5526,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               notice: {
                 kind: "turn_rejected",
                 text:
-                  message.reason === "input_not_sent"
+                  message.queuePauseReason && (restore || restoreDirect)
+                    ? `Message returned to the queue: ${message.queuePauseReason === "max_turns"
+                      ? "the turn hit the turn limit"
+                      : message.queuePauseReason === "cancelled"
+                        ? "the turn was cancelled"
+                        : "the turn failed"}.`
+                    : message.reason === "input_not_sent"
                     ? "Message was not sent. Restore the saved message before sending again."
                     : message.reason === "busy"
                     ? "Message rejected: the agent is still running the current turn."
@@ -5531,6 +5541,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     : "Message rejected: the host is not ready yet.",
               },
               ...(restore ?? restoreDirect ?? {}),
+              ...((restore || restoreDirect) ? { continueOffer: null } : {}),
+              ...((restore || restoreDirect || rejectedSystem) ? {
+                transcript: get().transcript.filter(block => block.kind !== "user_text" || block.id !== message.requestId),
+              } : {}),
+              ...(message.queuePauseReason && (restore || restoreDirect) ? { queuePauseReason: message.queuePauseReason } : {}),
               ...reconciled,
               ...(message.reason === "input_not_sent" ? {
                 queuePaused: true, queuePauseReason: "rejected" as const,

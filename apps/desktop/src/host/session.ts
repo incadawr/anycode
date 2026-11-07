@@ -1785,7 +1785,7 @@ export class Session {
    * ring can never reach a classifier.
    */
   private readonly humanTurnRing: string[] = [];
-  private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[]; origin?: "system" }> = [];
+  private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[]; origin?: "system"; fromQueue?: true }> = [];
   /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
   private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
   private childStatusTextAt: number | undefined;
@@ -3180,7 +3180,7 @@ export class Session {
         if (message.origin !== "system") {
           this.broker.noteHumanPresent();
         }
-        this.onUserMessage(message.requestId, message.text, message.images, message.origin);
+        this.onUserMessage(message.requestId, message.text, message.images, message.origin, message.fromQueue);
         break;
       case "cancel_turn":
         this.onCancel();
@@ -4747,7 +4747,7 @@ export class Session {
     }
   }
 
-  private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
+  private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system", fromQueue?: true): void {
     if (this.runtimeHistory?.requiresRecovery()) {
       this.outbound.sendDirect({type:"turn_rejected",requestId,reason:"not_ready"});
       this.pushRuntimeInputRecovery();
@@ -4779,11 +4779,12 @@ export class Session {
       // chain rather than losing them. 4730 xfix D3: the entry carries its
       // `origin` so a system-origin message (agent-inbox delivery, detached
       // report) drained later is still not recorded as human context.
-      if (this.child !== undefined || (this.engine.id === "claude" && this.turnId !== null)) {
-        // Claude can yield loop_end before its final context read settles.
-        // Retain a prompt arriving in that window until the reader is released.
+      if (fromQueue || this.child !== undefined || (this.engine.id === "claude" && this.turnId !== null)) {
+        // The renderer may drain after completed while the host is still
+        // settling, or a Sessions API next_turn may win admission. Retain
+        // that dispatch exactly once on every engine until the next seam.
         if (this.steerQueue.some(entry => entry.requestId === requestId)) return;
-        this.enqueueSteerMessage(requestId, text, images, origin);
+        this.enqueueSteerMessage(requestId, text, images, origin, fromQueue);
         return;
       }
       // Protocol guard (the UI also blocks the composer): one turn at a time.
@@ -4872,7 +4873,7 @@ export class Session {
    * `CHILD_STEER_QUEUE_MAX`) or when the attachment isn't supported —
    * neither consumes a queue slot.
    */
-  private enqueueSteerMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
+  private enqueueSteerMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system", fromQueue?: true): void {
     const attachments = images?.length ? [...images] : undefined;
     if (attachments !== undefined && (!this.engine.capabilities.supportsImages || !this.imagesAccepted())) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
@@ -4885,7 +4886,14 @@ export class Session {
     const entry: { requestId: string; text: string; images?: ImageAttachment[]; origin?: "system" } =
       attachments !== undefined ? { requestId, text, images: attachments } : { requestId, text };
     if (origin !== undefined) entry.origin = origin;
-    this.steerQueue.push(entry);
+    this.steerQueue.push({ ...entry, ...(fromQueue ? { fromQueue } : {}) });
+  }
+
+  /** Return unstarted composer dispatches after a real stop/error, never on a busy race. */
+  private rejectQueuedComposerMessages(queuePauseReason: "cancelled" | "error" | "max_turns"): void {
+    const held = this.steerQueue.filter(entry => entry.fromQueue);
+    for (const entry of held) this.steerQueue.splice(this.steerQueue.indexOf(entry), 1);
+    for (const entry of held) this.outbound.emit({ type: "turn_rejected", requestId: entry.requestId, reason: "not_ready", queuePauseReason });
   }
 
   private diagnoseBlockedSteerFrames(): void {
@@ -5135,7 +5143,12 @@ export class Session {
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         // Stream ownership and turn-local state are now released. Drain before
         // the first teardown await so a new owner cannot overtake queued input.
-        if (this.child === undefined && this.engine.id === "claude" && this.steerQueue.length > 0) {
+        const settled = this.latestPublicResult;
+        if (this.child === undefined && settled?.turnId === pendingTurnIdHolder.turnId &&
+          (settled.terminalReason === "cancelled" || settled.terminalReason === "error" || settled.terminalReason === "max_turns")) {
+          this.rejectQueuedComposerMessages(settled.terminalReason);
+        }
+        if (this.child === undefined && this.steerQueue.length > 0) {
           if (this.shuttingDown) this.rejectQueuedSteerMessages();
           else this.startNextQueuedSteerTurn();
         }
@@ -5246,7 +5259,9 @@ export class Session {
     // of the ladder — the refusal latched by an earlier chain ended THAT
     // chain, not this one. Cleared only once a chain actually started, so a
     // rejected drain never loses the refusal the terminal still reports.
-    if (this.drainAgentInbox(true)) {
+    // Root inbox admission requires its normal peer permit after teardown;
+    // the settled-child path below can reject registered messages permanently.
+    if (this.child !== undefined && this.drainAgentInbox(true)) {
       this.childCeilingLastRefusal = undefined;
       return "started";
     }
@@ -6446,6 +6461,7 @@ export class Session {
   }
 
   private onCancel(): void {
+    if (this.child === undefined) this.rejectQueuedComposerMessages("cancelled");
     for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Cancelled by Stop before queued delivery" });
     if (this.abort) {
       this.abort.abort();

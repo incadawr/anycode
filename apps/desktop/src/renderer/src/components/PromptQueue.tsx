@@ -113,7 +113,9 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
           <span className="prompt-queue-paused-text">
             {queuePauseReason === "max_turns"
               ? "Queue held — the turn hit the turn limit"
-              : "Queue paused — turn was cancelled/failed"}
+              : queuePauseReason === "rejected"
+                ? "Queue held — message was rejected"
+                : "Queue paused — turn was cancelled/failed"}
           </span>
           <div className="prompt-queue-paused-actions">
             <button

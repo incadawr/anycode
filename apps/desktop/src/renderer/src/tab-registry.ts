@@ -485,7 +485,7 @@ export function createTabRegistry(
     try {
       if ((item.origin === "system" || item.orchestrate || entry.store.getState().orchestrateActive) && !saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
       connection.send({
-        type: "user_message", requestId, text: item.text,
+        type: "user_message", requestId, text: item.text, fromQueue: true,
         ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),
         ...(item.origin !== undefined ? { origin: item.origin } : {}),
       });

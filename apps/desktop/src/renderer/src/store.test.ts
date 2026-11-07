@@ -6791,6 +6791,35 @@ describe("— max_turns end: Continue offer + held-queue reason", () => {
     expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained"]);
   });
 
+  describe.each([true, false])("returned message (queued=%s)", queued => {
+    it.each([
+      ["cancelled", "the turn was cancelled"],
+      ["error", "the turn failed"],
+      ["max_turns", "the turn hit the turn limit"],
+    ] as const)("uses the %s reason in the notice and clears Continue", (reason, explanation) => {
+      const store = readyStore();
+      if (queued) {
+        store.getState().enqueuePrompt({ text: "held", images: [] });
+        store.getState().takeQueueHead("held-request");
+      } else {
+        store.getState().recordSentMessage("held", [], "held-request");
+      }
+      startTurn(store);
+      store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: { type: "loop_end", reason, turns: 2 } });
+      if (reason === "max_turns") expect(store.getState().continueOffer).not.toBeNull();
+
+      store.getState().applyHostMessage({ type: "turn_rejected", requestId: "held-request", reason: "not_ready", queuePauseReason: reason });
+
+      expect(store.getState().promptQueue.map(item => item.text)).toEqual(["held"]);
+      expect(store.getState().queuePaused).toBe(true);
+      expect(store.getState().queuePauseReason).toBe(reason);
+      expect(store.getState().notice).toEqual({ kind: "turn_rejected", text: `Message returned to the queue: ${explanation}.` });
+      expect(store.getState().continueOffer).toBeNull();
+      store.getState().clearQueue();
+      expect(store.getState().continueOffer).toBeNull();
+    });
+  });
+
   it("a later fatal / host exit re-pause does NOT keep a stale max_turns reason", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "held", images: [] });
