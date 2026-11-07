@@ -80,7 +80,7 @@ if (args[0] === "--version") {
             apiProvider: "firstParty",
           };
       process.stdout.write(
-        `${JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { account } } })}\n`,
+        `${JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: requestId, response: { account, models: [{ value: "test-model", displayName: "Test model 6.0" }] } } })}\n`,
       );
     }
   });

@@ -320,6 +320,16 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
     expect(report).toEqual({ status: "ready", version: "2.1.212" });
   });
 
+  it("returns only an opaque catalog key and sanitized names from a fake initialize", async () => {
+    // process.execPath is only the stat target; fakeSpawn always launches the test double.
+    const report = await runClaudeDoctor(process.execPath, {
+      trust: TRUSTED, spawnImpl: fakeSpawn(), profileDir: freshProfileDir(),
+    });
+    expect(report.catalogIdentity).toMatch(/^[a-f0-9]{64}$/);
+    expect(report.models).toEqual([{ id: "test-model", label: "Test model 6.0" }]);
+    expect(JSON.stringify(report)).not.toMatch(/sentinel-custody|Sentinel Org|subscriptionType|tokenSource/);
+  });
+
   it("signed_out: tokenSource:none -> status signed_out, from the SAME fake binary/version", async () => {
     const report = await runClaudeDoctor("/fake/claude", {
       trust: TRUSTED,

@@ -1,6 +1,6 @@
 import { useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { EngineModelChoice } from "../../shared/protocol.js";
-import { CLAUDE_DRAFT_MODELS } from "./claude-draft-models.js";
+import { useClaudeDraftModels } from "./use-claude-draft-models.js";
 import { createCodexDraftCatalogRefresh, type CodexDraftCatalogRefreshDeps } from "./codex-draft-model.js";
 import { useTabsStore } from "./tabs-store.js";
 import { pickEngineModels } from "./role-model-options.js";
@@ -14,6 +14,7 @@ export function useRoleEngineModels(open: boolean) {
   const context = useContext(TabContext);
   const engine = useSyncExternalStore(context?.store.subscribe ?? subscribeNone,
     context ? () => context.store.getState().engine : noEngine, noEngine);
+  const claudeModels = useClaudeDraftModels(open && engine?.id !== "claude");
   const codexModels = useTabsStore((state) => state.codexModels);
   const liveCodex = engine?.id === "codex" && engine.model !== undefined;
   useEffect(() => startRoleCodexCatalogRefresh(open && !liveCodex, {
@@ -22,7 +23,7 @@ export function useRoleEngineModels(open: boolean) {
     setModels: (models) => useTabsStore.getState().setCodexModels(models),
     subscribe: (refresh) => window.anycode.onEnginesChanged(refresh),
   }), [open, liveCodex]);
-  return useMemo(() => pickEngineModels(engine, CLAUDE_DRAFT_MODELS, codexModels), [engine, codexModels]);
+  return useMemo(() => pickEngineModels(engine, claudeModels, codexModels), [engine, claudeModels, codexModels]);
 }
 
 /** Fill a missing shared catalog only; role editing must never clear StartScreen's models. */

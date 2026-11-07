@@ -150,6 +150,8 @@ export interface TabsState {
   /** At most one parked New Session draft (§4.1) — never a `TabInfo` row, so the automation snapshot stays byte-identical. */
   draft: SessionDraft | null;
   /** Codex draft model catalog: [] = unloaded/invalidated; submit refuses rather than guess. */
+  claudeModels: readonly EngineModelChoice[];
+  setClaudeModels(models: readonly EngineModelChoice[]): void;
   codexModels: readonly EngineModelChoice[];
   /** Invariant: `draftActive` implies `draft !== null`. Whether the start screen is the thing currently shown. */
   draftActive: boolean;
@@ -327,6 +329,8 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     activeTabId: null,
     selectionRevision: 0,
     draft: null,
+    claudeModels: [],
+    setClaudeModels: (models) => set({ claudeModels: models }),
     codexModels: [],
     draftActive: false,
     hiddenWorkspaces: readHiddenWorkspaces(storage),

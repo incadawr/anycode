@@ -279,6 +279,7 @@ describe("createClaudeOnboardingController — loginStart/loginCancel", () => {
     expect(Object.keys(result).sort()).toEqual(["ok", "snapshot"]);
     if (result.ok) {
       expect(Object.keys(result.snapshot).sort()).toEqual(["binaryPath", "checkedAt", "report", "source"]);
+      expect(JSON.stringify(result.snapshot)).not.toContain("leak@evil.example");
     }
   });
 
@@ -602,4 +603,23 @@ describe("doctor source env — engine-proxy carrier custody", () => {
     });
     expect(env).toEqual({ ANYCODE_CLAUDE_BIN: "/env/claude", HTTPS_PROXY: SHELL_PROXY, https_proxy: SHELL_PROXY });
   });
+});
+
+
+it("publishes a matching persisted Claude catalog and remembers fresh initialize choices", async () => {
+  const identity = "a".repeat(64);
+  let cache = { identity, models: [{ id: "remembered", label: "Remembered 6.0" }] };
+  let report: ClaudeDoctorReport = { status: "ready", catalogIdentity: identity };
+  const writeClaudeSettings = fakeWriteClaudeSettings();
+  const controller = createClaudeOnboardingController(baseDeps({
+    readBinaryPathSetting: async () => "/opt/claude", fs: fakeExecutableFs("/opt/claude"),
+    runDoctor: async () => ({ ...report }), readModelCatalog: () => cache, writeClaudeSettings,
+  }));
+  expect((await controller.recheck()).report.models).toEqual(cache.models);
+  expect(writeClaudeSettings.mock.calls[0]![0].modelCatalog).toEqual(cache);
+  report = { status: "ready", catalogIdentity: "b".repeat(64) };
+  expect((await controller.recheck()).report.models).toBeUndefined();
+  report = { ...report, models: [{ id: "fresh", label: "Fresh 7.0" }] };
+  expect((await controller.recheck()).report.models).toEqual(report.models);
+  expect(writeClaudeSettings.mock.calls.at(-1)![0].modelCatalog).toEqual({ identity: report.catalogIdentity, models: report.models });
 });

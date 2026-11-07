@@ -112,7 +112,7 @@ import {
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
 import { activeProviderView, connectionById } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
-import { CLAUDE_DRAFT_MODELS } from "../claude-draft-models.js";
+import { useClaudeDraftModels } from "../use-claude-draft-models.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
 import { openSettingsAddConnection, RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
@@ -651,6 +651,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // button and the automation facade's `startScreenSubmit` — both funnelling
   // through `submitStartDraft` — read ONE source of truth (see the refresh
   // effect below).
+  const claudeDraftModels = useClaudeDraftModels(draft?.engine === "claude");
   const codexModels = useTabsStore((state) => state.codexModels);
   // codex-profiles cut §3.3/W3-F: the account-profile chip's own catalog,
   // fetched the same "once per codex-selected transition, live-refreshed via
@@ -1126,18 +1127,13 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const needsProject = !submitting && draft.workspace === null && hasSendableDraft(draft.prompt, draftImages.length);
   const codexDraft = draft.engine === "codex";
   // SLICE-CC C5 (cut §1.4): the Claude draft's own branch of the composer
-  // footer. Drafts currently use the shared static fallback; sessions get
-  // their account-specific model catalog from initialize.
+  // footer. Drafts prefer the confirmed cached catalog; sessions get
+  // their own model catalog from initialize.
   const claudeDraft = draft.engine === "claude";
   const claudeDraftPreset = draft.enginePreset ?? DEFAULT_CLAUDE_DRAFT_PRESET;
-  const claudeDraftModel = resolveClaudeDraftModel(draft.model, CLAUDE_DRAFT_MODELS);
-  // same "only show the row when the model actually has a
-  // vocabulary" discipline as the Codex branch above. `CLAUDE_DRAFT_MODELS`
-  // does not currently declare any `efforts` (no live per-model catalog at
-  // draft time — see that table's own doc comment), so this resolves to
-  // `undefined` and the row stays hidden today; wiring is generic so it
-  // lights up for free the moment that table ever gains real data.
-  const claudeDraftEfforts = draftModelEfforts(claudeDraftModel, CLAUDE_DRAFT_MODELS);
+  const claudeDraftModel = resolveClaudeDraftModel(draft.model, claudeDraftModels);
+  // Effort choices follow the confirmed model catalog.
+  const claudeDraftEfforts = draftModelEfforts(claudeDraftModel, claudeDraftModels);
   const claudeDraftEffort = resolveDraftEngineEffort(draft.engineEffort, claudeDraftEfforts);
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
@@ -1838,7 +1834,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   onPick={(id) => useTabsStore.getState().setDraftEnginePreset(id)}
                 />
                 <EngineModelMenu
-                  model={{ current: claudeDraftModel, available: CLAUDE_DRAFT_MODELS }}
+                  model={{ current: claudeDraftModel, available: claudeDraftModels }}
                   pendingModel={undefined}
                   disabled={false}
                   onPick={(id) => useTabsStore.getState().setDraftModel(id)}

@@ -1,9 +1,9 @@
 import type { EngineModelChoice } from "../../shared/protocol.js";
 
 /**
- * Static fallback for drafts until an account-scoped catalog is available.
- * The doctor already performs initialize, but currently discards its models;
- * running sessions use their own live initialize catalog instead of this table.
+ * Fallback when no account/CLI-confirmed initialize catalog is available.
+ * Drafts prefer the cached doctor catalog; running sessions use their own
+ * live initialize catalog instead of this table.
  * Full model ids avoid assuming which aliases an account's CLI advertises.
  * The host resolves these through the live catalog before sending set_model;
  * an unavailable model falls back to the CLI default with a warning.

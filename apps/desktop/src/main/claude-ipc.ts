@@ -24,7 +24,8 @@
  * constants, kept in sync by contract.
  */
 import { guardedIpcHandle } from "./ipc-guard.js";
-import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
+import { selectClaudeCatalog } from "./claude-model-cache.js";
+import type { ClaudeDoctorReport, ClaudeModelCache } from "../shared/claude-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
 import { ENV_CLAUDE_BIN, ENV_CLAUDE_PROXY_URL, stripEngineProxyCarriers } from "../shared/engines.js";
 import type { TrustedBinaryConsent } from "../shared/settings.js";
@@ -106,8 +107,10 @@ export interface ClaudeIpcDeps {
   readBinaryPathSetting: () => Promise<string | undefined>;
   /** reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
   readTrustedBinaries?: () => readonly TrustedBinaryConsent[];
-  /** Persists a `settings.claude` patch (best-effort: a `read_only` refusal must not block the LIVE snapshot this session already computed from reaching the caller). NEVER carries account material — only status/version/at (custody). */
+  readModelCatalog?: () => ClaudeModelCache | undefined;
+  /** Persists a `settings.claude` patch (best-effort: a `read_only` refusal must not block the LIVE snapshot this session already computed from reaching the caller). Carries only status metadata and a catalog bound to an opaque identity digest. */
   writeClaudeSettings: (patch: {
+    modelCatalog?: ClaudeModelCache;
     binaryPath?: string;
     lastCheck?: { status: ClaudeDoctorReport["status"]; version?: string; at: string };
   }) => Promise<SettingsMutationResult>;
@@ -175,7 +178,7 @@ function shouldPersistPath(source: ClaudeBinarySource, binaryPath: string | null
   return binaryPath !== null && source !== "env" && source !== "none";
 }
 
-/** The credential-free lastCheck projection — the ONLY report facts that ever reach settings.json (custody). */
+/** Credential-free lastCheck projection; the model catalog is stored separately. */
 function lastCheckOf(snapshot: ClaudeOnboardingSnapshot): { status: ClaudeDoctorReport["status"]; version?: string; at: string } {
   return {
     status: snapshot.report.status,
@@ -271,6 +274,9 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
       await deps.writeClaudeSettings({
         ...(pathToPersist !== undefined ? { binaryPath: pathToPersist } : {}),
         lastCheck: lastCheckOf(snapshot),
+        ...(snapshot.report.catalogIdentity && snapshot.report.models !== undefined ? {
+          modelCatalog: { identity: snapshot.report.catalogIdentity, models: snapshot.report.models },
+        } : {}),
       });
     } catch {
       // Best-effort persistence — the live snapshot still reaches the caller.
@@ -299,7 +305,7 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
     discoveryTrustRefusal?: { binaryPath?: string; reason: string; staleConsent?: boolean; offerTrust: boolean },
   ): Promise<ClaudeOnboardingSnapshot> {
     const consents = deps.readTrustedBinaries?.() ?? [];
-    const report: ClaudeDoctorReport =
+    const rawReport: ClaudeDoctorReport =
       binaryPath === null
         ? discoveryTrustRefusal !== undefined
           ? {
@@ -327,6 +333,18 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
             ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
+    const { status, version, error, trustRefusal, catalogIdentity, models: liveModels } = rawReport;
+    const report: ClaudeDoctorReport = {
+      status,
+      ...(version !== undefined ? { version } : {}),
+      ...(error !== undefined ? { error } : {}),
+      ...(trustRefusal ? { trustRefusal } : {}),
+      ...(catalogIdentity && /^[a-f0-9]{64}$/.test(catalogIdentity)
+        ? { catalogIdentity, models: liveModels } : {}),
+    };
+    const models = selectClaudeCatalog(report, deps.readModelCatalog?.());
+    if (models.length || report.models !== undefined) report.models = models;
+    else delete report.models;
     const snapshot: ClaudeOnboardingSnapshot = { report, binaryPath, source, checkedAt: new Date().toISOString() };
     lastReport = report;
     await persist(snapshot);

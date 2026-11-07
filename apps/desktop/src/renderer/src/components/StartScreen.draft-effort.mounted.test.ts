@@ -56,14 +56,14 @@ beforeEach(() => {
     draftActive: true,
     availableEngines: ["core", "codex", "claude"],
     claudeOrchestrateEnabled: false,
-    codexModels: [],
+    codexModels: [], claudeModels: [],
   });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   document.body.replaceChildren();
-  useTabsStore.setState({ draft: null, draftActive: false, codexModels: [] });
+  useTabsStore.setState({ draft: null, draftActive: false, codexModels: [], claudeModels: [] });
 });
 
 async function mountStartScreen(): Promise<{ container: HTMLDivElement; root: ReturnType<typeof createRoot> }> {
@@ -197,11 +197,7 @@ describe("StartScreen — Codex draft effort menu", () => {
 
 describe("StartScreen — Claude draft effort menu", () => {
   it("offers no effort page at all, because the draft catalog declares no levels", async () => {
-    // The Claude draft's model list is STATIC and carries no per-model
-    // vocabulary (the real catalog is per-account and only arrives with a live
-    // session's `initialize`). Capability is the vocabulary, never a guessed
-    // default: the shared menu must not be handed an effort control it cannot
-    // honestly populate, so there is no page whose tick could go missing.
+    // Without a confirmed catalog, the fallback has no effort vocabulary.
     useTabsStore.setState({
       draft: { workspace: "/ws", prompt: "", engine: "claude", model: null, mode: "build", engineEffort: "high" },
     });
@@ -274,5 +270,20 @@ it("shows external engine choices and Codex toggle when mounted with the shell w
     await act(async () => { root.render(createElement(Shell)); });
     expect([...container.querySelectorAll(".start-engine-choice")].map(b => b.textContent)).toEqual(["AnyCode", "Codex", "Claude"]);
     expect(container.querySelector('button[aria-label="Orchestrate: request orchestration when the session starts"]')).not.toBeNull();
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("renders the confirmed cached Claude model and its effort vocabulary before starting", async () => {
+  const models = [{ id: "account-model", label: "Account model 6.0", efforts: ["high"] }];
+  window.anycode.claude = {
+    recheck: async () => ({ report: { status: "ready", models } }),
+    onSnapshotChanged: () => () => {},
+  } as unknown as typeof window.anycode.claude;
+  useTabsStore.setState({ draft: { workspace: "/ws", prompt: "", engine: "claude", model: "account-model", mode: "build" } });
+  const { container, root } = await mountStartScreen();
+  try {
+    expect(container.textContent).toContain("Account model 6.0");
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Engine model and effort"]')!.click());
+    expect(container.textContent).toContain("Effort");
   } finally { await act(async () => root.unmount()); }
 });

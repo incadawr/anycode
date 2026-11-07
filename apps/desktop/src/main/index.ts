@@ -3728,6 +3728,7 @@ void app.whenReady().then(async () => {
     // fresh read of settings.security.trustedBinaries per gate
     // check — mirror of readBinaryPathSetting's dep shape.
     readTrustedBinaries: () => readTrustedBinaryConsentsSync(settingsPath),
+    readModelCatalog: () => settings?.claude?.modelCatalog,
     writeClaudeSettings: (patch) => handleSet(settingsIpcDeps, { claude: patch }),
     dialog,
     // SLICE-CC-LOGIN (cut §4): the same `shell.openPath` pattern `openExternal`

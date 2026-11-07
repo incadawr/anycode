@@ -937,6 +937,14 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     // as on `codex` — the failure direction is "no proxy emitted".
     claude: z
       .object({
+        modelCatalog: z.object({
+          identity: z.string().regex(/^[a-f0-9]{64}$/),
+          models: z.array(z.object({
+            id: z.string().min(1).max(200),
+            label: z.string().max(256).optional(),
+            efforts: z.array(z.enum(["low", "medium", "high", "xhigh", "max"])).max(5).optional(),
+          })).max(100),
+        }).optional().catch(undefined),
         binaryPath: z.string().optional(),
         lastCheck: z
           .object({

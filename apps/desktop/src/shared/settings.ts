@@ -715,6 +715,7 @@ export interface AnycodeSettings {
    * single ambient `~/.claude` profile by default (owner pivot) until CC-E.
    */
   claude?: {
+    modelCatalog?: import("./claude-doctor.js").ClaudeModelCache;
     binaryPath?: string;
     lastCheck?: {
       status: "ready" | "not_installed" | "update_required" | "signed_out" | "error";
