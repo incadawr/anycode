@@ -15,6 +15,11 @@ ignored, even if the higher entry is disabled or failed.
    same `mcpServers` shape. The MCP pane shows these entries read-only, and
    **Import to project** copies one into the project config.
 
+In an untrusted folder, project config and `.mcp.json` servers are skipped with
+a folder-not-trusted problem. User entries still load. Configured servers are
+also forwarded to root Claude and Codex tabs when their CLI process starts;
+restart the session after a change.
+
 ## One stdio server
 
 ```json
@@ -34,9 +39,11 @@ ignored, even if the higher entry is disabled or failed.
 - `command` and `args` start the process. `cwd` is optional.
 - `env` sets variables for the child. `${env:NAME}` takes its value from the
   environment AnyCode was started with.
-- `inheritEnv: true` passes the whole parent environment, minus every `ANYCODE_*`
-  variable. By default the child gets only `PATH`, `HOME` and `LANG`. Explicit
-  `env` entries apply on top either way.
+- `inheritEnv: true` inherits the parent environment after removing all
+  `ANYCODE_*` variables (including `ANYCODE_*_PROXY_URL` carriers) and sanitizing
+  proxy variables with credentials. Those proxy values are dropped or replaced
+  with a local relay URL when available. By default the child gets only `PATH`,
+  `HOME` and `LANG`. Explicit `env` entries apply on top either way.
 - `"enabled": false` turns the entry off without deleting it.
 
 ## One HTTP server
@@ -108,7 +115,7 @@ rules, your instructions, or permission prompts.
 MCP loading is fail-soft, per file:
 
 - A config file with invalid JSON is skipped entirely. Other files still load.
-  The problem reads `Invalid JSON in MCP config <path>: …`.
+  The problem reads `Invalid JSON in MCP config <path>`.
 - A file that fails the schema is skipped entirely, with `Invalid MCP config <path>: …`.
 - A single entry that fails its checks is skipped alone, with
   `MCP server '<name>' in <path>: …`. Examples are a missing `command` or `url`,
@@ -124,7 +131,9 @@ These problems appear as strips in **Settings → MCP**.
   directory, URL, and environment variables. Values typed into the environment
   rows are masked afterwards; for tokens, prefer a `${env:NAME}` reference.
 - **Import**: scans Claude, Codex, zcode and `.mcp.json` for servers and offers to
-  add them. Imported servers start disabled until you enable them.
+  add them. Sources include `~/.claude.json`, `.claude/settings*.json`,
+  `.mcp.json`, `~/.codex/config.toml` and `~/.zcode/cli/config.json`.
+  Imported servers start disabled until you enable them.
 - Per-row controls to enable, edit or delete a server.
 
 ## How to verify it applied

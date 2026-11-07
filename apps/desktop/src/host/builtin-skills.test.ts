@@ -46,7 +46,7 @@ describe("buildHostBuiltinSkills", () => {
       anycodeSetupDocs: { kind: "local", dir: "/Applications/AnyCode.app/Contents/Resources/docs/user" },
     });
     const setup = list.find((skill) => skill.name === "anycode-setup");
-    expect(setup?.body).toContain("/Applications/AnyCode.app/Contents/Resources/docs/user/<topic>.md");
+    expect(setup?.body).toContain("/Applications/AnyCode.app/Contents/Resources/docs/user/README.md");
   });
 
   it("is called from host/index.ts boot (the wiring cannot silently drop the setup skill)", () => {

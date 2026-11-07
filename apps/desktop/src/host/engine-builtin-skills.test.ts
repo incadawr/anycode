@@ -1,3 +1,4 @@
+import { anycodeSetupSkill } from "@anycode/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ENGINE_BUILTIN_SKILLS,
@@ -85,8 +86,8 @@ describe("engine app builtins", () => {
   it("uses only app-resolved docs and explains source-name disabling and precedence", () => {
     docs.mockReturnValue({ kind: "local", dir: "/synthetic/app/docs/user" });
     const setup = buildEngineBuiltinSkills({ engine: "codex" })[0]!;
-    expect(setup.body).toContain("/synthetic/app/docs/user/<topic>.md");
-    expect(setup.body).toContain("configuration.md");
+    expect(setup.body).toContain("/synthetic/app/docs/user/README.md");
+    expect(setup.body).toContain("Read README.md first");
     expect(setup.body).toContain("available native read/edit tools");
     expect(setup.body).toContain("auth files");
     expect(setup.body).toContain("skills.disabled");
@@ -94,8 +95,19 @@ describe("engine app builtins", () => {
     expect(setup.body).not.toMatch(/three app builtins|prepared|CLI-reported|next launch/);
     docs.mockReturnValue({ kind: "remote", ref: "v0.0.87" });
     const remote = buildEngineBuiltinSkills({ engine: "claude" })[0]!;
-    expect(remote.body).toContain("https://raw.githubusercontent.com/incadawr/anycode/v0.0.87/docs/user/<topic>.md");
+    expect(remote.body).toContain("https://raw.githubusercontent.com/incadawr/anycode/v0.0.87/docs/user/README.md");
     expect(remote.body).toContain("unavailable");
+  });
+
+  it("shares diagnosis and secret policy with Native, differing only in location and tools", () => {
+    docs.mockReturnValue({ kind: "local", dir: "/synthetic/app/docs/user" });
+    const native = anycodeSetupSkill({ kind: "local", dir: "/synthetic/app/docs/user" }).body;
+    const engine = buildEngineBuiltinSkills({ engine: "codex" })[0]!.body;
+    const policy = (body: string) => body.slice(body.indexOf("## Read the guide first"));
+    expect(policy(engine)).toBe(policy(native));
+    expect(engine).toContain(".anycode/workflows");
+    expect(engine).toContain("sessionLimits");
+    expect(engine).not.toContain("Topics:");
   });
 
   it("rejects arbitrary source fields at runtime and in the typed API", () => {

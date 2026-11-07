@@ -33,8 +33,12 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
 
 ## Tools
 
+The approval column describes remote-origin checks. Native's permission mode
+also applies to side effects, including local navigation, clicks and typing.
+
 | tool | what it does | approval |
 |---|---|---|
+| `BrowserOpen` | opens a local file or URL in the preview | remote URL is high-risk; Native mode and saved rules apply |
 | `BrowserNavigate` | opens an `http(s)` url in the preview, or goes back, forward or reloads | remote URL escalates unless Full browser access is on |
 | `BrowserSnapshot` | lists the page's interactive and labelled elements, each with a ref such as `e12` | none |
 | `BrowserClick` | clicks an element by `ref` (preferred) or CSS `selector` | `remote: true` escalates unless Full browser access is on |
@@ -141,3 +145,12 @@ or action.
 - **"preview is not visible; open the preview panel"**: the preview is hidden.
   Open the preview panel and retry.
 - **"stale"**: the page changed. The agent takes a new snapshot.
+
+## Local dev-server boundaries
+
+A loopback preview grants only the exact origin it opened: scheme, host spelling
+and port. A page at `http://localhost:5173` cannot fetch another loopback port
+or switch to `127.0.0.1` through that grant. Open or navigate the new target
+explicitly to establish its own preview origin. Remote subresources are blocked
+under ordinary local-preview policy. Full browser access does not widen this
+loopback grant.

@@ -1,3 +1,4 @@
+import { anycodeSetupBody } from "./setup-body.js";
 import type { SkillMeta } from "../ports/skills.js";
 import { DEFAULT_TOOL_CONCURRENCY } from "../types/config.js";
 
@@ -126,7 +127,7 @@ Use these tools to operate a web app in the built-in preview the way a user woul
 - Refs are valid only for the LATEST snapshot. They die when the page navigates. On a \`stale_ref\` error, call \`BrowserSnapshot\` again. Never invent a ref.
 - Prefer a \`ref\` over a CSS \`selector\`. A selector must match exactly one element, and it does not reach inside iframes or shadow DOM.
 - Take one action, then verify it. Use \`BrowserWaitFor\` instead of sleeping.
-- Passwords are never typed (the call is refused) and password values never appear in a snapshot. Do not ask the user for a password to type into the page.
+- Password fields are refused unless Full browser access is enabled; password values stay masked in snapshots. Do not ask the user for a password to type into the page.
 - Use the browser tools to inspect and operate the page, not to collect secrets or credentials.
 - A non-localhost origin needs \`remote: true\` (or a remote \`url\`), and the user is asked to approve it. If the user declines, do not retry around the refusal.
 - Iframes are listed but cannot be operated.
@@ -314,103 +315,18 @@ export type AnycodeSetupDocsLocation =
   | { kind: "local"; dir: string }
   | { kind: "remote"; ref: string };
 
-/**
- * offline setup/config assistance. Registered unconditionally
- * (same posture as SUBAGENT_BUILTIN_SKILLS): the skill only READS config
- * files through the normal tools and points at docs/user topics; every
- * modification still goes through Write/Edit under the permission gate, so
- * there is no capability boolean to gate on. The docs tree is NOT embedded:
- * the body carries a fixed topic table plus the resolved docs location, so
- * the model reads the topic it needs at runtime.
- */
+/** The host resolves app-owned docs; the guide index supplies topic navigation. */
 export function anycodeSetupSkill(docs: AnycodeSetupDocsLocation): BuiltinSkillDefinition {
-  const location =
-    docs.kind === "local"
-      ? `This AnyCode build has its docs on disk at \`${docs.dir}\`. Read a topic with the Read tool using the absolute path \`${docs.dir}/<topic>.md\`.`
-      : `This AnyCode build does not carry its docs on disk. Fetch a topic with WebFetch from \`https://raw.githubusercontent.com/incadawr/anycode/${docs.ref}/docs/user/<topic>.md\` (the user approves each fetch). If that returns 404, fetch the same path with \`master\` in place of \`${docs.ref}\`.`;
+  const location = docs.kind === "local"
+    ? `App documentation: ${docs.dir}/README.md. Read other pages in the same directory.`
+    : `App documentation: https://raw.githubusercontent.com/incadawr/anycode/${docs.ref}/docs/user/README.md.
+If a release page returns 404, try the same page under master.`;
   return {
     name: "anycode-setup",
     description:
       "Use when the user asks how to set up or configure AnyCode, or why an MCP server, skill, subagent profile, permission, provider, Vision, Codex/Claude engine or setting is not taking effect. Read-only diagnosis; edits only through approved Write/Edit. Never prints API keys or secrets.",
-    body: `# AnyCode setup
-
-Offline assistant for configuring AnyCode. Diagnose by READING the user's
-configuration; change nothing without the user's approval. Rules that always
-apply:
-
-- NEVER print, quote or summarize API keys, tokens, passwords or other secret
-  values. Refer to a secret by its env-var name or vault slot only.
-- NEVER read \`~/.anycode/secrets.json\`. It holds secret values, and nothing
-  needed for diagnosis lives there.
-- Edit config only through Write/Edit after the user approves the change.
-  Never write config through Bash.
-- Expand \`~\` to the absolute home directory before any Read, Write or Edit.
-  If you do not know the home path, ask the user for it instead of guessing.
-- Read a \`docs/user/\` folder from the user's workspace only when that
-  workspace is the AnyCode repository itself (it contains
-  \`packages/core/src/skills/builtin.ts\`). Otherwise use the docs location below.
-
-## Topic table
-
-Topic files are named \`docs/user/<topic>.md\` relative to the docs location.
-
-| topic file | covers |
-|---|---|
-| docs/user/configuration.md | The two config worlds: \`~/.anycode/settings.json\` (app settings) versus \`.anycode/config.json\` (project and user shared config); which file owns which key; how to verify a change. |
-| docs/user/engines.md | The Native, Codex and Claude engines: binary discovery and trust, sign-in, per-engine proxy, how engine tabs see profiles and delegate. |
-| docs/user/subagents.md | Built-in personas and \`.anycode/agents/*.md\` profiles: frontmatter reference, hard rules, connection routing, examples per engine kind. |
-| docs/user/skills.md | Skill folders and roots, precedence, the \`Skill\` tool and \`$name\` references, disabling, the built-in skills. |
-| docs/user/plugins.md | Plugins: what they are, where they live, trust tiers, the two-phase install, MCP-server consent, updates, rollback and pinning. |
-| docs/user/mcp.md | MCP servers across the config files, stdio and HTTP entries, \`\${env:VAR}\` secret references, failure behaviour, how to verify. |
-| docs/user/sessions-api.md | Settings → Sessions API: enabling the local MCP that lets an external agent (Claude Code, Codex) list and message live sessions, sharing a session per tab, allowed folders, copying the MCP config, token regeneration, the env override, troubleshooting. |
-| docs/user/remote-control.md | Remote control from a chat app: the example plugin that reaches shared sessions from a private chat; status states and the secrets it needs. Setup details live in the example plugin's README under examples/. |
-| docs/user/lsp.md | Language servers: \`lspServers\` entries in the config files, the Settings → Language servers catalog and PATH detection, trust for project entries, when changes apply. |
-| docs/user/browser.md | Browser control in the built-in preview (BrowserNavigate, BrowserSnapshot, BrowserClick, BrowserType, BrowserWaitFor): the snapshot and ref workflow, limits, approval for remote origins, troubleshooting. |
-| docs/user/permissions.md | The mode ladder (plan, build, edit, auto, yolo), always-allow rules and patterns, workspace confinement, trusted binaries, the approval prompt. |
-| docs/user/orchestration.md | Supervisor, lead and builder setups built from profiles and engine tabs. |
-| docs/user/proxy.md | Settings → Network: proxy profiles, the application default, per-connection and per-engine proxy, no-proxy lists. |
-| docs/user/troubleshooting.md | Checklists for a missing MCP server, orchestration roles, a missing skill, and where problems are shown. |
-
-${location}
-
-## Diagnosis workflow (read-only, in order)
-
-1. Read \`~/.anycode/settings.json\`. Summarise provider connections by name
-   and id only, plus \`permissions.alwaysAllow\`, \`tools\`, \`network\` and
-   \`recognizer\`. Never echo credential fields.
-2. Read \`<project>/.anycode/config.json\`, then \`~/.anycode/config.json\`.
-   Look at \`mcpServers\`, \`skills.disabled\`, \`telemetry\`, \`repoMap\` and
-   \`webSearch\`. A project key beats the same user key.
-3. List what exists on disk: \`<project>/.anycode/skills\`,
-   \`<project>/.agents/skills\`, \`~/.anycode/skills\`, \`~/.agents/skills\`,
-   \`<project>/.anycode/agents\` and \`~/.anycode/agents\`.
-4. Report which setting applies and from which file, citing file paths. Do not
-   dump whole files. Then name the fix: the file to edit, the minimal change,
-   and the topic file that documents it.
-
-## Scope limits to check first
-
-- AnyCode skills, this one included, load only in AnyCode's own Native tabs.
-  Codex and Claude tabs do not receive them. If the problem is in an engine
-  tab, say so rather than changing skill files.
-- Some settings are overridden by environment variables set in the app's
-  launch environment (for example \`ANYCODE_TOOL_CONCURRENCY\`). If a setting
-  seems to have no effect, check for a matching variable.
-- Settings → Skills, Settings → Subagents and Settings → MCP show a strip for
-  every file or entry that failed to load. Check those strips before blaming
-  the model.
-
-## Verification after an approved change
-
-Name the Settings pane that shows the result (Provider, Codex, Claude,
-Permissions, Tools, Vision, Network, MCP, Skills, Subagents, Environment) and
-when it takes effect:
-
-- app settings and permission rules: sessions started after the change;
-- MCP servers and skills: a new session;
-- subagent profiles: the next turn in a Native tab; a new session in a Claude
-  or Codex tab.
-`,
+    body: anycodeSetupBody(location,
+      "Use Read for local docs and config, WebFetch for remote docs (with approval), and approved Write/Edit for edits."),
   };
 }
 

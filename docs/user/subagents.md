@@ -1,7 +1,7 @@
 # Subagents
 
 A subagent is a child agent that a session starts through the `Agent` tool. There
-are two kinds: the two built-in personas, and your own markdown profiles in
+are two kinds: five built-in personas, and your own markdown profiles in
 `.anycode/agents/`.
 
 ## Session children in worktrees
@@ -39,8 +39,19 @@ automatically.
 |---|---|
 | `general-purpose` | Full toolset under the parent's permission gate. The default for delegated build work. |
 | `explore` | Read-only reconnaissance. It sweeps many files and returns the conclusion. Set `ANYCODE_EXPLORE_MODEL` to run it on a cheaper model. |
+| `planner` | Read-only planning, default 100 turns. |
+| `executor` | Implementation, default 300 turns. |
+| `reviewer` | Read-only review, default 150 turns. |
 
-These names are reserved: a profile cannot use them.
+`general-purpose` and `explore` are reserved; profiles can replace the other
+three. They normally use the default child limit (150) unless the role has a
+specific budget. See [roles](roles.md#turn-budgets-and-reminders) for precedence.
+Built-in read-only personas have no Bash, Write or Edit tools. Core session
+children additionally enforce a plan-mode gate for read-only profiles.
+
+In Native sessions, at most four new children can start per turn. Core children
+use a context window capped at 128,000 tokens and Bash output to the model is
+capped at 10,000 bytes.
 
 ## Profile files
 
@@ -70,16 +81,16 @@ any nested line makes the whole file invalid, and the profile is not loaded.
 | `name` | no | Defaults to the file name. Must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. Reserved names are refused. |
 | `description` | **yes** | One line the parent model uses to pick the profile. |
 | `model` | no | Model id for this profile's children. |
-| `engine` | no | `codex` or `claude`: children run as a one-shot invocation of that CLI in the session's workspace. `claude` runs with `acceptEdits`; `codex` runs in a workspace-write sandbox. |
-| `tools` | no | Tool allowlist. In-process children only. |
+| `engine` | no | `codex` or `claude`: uses that CLI. Desktop session children inherit a posture mapped from the parent mode; inline one-shot children use acceptEdits / workspace-write. See [permissions](permissions.md#engine-presets). |
+| `tools` | no | Tool allowlist. Core inline and session children. |
 | `effort` | no | Reasoning tier: `off`, `low`, `medium`, `high`, `xhigh` or `max`. `model_reasoning_effort` is accepted as an alias. |
-| `maxTurns` | no | Positive integer turn budget for each run. Default 150. |
+| `maxTurns` | no | Turn budget for each run, any positive integer. If omitted, the configured child limit or role default applies. |
 | `connection` | no | Exact connection id to run on. Ids are in `provider.connections[].id` in `~/.anycode/settings.json`. |
 | `provider` | no | Provider id (for example `z-ai` or `deepseek`) resolved to a configured connection. |
-| `permissions.allow` | no | Rules that run without asking. `Tool` or `Tool(pattern)`, comma-separated. In-process children only. |
-| `permissions.deny` | no | Rules that are refused without asking. Same shape as `permissions.allow`. In-process children only. |
+| `permissions.allow` | no | Rules that run without asking. `Tool` or `Tool(pattern)`, comma-separated. Core inline and session children. |
+| `permissions.deny` | no | Rules that are refused without asking. Same shape as `permissions.allow`. Core inline and session children. |
 
-Unknown keys are ignored.
+Unknown keys are reported as problems and ignored; the profile still loads.
 
 **Hard rules.** A profile that breaks one of these is rejected and does not
 appear in the list:
@@ -125,13 +136,14 @@ Run the build script and report what happened.
 Matching is the same as for always-allow rules in
 [permissions.md](permissions.md): the pattern is a glob, and a shell command
 line is split on separators with the pattern applied to every segment, so one
-entry covers a whole pipeline only when every segment matches it. A `Write` or
-`Edit` allowed here still has to land inside the session workspace.
+entry covers a whole pipeline only when every segment matches it. Profile
+`Write`/`Edit`/`MultiEdit` allow rules can resolve a write approval only when the
+target is proven inside the session workspace, even with an absolute pattern.
 
-These lists apply to in-process children (`tier: "inline"`), the default on
-CLI and child-session hosts. On desktop, every profile defaults to a
-background session child. A session-tier child is its own session and keeps
-that session's rules.
+These lists and the `tools` allowlist apply to Core inline children and Core
+session children. Desktop defaults profiles to background session children;
+the child host enforces the restrictions as well as its inherited session gate.
+Children cannot use `Agent` or `Workflow` to delegate again.
 
 The settings pane does not edit these lists. Edit them in the file — and note
 that a save from that pane rewrites the profile from its own fields, so it does
@@ -197,7 +209,7 @@ and nothing else.
 ## How to verify it applied
 
 Open **Settings → Subagents**. The scope dropdown at the top switches between
-**User · This computer** and a recent folder. The scope dropdown at the top picks **User · This computer** (your user files) or a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip next to the dropdown shows how many entries the pane lists. Every profile that
+**User · This computer** (your user files) and a recent folder. The folder list is built from your recent sessions and open tabs; a folder with no open tab can still be edited, and its changes apply when a session starts there. A folder that no longer exists is shown as "folder not found" and cannot be selected. The chip next to the dropdown shows how many entries the pane lists. Every profile that
 loaded is listed. A profile
 that failed to load is missing from the list, and the pane shows a strip such as
 "1 profile(s) failed to load". Expand it for the reason. Then check the pickup

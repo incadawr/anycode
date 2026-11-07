@@ -31,6 +31,15 @@ its name, version, and what it contributes. Anything the manifest does not
 declare is not granted — capabilities are derived from content, never
 self-declared by the plugin.
 
+## Contribution limits
+
+Plugin `hooks` and `commands` declarations are parsed but do not contribute
+hooks or commands in this version. Workflows use workflow roots. `docs`,
+`promptOverlays` and `engineSupport` are reserved for official plugins;
+non-official declarations are ignored with a problem, and this version does
+not contribute these surfaces. Non-official plugins cannot shadow builtin
+skill or profile names.
+
 ## Tiers
 
 - **Official ✓** — from AnyCode's signed plugin index. Verified signature and
@@ -62,19 +71,21 @@ included)** — and nothing is written until you confirm.
 
 ## Consent for MCP servers
 
-A plugin's MCP servers never start by themselves. At install the sheet shows
-each server's command line and offers two buttons:
+Project plugins in a trusted folder can start MCP servers without separate
+per-plugin consent; untrusted project folders cannot start them. Other plugin
+tiers require MCP consent. At install the sheet shows each server's command
+line and offers two buttons:
 
 - **Install (MCP servers stay off)** — the default. Everything except MCP
   works immediately.
 - **Install and allow MCP servers** — records consent for exactly the command
   lines shown.
 
-If the plugin later changes a server's command, the consent no longer matches
-and the pane marks the plugin **Needs approval** — a new command needs fresh
-approval, every time. You can also grant approval later from the plugin's row
-(**Approve MCP**). Consent is per plugin, user-global; project and legacy
-plugin rows show the same consent state.
+For plugins requiring MCP consent, a changed server command invalidates that
+consent and the pane marks the plugin **Needs approval** — a new command needs
+fresh approval, every time. You can also grant approval later from the plugin's row
+(**Approve MCP**). Consent is per plugin, user-global. Project rows may show
+that consent state, but a trusted folder supplies the permission to run MCP.
 
 Auto-update for official plugins is OFF by default (toggle **Auto-update
 official plugins** in the pane header); third-party and local plugins never
@@ -83,8 +94,8 @@ update without an explicit **Update** click.
 ## Services
 
 A plugin can declare **services**: long-running background processes (for
-example, a bridge to a chat app) that AnyCode starts for you. They follow the
-same rules as MCP servers:
+example, a bridge to a chat app) that AnyCode starts for you. Services require
+their own consent:
 
 - Nothing runs until you consent. The install sheet lists each service's
   command, arguments and environment variable **names** (never the values) in a
@@ -109,11 +120,11 @@ same rules as MCP servers:
   discovery file in `ANYCODE_SESSIONS_DISCOVERY`, only while the Sessions API
   runs. The token is never placed in its environment, arguments or log.
 - To write a service that bridges an outside channel, see the
-  [channel plugin guide](../development/channel-plugins.md).
+  [channel plugin guide](https://github.com/incadawr/anycode/blob/master/docs/development/channel-plugins.md).
 
 ## Example: Telegram remote control
 
-[`examples/telegram-remote`](../../examples/telegram-remote/) is a service plugin
+[`examples/telegram-remote`](https://github.com/incadawr/anycode/blob/master/examples/telegram-remote) is a service plugin
 that reaches your shared sessions from Telegram. Its secrets are saved in
 Settings → MCP → Secrets, and the install sheet lists them. See
 [Remote control from a chat app](remote-control.md).
@@ -126,8 +137,8 @@ Settings → MCP → Secrets, and the install sheet lists them. See
 - **Pin** — freezes a plugin: no auto-updates, no rollback offered, until you
   unpin. Pin what works.
 - **Remove** — deletes a managed install. Default (bundled) plugins can be
-  removed too; they come back on the next app update unless you remove them
-  again (a tombstone remembers your choice).
+  removed too; the first removal records your choice, so app updates do not
+  automatically reinstall them.
 - **Reveal** — opens the plugin's directory in your file manager.
 
 Enable/disable is user-global per plugin, all tiers: a disabled plugin stays
@@ -140,8 +151,9 @@ installed but contributes nothing.
   per-plugin problems (a bad manifest, an entry that escapes the plugin root)
   fail-soft — the rest of the plugin still loads.
 - **A plugin MCP server doesn't start** — check the MCP pane's *From plugins*
-  section (read-only rows): no consent yet shows **Needs approval**; a name
-  collision with your own config means your config wins at runtime.
+  section (read-only rows): plugins requiring MCP consent show **Needs approval**
+  until approved; project plugins require folder trust. A name collision with
+  your own config means your config wins at runtime.
 - **Index offline / signature failed** — the pane header says so; installs and
   updates pause until the index refreshes (Check for updates retries).
 - **"Official index not configured in this build"** — this build carries no
@@ -152,7 +164,7 @@ installed but contributes nothing.
   as before.
 
 For authoring your own plugin (manifest reference, layout, signing), see
-[docs/development/plugins-authoring.md](../development/plugins-authoring.md).
+[docs/development/plugins-authoring.md](https://github.com/incadawr/anycode/blob/master/docs/development/plugins-authoring.md).
 
 ### Account sources
 

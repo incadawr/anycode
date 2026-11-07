@@ -1,3 +1,4 @@
+import { anycodeSetupBody } from "@anycode/core/setup-skill";
 import { isAbsolute } from "node:path";
 import {
   ENGINE_BUILTIN_SKILLS,
@@ -45,39 +46,18 @@ function setupBody(): string {
     if (!isAbsolute(docs.dir) || /[\x00-\x1f\x7f]/.test(docs.dir)) {
       throw new Error("Invalid app docs location");
     }
-    location = `Read the app documentation at ${docs.dir}/<topic>.md using available native read/edit tools.`;
+    location = `App documentation: ${docs.dir}/README.md. Read other pages in the same directory.`;
   } else {
     if (!/^(?:master|v\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?)$/.test(docs.ref)) {
       throw new Error("Invalid app docs reference");
     }
-    location = `App documentation: https://raw.githubusercontent.com/incadawr/anycode/${docs.ref}/docs/user/<topic>.md
+    location = `App documentation: https://raw.githubusercontent.com/incadawr/anycode/${docs.ref}/docs/user/README.md
 Use an available permitted reading tool. If that release page returns 404,
-try the same topic under master. If remote reading is unavailable, explain
+try the same page under master. If remote reading is unavailable, explain
 that limit and ask for the relevant non-secret excerpt; do not invent a tool.`;
   }
-  return `# AnyCode setup
-${location}
-
-Topics: configuration.md (app settings versus project/user config), engines.md
-(engine setup and trust), skills.md (discovery and disabling), subagents.md
-(profiles), plugins.md (install and trust), mcp.md (servers), permissions.md
-(approval rules), browser.md (preview), proxy.md (network), lsp.md (language
-servers), sessions-api.md (shared sessions), remote-control.md (chat access),
-orchestration.md (roles), troubleshooting.md (diagnosis).
-
-Start with the relevant topic and Settings pane. Diagnose only the relevant
-non-secret config keys, using available native read/edit tools with normal
-sandbox and approval restrictions. Propose minimal edits and obtain the user's
-approval before changing configuration. Do not dump entire settings files.
-Never read secrets or auth files, copy credentials, or print tokens, passwords
-or API keys. Refer to environment variable names without their values.
-Use app documentation rather than an unrelated workspace's docs/user folder.
-
-App builtins have separate engine aliases. Refer to skills.md for the original
-builtin ids used by skills.disabled. Files with the same name do not replace
-this app catalog. Other filesystem skills are outside this catalog.
-Check the relevant Settings pane and documentation before explaining when
-a proposed configuration change takes effect.`;
+  return anycodeSetupBody(location,
+    "Use available native read/edit tools and permitted remote reading tools; retain their normal approval restrictions.");
 }
 
 /** Fixed in-memory sources only. No file body, source path or docs override input.

@@ -5,7 +5,7 @@ sessions, checks what comes back, and accepts or returns it. AnyCode offers it
 two ways:
 
 - **Orchestrate mode**: a tab-level switch in Native and Codex tabs. The parent
-  stays read-only and delegates to built-in roles routed in Settings → Roles.
+  plans and delegates to built-in roles routed in Settings → Roles.
 - **The manual pattern**: any tab dispatches to your own subagent profiles
   (see [subagents.md](subagents.md)) with the delegation tool of its engine
   (see [engines.md](engines.md)).
@@ -13,30 +13,18 @@ two ways:
 ## Orchestrate mode
 
 Turn it on from the Orchestrate row in the permission-mode menu, the
-Orchestrate toggle in a Codex composer, or `/orchestrate <task>`. The tab plans
-read-only and hands work to background child sessions; their reports arrive as
+Orchestrate toggle in a Codex composer, or `/orchestrate <task>`. The tab enters plan mode and hands work to background child sessions.
+Non-read-only tools and tools needing approval ask; always-allow rules can
+resolve those asks. The parent is not strictly read-only. Child reports arrive as
 new turns. Children run in the permission mode you had before Orchestrate
-(never plan mode). Leaving plan mode, including approving a plan, turns
-Orchestrate off; in a Codex tab, turning it off restores the previous Codex
+(never plan mode). `ExitPlanMode` is hidden and denied while Orchestrate is on. Leaving plan
+by changing the mode turns Orchestrate off; in a Codex tab, turning it off restores the previous Codex
 permissions. Codex Orchestrate is available when the runtime policy can be
 verified.
 
-Settings → Roles exposes five roles: `orchestrator` for the parent tab's
-own turns, plus `planner`, `executor`, `reviewer` and `explore` for child
-sessions. `planner`, `executor` and `reviewer` have role-specific turn budgets;
-`explore` uses the default subagent turn limit. A same-named profile in
-`.anycode/agents/` replaces `planner`, `executor` or `reviewer`;
-`explore` and `general-purpose` are reserved. Settings → Roles (`/roles`) sets
-an ordered fallback chain of engine, connection, model and effort for child roles:
-when an entry fails on quota, auth, an unreachable endpoint or an unknown model,
-it cools down and the next one is used. `planner`, `reviewer` and `explore` must
-run on the Native engine, so they can stay read-only. In Native tabs only,
-the `orchestrator` route is checked at turn start and can switch only model
-and effort, keeping the parent's engine and connection. In Codex Orchestrate,
-choose the parent model and effort on the tab; this role provides no automatic
-parent fallback. The first Orchestrate run
-without configured roles offers presets built from your ready engines and
-connections.
+Configure the five roles, their routes, named project sets and fallback chains
+in [Roles](roles.md). Children cannot delegate further: Native child-session
+hosts remove both `Agent` and `Workflow` from their tool registry.
 
 ## Manual delegation
 
@@ -62,7 +50,7 @@ a workflow waits for each step's real result.
 
 Delegation tools: a Native supervisor uses the `Agent` tool with `agent_type`.
 A Codex tab uses `anycode_agent`, and a Claude tab uses `mcp__anycode__agent`.
-Both engine tools appear only when at least one profile exists.
+The engine tools appear when a profile or configured role is available.
 
 ## A minimal setup
 
@@ -115,31 +103,20 @@ over this limit is refused with the
 “application-wide child session limit reached” message; a synchronous spawn
 waits for a slot.
 
-For a longer worked example, the source repository has `docs/orchestration.md`.
-It is not shipped inside the app.
+A longer [manual setup example](https://github.com/incadawr/anycode/blob/master/docs/orchestration.md)
+is available in the source repository.
 
 ## Claude Code tabs and recovery
 
-Ordinary child delegation works in every engine tab. Orchestrate mode for
-Claude Code tabs is [not available yet](https://github.com/incadawr/anycode/issues/35): enabling its
-development flag does not qualify a native CLI version. The tab explains an
-unavailable capability and keeps ordinary conversation available.
+Ordinary child delegation works in Claude tabs. **Claude Orchestrate is disabled
+in 0.0.90.** No Claude CLI version has the live capability proof required by
+the production qualification list, which is empty. A development flag alone
+does not qualify a version. Use ordinary delegation or an available Native /
+Codex Orchestrate tab.
 
-The Claude overlay closes the parent's browser tools completely, as well as
-shell, writes and external MCP tools. Delegate browser research to a child.
-When the overlay is off, the parent's native configuration is restored.
-Each actual ON/OFF change restarts the Claude CLI, which adds startup latency;
-requesting the already applied state does not restart it. The logical session
-and native reference are retained without an extra model turn.
-
-Detached child reports wait while a mode change is being confirmed. After a
-successful restart they can start a new parent turn. Error and cancelled child
-results retain their status; the parent receiving a report does not turn the
-child result into success. Reports already admitted are not automatically
-resent when acceptance is uncertain. After an interrupted transition, reopen
-the session to restore a verified OFF configuration before continuing. If
-verification or saving recovery state fails, admission remains closed and the
-tab shows that recovery is required.
+The tab keeps ordinary conversation available when orchestration capability
+is unavailable. If a mode transition reports recovery required, reopen the
+session to restore a verified ordinary configuration before continuing.
 
 ## Coordinate with peer sessions
 
@@ -161,3 +138,21 @@ Claude/Codex roots currently remain closed for peer mutations, even if tools are
 declared. A resumed Orchestrate tab is closed until its host re-reports authority.
 Use an explicit reply or opt into one `on_turn_end` result to wake the sender in
 a new turn; receiving a reply does not turn an error or cancellation into success.
+
+## Messages and follow-ups
+
+For Native Core children, `Agent` with `continue_session` sends a follow-up to
+a finished child; `send_to` delivers `prompt` to a running child. These are
+session-tier operations. `send_to` cannot combine with provider routing,
+`detach: true` or `continue_session`; engine-profile children do not support
+these follow-ups. A continued child keeps its original connection.
+
+`AgentStatus` lists children in pages of 20 or reads one by id, retaining up
+to 64 recent children per tier. Codex calls it `anycode_agent_status`, Claude
+`mcp__anycode__agent_status`. A foreground-blocked parent cannot inspect its
+child until the call returns or is handed off.
+
+Codex and Claude roots can select an API connection through `provider` for a
+new, unpinned Core child. Discover selectors with the connection-listing tool;
+fixed profile and role routes cannot be overridden. The engine bridge exposes
+`continue_session` for finished Core children, but does not expose `send_to`.

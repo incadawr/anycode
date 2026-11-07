@@ -25,12 +25,15 @@ In `settings.json` a manual profile looks like this:
 {
   "network": {
     "proxyProfiles": [
-      { "id": "proxy-office", "name": "Office", "mode": "manual", "url": "http://127.0.0.1:8888", "noProxy": "internal.example.com,corp.example.com" }
+      { "id": "proxy-00000000-0000-4000-8000-000000000001", "name": "Office", "mode": "manual", "url": "http://127.0.0.1:8888", "noProxy": "internal.example.com,corp.example.com" }
     ],
-    "proxyRef": "proxy-office"
+    "proxyRef": "proxy-00000000-0000-4000-8000-000000000001"
   }
 }
 ```
+
+Profile ids are generated as `proxy-<uuid>`; the example id is illustrative.
+Use the id created by the pane when setting a reference.
 
 The profile editor has a **Check** section. Enter a target and test the profile
 before you rely on it.

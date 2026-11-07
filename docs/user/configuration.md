@@ -10,9 +10,9 @@ side by side.
 |---|---|---|
 | File | `~/.anycode/settings.json` | `<project>/.anycode/config.json` and `~/.anycode/config.json` |
 | Scope | The whole application | Per project (project file) and per machine (user file) |
-| Owns | Provider connections, permissions, tools, Vision, network and proxies, engine binary paths, session limits, appearance | MCP servers, disabled skills, telemetry, repo map, web search |
+| Owns | Provider connections, permissions, tools, Vision, network and proxies, engine binary paths, session limits, appearance | MCP servers, LSP servers, hooks, disabled skills, telemetry, repo map, web search |
 | Written by | The Settings window (or by hand while the app is closed) | By hand, or by the MCP and Skills panes for their own entries |
-| Precedence | One file, no merge | The project file wins over the user file, key by key |
+| Precedence | One file, no merge | Section-specific merge; see below |
 | Secrets | API keys in `~/.anycode/secrets.json` (mode 0600), never inline | `${env:NAME}` references, never literal tokens |
 
 `settings.json` is mode 0644 and human-editable. Secrets live in
@@ -48,14 +48,16 @@ below; the snippet shows only the sections discussed here.
 - **Tools** (Settings → Tools):
   - `tools.concurrency`: parallel read-only tool calls (default 4).
   - `tools.stallTimeoutMs`: per-attempt provider stream watchdog (default 90000 ms).
-  - `tools.maxTurns`: optional turn limit for the main agent (unlimited by default).
-  - `tools.subagentMaxTurns`: turn limit for subagents (default 150).
+  - `tools.maxTurns`: optional turn limit for an interactive top-level Native session; without it there is no turn limit.
+  - `tools.subagentMaxTurns`: turn limit for subagents (default 150, subject to role budgets). Accepts a positive integer.
   - `tools.maxRetries`: provider retry attempts (the pane's "Retry attempts"; default 8).
   - `tools.networkRetryBudgetMs`: wall-clock budget for riding out a network outage (the pane's "Network retry budget (ms)"; default 300000 ms, 5 minutes).
   - `tools.grepBackend`: `"rg"` (default) or `"tgrep"`.
   - `tools.archMap`: `true` opts into the read-only import-graph tool.
-  - `tools.subagentStallTimeoutMs`: silence limit for a running subagent.
-  - `sessionLimits`: open tabs (default 20), child sessions per parent (3) and app-wide (8). The pane accepts 4–40, 1–8 and 1–24.
+  - `tools.subagentStallTimeoutMs`: silence limit for a running subagent (default 600000 ms).
+  - `tools.networkWaitMaxMs`: maximum network wait (default 1800000 ms, 30 minutes).
+  - `tools.adaptiveTurnBudget`: opt into learned budgets when no explicit budget applies.
+- **Session limits** (Settings → Tools, top-level `sessionLimits`): open tabs (default 20), child sessions per parent (3) and app-wide (8). The pane accepts 4–40, 1–8 and 1–24.
 - **Vision** (Settings → Vision): `recognizer` `{ connectionId, modelId }`. When the
   main model cannot see images, this connection and model answer `InspectImage`
   calls. Unset means the fallback is off.
@@ -63,14 +65,71 @@ below; the snippet shows only the sections discussed here.
   See [proxy.md](proxy.md).
 - **Codex / Claude** (Settings → Codex, Settings → Claude): `codex` and `claude`
   hold the chosen binary path, the last doctor check, and the engine's proxy.
+  Codex also holds account `profiles`, `activeProfileId` and `riskAcceptedVersions`.
+  Claude holds `modelCatalog` and `contextWindowTokens` (100k–1M).
   Edit these through the panes.
 
-**Environment variables win over settings.** A matching variable in the app's
-launch environment overrides the settings value. The variables that do this are
-`ANYCODE_TOOL_CONCURRENCY`, `ANYCODE_STALL_TIMEOUT_MS`, `ANYCODE_MAX_RETRIES`,
-`ANYCODE_NETWORK_RETRY_BUDGET_MS`, `ANYCODE_GREP_BACKEND` and `ANYCODE_ARCHMAP`.
-If a setting seems to have no effect, check for one of these. The Provider pane
-shows an "Environment override" notice when a provider variable is set.
+### Other app settings
+
+| Key | Owner and use |
+|---|---|
+| `roles`, `roleProfiles` | Settings → Roles; [routing and project assignments](roles.md) |
+| `provider.custom[]` | Custom endpoint records; use Settings → Provider |
+| Connection `promptCache`, `maxOutputTokens`, `contextWindowTokens`, `pricing`, `modelOverrides` | Connection drawer; [providers](providers.md) |
+| `permissions.classifier` | Optional automatic command review; [permissions](permissions.md#ask-classifier) |
+| `security.trustedBinaries` | Settings → Permissions → Trusted binaries |
+| `security.allowWeakSecretStorage` | Consent to plaintext storage if OS secure storage is unavailable |
+| `browser.fullAccessDefault` | Permissions; `off` by default for new sessions |
+| `codexContinueOnAnotherAccount` | Codex account continuation, on unless set to `"off"` |
+| `communication` | Sessions API pane |
+| `plugins` | Plugin updates, consents and account sources |
+| `preview.autoOpen`, `preview.displayMode`, `preview.liveReload` | Preview controls; panel/window display |
+| `ui.theme` | Appearance: `system`, `light`, `dark` |
+| `keybindings.overrides` | Keyboard shortcuts; [default keys](cli.md#keyboard-shortcuts-desktop) |
+
+A missing settings file uses defaults. Corrupt JSON or a schema-invalid file is
+set aside as `settings.json.corrupt-<timestamp>` when possible; defaults are
+used. A settings file from a newer schema version opens read-only. Unknown
+top-level keys survive ordinary saves. Prefer Settings over manual edits.
+
+### Environment overrides
+
+Variables already present in the app's launch environment win over settings:
+
+| Setting | Variable |
+|---|---|
+| `tools.concurrency` | `ANYCODE_TOOL_CONCURRENCY` |
+| `tools.stallTimeoutMs` | `ANYCODE_STALL_TIMEOUT_MS` |
+| `tools.maxTurns` | `ANYCODE_MAX_TURNS` |
+| `tools.subagentMaxTurns` | `ANYCODE_SUBAGENT_MAX_TURNS` |
+| `tools.subagentStallTimeoutMs` | `ANYCODE_SUBAGENT_STALL_MS` |
+| `tools.maxRetries` | `ANYCODE_MAX_RETRIES` |
+| `tools.networkRetryBudgetMs` | `ANYCODE_NETWORK_RETRY_BUDGET_MS` |
+| `tools.networkWaitMaxMs` | `ANYCODE_NETWORK_WAIT_MAX_MS` |
+| `tools.adaptiveTurnBudget` | `ANYCODE_ADAPTIVE_TURN_BUDGET` |
+| `tools.grepBackend` | `ANYCODE_GREP_BACKEND` |
+| `tools.archMap` | `ANYCODE_ARCHMAP` |
+
+Other launch controls:
+
+- `ANYCODE_EFFORT_LEVELS`, `ANYCODE_IMAGE_INPUT`, `ANYCODE_PRESERVE_REASONING`,
+  `ANYCODE_REASONING_HISTORY`, `ANYCODE_REASONING_COMPACTOR_MODEL`: see
+  [providers](providers.md). Effort accepts `off`, `minimal`, `low`, `medium`,
+  `high`, `xhigh`, `max`; the current model may accept only a subset.
+- `ANYCODE_TELEMETRY=0` disables telemetry; `ANYCODE_TELEMETRY_DIR` overrides its folder.
+- `ANYCODE_REPO_MAP=0|1` forces the repository map off/on.
+- `ANYCODE_TODO_REMINDER_EVERY` changes the TodoWrite reminder cadence.
+- `ANYCODE_EXPLORE_MODEL` chooses the builtin explore model.
+- `ANYCODE_SUBAGENT_MAX_TURNS`, `ANYCODE_SUPERVISOR_IDLE_MS`: see [roles](roles.md).
+- `ANYCODE_CODEX_BIN`, `ANYCODE_CLAUDE_BIN`: see [engines](engines.md).
+- `ANYCODE_DB_PATH`: see [files and paths](files-and-paths.md).
+- `ANYCODE_COMMUNICATION_CONFIG`: file-based Sessions API control.
+- `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`: see [proxy](proxy.md).
+
+The Provider pane shows an **Environment override** notice for provider variables.
+A desktop app launched from the Dock or Start menu may not see your shell profile.
+Check the launch environment when a setting appears to do nothing; refer to
+variable names without printing secret values.
 
 **Verify it applied:** settings changes take effect in sessions you start
 afterwards. If a running tab still behaves the old way, start a new session.
@@ -79,8 +138,17 @@ afterwards. If a running tab still behaves the old way, start a new session.
 
 The project file `<project>/.anycode/config.json` and the user file
 `~/.anycode/config.json` share one schema. A project key wins over the same
-user key. Web search is the exception: `webSearch` is one object, so the project
-file replaces the user object wholesale.
+user key according to the section:
+
+- `mcpServers`: project names win over user names, then `.mcp.json` fills gaps.
+- `lspServers`: project entries win over user entries by server name.
+- `skills.disabled`: a name disabled in either file stays disabled.
+- `webSearch`, `telemetry`, `repoMap`: a project section replaces the user section
+  as a whole. They do not merge individual fields.
+- `hooks`: both files contribute, user hooks first.
+
+Folder trust gates project executable config and project telemetry/repo-map
+sections. See [workspace trust](getting-started.md#workspace-trust).
 
 ```json
 {
@@ -107,6 +175,7 @@ file replaces the user object wholesale.
 ```
 
 - **MCP servers**: `mcpServers`, as a stdio or HTTP entry. See [mcp.md](mcp.md).
+- **Hooks**: commands at tool, prompt and stop events. See [hooks](hooks.md).
 - **Skills**: `skills.disabled` lists skill names to hide. The Skills pane
   toggles it for filesystem skills. See [skills.md](skills.md).
 - **Language servers**: `lspServers`, an array of server entries. The
@@ -116,11 +185,14 @@ file replaces the user object wholesale.
   `.anycode/agents/*.md` files. See [subagents.md](subagents.md).
 - **Telemetry**: `telemetry.enabled: true` turns on a local JSONL sink, and
   optional `dir` (an absolute path) changes where it writes. The variable
-  `ANYCODE_TELEMETRY=0` turns it off; no environment variable turns it on.
-- **Repo map**: `repoMap.enabled` and optional `maxTokens`.
+  `ANYCODE_TELEMETRY=0` turns it off; no environment variable turns it on. Retention defaults to
+  180 days, 20,000 files and 64 MiB; set `telemetry.retention` in the user file
+  `~/.anycode/config.json` to change it. Project retention settings are ignored.
+- **Repo map**: `repoMap.enabled` and optional `maxTokens` (clamped to 500–8,000;
+  default 2% of context window). The map is frozen at session boot.
 - **Web search**: `webSearch.backend` is `"brave"` (the key comes from the
   environment variable named in `apiKeyEnv`) or `"searxng"` (set `endpoint` to
-  your instance).
+  your instance). `maxResults` is 1–10, default 5.
 
 **Verify it applied:** shared config is read when a session starts. Start a new
 session, then check Settings → MCP for servers and Settings → Environment for
@@ -132,7 +204,7 @@ Tools that a session starts (Bash, hooks, the terminal, and the Claude and Codex
 engine processes) see two variables that identify the session:
 
 - `ANYCODE_SESSION_ID` is the same id that the Sessions API reports as
-  `sessionId` (see [Communicating with live sessions](../development/agent-communication.md)).
+  `sessionId` (see [Communicating with live sessions](https://github.com/incadawr/anycode/blob/master/docs/development/agent-communication.md)).
 - `ANYCODE_SESSION_WORKSPACE` is the session's workspace folder.
 
 Both are set on every spawn, including a restart of the session's process. The
@@ -173,73 +245,4 @@ current workspace.
 - [permissions.md](permissions.md): the approval model.
 - [troubleshooting.md](troubleshooting.md): when a change does not seem to apply.
 
-
-Custom endpoints can declare supported reasoning levels in the connection's
-advanced settings for each model. Select **Supported** under Reasoning support,
-then choose the levels the model accepts. Leave the level list empty to use the
-provider metadata or automatic defaults. The selected reasoning effort is a
-separate setting. Returning Reasoning support to Auto clears the manual list.
-Image input can also be set to On or Off for the chosen model.
-
-For CLI or shell-launched desktop sessions, `ANYCODE_EFFORT_LEVELS` accepts a
-nonempty JSON array, for example `export ANYCODE_EFFORT_LEVELS='["low","high"]'`.
-Use `/effort high` to change the selected level in the CLI. Valid levels are
-`off`, `low`, `medium`, `high`, `xhigh`, and `max`. Like
-`ANYCODE_IMAGE_INPUT`, this shell setting applies to all models, including child
-models, and takes precedence over per-model settings, catalog data and fetched
-metadata. An invalid value is ignored with a warning.
-
-### Reasoning history experiments
-
-`ANYCODE_REASONING_HISTORY` selects reasoning replay for new responses:
-
-- Unset: replay returned reasoning unless the provider has an explicit exception.
-  Per-model settings and `ANYCODE_PRESERVE_REASONING` can override this default.
-- `none`: omit reasoning from provider requests.
-- `full`: replay the original reasoning under the same default and overrides.
-- `factual_N`: generate one factual summary per response at low effort, then replay
-  that fixed summary. `N` must be a positive integer, for example `factual_500`.
-
-Which providers accept replayed reasoning is a provider-side fact; the
-per-provider support table (wire fields, documentation citations, and measured
-results) lives in the developer docs at
-[reasoning-history.md](../development/reasoning-history.md).
-
-Reasoning replay applies to each model separately, including catalog, custom
-and vLLM connections. In the connection drawer's model settings, **Reasoning
-replay** offers Automatic, On and Off. Automatic replays returned reasoning
-unless the provider has an explicit exception. On or Off overrides that policy
-for the selected model; select a model before changing this setting. It applies
-to new sessions and is overridden by `ANYCODE_PRESERVE_REASONING` in the launch
-environment. Responses replays only original encrypted reasoning; text-only
-reasoning and factual summaries are not sent back.
-
-The compactor uses the current endpoint and model. Set
-`ANYCODE_REASONING_COMPACTOR_MODEL` to select another model on that endpoint.
-Original reasoning and metadata remain in history for audit; modified text is
-sent without the original signature. Provider and route gates still apply;
-Responses replays only original encrypted reasoning, excluding modified text
-and factual summaries. Endpoint compatibility with changed thinking must be
-established separately before running an experiment.
-
-The summary includes goal, verified facts, decision and constraints, unverified
-hypotheses, and next intended action. Its length is conservatively limited to
-`N` UTF-8 bytes (an upper bound for byte-based tokenizers), keeping complete
-field lines only, so it can be shorter than `N` model tokens. The compactor
-receives a separate output budget for its own low-effort reasoning. Empty or
-unusable output is treated as a compactor failure. Compactor usage is stored with the summary and reported
-separately as `reasoningCompactorUsage` on the response's `context_usage` trace
-event; it does not replace the main response's context usage. Compactor failures
-preserve the completed response and original reasoning for audit and report
-`reasoningCompactorStatus: failed`. Cancellation also preserves that response,
-reports `cancelled`, and follows normal turn cancellation. In factual mode,
-reasoning without a usable stored summary is omitted from replay, including
-older history and responses whose compaction failed. Unset and `full` always
-replay the original under the existing provider policy, even if a summary is
-stored.
-
-### Export and import a setup
-
-In Settings → Provider, choose **Export setup** to save a JSON file, or **Import setup** to preview and apply one. The preview lists connection destinations and lets you update, copy, or skip name collisions. A different destination must be added as a copy. After import, use the imported credential buttons to enter API keys or sign in through the connection editor. Keys and tokens are never exported.
-
-The file contains supported provider connection details and role profiles. It does not include unused custom providers, project-to-profile assignments, active selections, proxy profiles or their credentials, application settings, session history, vault paths, or secrets. Named proxy references require a matching proxy profile on the receiving installation. Connections with legacy proxy URLs cannot be exported. URL query strings and fragments are rejected. Connection names must be unique. The export secret filter is best-effort; keep keys and other secrets out of names and URLs. It rejects some secret-like text and identifies the affected field.
+- [providers](providers.md): model capabilities, reasoning history and setup export/import.
