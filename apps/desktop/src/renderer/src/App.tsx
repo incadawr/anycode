@@ -131,7 +131,10 @@ export function diagnosticsExportAction(): PaletteAction {
   const current = () => {
     const { activeTabId, tabs } = useTabsStore.getState();
     const tab = tabs.find(tab => tab.tabId === activeTabId);
-    return { tabId: activeTabId, enabled: !!tab?.sessionId && !!window.anycode?.diagnostics };
+    // Mirrors EnvironmentMenu's listener: it ignores the event without a workspace or while a branch switch is pending.
+    const git = activeTabId ? tabRegistry.getStore(activeTabId)?.getState() : undefined;
+    const switching = Object.values(git?.git.pending ?? {}).some(p => p.kind === "mutation" && (p.label === "switch branch" || p.label === "create branch"));
+    return { tabId: activeTabId, enabled: !!tab?.sessionId && !!window.anycode?.diagnostics && !!git?.workspace && !switching };
   };
   return {
     id: "diagnostics.export", label: "Export diagnostics…", hint: null,

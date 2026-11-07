@@ -14,6 +14,8 @@ import { Button } from "../ui/index.js";
 import { useContext, useEffect, useState } from "react";
 import { TabContext } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { bindingFor, formatBinding } from "../keymap.js";
+import type { DesktopPlatform } from "../../../shared/window.js";
 import type {
   DiagnosticsPreviewResult,
   DiagnosticsSaveResult,
@@ -108,6 +110,9 @@ export function DiagnosticsExportRow({ sessionId, autoStart = false }: { session
   const bridge = typeof window !== "undefined" ? window.anycode?.diagnostics : undefined;
   const busy = phase.step === "previewing" || phase.step === "saving";
   const available = bridge !== undefined && sessionId !== null;
+  const platform: DesktopPlatform = window.anycode?.platform ?? "darwin";
+  const paletteBinding = bindingFor("palette.toggle");
+  const paletteHint = paletteBinding ? formatBinding(paletteBinding, platform) : "the command palette";
 
   const startPreview = async (): Promise<void> => {
     if (bridge === undefined || sessionId === null) {
@@ -165,7 +170,7 @@ export function DiagnosticsExportRow({ sessionId, autoStart = false }: { session
       title={sessionId === null ? "This tab has no session id yet" : undefined}
       onClick={() => void startPreview()}>
       <span>Export diagnostics…</span>
-      <span className="environment-menu-scope">also in ⌘K</span>
+      <span className="environment-menu-scope">also in {paletteHint}</span>
     </Button>
   );
 

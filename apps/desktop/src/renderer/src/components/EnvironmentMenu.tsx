@@ -163,8 +163,9 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   }
 
   const workspacePath: string = workspace;
-  const showWorkspace = placement === "composer" || basename(workspacePath) !== (title ?? basename(workspacePath));
   const branch = status ? gitPillLabel(status) : null;
+  // The folder name is redundant with the title only when the branch can carry the trigger; otherwise keep it.
+  const showWorkspace = placement === "composer" || branch === null || basename(workspacePath) !== (title ?? basename(workspacePath));
   const dirtyCount = status?.dirtyCount ?? 0;
   const label = branch ? `${basename(workspacePath)} · ${branch}` : basename(workspacePath);
 
@@ -205,6 +206,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`Environment: ${label}`}
+        title={showWorkspace ? undefined : workspacePath}
         onClick={toggle}
       >
         <Folder />

@@ -121,20 +121,20 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
   }
 });
 
-async function branchMenu(run: (host: HTMLDivElement, store: ReturnType<typeof createDesktopStore>, send: ReturnType<typeof vi.spyOn>) => Promise<void>) {
+async function branchMenu(run: (host: HTMLDivElement, store: ReturnType<typeof createDesktopStore>, send: ReturnType<typeof vi.spyOn>) => Promise<void>, { placement = "header", branch = true }: { placement?: "header" | "composer"; branch?: boolean } = {}) {
   const { tabRegistry } = await import("../tab-registry.js");
   const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
   const bridge = Object.getOwnPropertyDescriptor(window, "anycode");
   Object.defineProperty(window, "anycode", { configurable: true, value: { communication: { get: async () => ({ ok: false }) }, browserAccess: { get: async () => ({ ok: false }), onChanged: () => () => {} }, sessionPeers: { get: async () => ({ ok: false }) } } });
   const store = createDesktopStore();
   store.setState({ connection: "ready", workspace: "/fixture/repo", git: { ...store.getState().git, statusKnown: true,
-    status: { head: { branch: "main", sha: "abcdef123", detached: false, ahead: null, behind: null }, staged: [], unstaged: [], untracked: [], dirtyCount: 0, filesTruncated: false } } });
+    status: branch ? { head: { branch: "main", sha: "abcdef123", detached: false, ahead: null, behind: null }, staged: [], unstaged: [], untracked: [], dirtyCount: 0, filesTruncated: false } : null } });
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
   try {
-    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement }))));
     await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
-    await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
+    if (branch) await act(async () => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.startsWith("Branch"))!.click());
     await run(host, store, send);
   } finally { await act(async () => root.unmount()); host.remove(); send.mockRestore(); if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode"); }
 }
@@ -646,18 +646,36 @@ it("hides a matching header folder and keeps differing titles", async () => {
       expect(host.querySelector(".environment-workspace")).toBeNull();
       expect(host.querySelector(".environment-separator")).toBeNull();
       expect(host.querySelector(".environment-trigger")?.getAttribute("aria-label")).toContain("repo");
+      expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBe("/fixture/repo");
       await act(async () => useTabsStore.setState({ tabs: [{ tabId: "tab", title: "Fix login" }] as typeof previous }));
       expect(host.querySelector(".environment-workspace")?.textContent).toContain("repo");
+      expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBeNull();
     } finally { await act(async () => useTabsStore.setState({ tabs: previous })); }
   });
 });
 
+it("keeps the folder name when it equals the title and nothing else would show it", async () => {
+  const previous = useTabsStore.getState().tabs;
+  try {
+    await act(async () => useTabsStore.setState({ tabs: [{ tabId: "tab", title: "repo" }] as typeof previous }));
+    await branchMenu(async (host) => {
+      expect(host.querySelector(".environment-workspace")?.textContent).toContain("repo");
+    }, { placement: "composer" });
+    await branchMenu(async (host) => {
+      expect(host.querySelector(".environment-workspace")?.textContent).toContain("repo");
+      expect(host.querySelector(".environment-trigger")?.getAttribute("title")).toBeNull();
+    }, { branch: false });
+  } finally { await act(async () => useTabsStore.setState({ tabs: previous })); }
+});
+
 it("exports through the bottom row and active-tab palette entry using the existing preview", async () => {
-  await branchMenu(async (host) => {
+  await branchMenu(async (host, store) => {
     const previous = useTabsStore.getState();
     const preview = vi.fn(async () => ({ ok: true, preview: "scrubbed bundle", summary: { bytes: 12, redactions: 0, truncated: false, sections: [] } }));
     Object.assign(window.anycode, { diagnostics: { preview, save: vi.fn() } });
     await act(async () => useTabsStore.setState({ activeTabId: "tab", tabs: [{ tabId: "tab", sessionId: "session-fixture" }] as typeof previous.tabs }));
+    const { tabRegistry } = await import("../tab-registry.js");
+    const getStore = vi.spyOn(tabRegistry, "getStore").mockReturnValue(store);
     try {
       await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })));
       await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
@@ -676,10 +694,18 @@ it("exports through the bottom row and active-tab palette entry using the existi
       await act(async () => host.querySelector<HTMLButtonElement>(".environment-trigger")!.click());
       expect(preview).toHaveBeenCalledTimes(2);
       expect(host.textContent).not.toContain("scrubbed bundle");
+      // Same gates as the menu listener: no workspace or a pending branch switch means no command.
+      await act(async () => store.setState({ workspace: null }));
+      expect(action.enabled).toBe(false);
+      await act(async () => store.setState({ workspace: "/fixture/repo" }));
+      await act(async () => store.setState({ git: { ...store.getState().git, pending: { switch: { kind: "mutation", label: "switch branch" } } } }));
+      expect(action.enabled).toBe(false);
+      await act(async () => store.setState({ git: { ...store.getState().git, pending: {} } }));
+      expect(action.enabled).toBe(true);
       await act(async () => useTabsStore.setState({ activeTabId: "foreign" }));
       expect(action.enabled).toBe(false);
       action.run();
       expect(preview).toHaveBeenCalledTimes(2);
-    } finally { await act(async () => useTabsStore.setState(previous)); }
+    } finally { getStore.mockRestore(); await act(async () => useTabsStore.setState(previous)); }
   });
 });
