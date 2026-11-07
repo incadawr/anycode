@@ -656,7 +656,8 @@ async function spawnableWhenKnown(deps: TabIpcDeps, engine: EngineId, codexProfi
  *  - new: capacity-guard -> workspace source (GUI-P1: a preselected
  *    `req.workspace` skips the dialog; otherwise showOpenDialog, cancel ->
  *    "cancelled") -> fresh uuid session -> spawn + deliver.
- *  - resume: getRootSession (missing, or a child session's id -> "session_not_found") -> already_open guard
+ *  - resume: published running tab -> managed refusal -> getRootSession
+ *    (missing, or a child session's id -> "session_not_found")
 
  * MAX_TABS is enforced authoritatively by manager.createTab.
  */
@@ -790,10 +791,18 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     return { ok: true, tabId: result.tab.tabId, workspace: result.tab.workspace };
   }
 
+  const openInTabId = deps.manager.sessionOpenInTab(req.sessionId, true);
+  if (openInTabId !== undefined) {
+    return { ok: false, reason: "already_open", focusTabId: openInTabId };
+  }
+  const managedRefusal = deps.manager.managedContinuationRefusal?.(req.sessionId);
+  if (managedRefusal) return { ok: false, reason: "worktree_unavailable", ...managedRefusal };
   const meta = await deps.persistence.getRootSession(req.sessionId);
   if (meta === null) {
     return { ok: false, reason: "session_not_found" };
   }
+  const tiedRefusal = deps.manager.managedContinuationRefusal?.(req.sessionId, meta.worktree?.path ?? meta.workspace);
+  if (tiedRefusal) return { ok: false, reason: "worktree_unavailable", ...tiedRefusal };
   if (meta.worktree !== undefined) {
     if (meta.workspace !== meta.worktree.path || !existsSync(meta.worktree.path)) {
       return { ok: false, reason: "worktree_unavailable", worktreePath: meta.worktree.path };
@@ -813,10 +822,6 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // a resumed profile nobody diagnosed since boot is hydrated, not refused.
   if (!isEngineId(engine) || (!historyOnly && !(await spawnableWhenKnown(deps, engine, meta.codexProfileId)))) {
     return notReady(deps, engine, meta.connectionId, meta.codexProfileId);
-  }
-  const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
-  if (openInTabId !== undefined) {
-    return { ok: false, reason: "already_open", focusTabId: openInTabId };
   }
   // Codex-profiles W3-F: resume re-resolves the profile the session was
   // CREATED under (`meta.codexProfileId`, persisted host metadata — never the

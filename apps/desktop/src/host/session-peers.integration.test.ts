@@ -131,6 +131,8 @@ async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "
     return { ok: true, tab: host };
   });
   const manager = { atCapacity: () => false, createTabAwaitingInitialSpawn: fork,
+    listTabs: tabs, getTab: (id: string) => hosts.find(host => host.tabId === id),
+    sessionOpenInTab: (id: string) => hosts.find(host => host.sessionId === id)?.tabId,
     deliverTabPort: vi.fn(), publishPreparedTab: () => true,
     communicationRequest: vi.fn(async () => ({ ok: true })) };
   const creator = { projects: { isAllowed: () => false }, manager: () => manager,

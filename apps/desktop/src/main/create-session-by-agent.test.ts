@@ -1,3 +1,7 @@
+import * as childCleanup from "./child-worktree-cleanup.js";
+import { createSessionPeerOpener } from "./session-peer-open.js";
+import type { ChildWorktreeReceipt } from "./child-worktree-resource.js";
+import type { TabHostManagerDeps } from "./tabs.js";
 /**
  * the previous regression test called
  * `primeNewSessionPin` ITSELF and then `createTab`, so reverting the
@@ -22,7 +26,7 @@ import { createAgentProjectsStore } from "./communication-agent-projects.js";
 import { handleSetSessionHandle, type CommunicationIpcDeps } from "./communication-ipc.js";
 import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister } from "./agent-session-title.js";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { Client, StreamableHTTPClientTransport } from "@anycode/core/communication-mcp";
 import { startCommunicationServer } from "./communication-server.js";
@@ -85,6 +89,7 @@ interface DeferredReply {
 }
 
 function rig(options: {
+  managerDeps?: Partial<TabHostManagerDeps>;
   failPrimingFor?: string;
   blocked?: () => boolean;
   pending?: Promise<void>;
@@ -92,6 +97,7 @@ function rig(options: {
   workspaceMissing?: (workspace: string) => boolean;
   window?: boolean;
   failFork?: boolean;
+  failAfterRoot?: boolean;
   sessions?: SessionAccessStore;
   /** The session id `create_session` assigns (deterministic when a row is pre-seeded). */
   sessionId?: string;
@@ -127,15 +133,17 @@ function rig(options: {
   const forkEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
   /** Every fork's argv — the wire a tab really boots with (account/profile flags included). */
   const forkArgs: string[][] = [];
+  const forkCwds: string[] = [];
   const hosts: FakeHost[] = [];
   /** Every internal control-plane operation the created hosts received, in order. */
   const operations: string[] = [];
   /** Answers waiting for the test to release them (deferred replies only). */
   const deferredReplies: DeferredReply[] = [];
   const fork: HostForkFn = (_entry, args, opts) => {
-    if (options.failFork) throw new Error("fork failed");
+    if (options.failFork || (options.failAfterRoot && forkCwds.length > 0)) throw new Error("fork failed");
     forkEnvs.push(opts?.env as NodeJS.ProcessEnv | undefined);
     forkArgs.push([...args]);
+    forkCwds.push(opts.cwd);
     const host = new FakeHost();
     hosts.push(host);
     host.postMessage.mockImplementation((message: unknown) => {
@@ -221,6 +229,7 @@ function rig(options: {
     ...(options.workspaceMissing !== undefined ? { workspaceMissing: options.workspaceMissing } : {}),
     logger: silentLogger,
     limits: { ...(options.limits ?? {}) },
+    ...options.managerDeps,
   });
   const exposed = new Map<string, boolean>();
   const sessions: SessionAccessStore = options.sessions ?? {
@@ -254,7 +263,7 @@ function rig(options: {
     listTabs: () => manager.listTabs(),
     ...overrides,
   });
-  return { manager, deps, forkEnvs, forkArgs, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles, hosts, operations, deferredReplies };
+  return { manager, deps, forkEnvs, forkArgs, forkCwds, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles, hosts, operations, deferredReplies };
 }
 
 describe("create_session — the production creation path primes a non-active connection before the fork", () => {
@@ -1440,4 +1449,214 @@ it("peer handler uses main's admitted creator adapter and primes the selected co
   expect(r.forkEnvs[0]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_API_KEY: "conn-glm-key" });
   expect(openers.get("sess-0")).toBe("opener");
   expect(r.exposed.get("sess-0")).not.toBe(true);
+});
+
+
+describe("managed native SessionOpen", () => {
+  afterEach(() => vi.restoreAllMocks());
+  function fixture(options: Parameters<typeof rig>[0] = {}) {
+    const receipt: ChildWorktreeReceipt = { version: 1, id: "resource", appRunId: "run", parentSessionId: "opener",
+      childSessionId: "sess-1", sourceRoot: "/ws", storageRoot: "/ws", projectRoot: "/project", baseSha: "a".repeat(40),
+      path: "/ws/.anycode/worktrees/child-resource", branch: "anycode-wt/child-resource", phase: "active", reason: null };
+    const resources = { read: vi.fn(async () => receipt), snapshot: vi.fn(async () => receipt), allocate: vi.fn(async () => receipt),
+      update: vi.fn(async (_r: ChildWorktreeReceipt, phase: ChildWorktreeReceipt["phase"], reason: string) => ({ ...receipt, phase, reason })) };
+    const r = rig({ ...options, managerDeps: { childWorktrees: resources, ...options.managerDeps } });
+    const root = r.manager.createTab({ workspace: "/ws", projectRoot: "/project", sessionId: "opener", resume: false });
+    if (!root.ok) throw new Error("fixture opener refused");
+    root.tab.childWorktreePolicy = true;
+    const policy = { kind: "native" as const, openerSessionId: "opener", authorize: vi.fn(() => true),
+      deliverFirstMessage: vi.fn(async () => ({ state: "rejected" })) };
+    const deps = r.deps();
+    return { ...r, receipt, resources, parent: root.tab, policy, deps, open: createSessionPeerOpener(deps) };
+  }
+
+  it("canonicalizes the opener workspace before comparing a same-checkout request", async () => {
+    const r = fixture(); r.parent.workspace = "/alias";
+    r.deps.realpathSync = p => p === "/alias" ? "/ws" : p;
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(true);
+  });
+
+  it("does not record unrelated trust refusals and clears the previous refusal after success", async () => {
+    const r = fixture(); r.parent.childWorktreeRefusal = "old worktree failure";
+    const trust = r.deps.readTrustStore; r.deps.readTrustStore = async () => ({ version: 1, folders: {} });
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(false);
+    expect(r.parent.childWorktreeRefusal).toBe("old worktree failure");
+    r.deps.readTrustStore = trust; r.parent.childWorktreePolicy = false;
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(true);
+    expect(r.parent.childWorktreeRefusal).toBeUndefined();
+  });
+
+  it("rechecks authorization immediately before publishing, after successful preparation", async () => {
+    const r = fixture();
+    r.policy.authorize.mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValueOnce(true).mockReturnValue(false);
+    const publish = vi.spyOn(r.manager, "publishPreparedTab");
+    expect(await r.open({ workspace: "/ws" }, r.policy)).toMatchObject({ ok: false, detail: expect.stringContaining("authorized") });
+    expect(r.resources.allocate).toHaveBeenCalledOnce(); expect(r.forkCwds).toHaveLength(2);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("failed preparation settles on exit or bounded timeout (timeout=%s)", async timeout => {
+    const settle = vi.spyOn(childCleanup, "settleChildWorktree").mockResolvedValue({ phase: timeout ? "unknown" : "removed", reason: "test disposition" });
+    const r = fixture({ stubbornHost: true, holdKillExit: true, managerDeps: { limits: { exitDeadlineMs: 30 } },
+      respond: op => ({ result: op === "get_session_status" ? {} : { ok: false, reason: "invalid_effort" } }) });
+    const opening = r.open({ workspace: "/ws", effort: "high" }, r.policy);
+    await vi.waitFor(() => expect(r.hosts[1]?.postMessage).toHaveBeenCalledWith({ type: "shutdown" }), { interval: 1 });
+    expect(settle).not.toHaveBeenCalled();
+    if (!timeout) r.hosts[1]!.emit("exit", 0);
+    const result = await opening;
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining(`Worktree ${timeout ? "unknown" : "removed"}:`) });
+    expect(settle).toHaveBeenCalledOnce();
+    expect(settle.mock.calls[0]![0].permission.actualExit).toBe(!timeout);
+    if (timeout) r.hosts[1]!.emit("exit", 0);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(settle).toHaveBeenCalledOnce();
+    expect(r.manager.listTabs().map(t => t.sessionId)).toEqual(["opener"]);
+  });
+
+  it("forks a new cwd, preserves projectRoot, keeps the pin, and reports rejected firstMessage without HTTP sharing", async () => {
+    const r = fixture({ window: true });
+    const result = await r.open({ workspace: "/ws", model: "conn-glm", firstMessage: "hello" }, r.policy);
+    expect(result).toMatchObject({ ok: true, delivery: { state: "rejected" } });
+    expect(r.forkCwds).toEqual(["/ws", r.receipt.path]);
+    expect(r.forkEnvs[1]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_MANAGED_CHILD_WORKTREE: "1" });
+    const child = r.manager.listTabs().find(t => t.sessionId === "sess-1")!;
+    expect(r.manager.getTab(child.tabId)).toMatchObject({ projectRoot: "/project", childWorktree: r.receipt });
+    expect(r.exposed.get("sess-1")).not.toBe(true);
+    expect(r.policy.authorize).toHaveBeenCalledWith("/ws", "/ws", true);
+    expect(r.policy.deliverFirstMessage).toHaveBeenCalledOnce();
+  });
+
+  it("captures ON before the creation queue, even when policy is switched OFF during trust await", async () => {
+    const r = fixture();
+    r.deps.readTrustStore = async () => { r.parent.childWorktreePolicy = false;
+      return { version: 1, folders: { "/ws": { decision: "trusted", hash: "h", decidedAt: "now" } } }; };
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(true);
+    expect(r.resources.allocate).toHaveBeenCalledOnce();
+  });
+
+  it("a request queued behind another creator retains its admitted ON policy", async () => {
+    const r = fixture();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const prime = vi.fn(async () => { await pending; });
+    r.deps.mcpSecretPrime = prime;
+    const first = createSessionForAgent({ workspace: "/ws" }, r.deps);
+    await vi.waitFor(() => expect(prime).toHaveBeenCalledOnce());
+    const queued = r.open({ workspace: "/ws" }, r.policy);
+    r.parent.childWorktreePolicy = false;
+    release();
+    expect((await first).ok).toBe(true);
+    expect((await queued).ok).toBe(true);
+    expect(r.resources.allocate).toHaveBeenCalledOnce();
+    expect(r.forkCwds.at(-1)).toBe(r.receipt.path);
+  });
+
+  it("OFF and external HTTP creation retain the old cwd", async () => {
+    const r = fixture();
+    r.parent.childWorktreePolicy = false;
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(true);
+    r.parent.childWorktreePolicy = true;
+    expect((await createSessionForAgent({ workspace: "/ws" }, r.deps)).ok).toBe(true);
+    expect(r.forkCwds).toEqual(["/ws", "/ws", "/ws"]);
+    expect(r.resources.allocate).not.toHaveBeenCalled();
+  });
+
+  it.each(["foreign", "claude", "codex", "helper", "non-git", "add", "access", "trust"])("refuses %s before a child fork", async failure => {
+    const r = fixture(failure === "helper" ? { managerDeps: { childWorktrees: undefined } } : {});
+    if (failure === "non-git") r.resources.snapshot.mockRejectedValue(new Error("Git required"));
+    if (failure === "add") r.resources.allocate.mockRejectedValue(new Error("allocation residue in receipt"));
+    if (failure === "access") r.policy.authorize.mockReturnValue(false);
+    if (failure === "foreign") r.deps.readTrustStore = async () => ({ version: 1,
+      folders: { "/other": { decision: "trusted", hash: "h", decidedAt: "now" } } });
+    if (failure === "trust") r.deps.readTrustStore = async () => ({ version: 1, folders: {} });
+    const result = await r.open({ workspace: failure === "foreign" ? "/other" : "/ws",
+      ...(failure === "claude" || failure === "codex" ? { engine: failure } : {}) }, r.policy);
+    expect(result.ok).toBe(false);
+    expect(r.forkCwds).toHaveLength(1);
+    if (!["add", "non-git"].includes(failure)) expect(r.resources.allocate).not.toHaveBeenCalled();
+  });
+
+  it.each(["snapshot", "add", "pin", "effort", "deferred"])("opener generation change during %s prevents publication and retains any receipt", async phase => {
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    let blocked = false, pinEntered = false;
+    const release = vi.fn();
+    const r = fixture({ blocked: () => blocked, pending, respond: op => op === "get_session_status"
+      ? { result: {} } : { defer: true } });
+    if (phase === "snapshot") r.resources.snapshot.mockImplementation(async () => { await pending; return r.receipt; });
+    if (phase === "add") r.resources.allocate.mockImplementation(async () => { await pending; return r.receipt; });
+    if (phase === "pin") {
+      r.deps.primeNewSessionPin = async () => { pinEntered = true; await pending; return { ok: true, release }; };
+    }
+    if (phase === "deferred") { r.deps.primeNewSessionPin = async () => ({ ok: true, release() {} }); blocked = true; }
+    const creating = vi.spyOn(r.manager, "createTabAwaitingInitialSpawn");
+    const opening = r.open({ workspace: "/ws", ...(phase === "effort" ? { effort: "high" } : {}) }, r.policy);
+    await vi.waitFor(() => expect(phase === "pin" ? Number(pinEntered) : phase === "effort"
+      ? r.deferredReplies.length : r.resources[phase === "snapshot" ? "snapshot" : "allocate"].mock.calls.length).toBeGreaterThan(0));
+    if (phase === "deferred") await vi.waitFor(() => expect(creating).toHaveBeenCalledOnce());
+    r.parent.hostGeneration += 1;
+    blocked = false;
+    finish();
+    if (phase === "effort") r.deferredReplies[0]!.answer({ ok: true });
+    expect((await opening).ok).toBe(false);
+    expect(r.manager.listTabs().map(t => t.sessionId)).toEqual(["opener"]);
+    if (phase !== "effort") expect(r.forkCwds).toHaveLength(1);
+    if (["add", "effort", "deferred"].includes(phase)) expect(r.resources.update).toHaveBeenCalled();
+    if (phase === "pin") expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each(["fork", "effort"])("%s failure retains the receipt without leaking a creation slot", async failure => {
+    const r = fixture({ failAfterRoot: failure === "fork", respond: op => ({ result: op === "get_session_status" ? {} : { ok: false, reason: "invalid_effort" } }) });
+    const result = await r.open({ workspace: "/ws", ...(failure === "effort" ? { effort: "high" } : {}) }, r.policy);
+    expect(result.ok).toBe(false);
+    expect(r.manager.listTabs().map(t => t.sessionId)).toEqual(["opener"]);
+    expect(r.resources.update).toHaveBeenCalledWith(r.receipt, failure === "fork" ? "retained" : "unknown", expect.any(String));
+    expect(result).toMatchObject({ detail: expect.stringContaining(r.receipt.path) });
+  });
+
+  it("rechecks access after add and releases the pin on refusal", async () => {
+    const r = fixture();
+    const release = vi.fn();
+    r.deps.primeNewSessionPin = async () => ({ ok: true, release });
+    r.resources.allocate.mockImplementation(async () => { r.policy.authorize.mockReturnValue(false); return r.receipt; });
+    expect((await r.open({ workspace: "/ws" }, r.policy)).ok).toBe(false);
+    expect(r.forkCwds).toHaveLength(1);
+    expect(release).toHaveBeenCalledOnce();
+    expect(r.resources.update).toHaveBeenCalledOnce();
+  });
+
+  it("actual opener close during add refuses the late result and a later open can still reserve", async () => {
+    const r = fixture();
+    r.manager.createTab({ workspace: "/other", sessionId: "other", resume: false });
+    let finish!: (value: ChildWorktreeReceipt) => void;
+    r.resources.allocate.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+    const opening = r.open({ workspace: "/ws" }, r.policy);
+    await vi.waitFor(() => expect(r.resources.allocate).toHaveBeenCalledOnce());
+    expect(await r.manager.closeTab(r.parent.tabId)).toMatchObject({ ok: true });
+    finish(r.receipt);
+    expect((await opening).ok).toBe(false);
+    expect(r.forkCwds).toHaveLength(2);
+    expect(r.resources.update).toHaveBeenCalledOnce();
+    expect((await createSessionForAgent({ workspace: "/ws" }, r.deps)).ok).toBe(true);
+  });
+
+  it("first-message access uses the new folder facts and receives no inherited trust or pair grant", async () => {
+    const r = fixture();
+    const grant = vi.fn(() => false);
+    const access = createSessionPeerAccess({ enabled: () => true, realpathSync: p => p,
+      statSync: () => ({ isDirectory: () => true }), isTrusted: key => key === "/ws",
+      policy: { projectKeys: () => ["/ws"], isNativeEnabled: key => key === "/ws", hasPairGrant: () => false,
+        setNativeEnabled: grant, setPairGrant: grant } });
+    const from = { workspace: "/ws", workspaceKey: "/ws", root: true, live: true, restricted: false, readOnly: false };
+    r.policy.deliverFirstMessage.mockImplementation(async () => {
+      const target = r.manager.listTabs().find(t => t.sessionId === "sess-1")!;
+      return { state: await access.canAccess(from, { ...from, workspace: target.workspace, workspaceKey: target.workspace }, "send") ? "queued" : "rejected" };
+    });
+    expect(await r.open({ workspace: "/ws", firstMessage: "hello" }, r.policy)).toMatchObject({ ok: true, delivery: { state: "rejected" } });
+    expect(grant).not.toHaveBeenCalled();
+    expect(r.exposed.get("sess-1")).not.toBe(true);
+    expect(await r.manager.closeTab(r.parent.tabId)).toMatchObject({ ok: true });
+    expect(r.manager.listTabs().map(t => t.sessionId)).toEqual(["sess-1"]);
+  });
+
 });

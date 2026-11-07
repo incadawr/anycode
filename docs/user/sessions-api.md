@@ -4,6 +4,18 @@ The Sessions API lets an external agent, such as Claude Code or Codex, list the
 live AnyCode sessions you share with it, read their status and last answer, and
 send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 
+## Worktree sessions
+
+The parent header's **New session children in worktrees** switch also applies to
+Core native `SessionOpen`, with the existing experimental gate unchanged. The
+target must be the source checkout. Opened roots remain independent: parent close
+does not close them; their own close triggers conservative cleanup. The new cwd
+inherits neither folder trust nor peer grants; first-message delivery can be
+rejected until access is granted. External HTTP `create_session` is outside this
+feature because it has no trusted parent. See [worktree limitations and manual
+recovery](subagents.md#session-children-in-worktrees). No automatic merge,
+post-crash cleanup or managed-session resume is provided.
+
 ## Native session peers (experimental)
 
 Native peer tools connect sessions inside AnyCode without configuring an HTTP

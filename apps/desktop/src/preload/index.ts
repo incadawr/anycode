@@ -1,3 +1,4 @@
+import { CHILD_WORKTREE_CHANNEL, type ChildWorktreeRequest, type ChildWorktreeView } from "../shared/child-worktree-view.js";
 import { AGENT_MESSAGE_LOOKUP_CHANNEL, AGENT_MESSAGE_FOCUS_CHANNEL, type AgentMessageLinksBridge } from "../shared/agent-message-links.js";
 /**
 
@@ -767,6 +768,7 @@ ipcRenderer.on(TERMINAL_PORT_ENVELOPE_TYPE, (event, payload: { tabId: string }) 
 // no ports, no arbitrary channels, no decrypted secret ever crosses back — a
 // value only travels in via setSecret.
 contextBridge.exposeInMainWorld("anycode", {
+  childWorktrees: (request: ChildWorktreeRequest): Promise<ChildWorktreeView> => ipcRenderer.invoke(CHILD_WORKTREE_CHANNEL, request),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   homeDirectory: () => ipcRenderer.invoke("anycode:home-directory") as Promise<string>,
   // the answer to a folder's project-trust question. The payload is a

@@ -1,3 +1,5 @@
+import { registerChildWorktreeIpc } from "./child-worktree-ipc.js";
+import { ChildWorktreeResources } from "./child-worktree-resource.js";
 import { recordReasoningReplayRejection } from "./reasoning-replay.js";
 import { registerSettingsIpcWithProbe } from "./connection-probe.js";
 import { registerAgentMessageLinks } from "./agent-message-links.js";
@@ -2776,7 +2778,10 @@ void app.whenReady().then(async () => {
     prepare: preparePeerTrust,
     access: peerAccess!,
   }) : undefined;
+  const childWorktreeRunId = randomUUID();
+  const childWorktrees = new ChildWorktreeResources({ userData: app.getPath("userData"), appRunId: childWorktreeRunId });
   manager = new TabHostManager({
+    childWorktrees,
     onFileActivity: fileActivity?.accept,
     onFileActivityLifecycle: fileActivity?.sync,
     onSessionPeerRequest: peerHandler,
@@ -3274,6 +3279,8 @@ void app.whenReady().then(async () => {
     },
   };
   registerTabIpc(tabIpcDeps);
+  registerChildWorktreeIpc({ userData: app.getPath("userData"), appRunId: childWorktreeRunId,
+    resources: childWorktrees, getTab: id => manager?.getTab(id) });
 
   // "Continue this Codex thread on another account" (`codex-continue.ts`): the
   // usage-limit banner's action. The target account is validated here, the

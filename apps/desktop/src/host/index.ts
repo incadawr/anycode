@@ -3543,6 +3543,7 @@ async function boot(): Promise<void> {
       },
     };
     const worktreeAvailable =
+      process.env.ANYCODE_MANAGED_CHILD_WORKTREE !== "1" &&
       typeof execAdapter.runBinary === "function" && (await fsAdapter.exists(join(projectRoot, ".git")));
     if (worktreeAvailable) {
       registry.register(enterWorktreeTool);
