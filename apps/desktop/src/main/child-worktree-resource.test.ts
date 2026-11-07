@@ -116,7 +116,29 @@ it.each(["open", "write", "sync", "link"])("does not call add when intent %s fai
   const resources = manager({ fs: brokenFs }); const snapshot = await resources.snapshot(root, root);
   await expect(resources.allocate(snapshot, sessions)).rejects.toThrow(/intent/);
   expect(add).not.toHaveBeenCalled();
-  expect((await fs.readdir(path.join(userData, "child-worktrees"))).filter(f => f.endsWith(".json"))).toEqual([]);
+  const remaining = await fs.readdir(path.join(userData, "child-worktrees"));
+  expect(remaining.filter(f => f.endsWith(".json"))).toEqual([]);
+  expect(remaining.filter(f => f.endsWith(".tmp"))).toEqual([]);
+});
+
+it("still reports success when removing the temporary name fails after a durable link", async () => {
+  const add = vi.spyOn(NodeGitAdapter.prototype, "worktreeAdd");
+  const resources = manager({ fs: { ...fs, unlink: async () => { throw new Error("busy"); } } });
+  const snapshot = await resources.snapshot(root, root);
+  await expect(resources.allocate(snapshot, sessions)).resolves.toMatchObject({ phase: "active" });
+  expect(add).toHaveBeenCalledTimes(1);
+  expect((await receipts()).length).toBe(1);
+});
+
+it("ties a damaged receipt to a workspace given with a trailing separator", async () => {
+  const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+  const directory = path.join(userData, "child-worktrees");
+  await fs.mkdir(directory, { recursive: true });
+  await fs.writeFile(path.join(directory, `${id}.json`), "{truncated");
+  const workspace = path.join(root, ".anycode", "worktrees", `child-${id}`);
+  const resources = manager();
+  expect(() => resources.findForSession("unrelated", `${workspace}${path.sep}`)).toThrow(/could not be verified/);
+  expect(resources.findForSession("unrelated", path.join(root, "ordinary"))).toBeUndefined();
 });
 
 it("writes exclusive durable intent before add and retains partial add residue", async () => {

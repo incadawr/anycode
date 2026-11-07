@@ -88,16 +88,18 @@ export class ChildWorktreeResources {
       path: path.join(snapshot.storageRoot, ".anycode", "worktrees", `child-${id}`),
       branch: `anycode-wt/child-${id}`, phase: "intent", reason: null,
     };
+    const temporary = path.join(this.directory, `${id}.${randomUUID()}.tmp`);
     try {
       await this.fs.mkdir(this.directory, { recursive: true });
       await this.syncDirectory(this.options.userData);
-      const temporary = path.join(this.directory, `${id}.${randomUUID()}.tmp`);
       await this.writeExclusive(temporary, receipt);
       // Publish only complete, synced intent; link preserves exclusive ownership.
       await this.fs.link(temporary, this.receiptPath(id));
-      await this.fs.unlink(temporary);
+      // The receipt is already durable here; a leftover temporary name is harmless.
+      await this.fs.unlink(temporary).catch(() => {});
       await this.syncDirectory();
     } catch {
+      await this.fs.unlink(temporary).catch(() => {});
       throw new Error("Child worktree intent could not be persisted; allocation refused");
     }
     let addAttempted = false;
@@ -157,7 +159,8 @@ export class ChildWorktreeResources {
         let owner: unknown;
         try { if (ids.length === 1) owner = JSON.parse(ids[0]![1]!); } catch { /* Unknown owner. */ }
         const suffix = path.join(".anycode", "worktrees", `child-${file.slice(0, -5)}`);
-        if (owner === sessionId || workspace?.endsWith(path.sep + suffix))
+        const trailing = path.sep === "\\" ? /\\+$/ : /\/+$/;
+        if (owner === sessionId || workspace?.replace(trailing, "").endsWith(path.sep + suffix))
           refusal = new Error(`Worktree receipt could not be verified. Inspect and repair the resource journal file ${journal}; it has been preserved.`);
       }
     }
@@ -203,9 +206,14 @@ export class ChildWorktreeResources {
 
   private async replace(receipt: ChildWorktreeReceipt): Promise<void> {
     const temporary = path.join(this.directory, `${receipt.id}.${randomUUID()}.tmp`);
-    await this.writeExclusive(temporary, receipt);
-    await this.fs.rename(temporary, this.receiptPath(receipt.id));
-    await this.syncDirectory();
+    try {
+      await this.writeExclusive(temporary, receipt);
+      await this.fs.rename(temporary, this.receiptPath(receipt.id));
+      await this.syncDirectory();
+    } catch (error) {
+      await this.fs.unlink(temporary).catch(() => {});
+      throw error;
+    }
   }
 }
 
