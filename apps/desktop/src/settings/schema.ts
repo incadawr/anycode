@@ -18,7 +18,7 @@ import { CLAUDE_EFFORT_LEVELS } from "../shared/claude-effort.js";
 
 import { isAbsolute } from "node:path";
 import { z } from "zod";
-import type { AnycodeSettings, SettingsPatch } from "../shared/settings.js";
+import type { AnycodeSettings, SettingsPatch, StoredModelRoutes } from "../shared/settings.js";
 // VALUE import (the one exception to the type-only rule below): the claude
 // context-window bounds, so the schema cannot drift from the settings-set gate
 // and the child-env builder that share the same constants.
@@ -233,6 +233,15 @@ export const modelRoutesSchema = z.object({ version: z.literal(1), fetchedAt: z.
     z.object({ kind: z.literal("refusal"), reason: z.enum(["unsupported-provider", "unknown-model", "unsupported-model", "invalid-route"]) }),
     z.object({ kind: z.literal("route"), route: z.object({ transport: z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]), baseUrl: z.string(), metadata: z.record(z.string(), z.unknown()) }).refine(route => route.baseUrl === (route.transport === "anthropic-messages" ? "https://opencode.ai/inference/go/anthropic/v1" : "https://opencode.ai/inference/go/openai/v1")) }),
   ])).refine(models => Object.keys(models).length > 0) }).optional().catch(undefined);
+// Compile-time parity: the parsed snapshot and StoredModelRoutes must be mutually
+// assignable, so `tsc` fails here if either side gains or loses a field or a variant.
+type AssertTrue<T extends true> = T;
+type ParsedModelRoutes = NonNullable<z.output<typeof modelRoutesSchema>>;
+export type ModelRoutesSchemaParity = AssertTrue<
+  [ParsedModelRoutes] extends [StoredModelRoutes]
+    ? [StoredModelRoutes] extends [ParsedModelRoutes] ? true : false
+    : false
+>;
 
 const connectionSchema = z.object({
   pricing: connectionPricingSchema.optional().catch(undefined),

@@ -1957,6 +1957,7 @@ export async function runWrapUp(
       tools: [],
       maxOutputTokens: config.maxOutputTokens,
       reasoningEffort: config.reasoningEffort,
+      contextWindowTokens: loop.contextInfo().contextWindowTokens,
       abortSignal: controller.signal,
     });
     for await (const event of stream) {

@@ -3005,6 +3005,29 @@ describe("wrap-up leaves the child history untouched (§4.3, DoD-4)", () => {
   });
 });
 
+describe("wrap-up request carries the child loop's context window", () => {
+  it("sends the same contextWindowTokens as the child loop's own requests", async () => {
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) {
+        return textStep("REPORT: window carried");
+      }
+      return toolStep("c1", "TodoRead", {}, "turn-1");
+    });
+    // Below the subagent clamp, so the child's window is exactly 64_000.
+    const runner = createSubagentRunner(
+      makeParent({ modelPort: model, mode: "yolo", context: { contextWindowTokens: 64_000, keepRecentMessages: 7 } }),
+    );
+
+    const outcome = await runner.run({ ...REQ, maxTurns: 2 }, {});
+    expect(outcome.finalText).toBe("REPORT: window carried");
+
+    const loopRequest = model.requests.find((req) => !isWrapUpRequest(req));
+    const wrapUpRequest = model.requests.find((req) => isWrapUpRequest(req));
+    expect(loopRequest?.contextWindowTokens).toBe(64_000);
+    expect(wrapUpRequest?.contextWindowTokens).toBe(64_000);
+  });
+});
+
 describe("wrap-up degrades without ever worsening the outcome (§7 F4, DoD-5)", () => {
   /** A child that runs `turns` tool steps, then answers the rescue via `wrapUp`. */
   function makePort(wrapUp: (yieldEvent: (e: ModelStreamEvent) => void) => Promise<void>): {
