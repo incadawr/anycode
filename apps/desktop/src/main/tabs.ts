@@ -133,6 +133,11 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * main-side style choice. The child-limit messages use the current wording
  * documented for users.
  */
+/** The engine a host authority report is tagged with; untagged reports are Core's. */
+function reportEngine(message: unknown): unknown {
+  return (message as { engine?: unknown }).engine ?? "core";
+}
+
 function childLimitGlobalMessage(limit: number): string {
   return `Agent: application-wide child session limit reached (${limit} running child ${limit === 1 ? "session" : "sessions"}). No child was started. Wait for one to finish, or use tier "inline".`;
 }
@@ -1368,10 +1373,10 @@ export class TabHostManager {
       turnContext: tab.proc ? this.peerTurns.active(tab.proc) : undefined,
       workspace: tab.workspace, workspaceKey: tab.peerWorkspaceKey ?? "",
       live: tab.state === "running" && tab.proc !== null, root: !tab.childOf,
-      // Core write modes and orchestrate roots still pass through the Core tool gate.
-      // Claude/Codex mode() is display-only "build", including read-only presets.
-      // Their native preset authority is not carried here: keep both closed.
-      restricted: !!tab.childOf, readOnly: tab.engine !== "core" ||
+      // Every engine reports its Core-equivalent authority through mode_changed and
+      // orchestrate_changed: Core its live mode, Claude/Codex the mapped preset
+      // (narrower of applied and pending). Unknown or absent reports stay read-only.
+      restricted: !!tab.childOf, readOnly:
         !(tab.orchestrate === true || tab.permissionMode === "build" || tab.permissionMode === "edit" ||
           tab.permissionMode === "auto" || tab.permissionMode === "yolo"),
       title: this.deps.agentTitleOf?.(tab.sessionId),
@@ -2193,12 +2198,12 @@ export class TabHostManager {
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
     if (data.type === "orchestrate_changed") {
       const enabled = (message as { enabled?: unknown }).enabled;
-      if (tab.proc === child && tab.engine === "core" && typeof enabled === "boolean") tab.orchestrate = enabled;
+      if (tab.proc === child && reportEngine(message) === tab.engine && typeof enabled === "boolean") tab.orchestrate = enabled;
       return;
     }
     if (data.type === "mode_changed") {
       const mode = (message as { mode?: unknown }).mode;
-      if (tab.proc === child && tab.engine === "core" &&
+      if (tab.proc === child && reportEngine(message) === tab.engine &&
         (mode === "plan" || mode === "build" || mode === "edit" || mode === "auto" || mode === "yolo")) tab.permissionMode = mode;
       return;
     }

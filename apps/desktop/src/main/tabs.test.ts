@@ -9255,18 +9255,77 @@ describe("peer host permission authority", () => {
     } finally { await manager.shutdownAllTabHosts(); }
   });
 
-  it.each(["claude", "codex"] as const)("fails closed for %s display-only mode reports", async engine => {
+  it.each(["claude", "codex"] as const)("admits only engine-tagged %s authority reports", async engine => {
     const { fork, hosts } = shutdownableForkRig();
     const manager = childManager(fork, windowRig().window, { engineReady: () => true });
     const created = manager.createTab({ workspace: "/ws", sessionId: engine, resume: false, engine });
     if (!created.ok) throw new Error("create failed");
-    hosts[0]!.emit("message", { type: "mode_changed", mode: "build" });
-    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: true });
-    expect(manager.peerHost(created.tab.tabId)?.readOnly).toBe(true);
+    const host = hosts[0]!;
+    const readOnly = () => manager.peerHost(created.tab.tabId)?.readOnly;
+    const other = engine === "claude" ? "codex" : "claude";
+    // Untagged reports are Core's: a native tab ignores them, as it does a mismatched tag.
+    host.emit("message", { type: "mode_changed", mode: "build" });
+    host.emit("message", { type: "orchestrate_changed", enabled: true });
+    for (const wrong of ["core", other]) {
+      host.emit("message", { type: "mode_changed", mode: "yolo", engine: wrong });
+      host.emit("message", { type: "orchestrate_changed", enabled: true, engine: wrong });
+    }
+    expect(readOnly()).toBe(true);
+    host.emit("message", { type: "mode_changed", mode: "build", engine }); expect(readOnly()).toBe(false);
+    host.emit("message", { type: "mode_changed", mode: "plan", engine }); expect(readOnly()).toBe(true);
+    host.emit("message", { type: "mode_changed", mode: "yolo", engine }); expect(readOnly()).toBe(false);
+    host.emit("message", { type: "mode_changed", mode: "yolo" }); host.emit("message", { type: "mode_changed", mode: "forged", engine });
+    expect(readOnly()).toBe(false);
+    host.emit("message", { type: "mode_changed", mode: "plan", engine }); expect(readOnly()).toBe(true);
+    host.emit("message", { type: "orchestrate_changed", enabled: true, engine }); expect(readOnly()).toBe(false);
+    host.emit("message", { type: "orchestrate_changed", enabled: "true", engine }); expect(readOnly()).toBe(false);
+    host.emit("message", { type: "orchestrate_changed", enabled: false, engine }); expect(readOnly()).toBe(true);
+    // A child of a native root stays a restricted, non-root peer whatever it reports.
+    host.emit("message", { type: "mode_changed", mode: "build", engine });
+    host.emit("message", spawnRequest({ requestId: `native-child-${engine}` }));
+    const child = manager.listTabs().find(t => t.childOf);
+    expect(child).toBeDefined();
+    hosts[1]!.emit("message", { type: "mode_changed", mode: "yolo" });
+    hosts[1]!.emit("message", { type: "orchestrate_changed", enabled: true });
+    expect(manager.peerHost(child!.tabId)).toMatchObject({ root: false, restricted: true });
     await manager.shutdownAllTabHosts();
   });
 
-  it.each(["build", "edit", "auto", "orchestrate"])("admits %s sends through the real main handler and refuses plan and forged bypass", async posture => {
+  it("clears native authority across codex build → core → codex commits", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const manager = childManager(fork, windowRig().window, {
+      engineReady: () => true, engineSwitchEnabled: () => true,
+      prepareEngineSwitch: async target => ({ launch: { target, env: {} } }),
+      commitEngineSwitchIdentity: vi.fn(),
+    });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "native-switch", resume: false, engine: "codex" });
+    if (!root.ok) throw new Error("create failed");
+    const host = hosts[0]!;
+    const readOnly = () => manager.peerHost(root.tab.tabId)?.readOnly;
+    host.emit("message", { type: "mode_changed", mode: "yolo", engine: "codex" });
+    expect(readOnly()).toBe(false);
+    const requestId = "to-core";
+    const send = (phase: string, extra = {}) => host.emit("message", {
+      type: "anycode:engine-switch", generation: 1, requestId, phase, ...extra,
+    });
+    send("prepare", { target: { engine: "core", model: "model", connectionId: "connection" } });
+    await vi.waitFor(() => expect(root.tab.switchCoordinator?.acceptsCandidate(requestId)).toBe(true));
+    send("commit", { identity: { model: "model", mode: "plan", externalSessionRef: "ref" } });
+    await vi.waitFor(() => expect(root.tab.engine).toBe("core"));
+    send("retire");
+    await vi.waitFor(() => expect(root.tab.switchCoordinator?.pending).toBe(false));
+    // The committed authority is cleared, and the old tag no longer applies.
+    expect(readOnly()).toBe(true);
+    host.emit("message", { type: "mode_changed", mode: "yolo", engine: "codex" });
+    expect(readOnly()).toBe(true);
+    host.emit("message", { type: "mode_changed", mode: "build" });
+    expect(readOnly()).toBe(false);
+    await manager.shutdownAllTabHosts();
+  });
+
+  const senderEngines = ["core", "claude", "codex"] as const;
+  it.each(senderEngines.flatMap(engine => ["build", "edit", "auto", "yolo", "orchestrate"].map(posture => [engine, posture] as const)))(
+    "admits %s sender %s sends through the real main handler and refuses plan and forged bypass", async (engine, posture) => {
     const { fork, hosts } = shutdownableForkRig();
     const access = createSessionPeerAccess({ enabled: () => true,
       policy: { isNativeEnabled: () => true, hasPairGrant: () => false } as never,
@@ -9276,27 +9335,28 @@ describe("peer host permission authority", () => {
       return { envelope: { messageId: "m" }, state: "acknowledged" as const };
     });
     const manager = childManager(fork, windowRig().window, {
-      onSessionPeerRequest: (id, proc, request) => handler(id, proc, request),
+      onSessionPeerRequest: (id, proc, request) => handler(id, proc, request), engineReady: () => true,
     });
     const handler = createSessionPeersHandler({ current: id => manager.peerHost(id),
       targets: () => manager.listTabs().map(t => manager.peerHost(t.tabId)!), access,
       prepare: async () => {}, send });
-    const a = manager.createTab({ workspace: "/ws", sessionId: "a", resume: false });
+    const a = manager.createTab({ workspace: "/ws", sessionId: "a", resume: false, engine });
     const b = manager.createTab({ workspace: "/ws", sessionId: "b", resume: false });
     if (!a.ok || !b.ok) throw new Error("create failed");
     manager.getTab(a.tab.tabId)!.peerWorkspaceKey = "/ws";
     manager.getTab(b.tab.tabId)!.peerWorkspaceKey = "/ws";
     const request = { requestId: "send", operation: "send", input: { sessionId: "b", payload: "hello" } };
-    hosts[0]!.emit("message", { type: "mode_changed", mode: posture === "orchestrate" ? "plan" : posture });
-    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: posture === "orchestrate" });
+    const tag = engine === "core" ? {} : { engine };
+    hosts[0]!.emit("message", { type: "mode_changed", mode: posture === "orchestrate" ? "plan" : posture, ...tag });
+    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: posture === "orchestrate", ...tag });
     hosts[0]!.emit("message", { type: "session_peers_request", request });
     await flush();
     expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "send",
       result: { status: "sent", messageId: "m", state: "acknowledged" } });
     expect(send).toHaveBeenCalledTimes(1);
     hosts[0]!.postMessage.mockClear();
-    hosts[0]!.emit("message", { type: "mode_changed", mode: "plan" });
-    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: false });
+    hosts[0]!.emit("message", { type: "mode_changed", mode: "plan", ...tag });
+    hosts[0]!.emit("message", { type: "orchestrate_changed", enabled: false, ...tag });
     hosts[0]!.emit("message", { type: "session_peers_request", request });
     await flush();
     expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "send", result: { status: "refused" } });
