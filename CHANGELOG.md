@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.93] - 2026-11-08
+
 ### Changed
 - Account sources explain preview failures, keep bindings when switching to a compatible transport, show setup hints, and list model prices after approval.
 - The Codex speed control in the composer is now a lightning toggle that shows ×1.5 when Fast is on.
@@ -17,7 +19,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Switching or creating-and-switching a branch in a worktree managed by AnyCode
   is now refused by the app itself, not only hidden in the interface.
 - Switching back to a session restores its scroll position, the transcript keeps following new output while it grows, and the minimap highlights the last turn when you are at the bottom.
-- Native sessions can read images with image-capable models.
+- Native sessions on Anthropic-compatible connections can read images with
+  image-capable models.
 - The macOS app icon now has rounded transparent corners and the standard
   size and margin, instead of a square icon with black corners.
 
