@@ -11,6 +11,8 @@ import {
   isAtBottom,
   isTerminalStatus,
   needsSnap,
+  nextFollow,
+  restoreScrollTarget,
   showTryAgainButton,
   showContinueButton,
   showStandaloneRetry,
@@ -358,6 +360,61 @@ describe("needsSnap (F17 sticky-follow, codex P7.3-F finding 4 dedup helper)", (
     // hidden), but a snap write is still worth doing to close the gap.
     expect(isAtBottom(500 - FOLLOW_THRESHOLD_PX, 1000, 500)).toBe(true);
     expect(needsSnap(500 - FOLLOW_THRESHOLD_PX, 1000, 500, false)).toBe(true);
+  });
+});
+
+describe("nextFollow (sticky-follow decision core)", () => {
+  it("keeps following when the content grew under the viewport and scrollTop did not move", () => {
+    // The bug: markdown/highlighting/images lay out AFTER the snap, the
+    // bottom moves away, scrollTop stays put — the old "not at bottom →
+    // stop following" reading mistook that growth for a manual scroll-up
+    // and parked the transcript mid-history.
+    expect(nextFollow(true, 500, 500, 1200, 500)).toBe(true);
+  });
+
+  it("stops following when the user really scrolled up", () => {
+    expect(nextFollow(true, 500, 300, 1000, 500)).toBe(false);
+  });
+
+  it("follows again when the user is back at the bottom", () => {
+    expect(nextFollow(false, 300, 500, 1000, 500)).toBe(true);
+  });
+
+  it("stays not-following when the content grew while not following", () => {
+    expect(nextFollow(false, 300, 300, 1200, 500)).toBe(false);
+  });
+
+  it("ignores a sub-pixel jitter as a scroll-up", () => {
+    // Fractional scroll offsets are normal; only a real move up counts.
+    expect(nextFollow(true, 500, 499.5, 1200, 500)).toBe(true);
+  });
+
+  it("keeps following when the user scrolled down but the bottom is not reached", () => {
+    expect(nextFollow(true, 300, 400, 1200, 500)).toBe(true);
+  });
+});
+
+describe("restoreScrollTarget (per-tab scroll restore)", () => {
+  it("scrolls by the difference between the anchor's current and its saved offset", () => {
+    // The anchor sits 300px below the container top now, but it was 100px
+    // below when the tab was left → scroll down by 200px.
+    expect(restoreScrollTarget(0, 300, 100, 2000, 500)).toBe(200);
+  });
+
+  it("keeps the current scroll position when the anchor did not move", () => {
+    expect(restoreScrollTarget(400, 120, 120, 2000, 500)).toBe(400);
+  });
+
+  it("clamps a negative target to the top of the list", () => {
+    expect(restoreScrollTarget(0, -300, 100, 2000, 500)).toBe(0);
+  });
+
+  it("clamps a target beyond the scrollable range to the bottom", () => {
+    expect(restoreScrollTarget(0, 5000, 100, 2000, 500)).toBe(1500);
+  });
+
+  it("returns 0 for a list that cannot scroll at all", () => {
+    expect(restoreScrollTarget(0, 300, 100, 400, 500)).toBe(0);
   });
 });
 
