@@ -465,6 +465,57 @@ export function shouldShowJumpButton(follow: boolean, blockCount: number): boole
 }
 
 /**
+ * Per-tab scroll memory. App keys MessageList by tabId, so a session switch
+ * REMOUNTS the list and every scroll position inside it is lost — the
+ * transcript then reopens at the bottom (or, with a stale follow flag, in
+ * the middle of the history). This module-level map keeps the position of
+ * every tab that was left, so the next mount can restore it.
+ */
+const savedScroll = new Map<string, { follow: boolean; anchorId: string | null; anchorOffset: number }>();
+
+/**
+ * The topmost transcript block that is still (partially) inside the
+ * container — the anchor a saved scroll position is expressed against.
+ * The offset is measured against the container's top edge, so it is negative
+ * for a block that starts above the viewport.
+ */
+function findAnchorBlock(container: HTMLElement): { id: string; offset: number } | null {
+  const containerTop = container.getBoundingClientRect().top;
+  for (const node of container.querySelectorAll<HTMLElement>("[data-block-id]")) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > containerTop) {
+      const id = node.getAttribute("data-block-id");
+      if (id) {
+        return { id, offset: rect.top - containerTop };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Scroll position that puts the anchor block back at its saved offset from
+ * the container's top edge — exported pure for unit tests.
+ *
+ * `anchorDelta` is the anchor's current offset from the container's top
+ * edge; scrolling by `x` moves the anchor's offset down by `x`, so the
+ * scroll that lands it on the saved offset is `anchorDelta - savedOffset`
+ * (plus the scroll position the container starts from). The result is
+ * clamped into the scrollable range.
+ */
+export function restoreScrollTarget(
+  currentScrollTop: number,
+  anchorDelta: number,
+  savedOffset: number,
+  scrollHeight: number,
+  clientHeight: number,
+): number {
+  const max = Math.max(0, scrollHeight - clientHeight);
+  const target = currentScrollTop + anchorDelta - savedOffset;
+  return Math.min(max, Math.max(0, target));
+}
+
+/**
  * Sticky-follow decision core — exported pure for unit tests.
  *
  * A scroll event does not always mean the USER scrolled: content that grows
@@ -976,6 +1027,75 @@ export function MessageList({
     }
     spyActiveMark();
   };
+
+  // --- per-tab scroll memory (session switch) -------------------------------
+  // App keys MessageList by tabId, so a session switch REMOUNTS this
+  // component and the browser forgets the scroll position: the transcript
+  // reopens at the bottom (or, with a stale follow flag, in the middle of
+  // the history). The module-level map keeps the last position of every tab
+  // that was left, so the next mount of that tab can put it back.
+  //
+  // Restore the position this tab had before the list was remounted. Runs
+  // BEFORE the snap effect below: a restored (scrolled-up) position must not
+  // be yanked back to the bottom by the follow-snap. When the anchor block
+  // is not in the DOM the restore is impossible — follow stays on and the
+  // list snaps to the bottom, as it did before.
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || !tabId) {
+      return;
+    }
+    const saved = savedScroll.get(tabId);
+    if (!saved || saved.follow || !saved.anchorId) {
+      return;
+    }
+    const anchor = container.querySelector<HTMLElement>(
+      `[data-block-id="${escapeSelector(saved.anchorId)}"]`,
+    );
+    if (!anchor) {
+      return;
+    }
+    // Put the anchor block back where it was: the saved offset is measured
+    // against the container's top edge, so the scroll has to move by the
+    // difference between the anchor's current and its saved offset.
+    const delta = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    const target = restoreScrollTarget(
+      container.scrollTop,
+      delta,
+      saved.anchorOffset,
+      container.scrollHeight,
+      container.clientHeight,
+    );
+    container.scrollTop = target;
+    lastScrollTopRef.current = target;
+    followRef.current = false;
+    setFollow(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Remember the position of this tab when the list unmounts (session switch).
+  useLayoutEffect(() => {
+    return () => {
+      if (!tabId) {
+        return;
+      }
+      const container = containerRef.current;
+      if (!container) {
+        savedScroll.set(tabId, { follow: followRef.current, anchorId: null, anchorOffset: 0 });
+        return;
+      }
+      if (followRef.current) {
+        savedScroll.set(tabId, { follow: true, anchorId: null, anchorOffset: 0 });
+        return;
+      }
+      const anchor = findAnchorBlock(container);
+      savedScroll.set(tabId, {
+        follow: false,
+        anchorId: anchor?.id ?? null,
+        anchorOffset: anchor?.offset ?? 0,
+      });
+    };
+  }, [tabId]);
 
   // Snap to bottom after every commit while following (design §3.1): streaming
   // patches the tail block per rAF flush, each flush re-renders, so a no-dep
