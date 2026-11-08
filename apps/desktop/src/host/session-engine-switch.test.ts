@@ -212,12 +212,13 @@ describe("Session — engine switch", () => {
       expect(orchestrate).toEqual([false]);
       h.send({ type: "engine_switch_request", requestId: "native", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
-      expect(modes).toEqual(["build"]);
-      expect(orchestrate).toEqual([false]);
+      // The native target has no settings seam here, so its authority fails closed.
+      expect(modes).toEqual(["build", "plan"]);
+      expect(orchestrate).toEqual([false, false]);
       h.send({ type: "engine_switch_request", requestId: "core", engine: "core", model: "test-model" });
       await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === "core"));
-      expect(modes).toEqual(["build", "build"]);
-      expect(orchestrate).toEqual([false, false]);
+      expect(modes).toEqual(["build", "plan", "build"]);
+      expect(orchestrate).toEqual([false, false, false]);
     } finally { h.close(); }
   });
 

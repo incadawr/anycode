@@ -10483,9 +10483,11 @@ it.each(["claude", "codex"] as const)("does not publish %s display mode as permi
   const mode = vi.fn(), orchestrate = vi.fn();
   try {
     h.session.observePermissionMode(mode, orchestrate);
+    // No settings seam: the attach report fails closed to plan, never the display "build".
+    expect(mode).toHaveBeenCalledExactlyOnceWith("plan", engineId);
     h.outbound.emit({ type: "mode_changed", mode: "build" });
+    expect(mode).toHaveBeenCalledTimes(1);
     h.outbound.emit({ type: "orchestrate_changed", enabled: true });
-    expect(mode).not.toHaveBeenCalled();
-    expect(orchestrate).not.toHaveBeenCalled();
+    expect(orchestrate).toHaveBeenLastCalledWith(false, engineId);
   } finally { h.close(); }
 });

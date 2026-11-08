@@ -127,6 +127,7 @@ import type { SessionEngine } from "./engines/session-engine.js";
 import { wakeNetworkWaiters } from "./network-wait.js";
 import { ENGINE_SWITCH_TURN_ID, planEngineSwitchImport, renderImportPrompt } from "./engine-switch.js";
 import type { EngineId } from "./engines/session-engine.js";
+import { nativePeerAuthorityMode } from "./engines/child-permission-map.js";
 
 /** Cap on the replay ring buffer; older messages roll off (design §3). */
 export const REPLAY_BUFFER_CAP = 5_000;
@@ -1486,18 +1487,31 @@ export class Session {
 
   private busyValue = false;
   private activityListener?: (state: SessionActivityState) => void;
-  private permissionModeListener?: (mode: PermissionMode) => void;
-  private orchestrateListener?: (enabled: boolean) => void;
+  private permissionModeListener?: (mode: PermissionMode, engine: EngineId) => void;
+  private orchestrateListener?: (enabled: boolean, engine: EngineId) => void;
   /** Host control-plane authority, independent of renderer connect/replay. */
-  observePermissionMode(listener: (mode: PermissionMode) => void, orchestrateListener?: (enabled: boolean) => void): void {
+  observePermissionMode(listener: (mode: PermissionMode, engine: EngineId) => void, orchestrateListener?: (enabled: boolean, engine: EngineId) => void): void {
     this.permissionModeListener = listener;
     this.orchestrateListener = orchestrateListener;
     this.publishPermissionAuthority();
   }
+  /**
+   * The Core-equivalent authority a peer caller holds. Core reports its live
+   * mode; a native engine's own display mode is not authority, so it reports
+   * the mapped preset (narrower of applied and pending). Fails closed when the
+   * native posture is quarantined or the engine has no settings seam.
+   */
+  private peerAuthorityMode(): PermissionMode {
+    const engine = this.engine;
+    if (engine.id === "core") return engine.mode();
+    if (this.orchestrationPosture === "quarantined" || this.engineSettings === undefined) return "plan";
+    return nativePeerAuthorityMode(engine.id, this.engineSettings.snapshot().activePresetId, this.engineSettings.pendingSnapshot?.()?.activePresetId);
+  }
   private publishPermissionAuthority(): void {
-    if (this.engine.id !== "core") return;
-    this.permissionModeListener?.(this.engine.mode());
-    this.orchestrateListener?.(this.orchestrate);
+    const engine = this.engine.id;
+    const quarantined = engine !== "core" && this.orchestrationPosture === "quarantined";
+    this.permissionModeListener?.(this.peerAuthorityMode(), engine);
+    this.orchestrateListener?.(quarantined ? false : this.orchestrate, engine);
   }
   private get busy(): boolean { return this.busyValue; }
   private set busy(value: boolean) {
@@ -1863,8 +1877,11 @@ export class Session {
     this.outbound = options.outbound;
     this.outbound.observeEmissions((message) => {
       if (this.engine.id === "core") {
-        if (message.type === "mode_changed") this.permissionModeListener?.(message.mode);
-        if (message.type === "orchestrate_changed") this.orchestrateListener?.(message.enabled);
+        if (message.type === "mode_changed") this.permissionModeListener?.(message.mode, "core");
+        if (message.type === "orchestrate_changed") this.orchestrateListener?.(message.enabled, "core");
+      } else if (message.type === "engine_settings_changed" || message.type === "orchestrate_changed") {
+        // A native mode_changed is display-only; the mapped preset is what counts.
+        this.publishPermissionAuthority();
       }
       if (message.type === "file_snapshot" && this.turnId !== null) this.presentationJournal.recordFileSnapshot(this.turnId, message);
     });

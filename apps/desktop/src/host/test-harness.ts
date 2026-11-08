@@ -268,6 +268,8 @@ export function nodeWirePort(port: NodeMessagePort): WirePort {
 
 export interface HarnessOptions {
   steps: ModelStreamEvent[][];
+  /** Native settings seam handed to the Session (engine presets); omitted for Core. */
+  engineSettings?: SessionOptions["engineSettings"];
   /**
    * acceptance defect 1 fixture: replaces the built-in
    * ScriptedModelPort with a GatedModelPort that parks the FIRST step after
@@ -802,6 +804,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.observeFileActivity ? { observeFileActivity: options.observeFileActivity } : {}),
     ...(options.runtimeHistory ? {runtimeHistory: options.runtimeHistory} : {}),
     ...(options.engineSwitchCoordinator ? { engineSwitchCoordinator: options.engineSwitchCoordinator } : {}),
+    ...(options.engineSettings !== undefined ? { engineSettings: options.engineSettings } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
     ...(options.backgroundChildren !== undefined ? { backgroundChildren: options.backgroundChildren } : {}),
     broker,
