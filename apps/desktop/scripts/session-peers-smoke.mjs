@@ -317,8 +317,9 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
       return driver.tool(source,'SessionSend',{sessionId,payload,reply:options?.reply ?? 'explicit'},options);
     },
     waitNative(engine,after,token,tab) { return wait(() => native(engine,tab).slice(after).find(frame => !token || JSON.stringify(frame).includes(token))); },
-    async cards(tab, full = false) {
+    async cards(tab, full = false, expectedId) {
       assert((await api(`/tabs/${tab.tabId}/select`,{})).ok);
+      if (expectedId) await wait(() => evaluate(`!!document.querySelector(${JSON.stringify(`[data-block-id="agent-message:${expectedId}"]`)})`));
       await new Promise(r => setTimeout(r,300));
       await evaluate(`document.querySelectorAll('.agent-message-stack-toggle[aria-expanded="false"]').forEach(el => el.click())`);
       await new Promise(r => setTimeout(r,300));
@@ -596,11 +597,11 @@ export async function checkCoreReplies(driver,source,target) {
         assert.equal(permission.toolName,'SessionSend');
         assert((await driver.api(`/tabs/${target.tabId}/permission`,{behavior:'allow',requestId:permission.requestId})).ok);
       }
-      await wait(() => driver.replyRequests.slice(completedAt).some(r => r.incoming?.replyTo === fixture.received.incoming.messageId && r.incoming.payload.includes(fixture.nonce)));
+      const reply = await wait(() => driver.replyRequests.slice(completedAt).find(r => r.incoming?.replyTo === fixture.received.incoming.messageId && r.incoming.payload.includes(fixture.nonce)));
       await wait(async () => (await driver.api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.turn?.status === 'idle');
-      const outgoing = await driver.cards(target,true);
+      const outgoing = await driver.cards(target,true,reply.incoming.messageId);
       await driver.screenshot(`peer-${kind}-reply-outgoing.png`);
-      const incoming = await driver.cards(source,true);
+      const incoming = await driver.cards(source,true,reply.incoming.messageId);
       await driver.screenshot(`peer-${kind}-reply-incoming.png`);
       const evidence = {requests:driver.replyRequests,completedAt,received:fixture.received.incoming,originResult:result,nonce:fixture.nonce,kind,outgoing,incoming};
       writeFileSync(join(driver.pngDir,`${kind}-reply.json`),JSON.stringify(evidence,null,2));
