@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Switching or creating-and-switching a branch in a worktree managed by AnyCode
+  is now refused by the app itself, not only hidden in the interface.
+
 ## [0.0.92] - 2026-11-08
 
 ### Changed

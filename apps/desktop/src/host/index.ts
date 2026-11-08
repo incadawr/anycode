@@ -4056,7 +4056,11 @@ async function boot(): Promise<void> {
 
     const gitService = new NodeGitAdapter({ exec: execAdapter, cwd: workspace, signal: gitAbort.signal });
     const gitEnabled = systemPromptEnv.isGitRepo === true && typeof execAdapter.runBinary === "function";
-    gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound });
+    // The renderer locks the branch for an AnyCode-created worktree or a child
+    // session's worktree; refuse the same switches here, not only in the UI.
+    const branchSwitchLocked =
+      sessionMeta.worktree?.ownedByAnyCode === true || process.env.ANYCODE_MANAGED_CHILD_WORKTREE === "1";
+    gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound, branchSwitchLocked });
 
     const media = createCoreRuntimeMedia({
       registry,

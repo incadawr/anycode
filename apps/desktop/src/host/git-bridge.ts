@@ -49,11 +49,18 @@ const STAGE_UNAVAILABLE_REASON = "stage/unstage unavailable on this git port";
 const DISCARD_UNAVAILABLE_REASON = "discard unavailable on this git port";
 const STASH_UNAVAILABLE_REASON = "stash unavailable on this git port";
 const RESET_UNAVAILABLE_REASON = "reset unavailable on this git port";
+const BRANCH_SWITCH_LOCKED_REASON = "Branch switching is disabled in a worktree managed by AnyCode.";
 
 export interface GitBridgeOptions {
   /** null = non-git workspace / no runBinary (boot-gate mirror) — zero spawns forever. */
   git: GitPort | null;
   outbound: Pick<Outbound, "emit" | "sendDirect">;
+  /**
+   * True when the checkout is a worktree AnyCode manages (one it created, or a
+   * child session's worktree): its branch is fixed, so commands that would move
+   * HEAD to another branch are refused. Mirrors the renderer's branch lock.
+   */
+  branchSwitchLocked?: boolean;
 }
 
 function describeError(error: unknown): string {
@@ -86,6 +93,7 @@ export function projectGitStatus(summary: GitStatusSummary): WireGitStatus {
 export class GitBridge implements GitUiBridge {
   private readonly git: GitPort | null;
   private readonly outbound: Pick<Outbound, "emit" | "sendDirect">;
+  private readonly branchSwitchLocked: boolean;
 
   /** Serializes every command onto a single promise chain (at most one git child at a time). */
   private chain: Promise<void> = Promise.resolve();
@@ -97,6 +105,7 @@ export class GitBridge implements GitUiBridge {
   constructor(options: GitBridgeOptions) {
     this.git = options.git;
     this.outbound = options.outbound;
+    this.branchSwitchLocked = options.branchSwitchLocked === true;
   }
 
   handleCommand(message: { requestId: string; command: GitCommand }): void {
@@ -280,10 +289,19 @@ export class GitBridge implements GitUiBridge {
         return;
       }
       case "switch_branch": {
+        if (this.branchSwitchLocked) {
+          this.reply(requestId, { ok: false, reason: BRANCH_SWITCH_LOCKED_REASON });
+          return;
+        }
         await this.replyMutation(requestId, await git.switchBranch(command.name));
         return;
       }
       case "create_branch": {
+        // Only a create that switches moves HEAD; a plain `git branch <name>` leaves the fixed checkout untouched.
+        if (this.branchSwitchLocked && command.switch === true) {
+          this.reply(requestId, { ok: false, reason: BRANCH_SWITCH_LOCKED_REASON });
+          return;
+        }
         const result = await git.createBranch(
           command.name,
           command.switch !== undefined ? { switch: command.switch } : undefined,
