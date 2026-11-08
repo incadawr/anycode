@@ -61,8 +61,13 @@ Claude and Codex roots follow the same rules, taken from their permission preset
 | Claude **Ask**, **Workspace** | Allowed, with a human approval for each operation |
 | Codex **Ask for approval**, **Approve for me** | Allowed, with a human approval for each operation (peer calls never go to automatic review) |
 | Codex **Full access** | Allowed without a prompt, like Core `yolo` |
-| Claude **Read-only** | Refused, like Plan |
+| Claude **Read-only**, Codex **Read-only** | Refused, like Plan |
 | Unknown or older presets | Refused |
+
+An Orchestrate root always asks for a human approval for each operation, even on
+Codex **Full access**. A Claude or Codex root also holds no peer access while its
+Orchestrate restore is running or after it has failed, and a resumed Claude
+session holds none until Claude has confirmed its permission mode.
 
 A preset change that would widen access counts only after it has been applied;
 narrowing counts immediately. A Claude or Codex root that receives a message can

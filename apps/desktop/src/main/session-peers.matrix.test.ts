@@ -11,6 +11,7 @@ import { createCommunicationBroker } from "./communication-broker.js";
 import { writePrivateFile } from "./communication-ledger.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
 import { createSessionPeerReplies } from "./session-peer-replies.js";
+import { createSessionPeerReplyCoordinator } from "./session-peer-reply-coordinator.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { TabHostManager, type HostForkFn } from "./tabs.js";
 
@@ -18,6 +19,11 @@ import { TabHostManager, type HostForkFn } from "./tabs.js";
  * Sender x target matrix on the real TabHostManager: peer facts come from
  * manager.peerHost fed only by the host's own mode_changed/orchestrate_changed
  * reports, never from hand-written PeerHost values.
+ *
+ * Scope: main admission only (TabHostManager facts, access, handler, replies,
+ * and the terminal-driven automatic reply through the reply coordinator). The
+ * target delivery is a stub, and the host side (Session publication, the
+ * host's engine tag, the native bridge) is covered by the host tests.
  */
 const WS = "/ws";
 const ENGINES: readonly EngineId[] = ["core", "claude", "codex"];
@@ -59,9 +65,14 @@ async function matrixRig(senderEngine: EngineId, targetEngine: EngineId) {
   for (const tab of [sender.tab, target.tab]) manager.getTab(tab.tabId)!.peerWorkspaceKey = WS;
   const post = vi.fn(async () => ({ state: "acknowledged" }));
   const broker = await createCommunicationBroker({ realpath: async (p: string) => p, writeLedger: writePrivateFile,
-    ledgerFile: join(dir, "messages"), manager: { listTabs: () => manager.listTabs() as never, communicationRequest: post as never } });
+    ledgerFile: join(dir, "messages"), manager: { listTabs: () => manager.listTabs() as never, communicationRequest: post as never,
+      onSessionPeerTerminal: listener => manager.onSessionPeerTerminal(listener) } });
   cleanup.push(() => broker.dispose());
-  const replies = createSessionPeerReplies(broker);
+  // Automatic replies are driven by the host's real terminal push, as in production.
+  const replies = createSessionPeerReplies(broker, Date.now, createSessionPeerReplyCoordinator(broker, {
+    current: id => { const tab = manager.listTabs().find(t => t.sessionId === id); return tab && manager.peerHost(tab.tabId); },
+    sendAuto: (caller, source, payload) => replies.auto(caller, source, payload,
+      async id => manager.listTabs().find(t => t.sessionId === id) as never) }));
   const access = createSessionPeerAccess({ enabled: () => true,
     policy: { isNativeEnabled: () => true, hasPairGrant: () => false } as never,
     isTrusted: () => true, realpathSync: p => p, statSync: () => ({ isDirectory: () => true }) });
@@ -93,7 +104,16 @@ async function matrixRig(senderEngine: EngineId, targetEngine: EngineId) {
       .find(m => m.type === "session_peers_response" && m.requestId === requestId)?.result;
   };
   const peer = (who: "s" | "t") => manager.peerHost(who === "s" ? sender.tab.tabId : target.tab.tabId)!;
-  return { manager, replies, broker, report, call, peer, open, hostOf, post };
+  /** The target host pushes a turn start and its terminal result for one delivered message, through TabHostManager. */
+  const terminal = async (messageId: string, sequence: number) => {
+    const target = peer("t"), base = { generation: target.generation, sequence, turnId: `turn-${sequence}`, requestId: messageId, deliveredMessageIds: [messageId] };
+    (manager as unknown as { peerTurns: { expectMessage(proc: object, id: string): void } }).peerTurns.expectMessage(target.proc!, messageId);
+    hostOf("t").emit("message", { type: "session_peer_turn", ...base });
+    hostOf("t").emit("message", { type: "session_peer_terminal", ...base,
+      result: { source: "live_turn", turnId: base.turnId, requestId: messageId, nativeTurnId: null, terminalReason: "completed", publicAnswer: "answer", truncated: false, completedAt: 1 } });
+    await flush();
+  };
+  return { manager, replies, broker, report, call, peer, open, hostOf, post, terminal };
 }
 
 const pairs = ENGINES.flatMap(sender => ENGINES.map(target => [sender, target] as const));
@@ -188,5 +208,23 @@ describe("session peer matrix on the real TabHostManager", () => {
     rig.report("t", "build");
     const automatic = await auto();
     expect(automatic.envelope).toMatchObject({ recipientSessionId: "s", replyTo: messageId });
+  });
+
+  it.each(pairs)("terminal-driven reply: %s target auto-answers a %s sender only while it holds authority", async (senderEngine, targetEngine) => {
+    const rig = await matrixRig(senderEngine, targetEngine);
+    const results = () => [...rig.broker.ledger.messages.values()].filter(r => r.envelope.kind === "task_result");
+    const ask = async (sequence: number) => {
+      const sent = await rig.call("s", { sessionId: "t", payload: `question ${sequence}`, reply: "on_turn_end" });
+      if ((sent as { status?: string })?.status !== "sent") throw new Error("send failed " + JSON.stringify(sent));
+      return (sent as unknown as { messageId: string }).messageId;
+    };
+    rig.report("s", "build");
+    rig.report("t", "plan");
+    await rig.terminal(await ask(1), 1);
+    expect(results()).toHaveLength(0); // a read-only target never answers automatically
+    rig.report("t", "build");
+    await rig.terminal(await ask(2), 2);
+    expect(results()).toHaveLength(1);
+    expect(results()[0]!.envelope).toMatchObject({ recipientSessionId: "s" });
   });
 });

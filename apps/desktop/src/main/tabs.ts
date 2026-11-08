@@ -134,6 +134,7 @@ const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
  * documented for users.
  */
 /** The engine a host authority report is tagged with; untagged reports are Core's. */
+// `engine: null` or an absent tag both mean Core (the host always tags native reports).
 function reportEngine(message: unknown): unknown {
   return (message as { engine?: unknown }).engine ?? "core";
 }
