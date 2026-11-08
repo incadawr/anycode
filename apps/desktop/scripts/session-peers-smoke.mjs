@@ -213,7 +213,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
           await wait(async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId]?.connection === 'ready');
           await api(`/tabs/${tab.tabId}/prompt`,{text:'fixture ready'});
           await wait(async () => {
-            await invoke('workspaceTrust.decide',{tabId:tab.tabId,decision:'once'});
+            await invoke('workspaceTrust.decide',{tabId:tab.tabId,decision:'trust'});
             const state = await api(`/state/${tab.tabId}`);
             return native(engine).length > 0 && state.snapshot.states[tab.tabId]?.turn?.status === 'idle';
           });
@@ -700,6 +700,7 @@ export async function checkNativeSource(driver,coreTab,nativeTab) {
   await check('native-source-open',async () => {
     const nonce = `${driver.nonce}-native-source-open`, before = driver.native('core').length;
     const {response} = await driver.nativeTool(nativeTab,'SessionOpen',{engine:'core',firstMessage:nonce},{screenshot:'peer-native-source-open-approval.png'});
+    assert.equal(JSON.parse(response.result?.contentItems?.[0]?.text ?? 'null')?.status,'opened','SessionOpen did not open a session');
     await driver.waitNative('core',before,nonce);
     judgeNativeCall({response,expectedStatus:'opened',before,requests:driver.native('core'),nonce});
   });
