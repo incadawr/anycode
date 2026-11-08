@@ -3,7 +3,7 @@ import { loadSettings, saveSettings, withSettingsFileLock } from "../../settings
 import { accountSourceTransportCompatible, type AccountSourceKey, type AccountSourcePreviewResult } from "../../shared/account-sources.js";
 import type { AnycodeSettings, SecretKey } from "../../shared/settings.js";
 import { customProviderSecretKey } from "../host-env.js";
-import { AccountHttpError, fetchAccountDocument } from "./client.js";
+import { AccountHttpError, AccountInvalidDocumentError, fetchAccountDocument } from "./client.js";
 import type { AccountSourceCandidate } from "./candidates.js";
 
 interface Deps {
@@ -60,7 +60,7 @@ export class AccountBindingService {
       const token = randomUUID();
       this.pending.set(token, { candidate: fresh, connectionId, accountId: result.data.accountId, credentialDigest: credentialDigest(credentials.secret), expires: (this.deps.now ?? Date.now)() + 300_000 });
       return { ok: true, token, models: result.data.models.map(({ id, displayName, billing, ratesMicrosPerMillionTokens }) => ({ id, ...(displayName ? { displayName } : {}), billing, ...(ratesMicrosPerMillionTokens ? { ratesMicrosPerMillionTokens } : {}) })) };
-    } catch (error) { return { ok: false, reason: error instanceof AccountHttpError && error.status === 401 ? "auth_required" : error instanceof AccountHttpError && error.status === 403 ? "access_denied" : controller.signal.aborted || (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) ? "timeout" : "unavailable" }; }
+    } catch (error) { return { ok: false, reason: error instanceof AccountHttpError && error.status === 401 ? "auth_required" : error instanceof AccountHttpError && error.status === 403 ? "access_denied" : controller.signal.aborted || (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) ? "timeout" : error instanceof AccountInvalidDocumentError ? "invalid" : "unavailable" }; }
   }
   async bind(token: string): Promise<boolean> {
     const pending = this.pending.get(token);
