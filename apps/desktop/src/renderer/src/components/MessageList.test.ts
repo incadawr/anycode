@@ -9,8 +9,12 @@ import {
   formatStreamRetryLine,
   groupTranscriptBlocks,
   isAtBottom,
+  isAtTranscriptBottom,
   isTerminalStatus,
   needsSnap,
+  minimapSpyCandidate,
+  nextFollow,
+  restoreScrollTarget,
   showTryAgainButton,
   showContinueButton,
   showStandaloneRetry,
@@ -22,6 +26,11 @@ import {
   stackStatusClass,
   STARTER_CHIPS,
   topmostVisibleUserIndex,
+  findAnchorBlock,
+  isLaidOut,
+  shouldAdvanceScrollRef,
+  type AnchorContainerLike,
+  type AnchorElementLike,
 } from "./MessageList.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -358,6 +367,148 @@ describe("needsSnap (F17 sticky-follow, codex P7.3-F finding 4 dedup helper)", (
     // hidden), but a snap write is still worth doing to close the gap.
     expect(isAtBottom(500 - FOLLOW_THRESHOLD_PX, 1000, 500)).toBe(true);
     expect(needsSnap(500 - FOLLOW_THRESHOLD_PX, 1000, 500, false)).toBe(true);
+  });
+});
+
+describe("nextFollow (sticky-follow decision core)", () => {
+  it("keeps following when the content grew under the viewport and scrollTop did not move", () => {
+    // The bug: markdown/highlighting/images lay out AFTER the snap, the
+    // bottom moves away, scrollTop stays put — the old "not at bottom →
+    // stop following" reading mistook that growth for a manual scroll-up
+    // and parked the transcript mid-history.
+    expect(nextFollow(true, 500, 500, 1200, 500)).toBe(true);
+  });
+
+  it("stops following when the user really scrolled up", () => {
+    expect(nextFollow(true, 500, 300, 1000, 500)).toBe(false);
+  });
+
+  it("follows again when the user is back at the bottom", () => {
+    expect(nextFollow(false, 300, 500, 1000, 500)).toBe(true);
+  });
+
+  it("stays not-following when the content grew while not following", () => {
+    expect(nextFollow(false, 300, 300, 1200, 500)).toBe(false);
+  });
+
+  it("ignores a sub-pixel jitter as a scroll-up", () => {
+    // Fractional scroll offsets are normal; only a real move up counts.
+    expect(nextFollow(true, 500, 499.5, 1200, 500)).toBe(true);
+  });
+
+  it("drops follow on a single whole-pixel step up", () => {
+    // Slow wheel or keyboard nudges move one pixel at a time; each step
+    // advances the reference, so a 1px step itself has to count.
+    expect(nextFollow(true, 500, 499, 1200, 500)).toBe(false);
+  });
+
+  it("keeps following when the user scrolled down but the bottom is not reached", () => {
+    expect(nextFollow(true, 300, 400, 1200, 500)).toBe(true);
+  });
+});
+
+describe("restoreScrollTarget (per-tab scroll restore)", () => {
+  it("scrolls by the difference between the anchor's current and its saved offset", () => {
+    // The anchor sits 300px below the container top now, but it was 100px
+    // below when the tab was left → scroll down by 200px.
+    expect(restoreScrollTarget(0, 300, 100, 2000, 500)).toBe(200);
+  });
+
+  it("keeps the current scroll position when the anchor did not move", () => {
+    expect(restoreScrollTarget(400, 120, 120, 2000, 500)).toBe(400);
+  });
+
+  it("clamps a negative target to the top of the list", () => {
+    expect(restoreScrollTarget(0, -300, 100, 2000, 500)).toBe(0);
+  });
+
+  it("clamps a target beyond the scrollable range to the bottom", () => {
+    expect(restoreScrollTarget(0, 5000, 100, 2000, 500)).toBe(1500);
+  });
+
+  it("returns 0 for a list that cannot scroll at all", () => {
+    expect(restoreScrollTarget(0, 300, 100, 400, 500)).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// The anchor helpers — plain stubs, no DOM (the node test env has none).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Stub block element for the anchor helpers. */
+function stubNode(
+  id: string,
+  rect: { top: number; bottom: number; width: number; height: number },
+  hidden = false,
+): AnchorElementLike {
+  return {
+    getBoundingClientRect: () => rect,
+    getClientRects: () => (hidden ? [] : [rect]),
+    getAttribute: (name: string) => (name === "data-block-id" ? id : null),
+  };
+}
+
+/** Stub scroll container for the anchor helpers. */
+function stubContainer(top: number, nodes: AnchorElementLike[]): AnchorContainerLike {
+  return {
+    getBoundingClientRect: () => ({ top }),
+    querySelectorAll: () => nodes,
+  };
+}
+
+describe("isLaidOut (hidden anchors are not anchors)", () => {
+  it("treats a display:none element (no client rects) as not laid out", () => {
+    // A collapsed tool-call stack renders its anchor with display:none —
+    // its rect is all zeros, so it must never be used as a scroll anchor.
+    expect(isLaidOut(stubNode("hidden", { top: 0, bottom: 0, width: 0, height: 0 }, true))).toBe(false);
+  });
+
+  it("treats a zero-size element as not laid out", () => {
+    expect(isLaidOut(stubNode("empty", { top: 10, bottom: 10, width: 0, height: 0 }))).toBe(false);
+  });
+
+  it("accepts a normal visible block", () => {
+    expect(isLaidOut(stubNode("visible", { top: 10, bottom: 40, width: 300, height: 30 }))).toBe(true);
+  });
+});
+
+describe("findAnchorBlock (the topmost visible block)", () => {
+  it("skips a hidden first block and picks the next visible one", () => {
+    const container = stubContainer(-10, [
+      stubNode("hidden", { top: 0, bottom: 0, width: 0, height: 0 }, true),
+      stubNode("visible", { top: 120, bottom: 160, width: 300, height: 40 }),
+    ]);
+    expect(findAnchorBlock(container)).toEqual({ id: "visible", offset: 130 });
+  });
+
+  it("returns null when every block is above the container top", () => {
+    const container = stubContainer(100, [
+      stubNode("a", { top: 0, bottom: 40, width: 300, height: 40 }),
+      stubNode("b", { top: 50, bottom: 90, width: 300, height: 40 }),
+    ]);
+    expect(findAnchorBlock(container)).toBeNull();
+  });
+
+  it("reports a negative offset for a block that starts above the viewport", () => {
+    const container = stubContainer(100, [
+      stubNode("a", { top: 40, bottom: 200, width: 300, height: 160 }),
+    ]);
+    expect(findAnchorBlock(container)).toEqual({ id: "a", offset: -60 });
+  });
+});
+
+describe("shouldAdvanceScrollRef (slow scroll-up must not be lost)", () => {
+  it("does not advance the reference on a sub-pixel move without a follow edge", () => {
+    expect(shouldAdvanceScrollRef(true, true, 499.6, 500)).toBe(false);
+  });
+
+  it("advances the reference on a real (>= 1px) move", () => {
+    expect(shouldAdvanceScrollRef(true, true, 499, 500)).toBe(true);
+  });
+
+  it("advances the reference when the follow state flips", () => {
+    expect(shouldAdvanceScrollRef(true, false, 499.6, 500)).toBe(true);
+    expect(shouldAdvanceScrollRef(false, true, 500, 499.6)).toBe(true);
   });
 });
 
@@ -876,6 +1027,68 @@ describe("topmostVisibleUserIndex (minimap scroll-spy core, 4086 follow-up)", ()
   it("a single bubble above the midpoint is index 0", () => {
     expect(spy([200], 100, 500)).toBe(0);
     expect(spy([900], 100, 500)).toBe(null);
+  });
+});
+
+describe("isAtTranscriptBottom (minimap scroll-spy bottom detector)", () => {
+  it("is true at the exact bottom", () => {
+    expect(isAtTranscriptBottom(1000, 1500, 500)).toBe(true);
+  });
+
+  it("tolerates 2px of slack but not 3px", () => {
+    expect(isAtTranscriptBottom(998, 1500, 500)).toBe(true);
+    expect(isAtTranscriptBottom(997, 1500, 500)).toBe(false);
+  });
+
+  it("handles sub-pixel offsets", () => {
+    expect(isAtTranscriptBottom(999.5, 1500, 500)).toBe(true);
+    expect(isAtTranscriptBottom(996.5, 1500, 500)).toBe(false);
+  });
+
+  it("is false in the middle of the transcript", () => {
+    expect(isAtTranscriptBottom(0, 1500, 500)).toBe(false);
+  });
+});
+
+describe("minimapSpyCandidate (the minimap bottom override, decided in one pure place)", () => {
+  // Container top 100, clientHeight 500 -> midpoint 350.
+  const CONTAINER_TOP = 100;
+  const CLIENT_HEIGHT = 500;
+  const candidate = (
+    tops: readonly number[],
+    scrollTop: number,
+    scrollHeight: number,
+  ): number | null =>
+    minimapSpyCandidate(tops.length, (i) => tops[i]!, CONTAINER_TOP, CLIENT_HEIGHT, scrollTop, scrollHeight);
+  const midpoint = (tops: readonly number[]): number | null =>
+    topmostVisibleUserIndex(tops.length, (i) => tops[i]!, CONTAINER_TOP, CLIENT_HEIGHT);
+
+  it("at the bottom of a scrolling transcript the last turn wins (short final turn)", () => {
+    // The last bubble (top 480) is below the midpoint, so the midpoint rule
+    // alone yields the second-to-last turn — at the bottom the last turn
+    // must be the active one.
+    const tops = [120, 240, 480];
+    expect(midpoint(tops)).toBe(1);
+    expect(candidate(tops, 1000, 1500)).toBe(2);
+  });
+
+  it("scrolled up, the midpoint rule decides", () => {
+    const tops = [120, 240, 480];
+    expect(candidate(tops, 600, 1500)).toBe(midpoint(tops));
+  });
+
+  it("at the bottom but the last bubble above the midpoint, the midpoint rule decides", () => {
+    const tops = [120, 240, 300];
+    expect(candidate(tops, 1000, 1500)).toBe(midpoint(tops));
+  });
+
+  it("a transcript that does not scroll is never overridden", () => {
+    const tops = [120, 240, 480];
+    expect(candidate(tops, 0, 500)).toBe(midpoint(tops));
+  });
+
+  it("an empty bubble list yields null", () => {
+    expect(candidate([], 1000, 1500)).toBe(null);
   });
 });
 

@@ -465,6 +465,173 @@ export function shouldShowJumpButton(follow: boolean, blockCount: number): boole
 }
 
 /**
+ * Per-tab scroll memory. App keys MessageList by tabId, so a session switch
+ * REMOUNTS the list and every scroll position inside it is lost — the
+ * transcript then reopens at the bottom (or, with a stale follow flag, in
+ * the middle of the history). This module-level map keeps the position of
+ * every tab that was left, so the next mount can restore it.
+ */
+const savedScroll = new Map<string, { follow: boolean; anchorId: string | null; anchorOffset: number }>();
+
+/**
+ * Minimal structural view of a block element — enough to measure it.
+ * Structural (not `HTMLElement`) so the anchor helpers can be unit-tested
+ * with plain stubs: the node test env has no DOM.
+ */
+export interface AnchorElementLike {
+  getBoundingClientRect(): { top: number; bottom: number; width: number; height: number };
+  getClientRects(): ArrayLike<unknown>;
+  getAttribute(name: string): string | null;
+}
+
+/** Minimal structural view of the scrolling container. */
+export interface AnchorContainerLike {
+  getBoundingClientRect(): { top: number };
+  querySelectorAll(selector: string): Iterable<AnchorElementLike>;
+}
+
+/**
+ * Is this element really laid out? A collapsed tool-call stack renders its
+ * anchor with `display:none` — no boxes, an all-zero rect — so it must
+ * never be used as a scroll anchor (it would pin the list to the wrong
+ * place on restore).
+ */
+export function isLaidOut(el: AnchorElementLike): boolean {
+  if (el.getClientRects().length === 0) {
+    return false;
+  }
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 || rect.height > 0;
+}
+
+/**
+ * The topmost transcript block that is still (partially) inside the
+ * container — the anchor a saved scroll position is expressed against.
+ * The offset is measured against the container's top edge, so it is negative
+ * for a block that starts above the viewport.
+ */
+export function findAnchorBlock(container: AnchorContainerLike): { id: string; offset: number } | null {
+  const containerTop = container.getBoundingClientRect().top;
+  for (const node of container.querySelectorAll("[data-block-id]")) {
+    if (!isLaidOut(node)) {
+      continue;
+    }
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom > containerTop) {
+      const id = node.getAttribute("data-block-id");
+      if (id) {
+        return { id, offset: rect.top - containerTop };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * The laid-out element for a saved block id: the first match that actually
+ * has boxes, or — when every match is hidden (a collapsed stack's
+ * `display:none` anchor shares its id with the visible member card) — the
+ * nearest laid-out block ancestor of it.
+ */
+function findLaidOutAnchor(container: HTMLElement, id: string): HTMLElement | null {
+  const matches = container.querySelectorAll<HTMLElement>(`[data-block-id="${escapeSelector(id)}"]`);
+  for (const match of matches) {
+    if (isLaidOut(match)) {
+      return match;
+    }
+  }
+  const first = matches[0];
+  if (!first) {
+    return null;
+  }
+  let node: HTMLElement | null = first.parentElement;
+  while (node) {
+    const candidate = node.closest<HTMLElement>("[data-block-id]");
+    if (candidate && isLaidOut(candidate)) {
+      return candidate;
+    }
+    node = candidate ? candidate.parentElement : null;
+  }
+  return null;
+}
+
+/**
+ * Scroll position that puts the anchor block back at its saved offset from
+ * the container's top edge — exported pure for unit tests.
+ *
+ * `anchorDelta` is the anchor's current offset from the container's top
+ * edge; scrolling by `x` moves the anchor's offset down by `x`, so the
+ * scroll that lands it on the saved offset is `anchorDelta - savedOffset`
+ * (plus the scroll position the container starts from). The result is
+ * clamped into the scrollable range.
+ */
+export function restoreScrollTarget(
+  currentScrollTop: number,
+  anchorDelta: number,
+  savedOffset: number,
+  scrollHeight: number,
+  clientHeight: number,
+): number {
+  const max = Math.max(0, scrollHeight - clientHeight);
+  const target = currentScrollTop + anchorDelta - savedOffset;
+  return Math.min(max, Math.max(0, target));
+}
+
+/**
+ * Sticky-follow decision core — exported pure for unit tests.
+ *
+ * A scroll event does not always mean the USER scrolled: content that grows
+ * under the viewport (markdown, syntax highlighting, images) pushes the
+ * bottom away while `scrollTop` stays exactly where it was, and a naive
+ * "not at the bottom → stop following" reading mistakes that growth for a
+ * manual scroll-up — the transcript then stays parked mid-history. So follow
+ * is dropped ONLY when `scrollTop` actually moved UP; growth alone (or a
+ * move down that has not reached the bottom yet) keeps the previous state.
+ */
+export function nextFollow(
+  prevFollow: boolean,
+  prevScrollTop: number,
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+): boolean {
+  if (isAtBottom(scrollTop, scrollHeight, clientHeight)) {
+    return true;
+  }
+  // The user really moved up: a whole pixel or more (sub-pixel jitter is
+  // ignored). Must match the >= 1px rule that advances the reference.
+  if (scrollTop <= prevScrollTop - 1) {
+    return false;
+  }
+  // Content grew (or the user moved down without reaching the bottom):
+  // keep whatever the follow state was.
+  return prevFollow;
+}
+
+/**
+ * Should the reference scroll position advance to the current one?
+ *
+ * The reference is what the follow decision compares against, so it must
+ * track the real scroll position — but a scroll event can also carry a
+ * FRACTIONAL move (a slow wheel tick, a trackpad nudge). Advancing the
+ * reference on every such tick throws the accumulated movement away: the
+ * difference to the reference never grows past a fraction of a pixel and
+ * the follow decision never sees the upward move.
+ *
+ * So the reference advances only on a real move (a full pixel or more) or
+ * on a follow-state edge (where the old reference is stale by definition).
+ * Exported pure for unit tests.
+ */
+export function shouldAdvanceScrollRef(
+  prevFollow: boolean,
+  next: boolean,
+  scrollTop: number,
+  lastScrollTop: number,
+): boolean {
+  return next !== prevFollow || Math.abs(scrollTop - lastScrollTop) >= 1;
+}
+
+/**
  * Snap-dedup helper (codex P7.3-F finding 4) — given the container's current
  * geometry and whether a write was already flushed this frame, returns
  * whether a `scrollTop = scrollHeight` write is actually needed. Reused by
@@ -577,6 +744,19 @@ export function showStandaloneRetry(
 }
 
 /**
+ * Transcript-bottom detector for the minimap scroll-spy — exported pure
+ * for unit tests. True when the scroller is (within 2px of) the very
+ * bottom of its content.
+ */
+export function isAtTranscriptBottom(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+): boolean {
+  return scrollHeight - scrollTop - clientHeight <= 2;
+}
+
+/**
  * Minimap scroll-spy core (4086 follow-up) — exported pure for unit
  * tests. Given the monotone `top`s of human bubbles and agent delivery cards
  * (one per minimap turn, DOM order == mark order)
@@ -610,6 +790,42 @@ export function topmostVisibleUserIndex(
     }
   }
   return candidate;
+}
+
+/**
+ * Minimap scroll-spy decision — exported pure for unit tests.
+ *
+ * At the very bottom of a scrolling transcript the last turn is the active
+ * one even when its user bubble sits below the viewport midpoint (a short
+ * final turn); the midpoint rule alone would highlight the second-to-last
+ * turn there.
+ *
+ * The override is applied only when the last bubble's top is below the
+ * midpoint: a jump to an earlier turn that clamps the view to the bottom
+ * keeps that turn highlighted when the last bubble is above the midpoint.
+ * A transcript that does not scroll (scrollHeight <= clientHeight + 2) is
+ * never overridden — there is no "bottom" to be at.
+ */
+export function minimapSpyCandidate(
+  count: number,
+  topAt: (index: number) => number,
+  containerTop: number,
+  clientHeight: number,
+  scrollTop: number,
+  scrollHeight: number,
+): number | null {
+  if (count === 0) {
+    return null;
+  }
+  const base = topmostVisibleUserIndex(count, topAt, containerTop, clientHeight);
+  if (
+    scrollHeight > clientHeight + 2 &&
+    isAtTranscriptBottom(scrollTop, scrollHeight, clientHeight) &&
+    topAt(count - 1) - containerTop > clientHeight / 2
+  ) {
+    return count - 1;
+  }
+  return base;
 }
 
 /**
@@ -809,6 +1025,19 @@ export function MessageList({
   const enterIdsRef = useRef<Set<string>>(new Set());
   const hasRunRef = useRef(false);
 
+  // Per-tab scroll memory is keyed by tab id, but a read-only surface (a
+  // child history) and a replay surface share the tab's id with the root
+  // list — saving or restoring THEIR position would clobber the root's.
+  // The flags are mirrored into refs so the unmount cleanup and the mount
+  // restore always read the CURRENT value, not the one captured when the
+  // effect was created.
+  const tabIdRef = useRef(tabId);
+  tabIdRef.current = tabId;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  const replayingRef = useRef(replaying);
+  replayingRef.current = replaying;
+
   // Sticky-follow (F17, design §3.1): follow lives in a ref so a scroll tick
   // never re-renders by itself; the mirrored useState exists ONLY to flip the
   // jump-button's visibility, and is set exclusively on the boolean edge.
@@ -816,6 +1045,11 @@ export function MessageList({
   const columnRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
   const [follow, setFollow] = useState(true);
+  // Last observed scrollTop — the reference the follow decision compares
+  // against to tell "the user scrolled up" from "content grew under us"
+  // (the browser also fires scroll for programmatic writes and for
+  // scroll-anchoring adjustments, neither of which is a user scroll-up).
+  const lastScrollTopRef = useRef(0);
 
   // the internal full-size image viewer. Opened by a
   // thumbnail click; the block id + clicked index are looked up from `blocks`
@@ -878,6 +1112,9 @@ export function MessageList({
       return;
     }
     el.scrollTop = el.scrollHeight;
+    // The write itself queues a scroll event; remember where we landed so
+    // the handler does not read it as a user scroll-up.
+    lastScrollTopRef.current = el.scrollTop;
     snappedThisFrameRef.current = true;
     // Cleared at the START of the next frame (not a microtask) so it stays
     // true across BOTH the synchronous layout effect and the browser's own
@@ -904,11 +1141,13 @@ export function MessageList({
       return;
     }
     const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id], .minimap-turn[data-block-id]");
-    const candidate = topmostVisibleUserIndex(
+    const candidate = minimapSpyCandidate(
       bubbles.length,
       (i) => bubbles[i]!.getBoundingClientRect().top,
       el.getBoundingClientRect().top,
       el.clientHeight,
+      el.scrollTop,
+      el.scrollHeight,
     );
     // Above the first bubble still highlights turn 1 (nothing earlier exists).
     const nextActive = activeMarkIndex(minimapMarks, candidate ?? (bubbles.length > 0 ? 0 : null));
@@ -920,13 +1159,119 @@ export function MessageList({
     if (!el) {
       return;
     }
-    const next = isAtBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
-    if (followRef.current !== next) {
+    // Content growth (markdown, highlighting, images) moves the bottom away
+    // WITHOUT the user scrolling — the old "not at bottom → stop following"
+    // reading treated that growth as a manual scroll-up and left the
+    // transcript parked mid-history. Only a real upward move drops follow.
+    const prevFollow = followRef.current;
+    const next = nextFollow(
+      prevFollow,
+      lastScrollTopRef.current,
+      el.scrollTop,
+      el.scrollHeight,
+      el.clientHeight,
+    );
+    // The reference point only advances on a REAL move: on a follow edge
+    // (the state changed, so the old reference is stale) or on a scroll of
+    // at least a pixel. Sub-pixel wheel ticks therefore accumulate against
+    // the same reference instead of resetting it every tick — a slow
+    // scroll-up made of many fractional moves is then still seen as one
+    // upward move once it passes the 1px tolerance.
+    if (shouldAdvanceScrollRef(prevFollow, next, el.scrollTop, lastScrollTopRef.current)) {
+      lastScrollTopRef.current = el.scrollTop;
+    }
+    if (prevFollow !== next) {
       followRef.current = next;
       setFollow(next);
     }
     spyActiveMark();
   };
+
+  // --- per-tab scroll memory (session switch) -------------------------------
+  // App keys MessageList by tabId, so a session switch REMOUNTS this
+  // component and the browser forgets the scroll position: the transcript
+  // reopens at the bottom (or, with a stale follow flag, in the middle of
+  // the history). The module-level map keeps the last position of every tab
+  // that was left, so the next mount of that tab can put it back.
+  //
+  // Restore the position this tab had before the list was remounted. Runs
+  // BEFORE the snap effect below: a restored (scrolled-up) position must not
+  // be yanked back to the bottom by the follow-snap. When the anchor block
+  // is not in the DOM the restore is impossible — follow stays on and the
+  // list snaps to the bottom, as it did before.
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const tab = tabIdRef.current;
+    if (!container || !tab) {
+      return;
+    }
+    // A read-only or replayed surface shares the tab's id with the root
+    // list — it must not consume (or write) the root list's position.
+    if (readOnlyRef.current || replayingRef.current) {
+      return;
+    }
+    const saved = savedScroll.get(tab);
+    if (!saved || saved.follow || !saved.anchorId) {
+      return;
+    }
+    const anchor = findLaidOutAnchor(container, saved.anchorId);
+    if (!anchor) {
+      return;
+    }
+    // Put the anchor block back where it was: the saved offset is measured
+    // against the container's top edge, so the scroll has to move by the
+    // difference between the anchor's current and its saved offset.
+    const delta = anchor.getBoundingClientRect().top - container.getBoundingClientRect().top;
+    const target = restoreScrollTarget(
+      container.scrollTop,
+      delta,
+      saved.anchorOffset,
+      container.scrollHeight,
+      container.clientHeight,
+    );
+    container.scrollTop = target;
+    lastScrollTopRef.current = target;
+    followRef.current = false;
+    setFollow(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Remember the position of this tab when the list unmounts (session switch).
+  useLayoutEffect(() => {
+    return () => {
+      // The CLOSED-OVER tabId, not the ref: this cleanup also runs when the
+      // tab id changes, and it must save the position of the tab that is
+      // being left, not the one that is coming.
+      if (!tabId) {
+        return;
+      }
+      // Same shared-id rule as the restore above: a read-only or replayed
+      // surface never owns the tab's scroll position.
+      if (readOnlyRef.current || replayingRef.current) {
+        return;
+      }
+      const container = containerRef.current;
+      if (followRef.current) {
+        savedScroll.set(tabId, { follow: true, anchorId: null, anchorOffset: 0 });
+        return;
+      }
+      if (!container) {
+        // No anchor to save — keep whatever was already recorded for this
+        // tab instead of replacing a good entry with an empty one.
+        return;
+      }
+      const anchor = findAnchorBlock(container);
+      if (!anchor) {
+        // Same: an empty entry would lose a position that WAS recorded.
+        return;
+      }
+      savedScroll.set(tabId, {
+        follow: false,
+        anchorId: anchor.id,
+        anchorOffset: anchor.offset,
+      });
+    };
+  }, [tabId]);
 
   // Snap to bottom after every commit while following (design §3.1): streaming
   // patches the tail block per rAF flush, each flush re-renders, so a no-dep
