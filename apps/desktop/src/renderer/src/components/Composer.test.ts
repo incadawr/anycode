@@ -467,7 +467,7 @@ describe("composer image helpers", () => {
 
 describe("assumed context window hint", () => {
   it("states the assumption and where to fix it", () => {
-    expect(CTX_WINDOW_ASSUMED_HINT).toContain("assumed 8K total");
+    expect(CTX_WINDOW_ASSUMED_HINT).toContain("assumed 128K total");
     const usage = { estimatedTokens: 15500, budgetTokens: 2048 } as Parameters<typeof ctxWindowAssumedHint>[0];
     expect(ctxWindowAssumedHint(usage)).toContain("output reserve: 2K");
     expect(ctxWindowAssumedHint(usage)).toContain("connection settings");

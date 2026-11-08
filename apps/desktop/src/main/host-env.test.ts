@@ -857,7 +857,7 @@ describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL
 
   // The whole point of the pair: it survives the env channel and produces the
   // degraded budget the contract computes, instead of a 24x-overstuffed prompt.
-  it("the emitted pair round-trips through loadEnvConfig into the 8192/2048 applied budget (chain)", async () => {
+  it("the emitted pair round-trips through loadEnvConfig into the 8192-token window and its capped-reserve budget (chain)", async () => {
     const conn = boundConn("on-prem-8b", "on-prem-8b", 8192);
     const env = await buildHostEnv({
       bootEnv: { ANYCODE_API_KEY: "sk-test" },
@@ -870,8 +870,8 @@ describe("buildHostEnv — ANYCODE_CONTEXT_WINDOW + ANYCODE_CONTEXT_WINDOW_MODEL
     // No catalog entry for an on-prem model → the assumed fallback.
     const applied = resolveContextWindow(cfg.model, undefined, cfg.contextWindowTokens, cfg.contextWindowModel);
     expect(applied).toBe(8192);
-    expect(effectiveWindowTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(2_048);
-    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(1_884);
+    expect(effectiveWindowTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(6_144);
+    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(5_652);
   });
 
   it("the name-bearing hint list includes both window vars so the GUI can explain an override", () => {

@@ -166,7 +166,7 @@ describe("core context boot", () => {
           port.send({ type: "set_model", model: "other-model" });
           await vi.waitFor(() => expect(port.messages.filter(m => m.type === "model_changed").length).toBeGreaterThan(count));
           const switched = port.messages.filter(m => m.type === "model_changed").at(-1).contextUsage;
-          expect(switched).toMatchObject({ source: "estimate", budgetTokens: 2048 });
+          expect(switched).toMatchObject({ source: "estimate", budgetTokens: 104000 });
           expect(estimateParts).toBeDefined();
           expect(estimateParts!.history).toBeGreaterThan(0);
           expect(estimateParts!.prompt).toBeGreaterThan(0);

@@ -118,7 +118,7 @@ describe("ask", () => {
     expect(await ask(baseOpts({ question, endpoint: { ...endpoint, contextWindowTokens: window - 1 }, portFactory: () => { throw new Error("must not call"); } }))).toMatchObject({ ok: false, kind: "provider", error: expect.stringContaining("exceed") });
   });
   it("uses catalog or assumed windows when the endpoint omits a window", async () => {
-    expect(recognizerContextWindow(endpoint)).toBe(8192);
+    expect(recognizerContextWindow(endpoint)).toBe(128_000);
     const catalogEndpoint = { ...endpoint, providerName: "openai", model: "gpt-4o" };
     expect(recognizerContextWindow(catalogEndpoint)).toBeGreaterThan(8192);
     const port = new ScriptedModelPort(textScript("ok"));

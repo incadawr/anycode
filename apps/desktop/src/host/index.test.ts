@@ -937,12 +937,12 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
   }
 
   // The fallback change means an unknown model no longer omits `context` — it
-  // resolves the explicit assumed fallback (8192), so the boot window is a real
+  // resolves the explicit assumed fallback (128000), so the boot window is a real
   // number and the degraded budget engages instead of the 200k default.
-  it("model absent from the matched entry (anthropic catalog + test-model) -> spread yields the ASSUMED 8192 window, never no context", () => {
+  it("model absent from the matched entry (anthropic catalog + test-model) -> spread yields the ASSUMED 128000 window, never no context", () => {
     const spread = bootContextSpread("https://api.anthropic.com", "test-model", undefined);
 
-    expect(spread).toEqual({ context: { contextWindowTokens: 8_192 } });
+    expect(spread).toEqual({ context: { contextWindowTokens: 128_000 } });
   });
 
   it("catalog hit (z-ai + glm-4.7) -> spread yields { context: { contextWindowTokens: 200000 } }", () => {
@@ -975,7 +975,7 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
     });
     // A-bound pair, boot on an UNKNOWN B: the assumed fallback, not A's 50000.
     expect(bootContextSpread("https://api.anthropic.com", "test-model", 50_000, "glm-4.7")).toEqual({
-      context: { contextWindowTokens: 8_192 },
+      context: { contextWindowTokens: 128_000 },
     });
   });
 });
@@ -1374,10 +1374,10 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
     expect(a2.config.context).toEqual({ contextWindowTokens: 50_000 });
   });
 
-  it("live switch to an UNKNOWN model resolves the assumed 8192, not a stale previous window", () => {
+  it("live switch to an UNKNOWN model resolves the assumed 128000, not a stale previous window", () => {
     const out = makeSwitcher(50_000, "glm-5.2")("not-in-catalog", "high");
-    expect(out.setContextWindowCalls).toEqual([8_192]);
-    expect(out.config.context).toEqual({ contextWindowTokens: 8_192 });
+    expect(out.setContextWindowCalls).toEqual([128_000]);
+    expect(out.config.context).toEqual({ contextWindowTokens: 128_000 });
   });
 
   it("a shell-global override (no binding) applies to every switched model", () => {
@@ -1400,7 +1400,7 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
     // Child on A: the bound override applies.
     expect(settingsForChild("glm-5.2", "high").contextWindowTokens).toBe(50_000);
     // Child on an unknown model: the assumed fallback.
-    expect(settingsForChild("not-in-catalog", "high").contextWindowTokens).toBe(8_192);
+    expect(settingsForChild("not-in-catalog", "high").contextWindowTokens).toBe(128_000);
   });
 });
 
@@ -3035,7 +3035,7 @@ describe("per-model context window production wiring (pin the REAL call sites, n
     // Agent(model: B): B's OWN catalog window governs — A's pair must not leak.
     expect(resolve("glm-4.6", "high").contextWindowTokens).toBe(200_000);
     // Agent(model: unknown): the assumed fallback.
-    expect(resolve("not-in-catalog", "high").contextWindowTokens).toBe(8_192);
+    expect(resolve("not-in-catalog", "high").contextWindowTokens).toBe(128_000);
   });
 });
 

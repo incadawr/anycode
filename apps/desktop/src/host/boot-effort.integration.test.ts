@@ -93,7 +93,7 @@ it("pins an unpinned legacy host's live model settings to the connection that su
     writeFileSync(profile.settingsPath, JSON.stringify(settings));
     port.send({type:"set_model", model:"glm-5.3"});
     await vi.waitFor(() => expect(port.messages.some((m) => m.type === "model_changed")).toBe(true));
-    expect(port.messages.find((m) => m.type === "model_changed")).toMatchObject({reasoningEffort:"low", contextUsage:{budgetTokens:40000}});
+    expect(port.messages.find((m) => m.type === "model_changed")).toMatchObject({reasoningEffort:"low", contextUsage:{budgetTokens:48000}});
     settings.provider.connections[0]!.modelOverrides["glm-5.2"] = {contextWindowTokens:96000, reasoningEffort:"max"};
     writeFileSync(profile.settingsPath, JSON.stringify(settings));
     port.send({type:"set_model", model:"glm-5.2"});

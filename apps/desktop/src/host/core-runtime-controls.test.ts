@@ -20,7 +20,7 @@ describe("replacement core model controls", () => {
       expect(engine.reasoningEffort()).toBe("high");
       const firstBudget = engine.importBudgetBytes();
       const switched = engine.switchModel!("b","high");
-      expect(switched).toMatchObject({model:"b",reasoningEffort:"off",contextUsage:{budgetTokens:8000}});
+      expect(switched).toMatchObject({model:"b",reasoningEffort:"off",contextUsage:{budgetTokens:24000}});
       expect(controls.presentation.imageInputEnabled()).toBe(false);
       expect(engine.importBudgetBytes()).toBeLessThan(firstBudget);
       expect(controls.callbacks.effortResolution.levels("b")).toBeUndefined();

@@ -36,7 +36,7 @@ describe("connection model settings (GitHub #26)", () => {
     const settings = make();
     expect(settings.contextFor("a")).toEqual({ tokens: 128_000, source: "override" });
     expect(settings.contextFor("b")).toEqual({ tokens: 64_000, source: "override" });
-    expect(settings.contextFor("unknown")).toEqual({ tokens: 8192, source: "assumed" });
+    expect(settings.contextFor("unknown")).toEqual({ tokens: 128_000, source: "assumed" });
   });
 
   it("preserves shell-global and model-bound context overrides ahead of the saved map", () => {
@@ -149,7 +149,7 @@ it("applies a cleared override at the next safe refresh instead of restoring its
   persisted = { modelOverrides: {} };
   expect(settings.refresh()).toBe(true);
   expect(settings.switchEffort("a", "a", "max")).toBe("off");
-  expect(settings.contextFor("a")).toEqual({ tokens: 8192, source: "assumed" });
+  expect(settings.contextFor("a")).toEqual({ tokens: 128_000, source: "assumed" });
 });
 
 it("keeps real shell overrides authoritative when connection settings are refreshed", () => {
@@ -179,7 +179,7 @@ it("uses boot settings until a read succeeds, then honours a clear instead of a 
   expect(settings.refresh()).toBe(false);
   readable = true;
   expect(settings.refresh()).toBe(true);
-  expect(settings.contextFor("a").tokens).toBe(8192);
+  expect(settings.contextFor("a").tokens).toBe(128_000);
   expect(settings.effortFor("a")).toBeUndefined();
   expect(settings.switchEffort("a", "a", "high")).toBe("off");
 });
@@ -364,7 +364,7 @@ it("uses refreshed OpenCode Go limits for models outside the catalog", () => {
 it("uses an output-only live limit without claiming an unknown context window", () => {
   const model = "unknown-output-only";
   const settings = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: { modelCapabilities: { [model]: { maxOutputTokens: 100_000 } } }, liveCapabilitiesFor: () => undefined });
-  expect(settings.contextFor(model)).toEqual({ tokens: 8192, source: "assumed" });
+  expect(settings.contextFor(model)).toEqual({ tokens: 128_000, source: "assumed" });
   expect(resolveMaxOutputTokens(model, settings.entryFor(model), undefined)).toBe(100_000);
 });
 
