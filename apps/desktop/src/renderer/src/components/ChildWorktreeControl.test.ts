@@ -16,8 +16,10 @@ it("mounts durable resources, copies recovery values, toggles main policy and po
     await act(async () => root.render(createElement(ChildWorktreeControl, { tabId: "parent" })));
     expect((node.querySelector('input') as HTMLInputElement).checked).toBe(false);
     expect(node.textContent).toContain("Last creation refused:");
-    expect(node.textContent).toContain("not a security sandbox");
-    expect(node.textContent).toContain("uncommitted files are not copied");
+    expect(node.textContent).toContain("Not a sandbox");
+    expect(node.textContent).toContain("uncommitted files aren't copied");
+    expect(node.textContent).not.toContain("Review retained work manually");
+    expect(node.querySelector('a')?.getAttribute('href')).toBe('https://github.com/incadawr/anycode/blob/master/docs/user/subagents.md#session-children-in-worktrees');
     await act(async () => vi.advanceTimersByTime(6000)); expect(request).toHaveBeenCalledTimes(1);
     const details = node.querySelector("details")!;
     await act(async () => { details.open = true; details.dispatchEvent(new Event("toggle")); });

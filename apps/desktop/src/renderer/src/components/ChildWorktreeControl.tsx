@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Checkbox } from "../ui/index.js";
-import { CHILD_WORKTREE_LIMITATION, type ChildWorktreeView } from "../../../shared/child-worktree-view.js";
+import type { ChildWorktreeView } from "../../../shared/child-worktree-view.js";
 
 /** Self-contained so the header menu can move this control without new state wiring. */
 export function ChildWorktreeControl({ tabId }: { tabId: string }) {
@@ -49,13 +49,13 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
       copyTimer.current = setTimeout(() => { if (token === lifetime.current) setCopied(""); }, 1500);
     }, () => {});
   };
-  return <details className="environment-control" onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary className="environment-trigger">Child worktrees{view?.enabled ? " · ON" : ""}</summary>
+  return <details className="environment-control child-worktree-control" onToggle={event => setOpen(event.currentTarget.open)}>
+    <summary className="environment-trigger"><span>Child worktrees{view?.enabled ? " · ON" : ""}</span></summary>
     <div className="environment-menu" style={{ maxHeight: "75vh", overflow: "auto", overflowWrap: "anywhere" }}>
-    <p>{CHILD_WORKTREE_LIMITATION}</p>
     <Checkbox label="New session children in worktrees" checked={view?.enabled ?? false}
       disabled={!view?.canToggle || busy} onCheckedChange={enabled => void toggle(enabled)} />
-    <p>Core session children only. Inline agents use the current cwd. No inherited trust or access grants.</p>
+    <p>Each new child session works in its own Git checkout of the last commit (uncommitted files aren't copied). Not a sandbox: shell commands can still change files outside it.</p>
+    <p>Changes stay in the child's checkout — review and merge them yourself. <a href="https://github.com/incadawr/anycode/blob/master/docs/user/subagents.md#session-children-in-worktrees" target="_blank" rel="noreferrer">How →</a></p>
     {error && <p role="alert">{error}</p>}
     {view?.lastRefusal && <p role="alert">Last creation refused: {view.lastRefusal}</p>}
     {view?.unverified?.map(r => <p key={r.id}>Worktree receipt unverified · {r.id}: {r.reason} (project/session association unverified)</p>)}
@@ -68,10 +68,6 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
         ? "Checkout and branch kept; inspect manually." : r.phase === "removed"
           ? "Folder removed; branch retained." : "Creation or completion unconfirmed; inspect the resource journal.")}</p>
     </li>)}</ul>
-    <p>Review retained work manually: first <code>git -C '&lt;child-path&gt;' diff HEAD</code> (inspect untracked files separately),
-      commit in the retained checkout if needed, then in the parent review <code>git diff &lt;base-sha&gt;..&lt;branch&gt;</code>.
-      Merge/cherry-pick manually after review. A branch alone cannot transfer uncommitted files. Nothing runs automatically.
-      After a crash, inspect the retained path manually; no automatic cleanup or managed-session resume.</p>
     </div>
   </details>;
 }

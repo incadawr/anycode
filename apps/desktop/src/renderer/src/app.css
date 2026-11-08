@@ -1818,6 +1818,13 @@ body {
   height: 15px;
 }
 
+.child-worktree-control .environment-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .environment-workspace,
 .environment-branch {
   overflow: hidden;
