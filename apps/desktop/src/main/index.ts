@@ -3398,7 +3398,7 @@ void app.whenReady().then(async () => {
     systemProxy: systemProxyDelegate,
     // fired after a successful secret write/clear, BEFORE onMutation
     // (same ordering discipline as refreshProxySecrets just above).
-    onSecretWritten: (key, fresh) => { noteRecognizerSecretWrite(key, fresh); void accountSources?.reconcile(true); },
+    onSecretWritten: (key, fresh) => { noteRecognizerSecretWrite(key, fresh); void accountSources?.secretWritten(key); },
     onMutation: async () => {
       settings = (await loadSettings(settingsPath, fileLogger)).settings;
       void accountSources?.reconcile();
@@ -3577,7 +3577,7 @@ void app.whenReady().then(async () => {
     },
     // same hook as settingsIpcDeps's — a custom-record key write
     // must be able to force the recognizer push before onMutation runs.
-    onSecretWritten: (key, fresh) => { noteRecognizerSecretWrite(key, fresh); void accountSources?.reconcile(true); },
+    onSecretWritten: (key, fresh) => { noteRecognizerSecretWrite(key, fresh); void accountSources?.secretWritten(key); },
     onMutation: async (fresh) => {
       settings = fresh;
       void accountSources?.reconcile();
@@ -4174,7 +4174,7 @@ void app.whenReady().then(async () => {
         },
       },
       // Every plugin mutation re-reconciles services and account sources.
-      onChanged: () => { reconcileServices(); void accountSources?.reconcile(true); },
+      onChanged: () => { reconcileServices(); void accountSources?.reconcile(); },
       onRemoved: async (name) => { await accountSources?.removePlugin(name); },
       services: {
         snapshot: () => serviceSupervisor?.snapshot() ?? [],

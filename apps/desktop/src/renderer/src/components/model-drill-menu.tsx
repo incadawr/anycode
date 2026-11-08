@@ -27,11 +27,7 @@ import { modelDrillEffortLabel, type ModelDrillPage, type ModelDrillRow } from "
 import type { AccountSourcesSnapshot } from "../../../shared/account-sources.js";
 import type { ProviderConnection, CatalogSummary, AnycodeSettings } from "../../../shared/settings.js";
 
-function dollarsPerMillion(micros: string): string {
-  const n = BigInt(micros);
-  const fraction = String(n % 1_000_000n).padStart(6, "0").replace(/0+$/, "");
-  return `$${n / 1_000_000n}${fraction ? `.${fraction}` : ""}`;
-}
+import { accountModelPrice } from "./account-source-pricing.js";
 
 export interface ModelDrillMenuProps {
   /** The rows of the level currently on screen — a flat list, one roving-focus index across all of them. */
@@ -143,7 +139,7 @@ export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
     const current = row.current;
     const model = row.kind === "effort" ? undefined : catalogs?.find((catalog) => catalog.connectionId === row.connectionId)?.models.find((entry) => entry.id === row.modelId);
     const owned = row.kind === "effort" ? undefined : bindings?.find((b) => b.connectionId === row.connectionId)?.ownership[row.modelId];
-    const priceLabel = model?.billing === "free" ? "Free" : model?.ratesMicrosPerMillionTokens ? `${dollarsPerMillion(model.ratesMicrosPerMillionTokens.input)} in / ${dollarsPerMillion(model.ratesMicrosPerMillionTokens.output)} out per 1M` : model ? "Price unknown" : undefined;
+    const priceLabel = model ? accountModelPrice(model, true) : undefined;
     return (
       <button
         ref={attach}

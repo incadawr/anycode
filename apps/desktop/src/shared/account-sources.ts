@@ -43,4 +43,8 @@ export interface AccountSourceCandidateView {
   gatewayKind: "openai-compatible" | "openai" | "anthropic";
   apiBaseUrl: string;
 }
-export type AccountSourcePreviewResult = { ok: true; token: string; models: { id: string; displayName?: string; billing: "free" | "metered"; ratesMicrosPerMillionTokens?: { input: string; output: string; cachedInput?: string; cacheWrite?: string } }[] } | { ok: false; reason: string };
+export function accountSourceTransportCompatible(kind: AccountSourceCandidateView["gatewayKind"], transport: string | undefined): boolean {
+  return !transport || (kind === "anthropic" ? transport === "anthropic-messages" : transport === "openai-chat-completions" || transport === "openai-responses");
+}
+export type AccountSourcePreviewFailure = "not_found" | "connection_invalid" | "stale" | "invalid" | "auth_required" | "access_denied" | "timeout" | "unavailable" | "expired";
+export type AccountSourcePreviewResult = { ok: true; token: string; models: { id: string; displayName?: string; billing: "free" | "metered"; ratesMicrosPerMillionTokens?: { input: string; output: string; cachedInput?: string; cacheWrite?: string } }[] } | { ok: false; reason: AccountSourcePreviewFailure };

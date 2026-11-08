@@ -40,15 +40,17 @@ export function registerAccountSourcesIpc(deps: Deps) {
     const nextFingerprint = JSON.stringify([found.map((c) => [c.plugin, c.descriptor.id, c.descriptorHash]), bound.map((b) => {
       const c = settings.provider.connections.find((x) => x.id === b.connectionId);
       const custom = settings.provider.custom?.find((x) => x.id === c?.providerId);
-      return [b.plugin, b.source, b.descriptorHash, b.connectionId, b.accountId, c?.providerId, c?.baseUrl, c?.transport, c?.proxyRef, c?.proxyUrl, custom?.baseUrl, custom?.kind, custom?.authOptional];
+      return [b.plugin, b.source, b.descriptorHash, b.connectionId, b.accountId, c?.providerId, c?.baseUrl, c?.transport, c?.proxyRef, c?.proxyUrl, custom?.baseUrl, custom?.kind, custom?.authOptional, settings.provider.connections.filter((item) => item.providerId === c?.providerId).length];
     })]);
     if (!force && nextFingerprint === fingerprint) return;
     controller.replace([]);
     candidateViews = found.map(({ plugin, descriptor }) => ({ key: { plugin, source: descriptor.id }, displayName: descriptor.displayName, gatewayName: descriptor.gateway.name, gatewayBaseUrl: descriptor.gateway.baseUrl, gatewayKind: descriptor.gateway.kind, apiBaseUrl: descriptor.apiBaseUrl }));
     const sources: AccountSourceRuntime[] = [];
     for (const b of bound) {
-      const candidate = found.find((c) => c.plugin === b.plugin && c.descriptor.id === b.source && c.descriptorHash === b.descriptorHash);
+      const candidate = found.find((c) => c.plugin === b.plugin && c.descriptor.id === b.source);
       if (!candidate) continue;
+      const inert = (needsApproval: boolean): AccountSourceRuntime => ({ key: { plugin: b.plugin, source: b.source }, displayName: candidate.descriptor.displayName, apiBaseUrl: candidate.descriptor.apiBaseUrl, accountId: b.accountId, connectionId: b.connectionId, needsApproval, needsConnection: !needsApproval, fetcher: async () => { throw new Error("Inactive source"); }, applyCatalog: async () => {} });
+      if (candidate.descriptorHash !== b.descriptorHash) { sources.push(inert(true)); continue; }
       const credential = await withSettingsFileLock(deps.settingsPath, async () => {
         const fresh = await loadSettings(deps.settingsPath);
         const current = fresh.settings.plugins?.accountSources?.find((x) => x.plugin === b.plugin && x.source === b.source && x.descriptorHash === b.descriptorHash && x.connectionId === b.connectionId && x.accountId === b.accountId);
@@ -59,7 +61,7 @@ export function registerAccountSourcesIpc(deps: Deps) {
         return { secret, needsCredential: !secret && !record?.authOptional };
       });
       if (turn !== generation || disposed) return;
-      if (!credential) continue;
+      if (!credential) { sources.push(inert(false)); continue; }
       sources.push({ key: { plugin: b.plugin, source: b.source }, displayName: candidate.descriptor.displayName, apiBaseUrl: candidate.descriptor.apiBaseUrl, accountId: b.accountId, connectionId: b.connectionId, apiKey: credential.secret, needsCredential: credential.needsCredential, fetcher: deps.fetchFor(b.connectionId), withAuthorization: (publish) => withPluginStateLock(deps.home, async () => {
         const live = (await candidates()).some((item) => item.plugin === b.plugin && item.descriptor.id === b.source && item.descriptorHash === b.descriptorHash);
         if (live) await withSettingsFileLock(deps.settingsPath, async () => {
@@ -96,5 +98,14 @@ export function registerAccountSourcesIpc(deps: Deps) {
   guardedIpcHandle(ACCOUNT_SOURCES_RESET_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await binding.reset(key.data); });
   guardedIpcHandle(ACCOUNT_SOURCES_REFRESH_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await controller.refresh(key.data); });
   void reconcile(true);
-  return { reconcile, removePlugin: (name: string) => binding.removePlugin(name), dispose: () => { disposed = true; generation++; binding.invalidate(); controller.dispose(); } };
+  const secretWritten = async (key: SecretKey) => {
+    const { settings } = await loadSettings(deps.settingsPath);
+    if (disposed) return;
+    const bound = settings.plugins?.accountSources ?? [];
+    if (bound.some((b) => {
+      const connection = settings.provider.connections.find((c) => c.id === b.connectionId);
+      return connection && key === customProviderSecretKey(connection.providerId);
+    })) await reconcile(true);
+  };
+  return { reconcile, secretWritten, removePlugin: (name: string) => binding.removePlugin(name), dispose: () => { disposed = true; generation++; binding.invalidate(); controller.dispose(); } };
 }

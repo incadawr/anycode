@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { startAccountSourcesStore, useAccountSourcesStore } from "../account-sources-store.js";
 import { useSettingsStore } from "../settings-store.js";
-import type { AccountSourceCandidateView, AccountSourcePreviewResult } from "../../../shared/account-sources.js";
+import { accountSourceTransportCompatible, type AccountSourceCandidateView, type AccountSourcePreviewFailure, type AccountSourcePreviewResult } from "../../../shared/account-sources.js";
 import type { AnycodeSettings } from "../../../shared/settings.js";
 import { Button, Select } from "../ui/index.js";
+import { accountModelPrice } from "./account-source-pricing.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
 
 function money(value: string): string {
@@ -16,15 +17,19 @@ export function eligibleAccountConnections(settings: AnycodeSettings, candidate:
   const connections = settings.provider.connections;
   return connections.filter((c) => {
     const record = settings.provider.custom?.find((p) => p.id === c.providerId);
-    const transports = record?.kind === "anthropic" ? ["anthropic-messages"] : ["openai-chat-completions", "openai-responses"];
     return record && record.kind === candidate.gatewayKind && sameUrl(record.baseUrl, candidate.gatewayBaseUrl)
       && (!c.baseUrl || sameUrl(c.baseUrl, candidate.gatewayBaseUrl))
-      && (!c.transport || transports.includes(c.transport))
+      && accountSourceTransportCompatible(record.kind, c.transport)
       && connections.filter((other) => other.providerId === record.id).length === 1
       && !(settings.plugins?.accountSources ?? []).some((b) => b.connectionId === c.id && (b.plugin !== candidate.key.plugin || b.source !== candidate.key.source));
   });
 }
-function rate(value: string): string { const n = BigInt(value); const f = String(n % 1_000_000n).padStart(6, "0").replace(/0+$/, ""); return `$${n / 1_000_000n}${f ? `.${f}` : ""}`; }
+export function previewFailureText(reason: AccountSourcePreviewFailure): string {
+  const messages: Record<AccountSourcePreviewFailure, string> = {
+    not_found: "This source is no longer available.", connection_invalid: "The connection is unsuitable or has no API key.", stale: "The source or connection changed. Preview again.", invalid: "The source returned an invalid catalog.", auth_required: "Authentication failed. Check the connection's API key.", access_denied: "Access to this source was denied.", timeout: "The preview timed out or was cancelled.", unavailable: "The source is unavailable. Try again later.", expired: "Preview expired or connection changed."
+  };
+  return messages[reason];
+}
 export function AccountBudgetCard({ collapsed, onSettings }: { collapsed: boolean; onSettings(): void }) {
   const { snapshot, candidates, load } = useAccountSourcesStore();
   const settingsSnapshot = useSettingsStore((s) => s.snapshot);
@@ -47,7 +52,7 @@ export function AccountBudgetCard({ collapsed, onSettings }: { collapsed: boolea
   async function approve() {
     if (!preview?.ok) return;
     setBusy(true);
-    try { if (await window.anycode.accountSources.bind(preview.token)) { setCandidate(null); setPreview(null); await load(); await reloadSettings(); } else setPreview({ ok: false, reason: "Preview expired or connection changed." }); } finally { setBusy(false); }
+    try { if (await window.anycode.accountSources.bind(preview.token)) { setCandidate(null); setPreview(null); await load(); await reloadSettings(); } else setPreview({ ok: false, reason: "expired" }); } finally { setBusy(false); }
   }
   return <div className={`account-budget ${collapsed ? "account-budget-collapsed" : ""}`}>
     <Button type="button" className="account-budget-toggle" aria-label="Employee budget" aria-expanded={open} onClick={() => setOpen(!open)}>{collapsed ? "$" : "Employee budget"}</Button>
@@ -56,13 +61,14 @@ export function AccountBudgetCard({ collapsed, onSettings }: { collapsed: boolea
         <strong>{source.displayName}</strong>
         {source.budget?.windows.map((w) => <div key={w.kind}>{w.kind === "day" ? "Today" : "Month"}: {money(w.spent)} / {money(w.limit)}{open && <small> Remaining {money(w.remaining)}{w.reserved !== undefined ? ` · Reserved ${money(w.reserved)}` : ""} · Resets {new Date(w.resetsAt).toLocaleString()}</small>}</div>)}
         {source.status === "ready" && source.budget?.windows.some((w) => BigInt(w.remaining) === 0n) && <small>Budget exhausted. Free models remain available; metered models may be unavailable.</small>}
-        {source.status !== "ready" && <span>{source.status.replaceAll("_", " ")}</span>}
+        {source.status !== "ready" && <span>{source.status === "needs_connection" ? "Choose or create a dedicated connection" : source.status === "needs_approval" ? "Review the updated source" : source.status.replaceAll("_", " ")}</span>}
+        {open && (() => { const binding = settings?.plugins?.accountSources?.find((b) => b.plugin === source.key.plugin && b.source === source.key.source); const catalog = snapshot.catalogs?.find((c) => c.connectionId === binding?.connectionId); return catalog && <ul>{catalog.models.map((m) => <li key={m.id}>{m.displayName || m.id} · {accountModelPrice(m)}</li>)}</ul>; })()}
         {open && <><small>Employee spending, independent of this chat.{source.budget ? ` Observed ${new Date(source.budget.observedAt).toLocaleString()}` : ""}</small><Button type="button" onClick={() => void window.anycode.accountSources.refresh(source.key)}>Refresh</Button><Button type="button" onClick={() => void window.anycode.accountSources.reset(source.key)}>Restore source settings</Button><Button type="button" onClick={() => void window.anycode.accountSources.unbind(source.key)}>Disconnect</Button></>}
       </div>)}
       {open && <><Button type="button" onClick={onSettings}>Connections</Button>{candidates.map((item) => <Button type="button" key={`${item.key.plugin}/${item.key.source}`} onClick={() => { setCandidate(item); setConnectionId(""); setPreview(null); }}>Set up {item.displayName}</Button>)}</>}
       {open && candidate && <div className="account-budget-setup"><strong>{candidate.displayName}</strong><small>Gateway: {candidate.gatewayBaseUrl}<br />Account API: {candidate.apiBaseUrl}</small><Select label="Connection" value={connectionId} onChange={(e) => setConnectionId(e.target.value)} options={[{ value: "", label: "Choose a connection" }, ...eligible.map((c) => ({ value: c.id, label: c.label || c.providerId }))]} /><Button type="button" onClick={() => setCreating(true)}>Create dedicated connection</Button><Button type="button" disabled={!connectionId || busy} onClick={() => void showPreview()}>Preview catalog</Button>
-        {preview?.ok && <><p>Allow this source to read the account budget and synchronize these models:</p><ul>{preview.models.map((m) => <li key={m.id}>{m.displayName || m.id} · {m.billing === "free" ? "Free" : m.ratesMicrosPerMillionTokens ? `${rate(m.ratesMicrosPerMillionTokens.input)} input / ${rate(m.ratesMicrosPerMillionTokens.output)} output per 1M` : "Price unknown"}</li>)}</ul><Button type="button" disabled={busy} onClick={() => void approve()}>Allow and connect</Button></>}
-        {preview && !preview.ok && <p role="alert">{preview.reason}</p>}
+        {preview?.ok && <><p>Allow this source to read the account budget and synchronize these models:</p><ul>{preview.models.map((m) => <li key={m.id}>{m.displayName || m.id} · {accountModelPrice(m)}</li>)}</ul><Button type="button" disabled={busy} onClick={() => void approve()}>Allow and connect</Button></>}
+        {preview && !preview.ok && <p role="alert">{previewFailureText(preview.reason)}</p>}
       </div>}
     </div>}
     {candidate && settingsSnapshot && <ConnectionDrawer open={creating} mode="add" catalog={settingsSnapshot.catalog ?? []} connections={connections} secrets={settingsSnapshot.secrets} readOnly={settingsSnapshot.readOnly} initialCustom={{ name: candidate.gatewayName, baseUrl: candidate.gatewayBaseUrl, kind: candidate.gatewayKind }} onClose={() => { setCreating(false); void reloadSettings(); }} />}

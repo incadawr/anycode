@@ -7,6 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Account sources explain preview failures, keep bindings when switching to a compatible transport, show setup hints, and list model prices after approval.
+
+### Fixed
+- Account source previews stay valid when unrelated credentials or plugin settings change, and idle sources no longer wake up unnecessarily.
+
 ## [0.0.92] - 2026-11-08
 
 ### Changed

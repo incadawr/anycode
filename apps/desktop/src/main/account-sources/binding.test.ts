@@ -50,3 +50,34 @@ it("requires a matching dedicated connection and a fresh single-use preview", as
   await service.removePlugin("company");
   expect((await loadSettings(path)).settings.plugins?.accountSources).toEqual([]);
 });
+
+it.each([[401, "auth_required"], [403, "access_denied"]] as const)("reports HTTP %i during preview", async (status, reason) => {
+  dir = await mkdtemp(join(tmpdir(), "account-bind-"));
+  const path = join(dir, "settings.json");
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "conn", providerId: "custom:corp" }];
+  settings.provider.custom = [{ id: "custom:corp", name: "Company", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible", models: [], authOptional: true }];
+  await saveSettings(path, settings);
+  const descriptor = accountSourceSchema.parse({ id: "cluster", protocol: "anycode.account.v1", displayName: "Company", gateway: { name: "Company", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible" }, apiBaseUrl: "https://gateway.example.com/account/" });
+  const service = new AccountBindingService({ settingsPath: path, candidates: async () => [{ plugin: "company", descriptor, descriptorHash: accountSourceHash(descriptor) }], getSecret: async () => undefined, fetchFor: () => async () => new Response(null, { status }), changed: () => {} });
+  expect(await service.preview({ plugin: "company", source: "cluster" }, "conn")).toEqual({ ok: false, reason });
+});
+
+it.each([
+  ["invalid schema", () => new Response(JSON.stringify({ models: [] })), "invalid"],
+  ["malformed JSON", () => new Response("{"), "invalid"],
+  ["empty body", () => new Response(null), "invalid"],
+  ["oversized body", () => new Response("x".repeat(1024 * 1024 + 1)), "invalid"],
+  ["aborted request", () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); }, "timeout"],
+  ["network failure", () => { throw new Error("network failure"); }, "unavailable"],
+] as const)("reports %s during preview", async (_name, respond, reason) => {
+  dir = await mkdtemp(join(tmpdir(), "account-bind-"));
+  const path = join(dir, "settings.json");
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "conn", providerId: "custom:corp" }];
+  settings.provider.custom = [{ id: "custom:corp", name: "Company", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible", models: [], authOptional: true }];
+  await saveSettings(path, settings);
+  const descriptor = accountSourceSchema.parse({ id: "cluster", protocol: "anycode.account.v1", displayName: "Company", gateway: { name: "Company", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible" }, apiBaseUrl: "https://gateway.example.com/account/" });
+  const service = new AccountBindingService({ settingsPath: path, candidates: async () => [{ plugin: "company", descriptor, descriptorHash: accountSourceHash(descriptor) }], getSecret: async () => undefined, fetchFor: () => async () => respond(), changed: () => {} });
+  expect(await service.preview({ plugin: "company", source: "cluster" }, "conn")).toEqual({ ok: false, reason });
+});
