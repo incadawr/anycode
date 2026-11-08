@@ -191,7 +191,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
         });
         const provider = smokeProviderProfile('custom:local','core-model',{credentialFromEnv:true});
         provider.custom = [{id:'custom:local',name:'Fixture',baseUrl:fixtures.baseUrl,kind:'openai-compatible',models:['core-model']}];
-        Object.assign(provider.connections[0],{baseUrl:fixtures.baseUrl,transport:'openai-chat-completions',authOptional:true});
+        Object.assign(provider.connections[0],{baseUrl:fixtures.baseUrl,transport:'openai-chat-completions',authOptional:true,modelOverrides:{'core-model':{contextWindowTokens:128000}}});
         writeFileSync(path('settings.json'),JSON.stringify({version:2,provider,tools:{},permissions:{alwaysAllow:[]},security:{allowWeakSecretStorage:false,trustedBinaries:fixtures.consents},ui:{theme:'dark'}}));
         writeFileSync(path('unavailable-engine'),'#!/bin/sh\nexit 1\n',{mode:0o700});
         const env = peerEnv(process.env,root,fixtures.binaries);
