@@ -1397,10 +1397,10 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
 
   // Boot context-window resolution (slice 6.4, design slice-6.4-cut.md §2-C3):
   // env ANYCODE_CONTEXT_WINDOW (when its model binding is absent or names the
-  // boot model) > catalog window of the boot model > the assumed 8192 fallback
+  // boot model) > catalog window of the boot model > the assumed 128000 fallback
   // (UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS). The result is always a
   // number, so loopConfig.context is always populated and an unknown model boots
-  // at the degraded 8192 window rather than the DEFAULT_CONTEXT_WINDOW_TOKENS.
+  // at the assumed 128000 window rather than the DEFAULT_CONTEXT_WINDOW_TOKENS.
   // Telemetry sink (slice 6.6, design slice-6.6-cut.md §2-C1): opt-in — a
   // resolved config builds the per-session JSONL sink and the eventTap
   // closure; null keeps loopConfig.eventTap absent, so the default boot stays
@@ -2051,7 +2051,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
               // env override still applies inside resolveContextWindow, but ONLY if
               // its model binding is absent or names THIS id — a pair saved
               // for model A must never leak its window onto B. An unknown id resolves
-              // the assumed fallback (8192), never a stale previous model's window.
+              // the assumed fallback (128000), never a stale previous model's window.
               const contextWindow =
                 resolveContextWindow(id, entryForModel(id), envConfig.contextWindowTokens, envConfig.contextWindowModel) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
               loopConfig.maxOutputTokens = resolveMaxOutputTokens(

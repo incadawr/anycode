@@ -1391,7 +1391,7 @@ export interface DesktopState {
    * recognizer config.
    */
   imageFallback: boolean | undefined;
-  /** host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
+  /** host says the context window is the assumed 128K fallback (set by host_ready/model_changed). */
   contextWindowAssumed: boolean | undefined;
   modelSettingsConnectionId: string | null | undefined;
   /**

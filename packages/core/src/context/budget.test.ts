@@ -1,7 +1,7 @@
 /**
  * Token-budget math (design §2.5, task 1.2; degraded-window floor amendment,
  * phase1-tails-and-phase2-ruling §2):
- *   effectiveWindow  = max(contextWindow - min(outputReserve, contextWindow),
+ *   effectiveWindow  = max(contextWindow - min(outputReserve, 25% of contextWindow),
  *                          ceil(contextWindow * MIN_EFFECTIVE_WINDOW_FRACTION))
  *   compactThreshold = max(buffered > 0 ? min(byPercent, buffered) : byPercent, 1)
  *     where byPercent = floor(effectiveWindow * pct / 100), buffered = effectiveWindow - buffer
@@ -27,13 +27,13 @@ describe("effectiveWindowTokens", () => {
     expect(effectiveWindowTokens(config)).toBe(176_000);
   });
 
-  it("floors at MIN_EFFECTIVE_WINDOW_FRACTION of the window when the reserve would consume it entirely", () => {
+  it("caps the reserve at 25% when it would consume the window", () => {
     const config = resolveContextBudgetConfig({
       contextWindowTokens: 10_000,
       outputReserveTokens: 24_000,
     });
-    // raw = 10_000 - min(24_000, 10_000) = 0; floor = ceil(10_000 * 0.25) = 2_500.
-    expect(effectiveWindowTokens(config)).toBe(2_500);
+    // 10_000 - 2_500 = 7_500.
+    expect(effectiveWindowTokens(config)).toBe(7_500);
   });
 });
 
@@ -89,13 +89,13 @@ describe("microcompactThresholdTokens", () => {
     expect(microcompactThresholdTokens(config)).toBe(compactThresholdTokens(config));
   });
 
-  it("uses the degraded-window effective-window floor and remains positive", () => {
+  it("uses the capped reserve and remains positive", () => {
     const config = resolveContextBudgetConfig({
       contextWindowTokens: 8_000,
       outputReserveTokens: 24_000,
     });
-    // effective window = 2,000; 60% = 1,200.
-    expect(microcompactThresholdTokens(config)).toBe(1_200);
+    // effective window = 6,000; 60% = 3,600.
+    expect(microcompactThresholdTokens(config)).toBe(3_600);
     expect(microcompactThresholdTokens(config)).toBeGreaterThanOrEqual(1);
   });
 });
@@ -106,10 +106,10 @@ describe("degraded-window floor (MIN_EFFECTIVE_WINDOW_FRACTION amendment)", () =
       contextWindowTokens: 8_000,
       outputReserveTokens: 24_000,
     });
-    // raw = 8_000 - min(24_000, 8_000) = 0; floor = ceil(8_000 * 0.25) = 2_000.
-    expect(effectiveWindowTokens(config)).toBe(2_000);
-    // byPercent = floor(2_000 * 92 / 100) = 1_840; buffered = 2_000 - 13_000 < 0 -> byPercent branch.
-    expect(compactThresholdTokens(config)).toBe(1_840);
+    // Reserve is capped at 2,000, leaving 6,000.
+    expect(effectiveWindowTokens(config)).toBe(6_000);
+    // 92% of 6,000 = 5,520.
+    expect(compactThresholdTokens(config)).toBe(5_520);
     expect(compactThresholdTokens(config)).toBeGreaterThan(0);
   });
 
@@ -122,15 +122,15 @@ describe("degraded-window floor (MIN_EFFECTIVE_WINDOW_FRACTION amendment)", () =
     expect(compactThresholdTokens(config)).toBe(161_920);
   });
 
-  it("boundary contextWindow:37000 lands exactly on buffered === 0, falling back to the percent bound", () => {
+  it("caps a large reserve on a 37000-token window", () => {
     const config = resolveContextBudgetConfig({
       contextWindowTokens: 37_000,
       outputReserveTokens: 24_000,
     });
-    // raw = 37_000 - 24_000 = 13_000; floor = ceil(37_000 * 0.25) = 9_250; effectiveWindow = 13_000.
-    expect(effectiveWindowTokens(config)).toBe(13_000);
-    // buffered = 13_000 - 13_000 = 0 -> not > 0 -> byPercent branch: floor(13_000 * 92 / 100) = 11_960.
-    expect(compactThresholdTokens(config)).toBe(11_960);
+    // Reserve is capped at 9,250, leaving 27,750.
+    expect(effectiveWindowTokens(config)).toBe(27_750);
+    // Buffer cap: 27,750 - 13,000 = 14,750.
+    expect(compactThresholdTokens(config)).toBe(14_750);
   });
 
   it.each([100, 1_000, 8_000, 37_000, 200_000])(

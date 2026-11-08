@@ -62,17 +62,15 @@ export function resolveImageInput(
 }
 
 /**
- * Assumed context window for a model the catalog does not know (→
- * This is NOT a provider fact: it is an explicit, conservative
- * fallback that engages the degraded-window floor in the context budget rather
- * than letting an unknown model inherit a 24×-overstuffed default prompt.
+ * Assumed context window for a model the catalog does not know.
+ * This is an operational fallback, not a provider fact.
  */
-export const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 8_192;
+export const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 128_000;
 
 /**
  * Where a resolved context window came. `assumed` is the
  * conservative unknown-model fallback — the UI says so instead of letting a
- * large unknown model silently behave as 8K.
+ * fallback silently be mistaken for a provider fact.
  */
 export interface ContextWindowInfo {
   tokens: number;

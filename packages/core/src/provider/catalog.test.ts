@@ -49,7 +49,7 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + W5)", () => {
   });
 
   it("keeps every pre-W5 entry pinned to the anthropic-messages transport (byte-compat)", () => {
-    for (const id of ["anthropic", "z-ai", "deepseek", "moonshot"]) {
+    for (const id of ["anthropic", "deepseek", "moonshot"]) {
       const entry = findCatalogEntry(id);
       expect(entry?.defaultTransport).toBe("anthropic-messages");
       expect(entry?.supportedTransports).toEqual(["anthropic-messages"]);

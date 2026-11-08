@@ -2002,7 +2002,7 @@ export class AgentLoop {
       estimatedTokens: estimate.tokens,
       source: estimate.source,
       contextWindowTokens: budget.contextWindowTokens,
-      outputReserveTokens: budget.outputReserveTokens,
+      outputReserveTokens: Math.min(budget.outputReserveTokens, Math.floor(budget.contextWindowTokens * 0.25)),
       effectiveWindowTokens: this.budgetTokens,
       compactThresholdTokens: compactThresholdTokens(budget),
       breakerTripped: this.context.breakerTripped(),

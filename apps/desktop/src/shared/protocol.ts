@@ -651,7 +651,7 @@ export type HostToUiMessage =
        * seam wired) means the renderer applies no fallback-aware gating.
        */
       imageFallback?: boolean;
-      /** the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
+      /** the active model's context window is the assumed unknown-model fallback (128K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
       modelSettingsConnectionId?: string | null;
       /**
@@ -990,7 +990,7 @@ export type HostToUiMessage =
       imageInput?: boolean;
       /** slice C: the fallback verdict re-read for the NEW model, same precedent as `imageInput` above. */
       imageFallback?: boolean;
-      /** the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
+      /** the active model's context window is the assumed unknown-model fallback (128K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
     }
   | { type: "mode_change_rejected"; reason: string }

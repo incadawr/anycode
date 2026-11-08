@@ -158,8 +158,9 @@ const ENTRIES: CatalogProviderEntry[] = [
     id: "z-ai",
     name: "Z.AI (GLM)",
     baseUrl: "https://api.z.ai/api/anthropic",
+    transportBaseUrls: { "openai-chat-completions": "https://api.z.ai/api/coding/paas/v4" },
     defaultTransport: "anthropic-messages",
-    supportedTransports: ["anthropic-messages"],
+    supportedTransports: ["anthropic-messages", "openai-chat-completions"],
     auth: { kind: "api_key" },
     // (2026-08-15): refreshed to the live docs.z.ai model line (guides/llm
     // sidebar + each page's spec box and code samples). Fresh-first so the first

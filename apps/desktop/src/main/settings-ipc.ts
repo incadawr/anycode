@@ -935,13 +935,13 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 32_768;
 /**
  * pins of packages/core/src/types/config.ts's
  * DEFAULT_CONTEXT_WINDOW_TOKENS (200_000) and provider/capabilities.ts's
- * UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS (8_192). Same core-import-free rule as
+ * UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS (128_000). Same core-import-free rule as
  * the ceiling pin above — the drawer needs both numbers to NAME a blank/unknown
  * field's effective window, and it cannot import core. Move all pins together
  * with their core sources.
  */
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
-const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 8_192;
+const UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS = 128_000;
 
 /**
  * Builds the SettingsSnapshot the renderer renders Settings/Welcome from without

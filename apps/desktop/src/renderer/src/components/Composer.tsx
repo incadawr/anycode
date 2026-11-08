@@ -466,8 +466,8 @@ export function ctxPopoverHeadline(usage: ContextUsage | null, percent: number |
   return `${formatCtxTokenCount(usage.estimatedTokens)}/${formatCtxTokenCount(usage.budgetTokens)} (${percent}%)`;
 }
 
-/** shown when the active model's context window is the assumed 8K fallback. */
-export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 8K total.";
+/** shown when the active model's context window is the assumed 128K fallback. */
+export const CTX_WINDOW_ASSUMED_HINT = "Context window unknown \u2014 assumed 128K total.";
 
 /** Uses the meter's actual denominator, including any overridden output reserve. */
 export function ctxWindowAssumedHint(usage: ContextUsage | null): string {

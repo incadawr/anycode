@@ -842,7 +842,7 @@ export const IMAGE_INPUT_ONELINER = "Auto uses the catalog or the provider's mod
 export const MAX_OUTPUT_HELP =
   "Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if output keeps cutting off.";
 export const CONTEXT_WINDOW_HELP =
-  "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.";
+  "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 128000-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.";
 export const IMAGE_INPUT_HELP =
   "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.";
 
@@ -967,7 +967,7 @@ export { contextWindowTokensField } from "../../../shared/model-overrides.js";
 
 /** Shared by both write paths so create and save refuse a bad window identically. */
 const CONTEXT_WINDOW_ERROR =
-  "Context window must be a whole number between 1024 and 1000000 — leave it empty to use the catalog window (or the 8192 assumed fallback for an unknown model).";
+  "Context window must be a whole number between 1024 and 1000000 — leave it empty to use the catalog window (or the 128000 assumed fallback for an unknown model).";
 
 /** Distinct from CONTEXT_WINDOW_ERROR: tells the user WHAT to fix (the model, not the number). */
 const CONTEXT_WINDOW_ERROR_MODEL =
@@ -1016,7 +1016,7 @@ export function contextWindowEffectiveHint(
     const effective = usable !== undefined ? Math.min(matched.contextWindow, usable) : matched.contextWindow;
     return `catalog: ${effective}`;
   }
-  const assumed = snapshot?.unknownModelContextWindowTokens ?? 8_192;
+  const assumed = snapshot?.unknownModelContextWindowTokens ?? 128_000;
   return `assumed fallback: ${assumed} (unknown model — set a value to override)`;
 }
 

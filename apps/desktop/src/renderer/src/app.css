@@ -5027,7 +5027,7 @@ button.environment-menu-row:hover,
   color: var(--danger);
 }
 
-/* the window is an assumed 8K fallback — dotted underline marks
+/* the window is an assumed 128K fallback — dotted underline marks
    the percent as approximate without competing with the warning/danger tint. */
 .composer-ctx-meter-assumed {
   text-decoration: underline dotted;

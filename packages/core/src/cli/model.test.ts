@@ -8,6 +8,8 @@
 import { describe, expect, it } from "vitest";
 import { formatModelInfo, matchCatalogEntryByBaseUrl, SwitchableModelPort } from "./model.js";
 import { getBuiltinCatalog } from "../provider/catalog-data.js";
+import { resolveContextWindowInfo, resolveMaxOutputTokens } from "../provider/capabilities.js";
+import { resolveEndpoint } from "../provider/catalog.js";
 import type { CatalogProviderEntry, ProviderCatalog } from "../provider/catalog.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
@@ -106,6 +108,15 @@ describe("SwitchableModelPort", () => {
 
 describe("matchCatalogEntryByBaseUrl", () => {
   const catalog = getBuiltinCatalog();
+
+  it("resolves the z.ai coding OpenAI endpoint and its model limits", () => {
+    const url = "https://api.z.ai/api/coding/paas/v4";
+    const entry = matchCatalogEntryByBaseUrl(catalog, url);
+    expect(entry?.id).toBe("z-ai");
+    expect(resolveEndpoint(entry!, "glm-5.3-flash", "unused", "openai-chat-completions").baseUrl).toBe(url);
+    expect(resolveContextWindowInfo("glm-5.3-flash", entry, undefined)).toEqual({ tokens: 300_000, source: "catalog" });
+    expect(resolveMaxOutputTokens("glm-5.3-flash", entry, undefined)).toBe(131_072);
+  });
 
   it("matches the z-ai entry regardless of trailing slash / missing v1 suffix", () => {
     const zai = catalog.providers.find((entry) => entry.id === "z-ai");

@@ -1,11 +1,8 @@
 /**
- * Token budget math (design §2.5). Frozen formulas:
- *   effectiveWindow = contextWindow - min(outputReserve, contextWindow)
+ * Token budget math:
+ *   effectiveWindow = contextWindow - min(outputReserve, 25% of contextWindow)
  *   compactThreshold = min(floor(effectiveWindow * pct / 100), effectiveWindow - buffer)
- * Ratified amendment (degraded-window floor, phase1-tails-and-phase2-ruling §2):
- * effectiveWindow is floored at MIN_EFFECTIVE_WINDOW_FRACTION of the raw context
- * window, and compactThreshold is clamped to stay positive when the buffer would
- * otherwise push it at or below zero on a small/degraded window.
+ * compactThreshold is clamped to stay positive on small windows.
  * Estimates are cached per HistoryItem (immutable after append); provider
  * usage numbers are always authoritative over local estimates.
  */
@@ -58,13 +55,11 @@ export function resolveContextBudgetConfig(
 }
 
 /**
- * effectiveWindow = contextWindow - min(outputReserve, contextWindow), floored at
- * MIN_EFFECTIVE_WINDOW_FRACTION of the raw context window. The floor only engages
- * when the output reserve exceeds ~75% of the window (degraded/small windows);
- * the default 200k/24k window is unaffected (176 000 either way).
+ * Cap the reserve at 25% of the window so even an oversized reserve cannot
+ * collapse the input budget. This affects budget math, not the output limit.
  */
 export function effectiveWindowTokens(config: ContextBudgetConfig): number {
-  const raw = config.contextWindowTokens - Math.min(config.outputReserveTokens, config.contextWindowTokens);
+  const raw = config.contextWindowTokens - Math.min(config.outputReserveTokens, Math.floor(config.contextWindowTokens * 0.25));
   return Math.max(raw, Math.ceil(config.contextWindowTokens * MIN_EFFECTIVE_WINDOW_FRACTION));
 }
 

@@ -238,9 +238,9 @@ describe("resolveContextWindowInfo provenance", () => {
     expect(resolveContextWindowInfo("ghost", undefined, 50_000, "ghost")).toEqual({ tokens: 50_000, source: "override" });
   });
 
-  it("an unknown model with no applicable override is assumed at 8192", () => {
-    expect(resolveContextWindowInfo("ghost", Z_AI_ENTRY, undefined)).toEqual({ tokens: 8_192, source: "assumed" });
-    expect(resolveContextWindowInfo("ghost", undefined, 50_000, "other-model")).toEqual({ tokens: 8_192, source: "assumed" });
+  it("an unknown model with no applicable override is assumed at 128000", () => {
+    expect(resolveContextWindowInfo("ghost", Z_AI_ENTRY, undefined)).toEqual({ tokens: 128_000, source: "assumed" });
+    expect(resolveContextWindowInfo("ghost", undefined, 50_000, "other-model")).toEqual({ tokens: 128_000, source: "assumed" });
   });
 });
 
@@ -275,16 +275,16 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
     }
   });
 
-  it("without override, an unknown model id resolves the ASSUMED 8192 fallback", () => {
-    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBe(8_192);
+  it("without override, an unknown model id resolves the ASSUMED 128000 fallback", () => {
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBe(128_000);
     expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined)).toBe(UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS);
   });
 
-  it("without override, a missing entry resolves the ASSUMED 8192 fallback", () => {
-    expect(resolveContextWindow("glm-test-narrow", undefined, undefined)).toBe(8_192);
+  it("without override, a missing entry resolves the ASSUMED 128000 fallback", () => {
+    expect(resolveContextWindow("glm-test-narrow", undefined, undefined)).toBe(128_000);
   });
 
-  it("an entry with no matching model resolves the ASSUMED 8192 fallback (custom endpoint case)", () => {
+  it("an entry with no matching model resolves the ASSUMED 128000 fallback (custom endpoint case)", () => {
     const custom: CatalogProviderEntry = {
       id: "custom",
       name: "Custom",
@@ -294,12 +294,12 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
       auth: { kind: "api_key" },
       models: [],
     };
-    expect(resolveContextWindow("whatever-model", custom, undefined)).toBe(8_192);
+    expect(resolveContextWindow("whatever-model", custom, undefined)).toBe(128_000);
     expect(resolveContextWindow("whatever-model", custom, 50_000)).toBe(50_000);
   });
 
   it("an id from a different entry does not match (entry-scoped, R4)", () => {
-    expect(resolveContextWindow("claude-opus-5-5", Z_AI_ENTRY, undefined)).toBe(8_192);
+    expect(resolveContextWindow("claude-opus-5-5", Z_AI_ENTRY, undefined)).toBe(128_000);
   });
 
   it("a bound override applies to ITS model only; a mismatched binding falls through to the catalog, not the override", () => {
@@ -308,7 +308,7 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
     // A-bound override on B: ignored; B resolves through the catalog.
     expect(resolveContextWindow("glm-test-wide", Z_AI_ENTRY, 50_000, "glm-test-narrow")).toBe(200_000);
     // A-bound override on an unknown model: ignored; the assumed fallback applies.
-    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, 50_000, "glm-test-narrow")).toBe(8_192);
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, 50_000, "glm-test-narrow")).toBe(128_000);
   });
 
   it("a shell-global override (no binding) still wins over the catalog and over the assumed fallback", () => {
@@ -322,14 +322,15 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
 
   it("a binding with NO override changes nothing (inert binding)", () => {
     expect(resolveContextWindow("glm-test-narrow", Z_AI_ENTRY, undefined, "glm-test-narrow")).toBe(128_000);
-    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined, "ghost-model")).toBe(8_192);
+    expect(resolveContextWindow("ghost-model", Z_AI_ENTRY, undefined, "ghost-model")).toBe(128_000);
   });
 
-  it("the 8192 assumed fallback produces the degraded-window budget the contract computes", () => {
-    const applied = resolveContextWindow("on-prem-8b", undefined, undefined);
-    expect(applied).toBe(8_192);
-    expect(effectiveWindowTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(2_048);
-    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: applied }))).toBe(1_884);
+  it("the assumed window keeps at least 75% for input even with an oversized reserve", () => {
+    const info = resolveContextWindowInfo("on-prem-8b", undefined, undefined);
+    expect(info).toEqual({ tokens: 128_000, source: "assumed" });
+    const config = resolveContextBudgetConfig({ contextWindowTokens: info.tokens, outputReserveTokens: 200_000 });
+    expect(effectiveWindowTokens(config)).toBe(96_000);
+    expect(compactThresholdTokens(config)).toBe(83_000);
   });
 });
 
