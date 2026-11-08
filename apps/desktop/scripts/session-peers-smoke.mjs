@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawn, execFileSync, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
@@ -204,16 +204,22 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
         info = await wait(() => existsSync(path('automation.json')) && JSON.parse(readFileSync(path('automation.json'),'utf8')));
         await wait(() => evaluate("typeof window.anycode?.createTab === 'function' && !!window.__anycodeAutomation"));
         check('launch','PASS');
+        // Empty workspaces have no trust prompt; SessionOpen requires an explicit
+        // persistent decision even when there is no project spawn configuration.
+        const names = nativeEnabled ? ['A','B'] : ['A'];
+        for (const name of names) mkdirSync(path(name));
+        const hash = createHash('sha256').update(JSON.stringify({items:[],version:1})).digest('hex');
+        const folders = Object.fromEntries(names.map(name => [path(name),{decision:'trusted',hash,decidedAt:new Date().toISOString()}]));
+        mkdirSync(path('.anycode'),{recursive:true});
+        writeFileSync(path('.anycode/workspace-trust.json'),JSON.stringify({version:1,folders}),{mode:0o600});
         driver.tabs = [];
         for (const [name,engine] of (nativeEnabled ? [['A','core'],['B',targetEngine]] : [['A','core']])) {
-          mkdirSync(path(name));
           const tab = await invoke('createTab',{kind:'new',workspace:path(name),engine});
           assert(tab.ok,'Could not create fixture tab');
           driver.tabs.push({...tab,workspace:path(name),engine});
           await wait(async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId]?.connection === 'ready');
           await api(`/tabs/${tab.tabId}/prompt`,{text:'fixture ready'});
           await wait(async () => {
-            await invoke('workspaceTrust.decide',{tabId:tab.tabId,decision:'trust'});
             const state = await api(`/state/${tab.tabId}`);
             return native(engine).length > 0 && state.snapshot.states[tab.tabId]?.turn?.status === 'idle';
           });
