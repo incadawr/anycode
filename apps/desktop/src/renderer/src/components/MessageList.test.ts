@@ -12,6 +12,7 @@ import {
   isAtTranscriptBottom,
   isTerminalStatus,
   needsSnap,
+  minimapSpyCandidate,
   nextFollow,
   restoreScrollTarget,
   showTryAgainButton,
@@ -1047,18 +1048,47 @@ describe("isAtTranscriptBottom (minimap scroll-spy bottom detector)", () => {
   it("is false in the middle of the transcript", () => {
     expect(isAtTranscriptBottom(0, 1500, 500)).toBe(false);
   });
+});
 
-  it("a short last turn below the midpoint still wins at the bottom", () => {
-    // Container top 100, height 500 -> midpoint 350. The last user bubble
-    // (top 480) is below the midpoint, so the midpoint rule alone yields
-    // the second-to-last turn (index 1) — at the bottom the last turn
-    // (index 2) must be the active one.
+describe("minimapSpyCandidate (the minimap bottom override, decided in one pure place)", () => {
+  // Container top 100, clientHeight 500 -> midpoint 350.
+  const CONTAINER_TOP = 100;
+  const CLIENT_HEIGHT = 500;
+  const candidate = (
+    tops: readonly number[],
+    scrollTop: number,
+    scrollHeight: number,
+  ): number | null =>
+    minimapSpyCandidate(tops.length, (i) => tops[i]!, CONTAINER_TOP, CLIENT_HEIGHT, scrollTop, scrollHeight);
+  const midpoint = (tops: readonly number[]): number | null =>
+    topmostVisibleUserIndex(tops.length, (i) => tops[i]!, CONTAINER_TOP, CLIENT_HEIGHT);
+
+  it("at the bottom of a scrolling transcript the last turn wins (short final turn)", () => {
+    // The last bubble (top 480) is below the midpoint, so the midpoint rule
+    // alone yields the second-to-last turn — at the bottom the last turn
+    // must be the active one.
     const tops = [120, 240, 480];
-    const midpointSpy = topmostVisibleUserIndex(tops.length, (i) => tops[i]!, 100, 500);
-    expect(midpointSpy).toBe(1);
-    expect(isAtTranscriptBottom(1000, 1500, 500)).toBe(true);
-    const atBottom = tops.length - 1;
-    expect(atBottom).toBe(2);
+    expect(midpoint(tops)).toBe(1);
+    expect(candidate(tops, 1000, 1500)).toBe(2);
+  });
+
+  it("scrolled up, the midpoint rule decides", () => {
+    const tops = [120, 240, 480];
+    expect(candidate(tops, 600, 1500)).toBe(midpoint(tops));
+  });
+
+  it("at the bottom but the last bubble above the midpoint, the midpoint rule decides", () => {
+    const tops = [120, 240, 300];
+    expect(candidate(tops, 1000, 1500)).toBe(midpoint(tops));
+  });
+
+  it("a transcript that does not scroll is never overridden", () => {
+    const tops = [120, 240, 480];
+    expect(candidate(tops, 0, 500)).toBe(midpoint(tops));
+  });
+
+  it("an empty bubble list yields null", () => {
+    expect(candidate([], 1000, 1500)).toBe(null);
   });
 });
 

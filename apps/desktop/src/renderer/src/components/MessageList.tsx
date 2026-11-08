@@ -793,6 +793,42 @@ export function topmostVisibleUserIndex(
 }
 
 /**
+ * Minimap scroll-spy decision — exported pure for unit tests.
+ *
+ * At the very bottom of a scrolling transcript the last turn is the active
+ * one even when its user bubble sits below the viewport midpoint (a short
+ * final turn); the midpoint rule alone would highlight the second-to-last
+ * turn there.
+ *
+ * The override is applied only when the last bubble's top is below the
+ * midpoint: a jump to an earlier turn that clamps the view to the bottom
+ * keeps that turn highlighted when the last bubble is above the midpoint.
+ * A transcript that does not scroll (scrollHeight <= clientHeight + 2) is
+ * never overridden — there is no "bottom" to be at.
+ */
+export function minimapSpyCandidate(
+  count: number,
+  topAt: (index: number) => number,
+  containerTop: number,
+  clientHeight: number,
+  scrollTop: number,
+  scrollHeight: number,
+): number | null {
+  if (count === 0) {
+    return null;
+  }
+  const base = topmostVisibleUserIndex(count, topAt, containerTop, clientHeight);
+  if (
+    scrollHeight > clientHeight + 2 &&
+    isAtTranscriptBottom(scrollTop, scrollHeight, clientHeight) &&
+    topAt(count - 1) - containerTop > clientHeight / 2
+  ) {
+    return count - 1;
+  }
+  return base;
+}
+
+/**
  * The usage-limit banner, including the Codex "continue on another account"
  * picker. Its own component because the picker needs local state, and the
  * transcript renders blocks from inside a `.map` callback (no hooks there).
@@ -1105,19 +1141,14 @@ export function MessageList({
       return;
     }
     const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id], .minimap-turn[data-block-id]");
-    let candidate = topmostVisibleUserIndex(
+    const candidate = minimapSpyCandidate(
       bubbles.length,
       (i) => bubbles[i]!.getBoundingClientRect().top,
       el.getBoundingClientRect().top,
       el.clientHeight,
+      el.scrollTop,
+      el.scrollHeight,
     );
-    // At the very bottom of the transcript the last turn is the active one,
-    // even when its user bubble sits below the viewport midpoint (a short
-    // final turn). The midpoint rule alone would highlight the
-    // second-to-last turn there.
-    if (bubbles.length > 0 && isAtTranscriptBottom(el.scrollTop, el.scrollHeight, el.clientHeight)) {
-      candidate = bubbles.length - 1;
-    }
     // Above the first bubble still highlights turn 1 (nothing earlier exists).
     const nextActive = activeMarkIndex(minimapMarks, candidate ?? (bubbles.length > 0 ? 0 : null));
     setMinimapActive((prev) => (prev === nextActive ? prev : nextActive));
