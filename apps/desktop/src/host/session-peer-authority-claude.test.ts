@@ -100,3 +100,98 @@ describe("Claude native init after an engine switch", () => {
     expect(seen.at(-1)).toBe("plan");
   });
 });
+
+/**
+ * A reopened session whose saved orchestration was recovered to a verified OFF
+ * posture: the engine itself quarantines on a later init that drifts from the
+ * recovered base. That quarantine never passes through the Session's
+ * orchestration controller, so the seam must carry it.
+ */
+function recoveredOffRoot() {
+  const transport = {
+    notifications: () => ({ [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }) }),
+    close: async () => {},
+  } as never;
+  const engine = new ClaudeEngine(transport, "native-ref", undefined, {
+    catalog: ClaudeModelCatalog.fromInitialize([{ value: "m", resolvedModel: "m", displayName: "M" }]),
+    model: "m", preset: findClaudePreset("ask")!, effortsByModel: new Map(), notices: [],
+  });
+  engine.installOrchestration({ orchestrationRecovery: { nativeBase: { version: 1, engine: "claude", model: "m", preset: "ask",
+    permissionMode: "default", mcpDigest: "a".repeat(64), tools: ["Read"] } } } as never, { claudeNames: [] } as never);
+  // The recovery connect step sets these after checking the OFF argv and MCP digest.
+  engine.offBootVerified = true;
+  engine.presetProvisional = true;
+  const seam = new ClaudeSettingsSeam(engine);
+  const h = createHarness({ steps: [], engine, engineSettings: seam });
+  cleanups.push(async () => { h.close(); await engine.dispose("session-close"); });
+  const seen: string[] = [];
+  const orchestrate: boolean[] = [];
+  h.session.observePermissionMode(mode => seen.push(mode), enabled => orchestrate.push(enabled));
+  const init = (drift: { tools?: string[]; permissionMode?: Wire; mcp?: string[] } = {}) =>
+    (engine as unknown as { onSystemInit(init: unknown): void }).onSystemInit({ session_id: "native-ref", model: "m",
+      permissionMode: drift.permissionMode ?? "default", tools: drift.tools ?? ["Read"],
+      mcp_servers: (drift.mcp ?? []).map(name => ({ name, status: "connected" })) });
+  return { h, engine, seam, seen, orchestrate, init };
+}
+
+describe("Claude engine-owned quarantine revokes peer authority", () => {
+  it("a recovered OFF publishes build once, and an unchanged repeated init publishes nothing", () => {
+    const c = recoveredOffRoot();
+    expect(c.seen).toEqual(["plan"]);
+    c.init();
+    expect(c.seen).toEqual(["plan", "build"]);
+    expect(c.h.session.peerAuthorityClosed()).toBe(false);
+    c.init();
+    expect(c.seen).toEqual(["plan", "build"]);
+    expect(c.orchestrate).toEqual([false, false]);
+  });
+
+  it.each([
+    ["tool inventory", { tools: ["Read", "Bash"] }],
+    ["MCP inventory", { mcp: ["extra"] }],
+    ["permission mode", { permissionMode: "acceptEdits" as const }],
+  ])("a later %s drift publishes plan/false at once although the init throws, and nothing reopens it", (_label, drift) => {
+    const c = recoveredOffRoot();
+    c.init();
+    expect(c.seen.at(-1)).toBe("build");
+    expect(() => c.init(drift)).toThrow("recovered OFF posture drift");
+    expect(c.engine.orchestrationState).toBe("quarantined");
+    expect(c.h.session.peerAuthorityClosed()).toBe(true);
+    expect(c.seen).toEqual(["plan", "build", "plan"]);
+    expect(c.orchestrate.at(-1)).toBe(false);
+    // Later settings traffic and a later clean init cannot reopen it.
+    (c.seam as unknown as { notify(snapshot: unknown): void }).notify(c.engine.snapshot());
+    c.h.outbound.emit({ type: "engine_settings_changed", model: "m", activePresetId: "ask", state: "applied", appliesFrom: "next_turn" });
+    c.init();
+    expect(c.h.session.peerAuthorityClosed()).toBe(true);
+    expect(c.seen.filter(mode => mode !== "plan")).toEqual(["build"]);
+    expect(c.orchestrate.every(enabled => !enabled)).toBe(true);
+  });
+
+  it("a drift on the very first init of a provisional recovered preset keeps authority closed", () => {
+    const c = recoveredOffRoot();
+    expect(() => c.init({ tools: [] })).toThrow("recovered OFF posture drift");
+    expect(c.h.session.peerAuthorityClosed()).toBe(true);
+    expect(c.seen.every(mode => mode === "plan")).toBe(true);
+    c.init();
+    expect(c.h.session.peerAuthorityClosed()).toBe(true);
+    expect(c.seen.every(mode => mode === "plan")).toBe(true);
+  });
+
+  it("the seam reports and signals any engine quarantine assignment, once per change", () => {
+    const c = claudeParts("ask", false);
+    cleanups.push(async () => { await c.engine.dispose("session-close"); });
+    const calls: boolean[] = [];
+    const stop = c.seam.onSettingsReconciled(() => calls.push(c.seam.runtimeQuarantined()));
+    expect(c.seam.runtimeQuarantined()).toBe(false);
+    c.engine.orchestrationState = "transitioning";
+    expect(calls).toEqual([]);
+    c.engine.orchestrationState = "quarantined";
+    c.engine.orchestrationState = "quarantined";
+    expect(calls).toEqual([true]);
+    expect(c.seam.runtimeQuarantined()).toBe(true);
+    stop();
+    c.engine.orchestrationState = "off";
+    expect(calls).toEqual([true]);
+  });
+});

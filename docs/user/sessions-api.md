@@ -67,8 +67,10 @@ Claude and Codex roots follow the same rules, taken from their permission preset
 An Orchestrate root always asks for a human approval for each operation, even on
 Codex **Full access**. A Claude or Codex root also holds no peer access while its
 Orchestrate restore is running, or while a failed restore or Orchestrate switch
-is unresolved (a verified recovery to Orchestrate off reopens access), and a resumed Claude
-session holds none until Claude has confirmed its permission mode.
+is unresolved (a verified recovery to Orchestrate off reopens access). A resumed Claude
+session holds none until Claude has confirmed its permission mode, and none once its
+recovered Orchestrate-off posture has drifted (its tools, MCP servers or permission
+mode changed); reopen the conversation to recover.
 
 A preset change that would widen access counts only after it has been applied;
 narrowing counts immediately. A Claude or Codex root that receives a message can

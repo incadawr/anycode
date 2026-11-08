@@ -304,9 +304,17 @@ export interface EngineSettingsSeam {
    */
   presetVerified?(): boolean;
   /**
+   * True once the engine has quarantined its own runtime (a Claude recovered
+   * OFF posture drifted at init), a state that never passes through the
+   * Session's orchestration controller. Peer authority stays closed; only a
+   * new runtime clears it. Absent = never quarantined by the engine.
+   */
+  runtimeQuarantined?(): boolean;
+  /**
    * Fires whenever the engine reconciles its settings with the runtime's own
    * report (Claude native init), a change that never goes through
-   * `onSettingsApplied`. Session republishes peer authority from it.
+   * `onSettingsApplied`, and whenever `runtimeQuarantined()` changes. Session
+   * republishes peer authority from it.
    */
   onSettingsReconciled?(listener: () => void): () => void;
   /**
@@ -1510,13 +1518,15 @@ export class Session {
   }
   /**
    * True while a native root must hold no peer authority: the restore is still
-   * in progress, the orchestration state is quarantined (posture or controller),
-   * or the engine has not yet verified its preset (a resumed Claude session's persisted preset is provisional until
-   * its first init). The host bridge and the published report share this.
+   * in progress, the orchestration state is quarantined (posture, controller or
+   * the engine's own runtime), or the engine has not yet verified its preset (a
+   * resumed Claude session's persisted preset is provisional until its first
+   * init). The host bridge and the published report share this.
    */
   peerAuthorityClosed(): boolean {
     if (this.engine.id === "core") return false;
     if (this.orchestrationPosture !== "stable" || this.orchestrationController?.state.status === "quarantined") return true;
+    if (this.engineSettings?.runtimeQuarantined?.() === true) return true;
     return this.engineSettings?.presetVerified?.() === false;
   }
   /**

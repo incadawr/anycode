@@ -84,6 +84,19 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     return this.engine.snapshot();
   }
 
+  presetVerified(): boolean {
+    return !this.engine.presetProvisional;
+  }
+
+  /** The engine quarantined itself (e.g. recovered OFF init drift); only a new runtime clears it. */
+  runtimeQuarantined(): boolean {
+    return this.engine.orchestrationState === "quarantined";
+  }
+
+  onSettingsReconciled(listener: () => void): () => void {
+    return this.engine.onPeerAuthorityChanged(listener);
+  }
+
   /**
    * The decoded `get_usage` snapshot, projected onto the shared quota wire
    * (`EnginePresentation.quota`, rebuilt on every `ui_ready`). Without this the
@@ -91,14 +104,6 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
    * result never leaves the engine — decoder unit tests stay green while the
    * host-ready payload carries no quota at all.
    */
-  presetVerified(): boolean {
-    return !this.engine.presetProvisional;
-  }
-
-  onSettingsReconciled(listener: () => void): () => void {
-    return this.engine.onPresetReconciled(listener);
-  }
-
   quotaSnapshot(): CodexRateLimitsWire | null {
     return claudeQuotaToWire(this.engine.quotaSnapshot());
   }

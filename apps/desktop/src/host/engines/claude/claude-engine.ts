@@ -914,11 +914,20 @@ export class ClaudeEngine implements SessionEngine {
   private livePermissionMode: ClaudeWirePermissionMode | null = null;
   /** True while `settings.preset` is a persisted guess no `system/init` has confirmed (resume). */
   presetProvisional = false;
-  private readonly presetReconciledListeners = new Set<() => void>();
-  /** Fires when an init changed the preset or confirmed a provisional one (peer authority follows it). */
-  onPresetReconciled(listener: () => void): () => void {
-    this.presetReconciledListeners.add(listener);
-    return () => this.presetReconciledListeners.delete(listener);
+  private readonly peerAuthorityListeners = new Set<() => void>();
+  /**
+   * Fires when an init changed the preset or confirmed a provisional one, and
+   * on every entry into or exit from the engine's own quarantine (peer
+   * authority follows both).
+   */
+  onPeerAuthorityChanged(listener: () => void): () => void {
+    this.peerAuthorityListeners.add(listener);
+    return () => this.peerAuthorityListeners.delete(listener);
+  }
+  private notifyPeerAuthority(): void {
+    for (const listener of this.peerAuthorityListeners) {
+      try { listener(); } catch { /* a republish failure must never fail a turn */ }
+    }
   }
   /** Latch + one-shot observers for the FIRST turn-scoped `system/init` (`onFirstSystemInit`). */
   private firstInitSeen = false;
@@ -1040,7 +1049,19 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   orchestrationPolicy?: OrchestrationPolicy;
-  orchestrationState: ClaudeOrchestrationPosture = "off";
+  private orchestrationPosture: ClaudeOrchestrationPosture = "off";
+  /**
+   * Every assignment goes through here, so an engine-owned quarantine (a
+   * recovered OFF init drift, a failed transition after the transport stopped,
+   * a boot recovery problem) revokes peer authority at once, even when the
+   * assigning code throws right after.
+   */
+  get orchestrationState(): ClaudeOrchestrationPosture { return this.orchestrationPosture; }
+  set orchestrationState(next: ClaudeOrchestrationPosture) {
+    const changed = (next === "quarantined") !== (this.orchestrationPosture === "quarantined");
+    this.orchestrationPosture = next;
+    if (changed) this.notifyPeerAuthority();
+  }
   nativeMaterialized = false;
   // OFF argv and comparable MCP digest are checked at boot; native readback
   // is checked on first system/init unless host evidence supplies it earlier.
@@ -2283,11 +2304,7 @@ export class ClaudeEngine implements SessionEngine {
     const wasProvisional = this.presetProvisional;
     this.reconcileFromInit(init);
     this.presetProvisional = false;
-    if (wasProvisional || this.activePresetId !== presetBefore) {
-      for (const listener of this.presetReconciledListeners) {
-        try { listener(); } catch { /* a republish failure must never fail a turn */ }
-      }
-    }
+    if (wasProvisional || this.activePresetId !== presetBefore) this.notifyPeerAuthority();
     // GitHub #3: a server can connect on one turn and fail on a later one, so
     // every init is news. Observers get the same payload as the first-init latch
     // below, once per init — BEFORE the latch so a one-shot listener's failure
