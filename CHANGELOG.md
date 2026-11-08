@@ -7,6 +7,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.92] - 2026-11-08
+
+### Changed
+- The **Child worktrees** popover is shorter: the switch, two lines on what a
+  child checkout is, and a link to the guide for reviewing and merging its work.
+
+### Fixed
+- Crowded session headers: the **Child worktrees** label stays inside its
+  button, long folder and branch names shorten instead of pushing other
+  controls, and Git counters hide on narrow headers instead of overlapping
+  the icons next to them.
+- Header menus (workspace and **Child worktrees**) stay inside the window
+  instead of running past its edge.
+
 ## [0.0.91] - 2026-11-08
 
 ### Added
