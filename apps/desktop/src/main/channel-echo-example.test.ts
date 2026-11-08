@@ -60,7 +60,8 @@ describe("channel-echo example plugin", () => {
     const out = output(child);
     await vi.waitFor(async () => expect(await readFile(join(outbox, "build-bot__hello.answer.txt"), "utf8")).toContain("ECHO:hello"), { timeout: 15000, interval: 50 });
     expect(existsSync(join(inbox, "build-bot__hello.txt"))).toBe(false);
-    expect(existsSync(join(inbox, "build-bot__hello.txt.processing"))).toBe(false);
+    // The service writes the answer before it removes the claimed input.
+    await vi.waitFor(() => expect(existsSync(join(inbox, "build-bot__hello.txt.processing"))).toBe(false), { timeout: 5000, interval: 20 });
     expect(request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
     expect(out.read()).not.toContain(token);
     child.kill("SIGTERM");
