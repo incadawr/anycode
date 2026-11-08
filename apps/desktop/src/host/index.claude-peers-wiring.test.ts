@@ -18,6 +18,7 @@ const executable = ts.transpileModule(factory.getText(source), { compilerOptions
 
 async function fixture() {
   let preset = "ask";
+  let pending: string | null = null;
   const raw = { snapshot: () => ({ activePresetId: preset }) };
   const session = Object.create(Session.prototype);
   const request = vi.fn(async () => ({ status: "ok", sessions: [] }));
@@ -49,13 +50,15 @@ async function fixture() {
   const hostSwitchFactory = new Function(...Object.keys(deps), `${executable}\nreturn hostSwitchFactory;`)(...Object.values(deps));
   const context = hostSwitchFactory("root", broker, {}, {}, undefined, { env: { CLAUDE_BIN: "/claude" }, target: { engine: "claude" } });
   const resolved = await context.resolveClaude();
-  const runtime = { engine: raw, identity: { externalSessionRef: "native", model: "model" } };
+  // The switch runtime's settings seam is the Session's own: it carries the pending preset.
+  const engineSettings = { pendingSnapshot: () => pending === null ? null : { activePresetId: pending } };
+  const runtime = { engine: raw, engineSettings, identity: { externalSessionRef: "native", model: "model" } };
   resolved.configure(runtime);
   session.engine = runtime.engine; // Session adopts the configured runtime, including its wrapper.
   const call = (name = "sessions_list", args = {}) => resolved.options.stamp.callTool(name, args, new AbortController().signal, { toolUseId: "use" });
   expect(resolved.options.bootNotices).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Built-in AnyCode skills are unavailable after switching engines. Start a new Claude session to use them." }));
   return { raw, runtime, session, request, broker, authority: () => authority(), call,
-    preset: (value: string) => { preset = value; }, close: () => resolved.options.mcpBridge.close() };
+    preset: (value: string) => { preset = value; }, pending: (value: string | null) => { pending = value; }, close: () => resolved.options.mcpBridge.close() };
 }
 
 it("switched Claude peers use the engine adopted by Session, and lose authority when no longer owned", async () => {
@@ -108,5 +111,20 @@ it("switched Claude peer mode follows the live preset and read-only denies mutat
     expect((await f.call()).isError).toBe(false);
     f.preset("workspace");
     expect(f.authority().mode).toBe("build");
+  } finally { await f.close(); }
+});
+
+it("switched Claude peer mode narrows at once on a pending preset and ignores a pending widening", async () => {
+  const f = await fixture();
+  try {
+    const input = { sessionId: "peer", payload: "hello" };
+    f.pending("read-only");
+    expect(f.authority().mode).toBe("plan");
+    expect((await f.call("session_send", input)).isError).toBe(true);
+    expect(f.broker.requestPermission).not.toHaveBeenCalled();
+    f.pending(null);
+    expect(f.authority().mode).toBe("build");
+    f.preset("read-only"); f.pending("ask");
+    expect(f.authority().mode).toBe("plan");
   } finally { await f.close(); }
 });

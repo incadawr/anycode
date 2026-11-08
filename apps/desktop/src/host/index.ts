@@ -1465,7 +1465,7 @@ function hostSwitchFactory(
       const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser, connections: nativeConnectionBridge("claude", () => raw?.snapshot(), settingsPath),
         ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
           authority: () => ({ root: adopted !== undefined && session?.ownsRuntime(adopted.engine) === true,
-            mode: nativePeerAuthorityMode("claude", raw?.snapshot().activePresetId ?? "read-only"), orchestrate: routing.foreign.isEnabled() }) }) } : {}),
+            mode: nativePeerAuthorityMode("claude", raw?.snapshot().activePresetId ?? "read-only", adopted?.engineSettings?.pendingSnapshot?.()?.activePresetId), orchestrate: routing.foreign.isEnabled() }) }) } : {}),
         onEvent: event => raw?.pushBridgeEvent(event) });
       const mcpBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: stamp.listTools, callTool: stamp.callTool });
       return { options: {
@@ -2301,6 +2301,8 @@ async function bootClaudeSession(
   // the way the codex door's `codexParentEngine` does; until the engine
   // binds, the composition uses a read-only preset and refuses spawns.
   let claudeParentEngine: import("./engines/claude/claude-engine.js").ClaudeEngine | undefined;
+  // The Session's own settings seam, so the peer gate sees a pending narrowing exactly as main does.
+  let claudeParentSettings: ClaudeSettingsSeam | undefined;
   // late-bound live bridge-event tap. The bridge is built here,
   // but the engine exists only after connect below — `onEvent` closes over
   // this cell, and the `claudeEngine` assignment point binds it. Until then
@@ -2433,7 +2435,7 @@ async function bootClaudeSession(
       browser: engineBrowserBridge,
       ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
         authority: () => ({ root: claudeParentEngine !== undefined && session?.ownsRuntime(booted.engine) === true,
-          mode: nativePeerAuthorityMode("claude", claudeParentEngine?.snapshot().activePresetId ?? "read-only"),
+          mode: nativePeerAuthorityMode("claude", claudeParentEngine?.snapshot().activePresetId ?? "read-only", claudeParentSettings?.pendingSnapshot()?.activePresetId),
           orchestrate: claudeForeign?.isEnabled() === true }) }) } : {}),
       connections: nativeConnectionBridge("claude", () => claudeParentEngine?.snapshot()),
       onEvent: (event) => pushBridgeEvent?.(event),
@@ -2581,6 +2583,8 @@ async function bootClaudeSession(
   // CURRENT preset (fresh per run() call, cut §0.8), exactly the codex door's
   // `codexParentEngine` binding.
   claudeParentEngine = claudeEngine;
+  const claudeSettingsSeam = new ClaudeSettingsSeam(claudeEngine);
+  claudeParentSettings = claudeSettingsSeam;
   // bind the bridge's live event tap to the connected engine —
   // from here on, a bridged agent call's subagent_* events surface inside the
   // CLI's live turn (claude-engine.ts's bridge-event race).
@@ -2877,7 +2881,7 @@ async function bootClaudeSession(
     engine: booted.engine,
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
     // codex's choose-now/apply-at-next-turn one — settings-seam.ts).
-    engineSettings: new ClaudeSettingsSeam(claudeEngine),
+    engineSettings: claudeSettingsSeam,
     // the background-agents strip seam — same shape the codex
     // door wires (its own Session construction above) over the SAME
     // port API. Without it, pushBackgroundChildren() sends `[]` and
