@@ -37,6 +37,11 @@ import { ENV_MCP_SECRETS } from "./mcp-secrets.js";
 // re-export without adding a runtime core dependency.
 import type { ImplicitPromptCache } from "@anycode/core";
 export type { ImplicitPromptCache };
+// Type-only edge to the core route snapshot (erased; no runtime import). The
+// stored shape is the core snapshot plus the fetch timestamp; the zod schema in
+// settings/schema.ts asserts mutual assignability against this type.
+import type { ModelRouteSnapshot } from "@anycode/core/model-route";
+export type StoredModelRoutes = ModelRouteSnapshot<Record<string, unknown>> & { fetchedAt: string };
 
 // ── invoke channels (5 — frozen; named consistently with shared/tabs.ts) ──
 
@@ -462,7 +467,7 @@ export interface ProviderConnection {
   models?: string[];
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
   modelsFetchedAt?: string;
-  modelRoutes?: { version: 1; fetchedAt: string; models: Record<string, { kind: "refusal"; reason: "unsupported-provider" | "unknown-model" | "unsupported-model" | "invalid-route" } | { kind: "route"; route: { transport: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; baseUrl: string; metadata: Record<string, unknown> } }> };
+  modelRoutes?: StoredModelRoutes;
   /** Explicit model selection for this connection; absent preserves the provider defaults. */
   visibleModels?: string[];
   /**
@@ -996,7 +1001,6 @@ export interface CustomProviderRecord {
   models: string[];
   /** ISO timestamp of the last successful model-list fetch. */
   modelsFetchedAt?: string;
-  modelRoutes?: { version: 1; fetchedAt: string; models: Record<string, { kind: "refusal"; reason: "unsupported-provider" | "unknown-model" | "unsupported-model" | "invalid-route" } | { kind: "route"; route: { transport: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; baseUrl: string; metadata: Record<string, unknown> } }> };
   /**
    * User declaration that this endpoint authenticates nothing (local
    * servers — LM Studio/ollama/llama.cpp). Only `true` is persisted (additive,
