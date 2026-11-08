@@ -1034,9 +1034,15 @@ export interface ResolvedProviderSelection {
   defaultTransport?: string;
 }
 
-/** Development opt-in only; packaged builds stay off until native acceptance. */
-export function nativeSessionsEnabledForBoot(bootEnv: NodeJS.ProcessEnv, isPackaged: boolean): boolean {
-  return !isPackaged && bootEnv[NATIVE_SESSIONS_ENV] === "1";
+/**
+ * On by default on macOS and Linux; `ANYCODE_NATIVE_SESSIONS_ENABLED=0` turns it
+ * off. Windows stays opt-in (`=1`) until it has a live acceptance run.
+ */
+export function nativeSessionsEnabledForBoot(bootEnv: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): boolean {
+  const raw = bootEnv[NATIVE_SESSIONS_ENV];
+  if (raw === "0") return false;
+  if (raw === "1") return true;
+  return platform !== "win32";
 }
 
 export interface HostEnvParams {

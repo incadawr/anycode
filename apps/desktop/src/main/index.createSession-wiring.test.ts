@@ -264,6 +264,7 @@ beforeEach(async () => {
       delete process.env[key];
     }
   }
+  process.env.ANYCODE_NATIVE_SESSIONS_ENABLED = "0";
   dir = await mkdtemp(join(tmpdir(), "anycode-index-createsession-"));
   scratchRef.home = join(dir, "home");
   scratchRef.userData = join(dir, "userdata");

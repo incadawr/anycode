@@ -165,8 +165,9 @@ Inside a session's own tools, `ANYCODE_SESSION_ID` holds the same value as the
 
 ## Native peer architecture (experimental)
 
-The experimental native sessions flag is off by default; only a development
-build started with `ANYCODE_NATIVE_SESSIONS_ENABLED=1` enables it. Main supplies
+The experimental native sessions capability is on by default on macOS and Linux
+and off on Windows; `ANYCODE_NATIVE_SESSIONS_ENABLED=0` or `=1` overrides the
+platform default. Main supplies
 an explicit host capability. Core uses `SessionsList`, `SessionOpen`,
 `SessionSend`, `WhoEdits`; Codex declares `anycode_sessions_list`,
 `anycode_session_open`, `anycode_session_send`, `anycode_who_edits`; Claude uses

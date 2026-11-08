@@ -4,12 +4,18 @@ import { NATIVE_SESSIONS_ENV, takeNativeSessionsCarrier } from "../shared/sessio
 import { buildHostEnv, nativeSessionsEnabledForBoot } from "./host-env.js";
 
 describe("native session boot carrier", () => {
-  it.each([undefined, "0", "garbage", "true", " 1", "1 "])("defaults %s to off", raw => {
-    expect(nativeSessionsEnabledForBoot({ [NATIVE_SESSIONS_ENV]: raw }, false)).toBe(false);
+  it("is on by default on macOS and Linux, packaged or not", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(nativeSessionsEnabledForBoot({}, platform)).toBe(true);
+      expect(nativeSessionsEnabledForBoot({ [NATIVE_SESSIONS_ENV]: "garbage" }, platform)).toBe(true);
+    }
   });
-  it("accepts the development boot opt-in and rejects packaged boot", () => {
-    expect(nativeSessionsEnabledForBoot({ [NATIVE_SESSIONS_ENV]: "1" }, false)).toBe(true);
-    expect(nativeSessionsEnabledForBoot({ [NATIVE_SESSIONS_ENV]: "1" }, true)).toBe(false);
+  it("lets 0 switch it off and keeps Windows opt-in", () => {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      expect(nativeSessionsEnabledForBoot({ [NATIVE_SESSIONS_ENV]: "0" }, platform)).toBe(false);
+    }
+    expect(nativeSessionsEnabledForBoot({}, "win32")).toBe(false);
+    expect(nativeSessionsEnabledForBoot({ [NATIVE_SESSIONS_ENV]: "1" }, "win32")).toBe(true);
   });
   it.each([undefined, false, true])("uses only the main-derived boolean %s", async enabled => {
     const env = await buildHostEnv({

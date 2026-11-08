@@ -728,6 +728,8 @@ function reconcileServices(): void {
  * to them while a Bash child of main can no longer inherit the key.
  */
 let bootEnv: NodeJS.ProcessEnv = {};
+/** The isolated self-check boot never starts session peers, whatever the platform default is. */
+const nativeSessionsOn = (): boolean => selfCheckProfile === undefined && nativeSessionsEnabledForBoot(bootEnv);
 /** Loaded settings (source of provider defaults + consent flag). */
 let settings: AnycodeSettings | null = null;
 /** Current readiness = apiKey(env|vault) && model(env|settings); gates host spawns. */
@@ -1745,7 +1747,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
       getAccessToken: getAccessTokenFor,
     });
   const env = await buildHostEnv({
-    nativeSessionsEnabled: nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
+    nativeSessionsEnabled: nativeSessionsOn(),
     bootEnv,
     settings: current,
     getSecret,
@@ -2632,7 +2634,7 @@ void app.whenReady().then(async () => {
     console.warn("[main] network hint forwarders not attached", error);
   }
   communicationController = createCommunicationController({
-    nativeSessionsEnabled: nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
+    nativeSessionsEnabled: nativeSessionsOn(),
     manager: () => manager,
     userData: app.getPath("userData"),
     logger: { warn: (message) => console.warn(message), error: (message) => console.error(message) },
@@ -2704,7 +2706,7 @@ void app.whenReady().then(async () => {
         return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
       }
     };
-  const peerEnabled = nativeSessionsEnabledForBoot(bootEnv, app.isPackaged);
+  const peerEnabled = nativeSessionsOn();
   const peerPolicy = createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-policy.json") });
   const peerTrusted = async (workspace: string) => (await resolveWorkspaceTrust(new NodeLspConfigFs(), {
     workspace, home: selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
@@ -3953,7 +3955,7 @@ void app.whenReady().then(async () => {
 
   registerSessionPeerIpc({
     policy: peerPolicy,
-    enabled: () => nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
+    enabled: () => nativeSessionsOn(),
     tabs: () => manager?.listTabs() ?? [],
     realpath: realpathSync,
     isDirectory: path => statSync(path).isDirectory(),

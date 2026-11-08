@@ -20,12 +20,13 @@ post-crash cleanup or managed-session resume is provided.
 
 Native peer tools connect sessions inside AnyCode without configuring an HTTP
 client or sharing a bearer token. They use the same delivery broker as the
-HTTP Sessions API below, with separate access rules. They are behind the
-experimental native sessions flag, **off by default**: development builds only,
-started with `ANYCODE_NATIVE_SESSIONS_ENABLED=1`. Packaged builds keep them off.
+HTTP Sessions API below, with separate access rules. They are experimental and
+**on by default on macOS and Linux**. Start AnyCode with
+`ANYCODE_NATIVE_SESSIONS_ENABLED=0` to turn them off. On Windows they stay off
+until you start AnyCode with `ANYCODE_NATIVE_SESSIONS_ENABLED=1`.
 
-A root is a top-level session, rather than a child or inline sub-agent. With the
-flag on, trusted roots in the same exact folder have native access by default,
+A root is a top-level session, rather than a child or inline sub-agent. When
+enabled, trusted roots in the same exact folder have native access by default,
 subject to per-tab permissions. Claude and Codex roots can send messages and open
 peers too, and can receive and answer them, under the rules below.
 The tab's environment menu has **Native session access** to turn the project off
@@ -115,8 +116,8 @@ Limits and uncertainty:
   windows identify candidates, never a proven author or file owner. Background
   processes, external editors, late events, excluded trees and stale/partial
   baselines can hide writes; MultiEdit is not indexed.
-- Windows live behavior has not been verified. The experimental flag remains off
-  by default; tool declarations and fixture coverage do not establish live support
+- Windows live behavior has not been verified. Native peers stay off
+  by default on Windows; tool declarations and fixture coverage do not establish live support
   for every engine or platform.
 
 `ListConnections` is separate and remains available without the peer flag. It
