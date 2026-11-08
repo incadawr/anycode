@@ -147,7 +147,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
     reportFailure(error) { if (!closing) console.error(`Launcher log (temporary root/launcher.log; removed at teardown):\n${saveLog?.(error.message) ?? ''}`); },
     async start() {
       try {
-        fixtures = await createEngineSmokeFixtures(root,{scripted:true});
+        fixtures = await createEngineSmokeFixtures(root);
         // Reuse the reviewed CLI doubles; replace only the local model protocol.
         fixtures.fixture.removeAllListeners('request');
         fixtures.fixture.on('request',(request,response) => {

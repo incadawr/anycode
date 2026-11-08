@@ -72,7 +72,7 @@ test("scripted codex double calls a bridge tool, awaits the response, then compl
   const profile = mkdtempSync(join(tmpdir(), "anycode-fixture-test-"));
   let fixtures, double;
   try {
-    fixtures = await createEngineSmokeFixtures(profile, { scripted: true });
+    fixtures = await createEngineSmokeFixtures(profile);
     double = scriptedDouble(fixtures.binaries.codex);
     double.write({ id: 1, method: "thread/start", params: {} });
     await double.until(() => double.frames.find(frame => frame.id === 1));
@@ -108,7 +108,7 @@ test("scripted codex double answers a marker, replies explicitly, and holds busy
   const profile = mkdtempSync(join(tmpdir(), "anycode-fixture-test-"));
   let fixtures, double;
   try {
-    fixtures = await createEngineSmokeFixtures(profile, { scripted: true });
+    fixtures = await createEngineSmokeFixtures(profile);
     double = scriptedDouble(fixtures.binaries.codex);
     double.write({ id: 1, method: "thread/start", params: {} });
     await double.until(() => double.frames.find(frame => frame.id === 1));
@@ -148,7 +148,7 @@ test("scripted claude double holds its result until released and answers the rep
   const profile = mkdtempSync(join(tmpdir(), "anycode-fixture-test-"));
   let fixtures, double;
   try {
-    fixtures = await createEngineSmokeFixtures(profile, { scripted: true });
+    fixtures = await createEngineSmokeFixtures(profile);
     double = scriptedDouble(fixtures.binaries.claude, true);
     const release = join(profile, "release");
     writeFileSync(join(profile, "claude-script.json"), JSON.stringify({

@@ -27,7 +27,7 @@ if (log) appendFileSync(log,`${JSON.stringify({fixtureBoot:{args:process.argv.sl
 // Opt-in scripted mode (session-peer smoke only): active only while the script file exists.
 // The script never reaches main or the broker; it only decides what THIS double does for a
 // turn it really received: call a bridge tool, answer with a marker, or stay busy until released.
-const scriptFile = process.argv.find(arg => arg.startsWith("--double-script="))?.slice("--double-script=".length);
+const scriptFile = log?.replace(/\.jsonl$/, "-script.json");
 const readScript = () => { try { return scriptFile && existsSync(scriptFile) ? JSON.parse(readFileSync(scriptFile, "utf8")) : null; } catch { return null; } };
 const bridgeToolName = canonical => `anycode_${canonical.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase()}`;
 const textOf = value => typeof value === "string" ? value : Array.isArray(value) ? value.map(textOf).join("\n") : typeof value?.text === "string" ? value.text : typeof value?.content === "string" || Array.isArray(value?.content) ? textOf(value.content) : "";
