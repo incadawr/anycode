@@ -57,14 +57,14 @@ export class AccountSourcesController {
     };
     const run = async () => {
       const now = this.now();
+      // An attempt that cannot be applied must not cause an immediate retry.
+      state.nextAttempt = Math.max(state.nextAttempt, now + 1000);
       let failed = false;
       let unapplied = false;
       for (const endpoint of ["catalog", "budget"] as const) {
         if (!force && now - (endpoint === "catalog" ? state.lastCatalog : state.lastBudget) < (endpoint === "catalog" ? CATALOG_INTERVAL : BUDGET_INTERVAL)) continue;
         try {
           const result = await fetchAccountDocument(state.source.fetcher, state.source.apiBaseUrl, endpoint, state.source.apiKey, abort.signal);
-          // A response that cannot be applied must not cause an immediate retry.
-          state.nextAttempt = Math.max(state.nextAttempt, this.now() + 1000);
           if (!isCurrent()) return;
           if (result.data.accountId !== state.source.accountId) { await update(() => { delete state.view.budget; delete state.catalog; state.view.status = "needs_approval"; }); return; }
           let applied = false;
