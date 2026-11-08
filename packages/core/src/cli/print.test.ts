@@ -778,6 +778,25 @@ describe("runPrintMode — stream-json output format (design §2.2)", () => {
     expect(errorLine).toEqual({ type: "error", message: "server error", code: "server", statusCode: 500 });
   });
 
+  it("drops the discarded attempt's text from the result envelope on stream_retry", async () => {
+    async function* turn(): AsyncGenerator<AgentEvent, void, unknown> {
+      yield { type: "text_delta", id: "t", text: "partial" };
+      yield { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, discardedOutput: true, reason: "x" };
+      yield { type: "text_delta", id: "t", text: "full" };
+      yield { type: "loop_end", reason: "completed", turns: 1 };
+    }
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const getOut = collect(stdout);
+    collect(stderr);
+    const code = await runPrintMode(
+      structuredOpts(makeFakeLoop(() => turn()), makeFakeShutdown(), stdout, stderr, structuredCtx({ format: "json" })),
+    );
+    expect(code).toBe(0);
+    const env = parseLines(getOut()).at(-1)!;
+    expect(env.result).toBe("full");
+  });
+
   it("skips an unserializable event (fail-soft) + warns on stderr; the NDJSON stream stays valid", async () => {
     // A circular event breaks JSON.stringify; `turn_start` renders nothing on
     // stderr (render.ts), so only the stream-line stringify path is exercised.

@@ -2804,6 +2804,49 @@ describe("AiSdkModelPort — replay of a partial step when the consumer can disc
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["a bare string error (in-band SSE error chunk)", () => "upstream aborted"],
+    ["a JSON parse error", () => new Error("JSON parsing failed: Text: {\"choices\":[{\"del")],
+    ["an undici terminated error", () => Object.assign(new TypeError("terminated"), { cause: Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }) })],
+  ])("replays after text for %s in discard mode only", async (_name, make) => {
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(make())]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("full")), part(finishPart)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(discardRequest));
+    expect(events.find((e) => e.type === "stream_retry")).toMatchObject({ discardedOutput: true });
+    expect(events.at(-1)).toMatchObject({ type: "finish" });
+  });
+
+  it("flags discardedOutput when only reasoning had streamed", async () => {
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part({ type: "reasoning-delta", id: "r1", text: "thinking" }), throwsWith(retryableError())]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(discardRequest));
+    expect(events.find((e) => e.type === "stream_retry")).toMatchObject({ discardedOutput: true });
+  });
+
+  it("does not replay quota, abort or 4xx failures after text", async () => {
+    const quota = Object.assign(new Error("You have exceeded your quota"), { statusCode: 429 });
+    const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+    for (const error of [quota, abort, nonRetryableError()]) {
+      mockStreamText.mockReset();
+      mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(error)]));
+      const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+      await expect(collect(port.streamText(discardRequest))).rejects.toBe(error);
+      expect(mockStreamText).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("does not replay after a lone tool_input_delta", async () => {
+    const error = interruption();
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), part({ type: "tool-input-delta", id: "call_1", delta: "{\"fi" }), throwsWith(error)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    await expect(collect(port.streamText(discardRequest))).rejects.toBe(error);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
   it("respects the retry budget after text", async () => {
     const error = interruption();
     mockStreamText.mockImplementation(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(error)]));

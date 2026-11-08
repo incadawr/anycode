@@ -2981,6 +2981,19 @@ describe("AgentLoop.runTurn — discardable partial output", () => {
     await collect(makeLoop({ modelPort: off }).runTurn("hi"));
     expect(off.requests[0]?.discardablePartialOutput).toBeUndefined();
   });
+
+  it("does not stamp replayStopped on a terminal error after text in discard mode", async () => {
+    const script = [[
+      { type: "start" },
+      { type: "text_delta", id: "t1", text: "partial" },
+      { type: "error", error: new Error("boom") },
+    ]] as ModelStreamEvent[][];
+    const findErrorEvent = (events: AgentEvent[]) => events.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");
+    const on = await collect(makeLoop({ modelPort: new MockModelPort(script), discardPartialOutputOnRetry: true }).runTurn("hi"));
+    expect(findErrorEvent(on)?.retry?.replayStopped).toBeUndefined();
+    const off = await collect(makeLoop({ modelPort: new MockModelPort(script) }).runTurn("hi"));
+    expect(findErrorEvent(off)?.retry?.replayStopped).toBe("output_started");
+  });
 });
 
 describe("AgentLoop.runTurn — terminal retry metadata (W7b)", () => {

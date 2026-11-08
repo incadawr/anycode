@@ -1453,7 +1453,7 @@ export class AgentLoop {
               } else {
                 yield event;
               }
-              if (blocksAutomaticReplay(event)) replayBlocked = true;
+              if (blocksAutomaticReplay(event, this.config.discardPartialOutputOnRetry === true)) replayBlocked = true;
               if (isModelOutputEvent(event)) {
                 hadModelOutput = true;
               }

@@ -157,9 +157,10 @@ export type ModelStreamEvent =
        */
       waitSource?: "parent" | "subagent";
       /**
-       * True when the abandoned attempt had already streamed assistant text:
-       * consumers must drop that partial text (it was never committed and the
-       * step is re-issued from scratch). Absent otherwise.
+       * True when the abandoned attempt had already streamed assistant text or
+       * reasoning: consumers must drop that partial output (it was never
+       * committed and the step is re-issued from scratch). Lines already
+       * emitted live (stream-json) are not retracted. Absent otherwise.
        */
       discardedOutput?: true;
       reason: string;

@@ -53,7 +53,7 @@ import { contextualizeMiniMaxBalance, isMiniMaxEffortModel, isMiniMaxModel } fro
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
-import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isStreamInterruption, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
+import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isReplayableAfterPartialOutput, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 import { describeStreamArtifact, isIgnorableStreamArtifact } from "./stream-artifacts.js";
 import { translateStreamPart } from "./stream-translator.js";
@@ -1145,11 +1145,11 @@ export class AiSdkModelPort implements ModelPort {
       return attempt < policy.maxRetries;
     };
     // Replay after streamed text is allowed only when the consumer discards
-    // partial steps; the extra classifier also admits unclassified transport
-    // breaks (never 4xx/quota/abort) once output has begun.
+    // partial steps; the denylist classifier then admits any failure once
+    // output has begun, except abort, quota, network-config and 4xx.
     const discardable = request.discardablePartialOutput === true;
     const replayableError = (error: unknown, hadOutput: boolean): boolean =>
-      isRetryableStreamError(error) || (discardable && hadOutput && isStreamInterruption(error));
+      isRetryableStreamError(error) || (discardable && hadOutput && isReplayableAfterPartialOutput(error));
     // the failure that STARTED the include_usage probe, carried
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
@@ -1448,7 +1448,7 @@ export class AiSdkModelPort implements ModelPort {
             break;
           }
           if (blocksAutomaticReplay(event, discardable)) replayBlocked = true;
-          if (event.type === "text_delta") textDelivered = true;
+          if (event.type === "text_delta" || event.type === "reasoning_delta") textDelivered = true;
           if (isModelOutputEvent(event)) {
             hadModelOutput = true;
           }
