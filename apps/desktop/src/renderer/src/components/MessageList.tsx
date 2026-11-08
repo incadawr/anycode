@@ -474,14 +474,48 @@ export function shouldShowJumpButton(follow: boolean, blockCount: number): boole
 const savedScroll = new Map<string, { follow: boolean; anchorId: string | null; anchorOffset: number }>();
 
 /**
+ * Minimal structural view of a block element — enough to measure it.
+ * Structural (not `HTMLElement`) so the anchor helpers can be unit-tested
+ * with plain stubs: the node test env has no DOM.
+ */
+export interface AnchorElementLike {
+  getBoundingClientRect(): { top: number; bottom: number; width: number; height: number };
+  getClientRects(): ArrayLike<unknown>;
+  getAttribute(name: string): string | null;
+}
+
+/** Minimal structural view of the scrolling container. */
+export interface AnchorContainerLike {
+  getBoundingClientRect(): { top: number };
+  querySelectorAll(selector: string): Iterable<AnchorElementLike>;
+}
+
+/**
+ * Is this element really laid out? A collapsed tool-call stack renders its
+ * anchor with `display:none` — no boxes, an all-zero rect — so it must
+ * never be used as a scroll anchor (it would pin the list to the wrong
+ * place on restore).
+ */
+export function isLaidOut(el: AnchorElementLike): boolean {
+  if (el.getClientRects().length === 0) {
+    return false;
+  }
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 || rect.height > 0;
+}
+
+/**
  * The topmost transcript block that is still (partially) inside the
  * container — the anchor a saved scroll position is expressed against.
  * The offset is measured against the container's top edge, so it is negative
  * for a block that starts above the viewport.
  */
-function findAnchorBlock(container: HTMLElement): { id: string; offset: number } | null {
+export function findAnchorBlock(container: AnchorContainerLike): { id: string; offset: number } | null {
   const containerTop = container.getBoundingClientRect().top;
-  for (const node of container.querySelectorAll<HTMLElement>("[data-block-id]")) {
+  for (const node of container.querySelectorAll("[data-block-id]")) {
+    if (!isLaidOut(node)) {
+      continue;
+    }
     const rect = node.getBoundingClientRect();
     if (rect.bottom > containerTop) {
       const id = node.getAttribute("data-block-id");
@@ -489,6 +523,34 @@ function findAnchorBlock(container: HTMLElement): { id: string; offset: number }
         return { id, offset: rect.top - containerTop };
       }
     }
+  }
+  return null;
+}
+
+/**
+ * The laid-out element for a saved block id: the first match that actually
+ * has boxes, or — when every match is hidden (a collapsed stack's
+ * `display:none` anchor shares its id with the visible member card) — the
+ * nearest laid-out block ancestor of it.
+ */
+function findLaidOutAnchor(container: HTMLElement, id: string): HTMLElement | null {
+  const matches = container.querySelectorAll<HTMLElement>(`[data-block-id="${escapeSelector(id)}"]`);
+  for (const match of matches) {
+    if (isLaidOut(match)) {
+      return match;
+    }
+  }
+  const first = matches[0];
+  if (!first) {
+    return null;
+  }
+  let node: HTMLElement | null = first.parentElement;
+  while (node) {
+    const candidate = node.closest<HTMLElement>("[data-block-id]");
+    if (candidate && isLaidOut(candidate)) {
+      return candidate;
+    }
+    node = candidate ? candidate.parentElement : null;
   }
   return null;
 }
@@ -543,6 +605,29 @@ export function nextFollow(
   // Content grew (or the user moved down without reaching the bottom):
   // keep whatever the follow state was.
   return prevFollow;
+}
+
+/**
+ * Should the reference scroll position advance to the current one?
+ *
+ * The reference is what the follow decision compares against, so it must
+ * track the real scroll position — but a scroll event can also carry a
+ * FRACTIONAL move (a slow wheel tick, a trackpad nudge). Advancing the
+ * reference on every such tick throws the accumulated movement away: the
+ * difference to the reference never grows past a fraction of a pixel and
+ * the follow decision never sees the upward move.
+ *
+ * So the reference advances only on a real move (a full pixel or more) or
+ * on a follow-state edge (where the old reference is stale by definition).
+ * Exported pure for unit tests.
+ */
+export function shouldAdvanceScrollRef(
+  prevFollow: boolean,
+  next: boolean,
+  scrollTop: number,
+  lastScrollTop: number,
+): boolean {
+  return next !== prevFollow || Math.abs(scrollTop - lastScrollTop) >= 1;
 }
 
 /**
@@ -890,6 +975,19 @@ export function MessageList({
   const enterIdsRef = useRef<Set<string>>(new Set());
   const hasRunRef = useRef(false);
 
+  // Per-tab scroll memory is keyed by tab id, but a read-only surface (a
+  // child history) and a replay surface share the tab's id with the root
+  // list — saving or restoring THEIR position would clobber the root's.
+  // The flags are mirrored into refs so the unmount cleanup and the mount
+  // restore always read the CURRENT value, not the one captured when the
+  // effect was created.
+  const tabIdRef = useRef(tabId);
+  tabIdRef.current = tabId;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  const replayingRef = useRef(replaying);
+  replayingRef.current = replaying;
+
   // Sticky-follow (F17, design §3.1): follow lives in a ref so a scroll tick
   // never re-renders by itself; the mirrored useState exists ONLY to flip the
   // jump-button's visibility, and is set exclusively on the boolean edge.
@@ -1013,15 +1111,24 @@ export function MessageList({
     // WITHOUT the user scrolling — the old "not at bottom → stop following"
     // reading treated that growth as a manual scroll-up and left the
     // transcript parked mid-history. Only a real upward move drops follow.
+    const prevFollow = followRef.current;
     const next = nextFollow(
-      followRef.current,
+      prevFollow,
       lastScrollTopRef.current,
       el.scrollTop,
       el.scrollHeight,
       el.clientHeight,
     );
-    lastScrollTopRef.current = el.scrollTop;
-    if (followRef.current !== next) {
+    // The reference point only advances on a REAL move: on a follow edge
+    // (the state changed, so the old reference is stale) or on a scroll of
+    // at least a pixel. Sub-pixel wheel ticks therefore accumulate against
+    // the same reference instead of resetting it every tick — a slow
+    // scroll-up made of many fractional moves is then still seen as one
+    // upward move once it passes the 1px tolerance.
+    if (shouldAdvanceScrollRef(prevFollow, next, el.scrollTop, lastScrollTopRef.current)) {
+      lastScrollTopRef.current = el.scrollTop;
+    }
+    if (prevFollow !== next) {
       followRef.current = next;
       setFollow(next);
     }
@@ -1042,16 +1149,20 @@ export function MessageList({
   // list snaps to the bottom, as it did before.
   useLayoutEffect(() => {
     const container = containerRef.current;
-    if (!container || !tabId) {
+    const tab = tabIdRef.current;
+    if (!container || !tab) {
       return;
     }
-    const saved = savedScroll.get(tabId);
+    // A read-only or replayed surface shares the tab's id with the root
+    // list — it must not consume (or write) the root list's position.
+    if (readOnlyRef.current || replayingRef.current) {
+      return;
+    }
+    const saved = savedScroll.get(tab);
     if (!saved || saved.follow || !saved.anchorId) {
       return;
     }
-    const anchor = container.querySelector<HTMLElement>(
-      `[data-block-id="${escapeSelector(saved.anchorId)}"]`,
-    );
+    const anchor = findLaidOutAnchor(container, saved.anchorId);
     if (!anchor) {
       return;
     }
@@ -1076,23 +1187,36 @@ export function MessageList({
   // Remember the position of this tab when the list unmounts (session switch).
   useLayoutEffect(() => {
     return () => {
+      // The CLOSED-OVER tabId, not the ref: this cleanup also runs when the
+      // tab id changes, and it must save the position of the tab that is
+      // being left, not the one that is coming.
       if (!tabId) {
         return;
       }
-      const container = containerRef.current;
-      if (!container) {
-        savedScroll.set(tabId, { follow: followRef.current, anchorId: null, anchorOffset: 0 });
+      // Same shared-id rule as the restore above: a read-only or replayed
+      // surface never owns the tab's scroll position.
+      if (readOnlyRef.current || replayingRef.current) {
         return;
       }
+      const container = containerRef.current;
       if (followRef.current) {
         savedScroll.set(tabId, { follow: true, anchorId: null, anchorOffset: 0 });
         return;
       }
+      if (!container) {
+        // No anchor to save — keep whatever was already recorded for this
+        // tab instead of replacing a good entry with an empty one.
+        return;
+      }
       const anchor = findAnchorBlock(container);
+      if (!anchor) {
+        // Same: an empty entry would lose a position that WAS recorded.
+        return;
+      }
       savedScroll.set(tabId, {
         follow: false,
-        anchorId: anchor?.id ?? null,
-        anchorOffset: anchor?.offset ?? 0,
+        anchorId: anchor.id,
+        anchorOffset: anchor.offset,
       });
     };
   }, [tabId]);

@@ -24,6 +24,11 @@ import {
   stackStatusClass,
   STARTER_CHIPS,
   topmostVisibleUserIndex,
+  findAnchorBlock,
+  isLaidOut,
+  shouldAdvanceScrollRef,
+  type AnchorContainerLike,
+  type AnchorElementLike,
 } from "./MessageList.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -415,6 +420,87 @@ describe("restoreScrollTarget (per-tab scroll restore)", () => {
 
   it("returns 0 for a list that cannot scroll at all", () => {
     expect(restoreScrollTarget(0, 300, 100, 400, 500)).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// The anchor helpers — plain stubs, no DOM (the node test env has none).
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Stub block element for the anchor helpers. */
+function stubNode(
+  id: string,
+  rect: { top: number; bottom: number; width: number; height: number },
+  hidden = false,
+): AnchorElementLike {
+  return {
+    getBoundingClientRect: () => rect,
+    getClientRects: () => (hidden ? [] : [rect]),
+    getAttribute: (name: string) => (name === "data-block-id" ? id : null),
+  };
+}
+
+/** Stub scroll container for the anchor helpers. */
+function stubContainer(top: number, nodes: AnchorElementLike[]): AnchorContainerLike {
+  return {
+    getBoundingClientRect: () => ({ top }),
+    querySelectorAll: () => nodes,
+  };
+}
+
+describe("isLaidOut (hidden anchors are not anchors)", () => {
+  it("treats a display:none element (no client rects) as not laid out", () => {
+    // A collapsed tool-call stack renders its anchor with display:none —
+    // its rect is all zeros, so it must never be used as a scroll anchor.
+    expect(isLaidOut(stubNode("hidden", { top: 0, bottom: 0, width: 0, height: 0 }, true))).toBe(false);
+  });
+
+  it("treats a zero-size element as not laid out", () => {
+    expect(isLaidOut(stubNode("empty", { top: 10, bottom: 10, width: 0, height: 0 }))).toBe(false);
+  });
+
+  it("accepts a normal visible block", () => {
+    expect(isLaidOut(stubNode("visible", { top: 10, bottom: 40, width: 300, height: 30 }))).toBe(true);
+  });
+});
+
+describe("findAnchorBlock (the topmost visible block)", () => {
+  it("skips a hidden first block and picks the next visible one", () => {
+    const container = stubContainer(-10, [
+      stubNode("hidden", { top: 0, bottom: 0, width: 0, height: 0 }, true),
+      stubNode("visible", { top: 120, bottom: 160, width: 300, height: 40 }),
+    ]);
+    expect(findAnchorBlock(container)).toEqual({ id: "visible", offset: 130 });
+  });
+
+  it("returns null when every block is above the container top", () => {
+    const container = stubContainer(100, [
+      stubNode("a", { top: 0, bottom: 40, width: 300, height: 40 }),
+      stubNode("b", { top: 50, bottom: 90, width: 300, height: 40 }),
+    ]);
+    expect(findAnchorBlock(container)).toBeNull();
+  });
+
+  it("reports a negative offset for a block that starts above the viewport", () => {
+    const container = stubContainer(100, [
+      stubNode("a", { top: 40, bottom: 200, width: 300, height: 160 }),
+    ]);
+    expect(findAnchorBlock(container)).toEqual({ id: "a", offset: -60 });
+  });
+});
+
+describe("shouldAdvanceScrollRef (slow scroll-up must not be lost)", () => {
+  it("does not advance the reference on a sub-pixel move without a follow edge", () => {
+    expect(shouldAdvanceScrollRef(true, true, 499.6, 500)).toBe(false);
+  });
+
+  it("advances the reference on a real (>= 1px) move", () => {
+    expect(shouldAdvanceScrollRef(true, true, 499, 500)).toBe(true);
+  });
+
+  it("advances the reference when the follow state flips", () => {
+    expect(shouldAdvanceScrollRef(true, false, 499.6, 500)).toBe(true);
+    expect(shouldAdvanceScrollRef(false, true, 500, 499.6)).toBe(true);
   });
 });
 
