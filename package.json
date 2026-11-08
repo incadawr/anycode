@@ -1,6 +1,6 @@
 {
   "name": "anycode",
-  "version": "0.0.94",
+  "version": "0.0.95",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.0.0",

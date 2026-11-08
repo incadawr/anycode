@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.95] - 2026-11-09
+
 ### Changed
 
 - Native session peers are now on by default on macOS and Linux, packaged builds included, so Core, Claude and Codex sessions can message and open each other without a development flag. Set `ANYCODE_NATIVE_SESSIONS_ENABLED=0` to turn them off. Windows keeps them off unless `ANYCODE_NATIVE_SESSIONS_ENABLED=1` is set.
