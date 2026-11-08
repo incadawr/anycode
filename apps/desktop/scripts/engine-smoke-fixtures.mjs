@@ -5,14 +5,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 
-export async function createEngineSmokeFixtures(profile) {
+/** `scripted` opts the doubles into the session-peer smoke script file `<profile>/<engine>-script.json`. */
+export async function createEngineSmokeFixtures(profile, { scripted = false } = {}) {
   const fixturePath = fileURLToPath(new URL("../src/host/engine-switch-fixtures/native-double.mjs", import.meta.url));
   const binaries = {};
   const consents = [];
   for (const engine of ["codex", "claude"]) {
     const binary = join(profile, `${engine}-double`);
     const source = readFileSync(fixturePath, "utf8").replace(/^#![^\n]*\n/, "");
-    const prefix = `#!${realpathSync(process.execPath)}\nprocess.argv.push("--double-orchestration", ${JSON.stringify(`--double-log=${join(profile, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
+    const prefix = `#!${realpathSync(process.execPath)}\nprocess.argv.push("--double-orchestration", ${JSON.stringify(`--double-log=${join(profile, `${engine}.jsonl`)}`)}${scripted ? `, ${JSON.stringify(`--double-script=${join(profile, `${engine}-script.json`)}`)}` : ""}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
     writeFileSync(binary, prefix + source, { mode: 0o700 });
     const stat = statSync(binary);
     consents.push({ path: realpathSync(binary), fingerprint: { mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs }, grantedAt: new Date().toISOString() });

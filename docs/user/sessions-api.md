@@ -26,8 +26,8 @@ started with `ANYCODE_NATIVE_SESSIONS_ENABLED=1`. Packaged builds keep them off.
 
 A root is a top-level session, rather than a child or inline sub-agent. With the
 flag on, trusted roots in the same exact folder have native access by default,
-subject to per-tab permissions. Claude/Codex roots currently cannot send messages
-or open peers because their native preset authority is not carried to main.
+subject to per-tab permissions. Claude and Codex roots can send messages and open
+peers too, and can receive and answer them, under the rules below.
 The tab's environment menu has **Native session access** to turn the project off
 and **Allow communication** / **Revoke communication** for an explicit pair of
 folders. Both folders must be trusted and enabled. Nested folders and sibling
@@ -51,8 +51,23 @@ force the new tab to be shared externally; the normal new-session default applie
 Core roots can send/open in Build, Edit, Auto, `yolo` and Orchestrate, under
 Core's permission checks. Build, Edit, Auto and Orchestrate ask a human for each
 operation; ordinary `yolo` follows its allow policy. Plan without Orchestrate, unknown authority,
-children and restricted callers cannot send/open. A resumed Orchestrate tab stays
-closed for peer mutations until its host re-reports mode/Orchestrate authority.
+children and restricted callers cannot send/open. A resumed Orchestrate tab
+regains peer access once its host reports its mode again, without being reopened.
+
+Claude and Codex roots follow the same rules, taken from their permission preset:
+
+| Root preset | Peer send/open |
+|---|---|
+| Claude **Ask**, **Workspace** | Allowed, with a human approval for each operation |
+| Codex **Ask for approval**, **Approve for me** | Allowed, with a human approval for each operation (peer calls never go to automatic review) |
+| Codex **Full access** | Allowed without a prompt, like Core `yolo` |
+| Claude **Read-only** | Refused, like Plan |
+| Unknown or older presets | Refused |
+
+A preset change that would widen access counts only after it has been applied;
+narrowing counts immediately. A Claude or Codex root that receives a message can
+answer it with `replyTo`, or the sender can ask for one `on_turn_end` result, the
+same as for Core.
 
 For replies, `SessionSend {"replyTo":"<received-message-id>","payload":"…"}`
 derives the recipient and correlation from the original message; a supplied

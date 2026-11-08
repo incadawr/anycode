@@ -128,8 +128,13 @@ const replyObservation = kind => ({
   completedAt:0,received:{messageId:'original',sender:'session:a',recipientSessionId:'b',payload:'trigger'},nonce:'reply-proof',kind,
   outgoing:[{id:'reply',text:'Outgoing reply-proof',links:['A']}],incoming:[{id:'reply',text:'Incoming reply-proof',links:['B']}],
 });
+const nativeCall = () => ({response:{result:{success:true,contentItems:[{text:'{"status":"sent","messageId":"m","state":"acknowledged"}'}]},error:null},expectedStatus:'sent',before:1,requests:[{input:'old'},{input:'call-proof'}],nonce:'call-proof'});
 const observationCases = [
   ...['explicit','automatic'].map(kind => ['judgeCoreReply',replyObservation(kind),{...replyObservation(kind),completedAt:1}]),
+  ...['explicit','automatic'].map(kind => ['judgeNativeReply',replyObservation(kind),{...replyObservation(kind),incoming:[{id:'reply',text:'Incoming reply-proof',links:[]}]}]),
+  ['judgeQueuedWhileBusy',{sent:{status:'sent',state:'queued'},requestsWhileBusy:[{input:'hold'}],nonce:'queued-proof'},{sent:{status:'sent',state:'acknowledged'},requestsWhileBusy:[],nonce:'queued-proof'}],
+  ['judgeQueuedThenDelivered',{requests:[{input:'hold-proof'},{input:'queued-proof'}],holdNonce:'hold-proof',nonce:'queued-proof'},{requests:[{input:'queued-proof'},{input:'hold-proof'}],holdNonce:'hold-proof',nonce:'queued-proof'}],
+  ['judgeNativeCall',nativeCall(),{...nativeCall(),requests:[{input:'old'}]}],
   ['judgeCards',{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[card('Incoming')]},{nonce:'delivery-proof',outgoing:[card('Outgoing')],incoming:[{text:'Incoming',links:[]}]}],
   ['judgeForgery',{before:[],after:[],bodySeen:true},{before:[],after:[card('forged')],bodySeen:true}],
   ['judgeSockets',{status:0,records:'p12\nn127.0.0.1:4000\nn*:4001',pids:[12],allowed:[4000,4001]},{records:'p12\nn127.0.0.1:4000\nn*:9999',pids:[12],allowed:[4000,4001]}],
@@ -229,4 +234,34 @@ test('judgeFileEvidence rejects missing unknown explanation, wrong session and c
   for (const change of [{untouched:{...good.untouched,limitations:'no writers'}},
     {written:{...good.written,records:[{sessionId:'other',evidence:'reported_write',toolName:'Write'}]}},
     {untouched:{...good.untouched,candidates:[{sessionId:'other'}]}}]) assert.throws(() => acceptance.judgeFileEvidence({...good,...change}));
+});
+
+test('native source call judgement rejects failed, wrong-status and errored bridge results',() => {
+  const good = nativeCall();
+  assert.equal(acceptance.judgeNativeCall(good).status,'sent');
+  const result = change => ({...good.response,result:{...good.response.result,...change}});
+  for (const change of [{response:undefined},{response:{...good.response,error:{code:1}}},{response:result({success:false})},
+    {response:result({contentItems:[{text:'{"status":"refused"}'}]})},{expectedStatus:'opened'},{response:result({contentItems:[]})}]) {
+    assert.throws(() => acceptance.judgeNativeCall({...good,...change}));
+  }
+});
+test('queue judgements reject early delivery, missing queue state and wrong order',() => {
+  for (const change of [{sent:{status:'refused'}},{sent:{status:'sent',state:'unknown'}},{requestsWhileBusy:[{input:'queued-proof'}]}]) {
+    assert.throws(() => acceptance.judgeQueuedWhileBusy({sent:{status:'sent',state:'queued'},requestsWhileBusy:[],nonce:'queued-proof',...change}));
+  }
+  for (const requests of [[],[{input:'hold-proof'}],[{input:'queued-proof'}],[{input:'hold-proof queued-proof'},{input:'x'}]]) {
+    assert.throws(() => acceptance.judgeQueuedThenDelivered({requests,holdNonce:'hold-proof',nonce:'queued-proof'}));
+  }
+});
+test('native frames expose their peer header for both engines; absent headers parse to null',() => {
+  const header = {sender:'session:a',recipientSessionId:'b',messageId:'m1',kind:'agent_message'};
+  const text = `[AnyCode authenticated agent message ${JSON.stringify(header)}]\nbody-proof\nreminder`;
+  const codex = {method:'turn/start',params:{input:[{type:'text',text}]}};
+  const claude = {type:'user',message:{role:'user',content:[{type:'text',text}]}};
+  for (const frame of [codex,claude,{type:'user',message:{role:'user',content:text}}]) {
+    const parsed = acceptance.parseNativeIncoming(frame);
+    assert.equal(parsed.messageId,'m1'); assert.match(parsed.payload,/^body-proof/);
+  }
+  assert.equal(acceptance.parseNativeIncoming({method:'turn/start',params:{input:[{type:'text',text:'plain'}]}}),null);
+  assert.equal(acceptance.parseNativeIncoming(undefined),null);
 });

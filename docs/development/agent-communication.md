@@ -202,10 +202,14 @@ Edit, Auto or `yolo` authority, or reported Orchestrate ON. Core's dispatcher
 asks a human before each send/open in Build, Edit, Auto and Orchestrate; ordinary
 `yolo` follows its allow policy. A human approval is for that operation and
 cannot replace scope/trust checks. Plan without Orchestrate, unknown modes,
-children and restricted callers are refused. Claude/Codex roots currently fail
-closed for mutations: their displayed Build mode does not prove native preset
-authority. Host replacement clears reported authority. A resumed Orchestrate tab
-stays closed until the host re-reports its mode/Orchestrate state.
+children and restricted callers are refused. Claude/Codex roots report authority
+derived from their applied permission preset (the narrower of applied and pending);
+their displayed Build mode is never used. Claude Ask/Workspace and Codex Ask for
+approval/Approve for me map to Build, Codex Full access maps to `yolo`, and
+Read-only, unknown or older presets map to Plan. The native bridge asks a human for
+each send/open in Build and never routes peer calls to automatic review. Host
+replacement clears reported authority. A resumed Orchestrate tab regains peer
+access once the host re-reports its mode/Orchestrate state.
 
 Before draining a queued peer message, main checks current scope, trust, grant,
 process/generation and chain lifetime again. A host-generated nonce binds a
@@ -238,5 +242,4 @@ supported tool pairs produce `reported_write`; sampled changes during Bash
 windows produce candidate evidence only. Overall coverage stays partial, even
 when an individual sampler pass is complete. Background writes, late events,
 capacity limits and excluded trees make shell attribution incomplete. Windows
-live behavior remains unverified; Claude/Codex mutation authority and resumed
-Orchestrate authority are the current limitations described above.
+live behavior remains unverified.

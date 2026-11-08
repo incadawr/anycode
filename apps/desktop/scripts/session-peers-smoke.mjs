@@ -2,9 +2,11 @@
  * Extension API: createPeerSmoke() returns start/close, openPeers(tab),
  * sendPeer(source,target,payload), waitNative(engine,after,nonce), native(engine),
  * openPeer(coreSource,input), cards(tab), grant(source,target,enabled), httpOff(), screenshot(name).
- * Target selection: --target-engine codex (default) | core.
- * Tool-emitting prompts currently require a core source. Native doubles receive
- * and answer requests; they do not interpret core command prompts.
+ * Target selection: --target-engine codex (default) | claude | core.
+ * Core sources emit tool calls from `peer-command:` prompts. The Codex double has an
+ * opt-in scripted mode (profile script file) that turns the same prompt into a real bridge
+ * tool call, replies to a received peer message, or stays busy until a release file appears.
+ * The Claude double can only answer and stay busy (no MCP client): Claude is never a live source.
  * Hooks return raw observations; UI/reply acceptance belongs to the caller.
  */
 import assert from 'node:assert/strict';
@@ -86,13 +88,14 @@ export function captureLaunchLog(app, file, privateValues = []) {
   };
 }
 export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngine = 'codex' } = {}) {
-  assert(['codex','core'].includes(targetEngine), 'Unsupported target engine');
+  assert(['codex','claude','core'].includes(targetEngine), 'Unsupported target engine');
   const root = realpathSync(mkdtempSync(join(tmpdir(),'anycode-peers-')));
   pngDir ??= join(root,'png');
   let fixtures, app, cdp, info, closing, launchIssue, saveLog;
   let skips = 0;
   const catalogues = [], replyRequests = [];
-  let replyFixture;
+  let replyFixture, holdFixture;
+  const scripts = {};
   const nonce = randomUUID();
   const check = (name,status) => { if (status === 'SKIP') skips++; console.log(`[${nonce}] ${status} ${name}`); };
   const path = leaf => inside(root,join(root,leaf));
@@ -120,11 +123,31 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
   const driver = {
     root, pngDir, nonce, check, native, evaluate, invoke, api, close, catalogues, replyRequests,
     armReply(value) { replyFixture = value; },
+    /** Scripted native-double behaviour for this engine; the double re-reads the file every turn. */
+    armNative(engine,patch) {
+      scripts[engine] = {...scripts[engine],...patch};
+      writeFileSync(path(`${engine}-script.json`),JSON.stringify(scripts[engine]));
+    },
+    clearNative(engine) { delete scripts[engine]; rmSync(path(`${engine}-script.json`),{force:true}); },
+    /** Holds the target busy while it processes the message carrying `trigger`; release() lets it finish. */
+    armBusy(engine,trigger) {
+      if (engine === 'core') {
+        const hold = {trigger}; holdFixture = hold;
+        return {release: async () => { await wait(() => hold.release); hold.release(); holdFixture = undefined; }, disarm() { holdFixture = undefined; }};
+      }
+      const releaseFile = path(`${engine}-release-${randomUUID()}`);
+      driver.armNative(engine,{hold:{trigger,releaseFile}});
+      return {release: async () => { writeFileSync(releaseFile,''); }, disarm() { rmSync(releaseFile,{force:true}); }};
+    },
+    /** Tool results the scripted Codex double received from the real bridge, in order. */
+    doubleResponses(engine) {
+      return existsSync(path(`${engine}.jsonl`)) ? readFileSync(path(`${engine}.jsonl`),'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(frame => frame.doubleToolResponse).map(frame => frame.doubleToolResponse) : [];
+    },
     get exitCode() { return skips ? 2 : 0; },
     reportFailure(error) { if (!closing) console.error(`Launcher log (temporary root/launcher.log; removed at teardown):\n${saveLog?.(error.message) ?? ''}`); },
     async start() {
       try {
-        fixtures = await createEngineSmokeFixtures(root);
+        fixtures = await createEngineSmokeFixtures(root,{scripted:true});
         // Reuse the reviewed CLI doubles; replace only the local model protocol.
         fixtures.fixture.removeAllListeners('request');
         fixtures.fixture.on('request',(request,response) => {
@@ -140,6 +163,9 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
               replyRequests.push(entry);
               let command = parsePeerCommand(last), answer = 'fixture ready';
               const responding = incoming && replyFixture && incoming.payload.includes(replyFixture.trigger);
+              // Busy variant: the real incoming request exists, its model response is withheld until released.
+              const holding = incoming && holdFixture && incoming.payload.includes(holdFixture.trigger);
+              if (holding) { entry.held = true; holdFixture.release = () => finish(); }
               if (responding) {
                 const fixture = replyFixture;
                 entry.replyKind = fixture.kind;
@@ -159,7 +185,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
                 response.write(`data: ${JSON.stringify({...frame,choices:[{index:0,delta,finish_reason:null}]})}\n\n`);
                 response.end(`data: ${JSON.stringify({...frame,choices:[{index:0,delta:{},finish_reason:command ? 'tool_calls' : 'stop'}]})}\n\ndata: [DONE]\n\n`);
               }
-              if (!responding) finish();
+              if (!responding && !holding) finish();
             } catch { response.writeHead(400); response.end(); }
           });
         });
@@ -218,6 +244,45 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
       await wait(async () => (await api(`/tabs/${source.tabId}/mode-menu`,{})).open);
       assert((await api(`/tabs/${source.tabId}/mode-menu/click-row`,{name:mode})).ok);
       await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.mode === mode);
+    },
+    /** Engine permission preset chip (non-core tabs). The new preset applies from the next turn, so one turn is run. */
+    async selectPreset(tab,id) {
+      const names = {ask:['Ask for approval','Ask'],'full-access':['Full access'],'read-only':['Read-only'],workspace:['Workspace']}[id];
+      assert(names,'Unknown engine preset');
+      const state = async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId];
+      if ((await state())?.engine?.activePresetId === id) return;
+      assert((await api(`/tabs/${tab.tabId}/select`,{})).ok);
+      const item = `[...document.querySelectorAll('[role=menuitemradio]')].find(button => ${JSON.stringify(names)}.includes(button.querySelector('.model-pill-item-name')?.textContent))`;
+      await evaluate(`document.querySelector('button[aria-label="Codex permission preset"]').click()`);
+      await wait(() => evaluate(`!!(${item})`));
+      await evaluate(`(${item}).click()`);
+      assert((await api(`/tabs/${tab.tabId}/prompt`,{text:'fixture ready'})).ok);
+      await wait(async () => { const now = await state(); return now?.engine?.activePresetId === id && now.turn?.status === 'idle'; });
+    },
+    /** Scripted Codex source: the double turns the prompt into a real bridge call; approval goes through the real card. */
+    async nativeTool(source,tool,input,{approve = true,screenshot} = {}) {
+      assert.equal(source.engine,'codex','Scripted native source must be codex');
+      driver.armNative('codex',{peerCommands:true});
+      const seen = driver.doubleResponses('codex').length;
+      try {
+        const sent = await api(`/tabs/${source.tabId}/prompt`,{text:`peer-command:${JSON.stringify({tool,input})}`});
+        assert(sent.ok,'Native fixture tool prompt refused');
+        let card = null;
+        const response = await wait(async () => {
+          const permission = (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.permission;
+          if (permission && permission.requestId !== card?.requestId) {
+            assert(approve,'Unexpected approval card');
+            assert.equal(permission.toolName,tool,'Unexpected fixture approval request');
+            if (screenshot) { assert((await api(`/tabs/${source.tabId}/select`,{})).ok); await new Promise(r => setTimeout(r,300)); await driver.screenshot(screenshot); }
+            assert((await api(`/tabs/${source.tabId}/permission`,{behavior:'allow',requestId:permission.requestId})).ok,'Fixture tool approval failed');
+            card = permission;
+          }
+          return driver.doubleResponses('codex')[seen];
+        });
+        assert(!approve || card,'No approval card appeared');
+        await wait(async () => (await api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.turn?.status === 'idle');
+        return {response,card};
+      } finally { driver.clearNative('codex'); }
     },
     async orchestrate(source,enabled) {
       assert((await api(`/tabs/${source.tabId}/orchestrate`,{enabled})).ok);
@@ -437,8 +502,8 @@ export async function checkAcceptance(driver,source,target) {
   });
   if (target.engine === 'core') await checkCoreReplies(driver,source,target);
   else {
-    driver.check('explicit-reply-double-has-no-peer-tool-protocol','SKIP');
-    driver.check('automatic-reply-native-target-authority-fail-closed','SKIP');
+    await checkNativeReplies(driver,source,target);
+    await checkBusyReply(driver,source,target);
   }
   await check('file-evidence-and-unknown',async () => {
     const file = join(source.workspace,'reported.txt');
@@ -449,6 +514,8 @@ export async function checkAcceptance(driver,source,target) {
     const state = await driver.api(`/state/${source.tabId}`);
     judgeFileEvidence({written,untouched,sessionId:state.tabs.find(t => t.tabId === source.tabId).sessionId});
   });
+  // The Codex double is the only scripted native source; the claude and core runs have none.
+  if (target.engine === 'codex') await checkNativeSource(driver,source,target);
 }
 
 /** Parse only the actual last incoming message, never a nonce in conversation history. */
@@ -458,6 +525,15 @@ export function parseIncomingPeer(message) {
   return match ? {...JSON.parse(match[1]),payload:match[2]} : null;
 }
 export function judgeCoreReply({requests, completedAt, received, nonce, kind, outgoing, incoming}) {
+  judgeReplyRequests({requests, completedAt, received, nonce, kind});
+  judgeCards({outgoing:outgoing.filter(c => c.text.includes(nonce)),incoming:incoming.filter(c => c.text.includes(nonce)),nonce});
+}
+/** A native target's reply is proven by the fresh correlated request at the Core source, plus the card the source renders. */
+export function judgeNativeReply({requests, completedAt, received, nonce, kind, incoming}) {
+  judgeReplyRequests({requests, completedAt, received, nonce, kind});
+  assert(incoming.some(c => c.id && c.text.includes(nonce) && c.text.includes('Incoming') && c.links.length === 1 && c.links[0].trim()),'No incoming reply card with direction and peer identity link at the source');
+}
+function judgeReplyRequests({requests, completedAt, received, nonce, kind}) {
   assert(Number.isInteger(completedAt) && completedAt >= 0, 'Missing original tool completion boundary');
   assert(received?.messageId, 'Missing real incoming request');
   assert.equal(received.replyTo, undefined, 'Original request is already a reply');
@@ -468,7 +544,35 @@ export function judgeCoreReply({requests, completedAt, received, nonce, kind, ou
   assert.equal(replies[0].incoming.sender,`session:${received.recipientSessionId}`, 'Reply did not come from target');
   assert.equal(`session:${replies[0].incoming.recipientSessionId}`,received.sender, 'Reply did not wake source');
   assert.equal(replies[0].incoming.kind,kind === 'automatic' ? 'task_result' : 'agent_message');
-  judgeCards({outgoing:outgoing.filter(c => c.text.includes(nonce)),incoming:incoming.filter(c => c.text.includes(nonce)),nonce});
+}
+/** The native frame (Codex turn/start, Claude user frame) text, so its peer header can be read back. */
+export function nativeFrameText(frame) {
+  const collect = value => typeof value === 'string' ? value : Array.isArray(value) ? value.map(collect).join('\n') : value && typeof value === 'object' ? collect(value.text ?? value.content ?? '') : '';
+  return collect(frame?.params?.input ?? frame?.message ?? '');
+}
+export function parseNativeIncoming(frame) {
+  const match = nativeFrameText(frame).match(/\[AnyCode authenticated agent message (.+)\]\n([\s\S]*)/);
+  return match ? {...JSON.parse(match[1]),payload:match[2]} : null;
+}
+/** A busy target must accept the send as queued and must not see the message before it is free. */
+export function judgeQueuedWhileBusy({sent, requestsWhileBusy, nonce}) {
+  assert.equal(sent?.status,'sent','Busy send was not accepted');
+  assert.equal(sent.state,'queued','Busy target did not queue the message');
+  assert(nonce && !requestsWhileBusy.some(request => JSON.stringify(request).includes(nonce)),'Queued message reached the busy target early');
+}
+export function judgeQueuedThenDelivered({requests, holdNonce, nonce}) {
+  const held = requests.findIndex(request => JSON.stringify(request).includes(holdNonce));
+  const queued = requests.findIndex(request => JSON.stringify(request).includes(nonce));
+  assert(held >= 0 && queued > held,'Queued message was not delivered as a new request after the held turn');
+}
+/** A native source's tool call counts only with a successful bridge result AND a new request in the target. */
+export function judgeNativeCall({response, expectedStatus, before, requests, nonce}) {
+  assert(response && !response.error,'Scripted native source received no tool result');
+  assert.equal(response.result?.success,true,'Native peer tool call failed');
+  const body = JSON.parse(response.result.contentItems?.[0]?.text ?? 'null');
+  assert.equal(body?.status,expectedStatus,'Unexpected peer tool status');
+  judgeDelivery({before,requests,nonce});
+  return body;
 }
 export async function checkCoreReplies(driver,source,target) {
   for (const kind of ['explicit','automatic']) {
@@ -502,7 +606,108 @@ export async function checkCoreReplies(driver,source,target) {
       throw error;
     } finally { driver.armReply(undefined); }
   }
-  driver.check('reply-busy-variant-not-run','SKIP');
+  await checkBusyReply(driver,source,target);
+}
+
+/** Shared tail of a reply case: the reply must arrive as a NEW correlated request at the Core source, which goes idle. */
+async function observeReply(driver,source,target,{fixture,kind,result,received,completedAt,label}) {
+  await wait(() => driver.replyRequests.slice(completedAt).some(r => r.incoming?.replyTo === received.messageId && r.incoming.payload.includes(fixture.nonce)));
+  await wait(async () => (await driver.api(`/state/${source.tabId}`)).snapshot.states[source.tabId]?.turn?.status === 'idle');
+  // Outgoing cards of a native sender are recorded as evidence, not gated: the request at the source is the proof.
+  const outgoing = await driver.cards(target,true);
+  await driver.screenshot(`peer-${label}-outgoing.png`);
+  const incoming = await driver.cards(source,true);
+  await driver.screenshot(`peer-${label}-incoming.png`);
+  const evidence = {requests:driver.replyRequests,completedAt,received,originResult:result,nonce:fixture.nonce,kind,outgoing,incoming};
+  writeFileSync(join(driver.pngDir,`${label}.json`),JSON.stringify(evidence,null,2));
+  judgeNativeReply(evidence);
+}
+/** Native target (codex: explicit and automatic; claude: automatic only, its double has no MCP client). */
+export async function checkNativeReplies(driver,source,target) {
+  for (const kind of target.engine === 'codex' ? ['explicit','automatic'] : ['automatic']) {
+    const name = `native-target-${kind}-reply-request-idle`;
+    const fixture = {kind,trigger:`${driver.nonce}-native-${kind}-trigger`,nonce:`${driver.nonce}-native-${kind}-reply`};
+    driver.armNative(target.engine,{reply:fixture});
+    try {
+      const before = driver.native(target.engine,target).length, completedAt = driver.replyRequests.length;
+      const result = JSON.parse(await driver.sendPeer(source,target,fixture.trigger,{reply:kind === 'automatic' ? 'on_turn_end' : 'explicit'}));
+      assert.equal(result.status,'sent','Origin tool did not complete successfully');
+      const received = parseNativeIncoming(await driver.waitNative(target.engine,before,fixture.trigger,target));
+      assert.equal(received?.messageId,result.messageId,'Native target received a different delivery');
+      if (kind === 'explicit') {
+        const permission = await wait(async () => (await driver.api(`/state/${target.tabId}`)).snapshot.states[target.tabId]?.permission);
+        assert.equal(permission.toolName,'SessionSend');
+        assert((await driver.api(`/tabs/${target.tabId}/permission`,{behavior:'allow',requestId:permission.requestId})).ok);
+      }
+      await observeReply(driver,source,target,{fixture,kind,result,received,completedAt,label:`${target.engine}-${kind}-reply`});
+      driver.check(name,'PASS');
+    } catch (error) {
+      writeFileSync(join(driver.pngDir,`${target.engine}-${kind}-reply-failure.json`),JSON.stringify({requests:driver.replyRequests,error:error.message},null,2));
+      driver.check(name,'FAIL');
+      throw error;
+    } finally { driver.clearNative(target.engine); }
+  }
+}
+/** Busy target: the send is queued, nothing reaches the target until it is free, then one new request carries it and its reply returns. */
+export async function checkBusyReply(driver,source,target) {
+  const name = `${target.engine === 'core' ? 'core' : 'native'}-target-busy-reply-queued-then-delivered`;
+  const holdNonce = `${driver.nonce}-busy-hold`;
+  const fixture = {kind:'automatic',trigger:`${driver.nonce}-busy-queued`,nonce:`${driver.nonce}-busy-reply`};
+  const busy = driver.armBusy(target.engine,holdNonce);
+  try {
+    if (target.engine === 'core') driver.armReply(fixture); else driver.armNative(target.engine,{reply:fixture});
+    const before = driver.native(target.engine,target).length, completedAt = driver.replyRequests.length;
+    const first = JSON.parse(await driver.sendPeer(source,target,holdNonce,{reply:'explicit'}));
+    assert.equal(first.status,'sent','Hold message was not accepted');
+    await driver.waitNative(target.engine,before,holdNonce,target);
+    await wait(async () => (await driver.api(`/state/${target.tabId}`)).snapshot.states[target.tabId]?.turn?.status !== 'idle');
+    const result = JSON.parse(await driver.sendPeer(source,target,fixture.trigger,{reply:'on_turn_end'}));
+    judgeQueuedWhileBusy({sent:result,requestsWhileBusy:driver.native(target.engine,target).slice(before),nonce:fixture.trigger});
+    await busy.release();
+    if (target.engine === 'core') { await wait(() => fixture.received); fixture.release(); }
+    const frame = await driver.waitNative(target.engine,before,fixture.trigger,target);
+    judgeQueuedThenDelivered({requests:driver.native(target.engine,target).slice(before),holdNonce,nonce:fixture.trigger});
+    const received = target.engine === 'core' ? fixture.received.incoming : parseNativeIncoming(frame);
+    assert.equal(received?.messageId,result.messageId,'Queued delivery carried a different message');
+    await observeReply(driver,source,target,{fixture,kind:'automatic',result,received,completedAt,label:`${target.engine}-busy-reply`});
+    driver.check(name,'PASS');
+  } catch (error) {
+    writeFileSync(join(driver.pngDir,`${target.engine}-busy-reply-failure.json`),JSON.stringify({requests:driver.replyRequests,error:error.message},null,2));
+    driver.check(name,'FAIL');
+    throw error;
+  } finally { busy.disarm(); driver.armReply(undefined); driver.clearNative(target.engine); }
+}
+/**
+ * Codex as a live SOURCE toward a Core tab: send and open through the real bridge with the real approval card,
+ * and Full access (yolo parity with Core) with no card. No read-only case: Codex read-only is a legacy preset
+ * that cannot be selected, and Claude has no MCP-capable double, so those refusals stay in the unit matrix.
+ */
+export async function checkNativeSource(driver,coreTab,nativeTab) {
+  async function check(name,probe) {
+    try { await probe(); driver.check(name,'PASS'); }
+    catch (error) { driver.check(name,'FAIL'); throw error; }
+  }
+  const sessionId = (await driver.api(`/state/${coreTab.tabId}`)).tabs.find(t => t.tabId === coreTab.tabId)?.sessionId;
+  assert(sessionId,'Core target logical session missing');
+  await driver.grant(nativeTab,coreTab,true);
+  async function sendToCore(label,options) {
+    const nonce = `${driver.nonce}-${label}`, before = driver.native('core',coreTab).length;
+    const {response} = await driver.nativeTool(nativeTab,'SessionSend',{sessionId,payload:nonce,reply:'explicit'},options);
+    await driver.waitNative('core',before,nonce,coreTab);
+    judgeNativeCall({response,expectedStatus:'sent',before,requests:driver.native('core',coreTab),nonce});
+  }
+  await check('native-source-send-to-core',() => sendToCore('native-source-send',{screenshot:'peer-native-source-approval.png'}));
+  await check('native-source-open',async () => {
+    const nonce = `${driver.nonce}-native-source-open`, before = driver.native('core').length;
+    const {response} = await driver.nativeTool(nativeTab,'SessionOpen',{engine:'core',firstMessage:nonce},{screenshot:'peer-native-source-open-approval.png'});
+    await driver.waitNative('core',before,nonce);
+    judgeNativeCall({response,expectedStatus:'opened',before,requests:driver.native('core'),nonce});
+  });
+  await check('native-source-full-access-no-card',async () => {
+    await driver.selectPreset(nativeTab,'full-access');
+    try { await sendToCore('native-source-full-access',{approve:false}); }
+    finally { await driver.selectPreset(nativeTab,'ask'); }
+  });
 }
 
 export async function runSmoke(options) {
@@ -517,6 +722,7 @@ export async function runSmoke(options) {
     await driver.selectMode(source,'build');
     driver.check('source-build-mode','PASS');
     if (target.engine === 'core') await driver.selectMode(target,'build');
+    else await driver.selectPreset(target,'ask');
     await checkAuthoritySteps(driver,source,target);
     await driver.selectMode(source,'build');
     await checkAcceptance(driver,source,target);

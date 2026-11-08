@@ -7,6 +7,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Claude and Codex sessions can now message and open other sessions on any engine with native session peers, under the same approval rules as Native sessions. Read-only presets stay refused, and a restored Orchestrate tab regains peer access without being reopened.
+
 ## [0.0.93] - 2026-11-08
 
 ### Changed

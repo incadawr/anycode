@@ -134,8 +134,10 @@ receiver runs under its own permissions. HTTP sharing and External approvals do
 not supply these grants.
 
 Plan without Orchestrate, children and restricted callers cannot send/open.
-Claude/Codex roots currently remain closed for peer mutations, even if tools are
-declared. A resumed Orchestrate tab is closed until its host re-reports authority.
+Claude and Codex roots can send/open under their permission preset (Ask and
+Workspace on Claude, Ask for approval, Approve for me and Full access on Codex);
+Claude Read-only is refused. A resumed Orchestrate tab regains peer access once
+its host reports its mode again, without being reopened.
 Use an explicit reply or opt into one `on_turn_end` result to wake the sender in
 a new turn; receiving a reply does not turn an error or cancellation into success.
 
