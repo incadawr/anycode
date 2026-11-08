@@ -24,6 +24,6 @@ it.each([
 it("refuses an unavailable model before a client can POST", () => {
   const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
   const envConfig = loadEnvConfig({ ANYCODE_API_KEY: "fake", ANYCODE_MODEL: "gemini-4-argon", ANYCODE_PROVIDER_ID: "opencode" });
-  expect(() => buildCliEndpointConfig({ transport: "anthropic-messages", envConfig, catalogEntry: undefined, retryOverride: {}, includeUsageResolved: false, model: envConfig.model })).toThrow("unsupported-model");
+  expect(() => buildCliEndpointConfig({ transport: "anthropic-messages", envConfig, catalogEntry: undefined, retryOverride: {}, includeUsageResolved: false, model: envConfig.model })).toThrow("not supported on OpenCode Go");
   expect(fetch).not.toHaveBeenCalled();
 });
