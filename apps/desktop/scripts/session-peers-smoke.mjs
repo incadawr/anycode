@@ -87,7 +87,7 @@ export function captureLaunchLog(app, file, privateValues = []) {
     return output;
   };
 }
-export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngine = 'codex' } = {}) {
+export async function createPeerSmoke({ pngDir, nativeEnabled = true, nativeDefault = false, targetEngine = 'codex' } = {}) {
   assert(['codex','claude','core'].includes(targetEngine), 'Unsupported target engine');
   const root = realpathSync(mkdtempSync(join(tmpdir(),'anycode-peers-')));
   pngDir ??= join(root,'png');
@@ -195,7 +195,8 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, targetEngi
         writeFileSync(path('settings.json'),JSON.stringify({version:2,provider,tools:{},permissions:{alwaysAllow:[]},security:{allowWeakSecretStorage:false,trustedBinaries:fixtures.consents},ui:{theme:'dark'}}));
         writeFileSync(path('unavailable-engine'),'#!/bin/sh\nexit 1\n',{mode:0o700});
         const env = peerEnv(process.env,root,fixtures.binaries);
-        env.ANYCODE_NATIVE_SESSIONS_ENABLED = nativeEnabled ? '1' : '0';
+        if (nativeDefault) delete env.ANYCODE_NATIVE_SESSIONS_ENABLED;
+        else env.ANYCODE_NATIVE_SESSIONS_ENABLED = nativeEnabled ? '1' : '0';
         app = launchSmokeElectron(spawn,{cwd:resolve(desktop,'../..'),env,stdio:['ignore','pipe','pipe']});
         app.on('error',() => { launchIssue = 'launcher-error'; });
         saveLog = captureLaunchLog(app,path('launcher.log'),[root,desktop,resolve(desktop,'../..'),nonce]);
@@ -742,5 +743,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const index = process.argv.indexOf('--png-dir');
   const engine = process.argv.indexOf('--target-engine');
   process.exitCode = await runSmoke({...(index < 0 ? {} : {pngDir:resolve(process.argv[index+1])}),
-    targetEngine:engine < 0 ? 'codex' : process.argv[engine+1]});
+    targetEngine:engine < 0 ? 'codex' : process.argv[engine+1], nativeDefault:process.argv.includes('--native-default')});
 }
