@@ -3,7 +3,7 @@ import ts from "typescript";
 import { expect, it, vi } from "vitest";
 import { Session } from "./session.js";
 import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
-import { claudeAgentPermissionMode } from "./engines/child-permission-map.js";
+import { claudeAgentPermissionMode, nativePeerAuthorityMode } from "./engines/child-permission-map.js";
 import { createBridgePresentationStamp } from "./engines/claude/bridge-presentation-stamp.js";
 import { createConnectionTargetsBridge } from "./engines/connection-targets-bridge.js";
 import { ClaudeMcpBridge } from "./engines/claude/mcp-bridge.js";
@@ -43,7 +43,7 @@ async function fixture() {
       return createSessionPeerBridge(options);
     },
     ClaudeMcpBridge, buildClaudeLaunchOptions: (options: any) => options,
-    resolveClaudeConfigDir: () => "/home/claude", claudeAgentPermissionMode,
+    resolveClaudeConfigDir: () => "/home/claude", claudeAgentPermissionMode, nativePeerAuthorityMode,
     ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript, bindClaudeUsage: () => {},
   };
   const hostSwitchFactory = new Function(...Object.keys(deps), `${executable}\nreturn hostSwitchFactory;`)(...Object.values(deps));
@@ -74,6 +74,21 @@ it("switched Claude peers use the engine adopted by Session, and lose authority 
     expect(f.authority().root).toBe(false);
     expect((await f.call()).isError).toBe(true);
     expect(f.request).toHaveBeenCalledOnce();
+  } finally { await f.close(); }
+});
+
+it("switched Claude peer authority maps ask to one broker prompt and read-only to a refusal before approval", async () => {
+  const f = await fixture();
+  try {
+    const input = { sessionId: "peer", payload: "hello" };
+    f.preset("read-only");
+    expect(f.authority().mode).toBe("plan");
+    expect((await f.call("session_send", input)).isError).toBe(true);
+    expect(f.broker.requestPermission).not.toHaveBeenCalled();
+    f.preset("ask");
+    expect(f.authority().mode).toBe("build");
+    expect((await f.call("session_send", input)).isError).toBe(false);
+    expect(f.broker.requestPermission).toHaveBeenCalledOnce();
   } finally { await f.close(); }
 });
 

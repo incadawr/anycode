@@ -4,11 +4,12 @@ import { createSessionPeersPort } from "../../session-peers-port.js";
 import { createSessionPeersHandler, type PeerHost } from "../../../main/session-peers.js";
 import { createSessionPeerAccess } from "../../../main/session-peer-access.js";
 import { createSessionPeerBridge } from "../session-peer-bridge.js";
+import { nativePeerAuthorityMode } from "../child-permission-map.js";
 import { CodexDynamicToolBridge } from "./dynamic-tool-bridge.js";
 import { captureBaseConfig, orchestrationOverrides, verifyConfig } from "./orchestration-policy.js";
 
 const active = { threadId: "thread", turnId: "turn" };
-function fixture() {
+function fixture(authority: Parameters<typeof createSessionPeerBridge>[0]["authority"] = () => ({ root: true, mode: "plan", orchestrate: true })) {
   const proc = {};
   let caller: PeerHost = { tabId: "a", sessionId: "a", proc, generation: 1, workspace: "/workspace",
     workspaceKey: "/workspace", live: true, root: true, restricted: false, readOnly: true, engine: "codex", activity: "running" };
@@ -28,8 +29,7 @@ function fixture() {
     }));
   });
   const broker = { requestPermission: vi.fn(async () => ({ behavior: "allow" as const })) };
-  const peers = createSessionPeerBridge({ port, broker, cwd: "/workspace",
-    authority: () => ({ root: true, mode: "plan", orchestrate: true }) });
+  const peers = createSessionPeerBridge({ port, broker, cwd: "/workspace", authority });
   // The optional dependency is absent in older bridges, so the positive tests distinguish them.
   const bridge = new CodexDynamicToolBridge([], undefined, undefined, undefined, undefined, undefined, peers);
   const events: AgentEvent[] = [];
@@ -64,6 +64,13 @@ it("rejects namespaces, foreign turns, absent turns and duplicate calls before R
   await f.call();
   expect(f.sent).toHaveLength(1);
   expect(f.response.result.mock.calls.map(([r]) => r.success)).toEqual([false, false, false, false, true, false]);
+});
+
+it("a pending full-access over an applied ask still asks before a peer send", async () => {
+  const f = fixture(() => ({ root: true, mode: nativePeerAuthorityMode("codex", "ask", "full-access"), orchestrate: false }));
+  await f.call({ tool: "anycode_session_send", arguments: { sessionId: "b", payload: "hello" } });
+  expect(f.broker.requestPermission).toHaveBeenCalledOnce();
+  expect(f.broker.requestPermission).toHaveBeenCalledWith(expect.objectContaining({ mode: "build" }));
 });
 
 it("Stop releases the RPC wait with unknown and ignores a late main response", async () => {
