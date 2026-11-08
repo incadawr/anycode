@@ -2914,7 +2914,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     expect(findContextEventIndex(text, 176_000)).toBeGreaterThan(afterIdx);
   });
 
-  it("scenario 3: ANYCODE_CONTEXT_WINDOW overrides the catalog window at boot AND survives a /model switch — the denominator never moves (R7 floor math: 50000 ⇒ 26000)", async () => {
+  it("scenario 3: ANYCODE_CONTEXT_WINDOW overrides the catalog window at boot AND survives a /model switch — the denominator never moves (R7 floor math: 50000 ⇒ 37500)", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2950,28 +2950,28 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     // the pre-switch turn's context_usage EVENT (distinct from /context's own
     // snapshot line, which also happens to share the window below).
-    const firstTurnIdx = findContextEventIndex(text, 26_000);
+    const firstTurnIdx = findContextEventIndex(text, 37_500);
     expect(firstTurnIdx).toBeGreaterThanOrEqual(0);
     // The switch still ran through the factory-built glm-4.7 port...
     const switchTextIdx = text.indexOf("from-glm-4.7");
     expect(switchTextIdx).toBeGreaterThan(firstTurnIdx);
     // ...but the override wins again inside resolveContextWindow for the
-    // post-switch turn ⇒ the SAME (26000) denominator, never the catalog's
+    // post-switch turn ⇒ the SAME (37500) denominator, never the catalog's
     // 176000 for glm-4.7 — the override is immovable across the switch.
     // Exactly two context_usage EVENTS carry it (one per turn).
-    const eventMatches = [...text.matchAll(/\[context: ~\d+\/26000 tokens \(/g)];
+    const eventMatches = [...text.matchAll(/\[context: ~\d+\/37500 tokens \(/g)];
     expect(eventMatches.length).toBe(2);
     expect(eventMatches[1]!.index).toBeGreaterThan(switchTextIdx);
-    // /context's own snapshot after the switch agrees: 50000/13000, never the
+    // /context's own snapshot after the switch agrees: 50000/24500, never the
     // catalog's 200000/161920 for glm-4.7.
-    expect(text).toContain("[context] window 50000 — output reserve 24000 — auto-compact at 13000");
+    expect(text).toContain("[context] window 50000 — output reserve 12500 — auto-compact at 24500");
     expect(text).not.toContain("[context] window 200000");
     expect(text).not.toContain("[context] window 300000");
     expect(findContextEventIndex(text, 176_000)).toBe(-1);
     expect(findContextEventIndex(text, 276_000)).toBe(-1);
   });
 
-  it("scenario 4: a non-catalog model resolves the ASSUMED 8192 window at boot — loopConfig.context carries it and /context reflects the degraded budget (8192/2048/1884) instead of the DEFAULT 200000", async () => {
+  it("scenario 4: a non-catalog model resolves the ASSUMED 128000 window at boot — loopConfig.context carries it and /context reflects the budget (128000/104000/91000) instead of the DEFAULT 200000", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -2993,18 +2993,16 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    // The fallback change means an unknown model no longer omits loopConfig.context
-    // and no longer boots at DEFAULT_CONTEXT_WINDOW_TOKENS. It resolves the
-    // explicit assumed fallback (8192), and the degraded-window budget engages:
-    // effectiveWindow = max(8192 - min(24000, 8192), ceil(8192*0.25)) = 2048,
-    // compactThreshold = 1884.
-    expect(text).toContain("/2048 tokens");
-    expect(text).toContain("[context] window 8192 — output reserve 24000 — auto-compact at 1884");
+    // An unknown model resolves the explicit assumed fallback (128000); the
+    // output reserve (24000) stays under the 25% cap, so effectiveWindow is
+    // 104000 and compactThreshold is 91000.
+    expect(text).toContain("/104000 tokens");
+    expect(text).toContain("[context] window 128000 — output reserve 24000 — auto-compact at 91000");
     expect(text).not.toContain("[context] window 200000");
     expect(text).not.toContain("/176000 tokens");
   });
 
-  it("scenario 5: an A-bound override governs A at boot but NOT an UNKNOWN model B after /model — B re-resolves the assumed 8192", async () => {
+  it("scenario 5: an A-bound override governs A at boot but NOT an UNKNOWN model B after /model — B re-resolves the assumed 128000", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     const input = new PassThrough();
     const output = new PassThrough();
@@ -3036,14 +3034,14 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    // Boot on A: the A-bound override applies (50000 - 24000 = 26000 denominator).
-    const bootIdx = findContextEventIndex(text, 26_000);
+    // Boot on A: the A-bound override applies (50000 - 24000 = 37500 denominator).
+    const bootIdx = findContextEventIndex(text, 37_500);
     expect(bootIdx).toBeGreaterThanOrEqual(0);
     // After the switch to the unknown B the binding no longer matches, so the
-    // override is inert: B resolves the assumed 8192 (2048 effective).
-    const afterIdx = findContextEventIndex(text, 2_048);
+    // override is inert: B resolves the assumed 128000 (104000 effective).
+    const afterIdx = findContextEventIndex(text, 104_000);
     expect(afterIdx).toBeGreaterThan(bootIdx);
-    expect(text).toContain("[context] window 8192 — output reserve 24000 — auto-compact at 1884");
+    expect(text).toContain("[context] window 128000 — output reserve 24000 — auto-compact at 91000");
     expect(text).not.toContain("[context] window 50000");
     expect(findContextEventIndex(text, 176_000)).toBe(-1);
   });
@@ -3080,7 +3078,7 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    const bootIdx = findContextEventIndex(text, 26_000);
+    const bootIdx = findContextEventIndex(text, 37_500);
     expect(bootIdx).toBeGreaterThanOrEqual(0);
     // glm-4.7's catalog window is 200000 (176000 effective), NOT A's 50000.
     const afterIdx = findContextEventIndex(text, 176_000);
@@ -3123,8 +3121,8 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    // Boot on the bound model A: 50000 - 24000 = 26000.
-    const bootIdx = findContextEventIndex(text, 26_000);
+    // Boot on the bound model A: 50000 - 24000 = 37500.
+    const bootIdx = findContextEventIndex(text, 37_500);
     expect(bootIdx).toBeGreaterThanOrEqual(0);
     // Switch to the catalogued B: B's own 200000 window (176000 effective).
     const bIdx = findContextEventIndex(text, 176_000);
@@ -3132,9 +3130,9 @@ describe("CLI context v2 e2e (design slice-6.4-cut.md §2-C4)", () => {
     // Switch BACK to A: the boot pair applies again — observed as the same
     // applied budget AFTER B's turn, which only holds if A's pair is reused and
     // B's window did not stick.
-    expect(findContextEventIndex(text.slice(bIdx), 26_000)).toBeGreaterThanOrEqual(0);
+    expect(findContextEventIndex(text.slice(bIdx), 37_500)).toBeGreaterThanOrEqual(0);
     // The final /context header names A's window, not B's.
-    expect(text).toContain("[context] window 50000 — output reserve 24000 — auto-compact at 13000");
+    expect(text).toContain("[context] window 50000 — output reserve 12500 — auto-compact at 24500");
     expect(text).not.toContain("[context] window 200000");
     expect(findContextEventIndex(text, 276_000)).toBe(-1);
   });
@@ -3189,7 +3187,7 @@ describe("per-model context window production wiring", () => {
     const resolve = buildChildModelSettingsResolver(deps);
     expect(resolve("glm-5.2", "high").contextWindowTokens).toBe(50_000);
     expect(resolve("glm-4.6", "high").contextWindowTokens).toBe(200_000);
-    expect(resolve("not-in-catalog", "high").contextWindowTokens).toBe(8_192);
+    expect(resolve("not-in-catalog", "high").contextWindowTokens).toBe(128_000);
   });
 
   it("boot and the mid-session switch both pass the model binding as the 4th argument", async () => {

@@ -888,9 +888,9 @@ describe("contextWindowEffectiveHint (name the window a blank field resolves to)
     );
   });
 
-  it("an older snapshot without the projection degrades to the literal 8192, never a crash", () => {
+  it("an older snapshot without the projection degrades to the assumed 128000 fallback, never a crash", () => {
     expect(contextWindowEffectiveHint(undefined, "qwen3-selfhosted", undefined, "")).toBe(
-      "assumed fallback: 8192 (unknown model — set a value to override)",
+      "assumed fallback: 128000 (unknown model — set a value to override)",
     );
   });
 });
@@ -2249,7 +2249,7 @@ describe("helper text (one visible line, the full text in a ? tooltip)", () => {
       "Leave empty to use the provider's default. Reasoning models spend part of this budget on hidden thinking before they write anything — for a self-hosted endpoint the catalog has no model list to guess a limit from, so raise this if output keeps cutting off.",
     );
     expect(CONTEXT_WINDOW_HELP).toBe(
-      "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.",
+      "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 128000-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.",
     );
     expect(IMAGE_INPUT_HELP).toBe(
       "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.",

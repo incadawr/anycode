@@ -3305,8 +3305,8 @@ describe("connection contextWindowTokens CRUD — bounded model override at the 
     expect(boot.cfg.contextWindowTokens).toBe(8192);
     expect(boot.cfg.contextWindowModel).toBe("model-a");
     expect(boot.window).toBe(8192); // override, not A's 100000 catalog window
-    expect(boot.effective).toBe(2_048);
-    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: boot.window }))).toBe(1_884);
+    expect(boot.effective).toBe(6_144);
+    expect(compactThresholdTokens(resolveContextBudgetConfig({ contextWindowTokens: boot.window }))).toBe(5_652);
 
     // Edit to 16384 (the GUI-shaped payload): the applied limit follows on disk,
     // through the env channel, into the budget.
@@ -3320,7 +3320,7 @@ describe("connection contextWindowTokens CRUD — bounded model override at the 
     expect(edited.env.ANYCODE_CONTEXT_WINDOW).toBe("16384");
     expect(edited.cfg.contextWindowTokens).toBe(16384);
     expect(edited.window).toBe(16384);
-    expect(edited.effective).toBe(4_096); // max(0, ceil(16384*0.25))
+    expect(edited.effective).toBe(12_288); // 16384 - min(reserve, floor(16384*0.25))
     expect(edited.effective).not.toBe(boot.effective);
 
     // Clear: back to the CATALOG window (A's 100000 -> 76000 effective), not to
@@ -3359,18 +3359,18 @@ describe("connection contextWindowTokens CRUD — bounded model override at the 
     const boot = await appliedChain();
     // No catalog entry for on-prem-8b, but its own override governs.
     expect(boot.window).toBe(8192);
-    expect(boot.effective).toBe(2_048);
+    expect(boot.effective).toBe(6_144);
 
     // Switch to another model the catalog also does not know: A's override must
-    // NOT leak — the assumed 8192 fallback applies (same number here, but reached
-    // through the fallback branch, verified by the absent env pair below).
+    // NOT leak — the assumed 128000 fallback applies, reached through the
+    // fallback branch, verified by the absent env pair below.
     await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", model: "other-unknown" });
     const switched = await appliedChain();
     expect(switched.env.ANYCODE_CONTEXT_WINDOW).toBeUndefined();
     expect(switched.env.ANYCODE_CONTEXT_WINDOW_MODEL).toBeUndefined();
     expect(switched.cfg.contextWindowTokens).toBeUndefined();
-    expect(switched.window).toBe(8_192);
-    expect(switched.effective).toBe(2_048);
+    expect(switched.window).toBe(128_000);
+    expect(switched.effective).toBe(104_000);
   });
 
   // The IPC rejection matrix for the UPDATE path (the accepted contract requires

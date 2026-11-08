@@ -234,7 +234,6 @@ const ALLOW: Entry[] = [
   { path: "packages/core/src/cli/theme.test.ts", value: " 4.1.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "packages/core/src/cli/theme.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "packages/core/src/cli/theme.ts", value: " 4.1.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
-  { path: "packages/core/src/context/budget.test.ts", value: " 1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "packages/core/src/context/history.test.ts", value: " 1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "packages/core/src/context/manager.test.ts", value: " 1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
   { path: "packages/core/src/context/tokenizer.test.ts", value: " 1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
