@@ -598,8 +598,9 @@ export function nextFollow(
   if (isAtBottom(scrollTop, scrollHeight, clientHeight)) {
     return true;
   }
-  // The user really moved up (1px tolerance for fractional scroll offsets).
-  if (scrollTop < prevScrollTop - 1) {
+  // The user really moved up: a whole pixel or more (sub-pixel jitter is
+  // ignored). Must match the >= 1px rule that advances the reference.
+  if (scrollTop <= prevScrollTop - 1) {
     return false;
   }
   // Content grew (or the user moved down without reaching the bottom):

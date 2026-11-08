@@ -394,6 +394,12 @@ describe("nextFollow (sticky-follow decision core)", () => {
     expect(nextFollow(true, 500, 499.5, 1200, 500)).toBe(true);
   });
 
+  it("drops follow on a single whole-pixel step up", () => {
+    // Slow wheel or keyboard nudges move one pixel at a time; each step
+    // advances the reference, so a 1px step itself has to count.
+    expect(nextFollow(true, 500, 499, 1200, 500)).toBe(false);
+  });
+
   it("keeps following when the user scrolled down but the bottom is not reached", () => {
     expect(nextFollow(true, 300, 400, 1200, 500)).toBe(true);
   });
