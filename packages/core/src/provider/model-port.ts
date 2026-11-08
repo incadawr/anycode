@@ -53,7 +53,7 @@ import { contextualizeMiniMaxBalance, isMiniMaxEffortModel, isMiniMaxModel } fro
 import { createLanguageModel } from "./language-model.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
-import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
+import { DEFAULT_RETRY_POLICY, isRetryableStreamError, isStreamInterruption, isTransientNetworkError, retryDelayMs, type RetryPolicy } from "./retry.js";
 import { toSdkMessages, toSdkTools } from "./sdk-mapping.js";
 import { describeStreamArtifact, isIgnorableStreamArtifact } from "./stream-artifacts.js";
 import { translateStreamPart } from "./stream-translator.js";
@@ -1144,6 +1144,12 @@ export class AiSdkModelPort implements ModelPort {
       firstFailureAt ??= Date.now();
       return attempt < policy.maxRetries;
     };
+    // Replay after streamed text is allowed only when the consumer discards
+    // partial steps; the extra classifier also admits unclassified transport
+    // breaks (never 4xx/quota/abort) once output has begun.
+    const discardable = request.discardablePartialOutput === true;
+    const replayableError = (error: unknown, hadOutput: boolean): boolean =>
+      isRetryableStreamError(error) || (discardable && hadOutput && isStreamInterruption(error));
     // the failure that STARTED the include_usage probe, carried
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
@@ -1154,6 +1160,7 @@ export class AiSdkModelPort implements ModelPort {
       if (request.abortSignal?.aborted) throw abortReason(request.abortSignal);
       let hadModelOutput = false;
       let replayBlocked = false;
+      let textDelivered = false;
       // finish totals discard raw usage; keep the latest step's wire usage
       // inside this attempt so abandoned attempts cannot affect a retry.
       let stepRawUsage: unknown;
@@ -1432,7 +1439,7 @@ export class AiSdkModelPort implements ModelPort {
             event.type === "error" &&
             !completedFinish &&
             !replayBlocked &&
-            isRetryableStreamError(event.error) &&
+            replayableError(event.error, hadModelOutput) &&
             mayRetryProvisional(event.error, hadModelOutput) &&
             !request.abortSignal?.aborted
           ) {
@@ -1440,7 +1447,8 @@ export class AiSdkModelPort implements ModelPort {
             attemptController.abort(pendingRetryError);
             break;
           }
-          if (blocksAutomaticReplay(event)) replayBlocked = true;
+          if (blocksAutomaticReplay(event, discardable)) replayBlocked = true;
+          if (event.type === "text_delta") textDelivered = true;
           if (isModelOutputEvent(event)) {
             hadModelOutput = true;
           }
@@ -1491,7 +1499,7 @@ export class AiSdkModelPort implements ModelPort {
           // Match the yielded-error gate and let external cancellation win.
           !completedFinish &&
           !replayBlocked &&
-          isRetryableStreamError(error) &&
+          replayableError(error, hadModelOutput) &&
           mayRetryProvisional(error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
@@ -1541,7 +1549,7 @@ export class AiSdkModelPort implements ModelPort {
         includeUsageProbe = undefined;
         if (
           !completedFinish && !replayBlocked &&
-          isRetryableStreamError(failure.error) &&
+          replayableError(failure.error, hadModelOutput) &&
           mayRetryProvisional(failure.error, hadModelOutput) &&
           !request.abortSignal?.aborted
         ) {
@@ -1621,6 +1629,7 @@ export class AiSdkModelPort implements ModelPort {
         ...(waitedMs !== undefined && this.config.networkWaitSource !== undefined
           ? { waitSource: this.config.networkWaitSource }
           : {}),
+        ...(textDelivered ? { discardedOutput: true as const } : {}),
         reason: describeRetryReason(pendingRetryError),
       };
       if (recoveredAfterMs === undefined) {

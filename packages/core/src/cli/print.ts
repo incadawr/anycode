@@ -207,6 +207,10 @@ export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
         // Every AgentEvent verbatim, in yield order (design §2.2).
         emitStreamLine(event);
       }
+      if (event.type === "stream_retry" && event.discardedOutput && structured) {
+        // The abandoned attempt's text was dropped upstream; the replay re-sends it.
+        resultText = "";
+      }
       if (event.type === "text_delta") {
         if (structured) {
           // Design §2.2: result == the same text the text path writes to stdout;

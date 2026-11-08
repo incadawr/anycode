@@ -2750,3 +2750,71 @@ describe("reasoning replay correction", () => {
   });
 
 });
+
+describe("AiSdkModelPort — replay of a partial step when the consumer can discard it", () => {
+  const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
+  const toolCallPart = { type: "tool-call", toolCallId: "call_1", toolName: "Read", input: { file_path: "/a.txt" } };
+  const discardRequest = { ...baseRequest, discardablePartialOutput: true };
+  const interruption = () => new Error("Stream interrupted");
+
+  it("replays a step that broke after text, flags the retry as discarding output, then succeeds", async () => {
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(retryableError())]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("full")), part(finishPart)]));
+
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3, midStreamRetries: 0 }));
+    const events = await collect(port.streamText(discardRequest));
+
+    const retryIndex = events.findIndex((e) => e.type === "stream_retry");
+    expect(events[retryIndex]).toMatchObject({ type: "stream_retry", attempt: 1, discardedOutput: true });
+    expect(events.slice(retryIndex + 1).filter((e) => e.type === "text_delta")).toEqual([{ type: "text_delta", id: "t1", text: "full" }]);
+    expect(events.at(-1)).toMatchObject({ type: "finish", finishReason: "stop" });
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats an unclassified stream interruption as transient only in discard mode", async () => {
+    mockStreamText
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(interruption())]))
+      .mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    const events = await collect(port.streamText(discardRequest));
+    expect(events.some((e) => e.type === "stream_retry")).toBe(true);
+
+    mockStreamText.mockReset();
+    const error = interruption();
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(error)]));
+    const strict = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    await expect(collect(strict.streamText(baseRequest))).rejects.toBe(error);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay once a tool call was emitted", async () => {
+    const error = interruption();
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), part(toolCallPart), throwsWith(error)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    await expect(collect(port.streamText(discardRequest))).rejects.toBe(error);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay a non-retryable error after text", async () => {
+    const error = nonRetryableError();
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(error)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
+    await expect(collect(port.streamText(discardRequest))).rejects.toBe(error);
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects the retry budget after text", async () => {
+    const error = interruption();
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), part(textDelta("par")), throwsWith(error)]));
+    const port = new AiSdkModelPort(baseConfig({ maxRetries: 2 }));
+    const seen: unknown[] = [];
+    await expect(
+      (async () => {
+        for await (const e of port.streamText(discardRequest)) seen.push(e);
+      })(),
+    ).rejects.toBe(error);
+    expect(seen.filter((e) => (e as { type: string }).type === "stream_retry")).toHaveLength(2);
+    expect(mockStreamText).toHaveBeenCalledTimes(3);
+  });
+});

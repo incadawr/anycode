@@ -29,6 +29,13 @@ export interface ModelRequest {
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
   abortSignal?: AbortSignal;
+  /**
+   * The consumer can discard a partially streamed step (it resets on
+   * `stream_retry`). Lets the adapter replay a step that broke after text or
+   * reasoning but before any tool call; the `stream_retry` then carries
+   * `discardedOutput: true`. Tool activity still blocks replay.
+   */
+  discardablePartialOutput?: boolean;
 }
 
 export interface ModelPort {

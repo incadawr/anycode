@@ -113,6 +113,28 @@ export function isRetryableStreamError(error: unknown): boolean {
   return hasRetryableStatusCode(extractStatusCode(error));
 }
 
+const STREAM_INTERRUPTION_PATTERN =
+  /\bterminated\b|premature close|socket hang up|other side closed|stream (?:was )?(?:interrupted|ended|closed|reset|aborted)|unexpected end of|incomplete (?:chunked|chunk)|network connection (?:was )?lost|connection (?:was )?(?:closed|reset|lost)/i;
+
+/**
+ * A stream that broke mid-flight without an HTTP status: the connection ended
+ * or reset while the body was still being read. Used only when the consumer
+ * can discard a partial step, to treat otherwise-unclassified transport
+ * breaks as plausibly transient. Never true for quota, configuration or
+ * 4xx failures.
+ */
+export function isStreamInterruption(error: unknown): boolean {
+  if (isQuotaExhaustion(error)) return false;
+  if (classifyNetworkConfigurationFailure(error) !== undefined) return false;
+  const status = extractStatusCode(error);
+  if (status !== undefined) return false;
+  if (!(error instanceof Error)) return false;
+  if (error.name === "AbortError") return false;
+  if (STREAM_INTERRUPTION_PATTERN.test(error.message)) return true;
+  const cause = (error as { cause?: unknown }).cause;
+  return cause instanceof Error && cause !== error && isStreamInterruption(cause);
+}
+
 /** Quota wording in a message (or stringified `data`). Also matches a rate limit that names a quota: see isQuotaExhaustion. */
 export const QUOTA_WORD_PATTERN = /\bquota\b/i;
 

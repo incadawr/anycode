@@ -81,10 +81,15 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
   }
 }
 
-/** Output whose delivery makes an automatic replay unsafe. */
-export function blocksAutomaticReplay(e: ModelStreamEvent): boolean {
+/**
+ * Output whose delivery makes an automatic replay unsafe. Tool activity always
+ * blocks (a call may already be dispatched). Text blocks too, unless the
+ * consumer declared it can discard a partial step (`textIsDiscardable`).
+ */
+export function blocksAutomaticReplay(e: ModelStreamEvent, textIsDiscardable = false): boolean {
   switch (e.type) {
     case "text_delta":
+      return !textIsDiscardable;
     case "tool_input_start": case "tool_input_delta": case "tool_input_end": case "tool_call":
       return true;
     default:

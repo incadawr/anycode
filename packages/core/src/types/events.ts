@@ -156,6 +156,12 @@ export type ModelStreamEvent =
        * right one. Absent otherwise and on legacy replays.
        */
       waitSource?: "parent" | "subagent";
+      /**
+       * True when the abandoned attempt had already streamed assistant text:
+       * consumers must drop that partial text (it was never committed and the
+       * step is re-issued from scratch). Absent otherwise.
+       */
+      discardedOutput?: true;
       reason: string;
     }
   /**

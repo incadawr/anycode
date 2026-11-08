@@ -334,6 +334,12 @@ export interface AgentLoopConfig {
   /** Passed out-of-band as ModelRequest.system on every step; never enters history. */
   systemPrompt?: string;
   maxOutputTokens?: number;
+  /**
+   * Headless structured output only: a step that breaks after streaming text
+   * but before any tool call may be replayed; the partial text is dropped on
+   * `stream_retry` (see ModelRequest.discardablePartialOutput).
+   */
+  discardPartialOutputOnRetry?: boolean;
   reasoningEffort?: ReasoningEffort;
   /** Injected for session resume (design §2.10); a fresh empty history when omitted. */
   history?: ConversationHistory;
@@ -1433,6 +1439,7 @@ export class AgentLoop {
               maxOutputTokens: this.config.maxOutputTokens,
               reasoningEffort: this.config.reasoningEffort,
               abortSignal: turnAbort.signal,
+              ...(this.config.discardPartialOutputOnRetry ? { discardablePartialOutput: true } : {}),
             };
             const stream = this.config.modelPort.streamText({ ...modelRequest, contextWindowTokens: this.context.getBudgetConfig().contextWindowTokens });
             for await (const event of stream) {

@@ -2959,6 +2959,30 @@ describe("AgentLoop.runTurn — stream_retry resets step accumulators (design sl
   });
 });
 
+describe("AgentLoop.runTurn — discardable partial output", () => {
+  it("asks the port to replay partial steps only when configured, and drops the discarded text", async () => {
+    const script = [
+      [
+        { type: "start" },
+        { type: "text_delta", id: "t1", text: "partial" },
+        { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, discardedOutput: true, reason: "Stream interrupted" },
+        { type: "text_delta", id: "t2", text: "done" },
+        { type: "finish", finishReason: "stop", usage: {} },
+      ],
+    ] as ModelStreamEvent[][];
+    const on = new MockModelPort(script);
+    const loopOn = makeLoop({ modelPort: on, discardPartialOutputOnRetry: true });
+    const events = await collect(loopOn.runTurn("hi"));
+    expect(on.requests[0]?.discardablePartialOutput).toBe(true);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    expect(loopOn.history.toMessages().find((m) => m.role === "assistant")).toEqual({ role: "assistant", content: [{ type: "text", text: "done" }] });
+
+    const off = new MockModelPort(script);
+    await collect(makeLoop({ modelPort: off }).runTurn("hi"));
+    expect(off.requests[0]?.discardablePartialOutput).toBeUndefined();
+  });
+});
+
 describe("AgentLoop.runTurn — terminal retry metadata (W7b)", () => {
   function findErrorEvent(events: AgentEvent[]): Extract<AgentEvent, { type: "error" }> | undefined {
     return events.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");

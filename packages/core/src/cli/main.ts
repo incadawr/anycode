@@ -1578,6 +1578,8 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
           ? { todoReminder: { everyToolCalls: envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery } }
           : {}),
         maxOutputTokens: bootMaxOutputTokens,
+        // Structured headless output (json / stream-json) can drop a partial step on stream_retry.
+        ...(parsedArgs.print && rawFormat !== undefined && rawFormat !== "text" ? { discardPartialOutputOnRetry: true } : {}),
         reasoningEffort: bootReasoningEffort,
         // Base prompt (identity/conventions/safety/tool-discipline/env, design
         // §2.1) enriched with the boot toolNames snapshot + session env, then
