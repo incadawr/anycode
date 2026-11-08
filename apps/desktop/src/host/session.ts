@@ -6794,6 +6794,7 @@ export class Session {
       saving = false;
       this.orchestrationPosture = "stable";
       this.onOrchestrateChanged?.(true);
+      this.publishPermissionAuthority();
     })().catch(async error => {
       if (!this.ownsRuntime(engine)) return;
       console.warn("[host] saved orchestration could not be restored",error);
@@ -6810,6 +6811,7 @@ export class Session {
         this.persistRuntimeSettings(true);
         this.orchestrationPosture = "stable";
         this.onOrchestrateChanged?.(false);
+        this.publishPermissionAuthority();
         const reason = !saved || engine.id !== "core" && !saved.nativeBase ? "The saved native base is unavailable." : "The runtime policy or routing could not restore the saved overlay.";
         message = `Orchestration was turned off after verification. ${reason} You can continue this conversation.`;
       } catch (recoveryError) {

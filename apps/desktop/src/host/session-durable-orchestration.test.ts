@@ -3,6 +3,7 @@ import { SqlitePersistenceAdapter, type RuntimeSettings } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
 import { RuntimeSessionHistory, createRuntimeSessionHistory } from "./runtime-session-history.js";
 import { createHarness, finishStep } from "./test-harness.js";
+import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
 
 type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
 async function setup(native: boolean, offProof: () => Promise<void> = async () => {}) {
@@ -88,6 +89,25 @@ describe("checked orchestration settings", () => {
       expect(active().selected.orchestration).toBeUndefined();
       expect(active().applied.orchestration).toBeUndefined();
     } finally { h.close(); await store.close(); }
+  });
+  it("republishes a restored native orchestrate flag with the engine tag", async () => {
+    const first = await setup(true);
+    try { expect(await first.toggle(true, "on")).toMatchObject({ outcome: "applied" }); } finally { first.h.close(); }
+    const h = createHarness({ steps: [finishStep()], runtimeHistory: new RuntimeSessionHistory(first.store, "test-session") });
+    Object.defineProperty(h.engine, "id", { value: "claude" });
+    Object.defineProperty(h.engine, "verifyOrchestrationOff", { value: async () => {} });
+    Object.defineProperty(h.engine, "orchestrationPolicy", { value: { nativeBase: () => ({ version: 1, engine: "claude", model: "m", preset: "read-only", permissionMode: "plan", mcpDigest: "a".repeat(64), tools: ["Read"] }), availability: () => ({ supported: true }),
+      apply: async (enabled: boolean, baseAuthority: unknown) => ({ enabled, baseAuthority }) } });
+    bindRuntimeOrchestration(h.engine, { ownerSessionId: "test-session", port: { hasRunningChildren: () => false, cancelAllBackgroundChildren: () => {} }, baseMode: () => "plan" });
+    const seen: Array<[boolean, string, boolean]> = [];
+    const flag = () => (h.session as unknown as { orchestrate: boolean }).orchestrate;
+    h.session.observePermissionMode(() => {}, (enabled, engine) => seen.push([enabled, engine, flag()]));
+    try {
+      h.send({ type: "ui_ready", orchestrationProtocol: 1 });
+      await h.waitFor((m): m is Of<"host_ready"> => m.type === "host_ready");
+      await h.waitUntil(() => seen.length > 1);
+      expect(seen).toEqual([[false, "claude", false], [true, "claude", true]]);
+    } finally { await h.session.shutdown(); h.close(); await first.store.close(); }
   });
   it("loads saved ON at revision zero with both flags off and leaves legacy sessions lazy", async () => {
     const store = new SqlitePersistenceAdapter(":memory:");

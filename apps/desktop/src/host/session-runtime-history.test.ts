@@ -232,6 +232,45 @@ describe("canonical reconnect hydration", () => {
     } finally { h.close(); await store.close(); }
   });
 
+  it("republishes peer authority after a saved overlay restores", async () => {
+    const store = await switchedStore();
+    const state = store.loadRuntimeSession("test-session")!;
+    const saved = {model:"scripted-model",mode:"plan",orchestration:{enabled:true as const,baseMode:"edit" as const}};
+    store.updateRuntimeSettings("test-session",state.activeSegmentId,saved,saved);
+    const h = createHarness({steps:[finishStep()],runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    bindRuntimeOrchestration(h.engine,{ownerSessionId:"test-session",port:{hasRunningChildren:() => false,cancelAllBackgroundChildren:() => {}},baseMode:() => h.engine.mode()});
+    const orchestrate: Array<[boolean,string,boolean]> = [];
+    const flag = () => (h.session as unknown as {orchestrate:boolean}).orchestrate;
+    h.session.observePermissionMode(() => {},(enabled,engine) => orchestrate.push([enabled,engine,flag()]));
+    try {
+      expect(orchestrate).toEqual([[false,"core",false]]);
+      h.send({type:"ui_ready",orchestrationProtocol:1});
+      expect(await h.waitFor(m => m.type === "host_ready")).toMatchObject({orchestration:{enabled:true}});
+      await h.waitUntil(() => orchestrate.length > 1);
+      expect(orchestrate.slice(1)).toEqual([[true,"core",true]]);
+    } finally { h.close(); await store.close(); }
+  });
+
+  it("republishes peer authority when a failed restore recovers to off", async () => {
+    const store = await switchedStore();
+    const state = store.loadRuntimeSession("test-session")!;
+    const saved = {model:"scripted-model",mode:"plan",orchestration:{enabled:true as const,baseMode:"edit" as const}};
+    store.updateRuntimeSettings("test-session",state.activeSegmentId,saved,saved);
+    const h = createHarness({steps:[finishStep()],runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    bindRuntimeOrchestration(h.engine,{ownerSessionId:"test-session",port:{hasRunningChildren:() => false,cancelAllBackgroundChildren:() => {}},baseMode:() => h.engine.mode()});
+    h.engine.setCoreOrchestrate = enabled => { h.config.orchestrate = enabled; return !enabled; };
+    const log = vi.spyOn(console,"warn").mockImplementation(() => {});
+    const orchestrate: Array<[boolean,string,boolean]> = [];
+    const flag = () => (h.session as unknown as {orchestrate:boolean}).orchestrate;
+    h.session.observePermissionMode(() => {},(enabled,engine) => orchestrate.push([enabled,engine,flag()]));
+    try {
+      h.send({type:"ui_ready",orchestrationProtocol:1});
+      await h.waitFor(m => m.type === "host_ready");
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "engine_notice" && m.event.message.includes("turned off")));
+      expect(orchestrate).toEqual([[false,"core",false],[false,"core",false]]);
+    } finally { await h.session.shutdown(); h.close(); log.mockRestore(); await store.close(); }
+  });
+
   it("re-budgets a pending handoff durably before dispatch and preserves it when the input cannot fit", async () => {
     const store = await switchedStore();
     const state = store.loadRuntimeSession("test-session")!;
