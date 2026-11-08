@@ -47,3 +47,25 @@ it.skipIf(!existsSync(chrome))("keeps the child worktree label within its trigge
     expect(rows[2]!.label).toBeLessThan(rows[2]!.labelScroll);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60000);
+
+it.skipIf(!existsSync(chrome))("keeps crowded header controls and Git indicators inside their boxes", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "crowded-header-"));
+  const css = ["tokens.css", "app.css"].map(f => readFileSync(resolve(import.meta.dirname, "..", f), "utf8")).join("\n");
+  try {
+    const file = resolve(dir, "index.html");
+    const header = (windowWidth: number) => `<header class="session-header" style="width:${windowWidth - 264}px"><span class="session-header-title session-header-title-wrap">A crowded session header demonstrating child worktree layout and review</span><span class="engine-identity session-header-engine">Codex</span><details class="environment-control child-worktree-control"><summary class="environment-trigger"><span>Child worktrees</span></summary></details><div class="environment-control environment-control-header"><button class="environment-trigger environment-trigger-has-branch"><svg></svg><span class="environment-workspace">a-very-long-workspace-folder-name</span><span class="environment-separator">/</span><svg></svg><span class="environment-branch">master</span><span class="environment-git-count">●2</span><span class="environment-git-count">↑2306 ↓2767</span><span>⌄</span></button></div><button class="session-extensions-trigger"><svg width="16" height="16"></svg><span class="session-extensions-label">Extensions</span></button><span class="session-header-connection"><svg width="8" height="8"></svg></span></header>`;
+    writeFileSync(file, `<html data-platform="darwin"><style>${css}</style>${[900, 1400].map(header).join("")}<pre id="result"></pre><script>
+      document.querySelector('#result').textContent=JSON.stringify([...document.querySelectorAll('header')].map(h=>{const controls=[...h.children].map(e=>e.getBoundingClientRect());const pills=[...h.querySelectorAll('.environment-trigger')].map(p=>{const box=p.getBoundingClientRect();return {width:p.clientWidth,scroll:p.scrollWidth, outside:[...p.children].filter(c=>getComputedStyle(c).display!=='none').some(c=>{const r=c.getBoundingClientRect();return r.left<box.left-1||r.right>box.right+1})}});return {overlap:controls.some((r,i)=>i>0&&r.left<controls[i-1].right-1), pills, overflow:h.scrollWidth>h.clientWidth+1}}));</script>`);
+    const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${dir}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30000 });
+    expect(run.status, run.stderr).toBe(0);
+    const rows = JSON.parse(run.stdout.match(/<pre id="result">([^<]+)<\/pre>/)![1]!) as Array<{overlap:boolean;overflow:boolean;pills:Array<{width:number;scroll:number;outside:boolean}>}>;
+    for (const row of rows) {
+      expect(row.overlap, JSON.stringify(row)).toBe(false);
+      expect(row.overflow, JSON.stringify(row)).toBe(false);
+      for (const pill of row.pills) {
+        expect(pill.outside, JSON.stringify(row)).toBe(false);
+        expect(pill.scroll, JSON.stringify(row)).toBeLessThanOrEqual(pill.width + 1);
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60000);

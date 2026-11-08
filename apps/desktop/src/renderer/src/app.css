@@ -1620,7 +1620,7 @@ body {
 }
 
 .session-header-title {
-  flex-shrink: 1;
+  flex-shrink: 100;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1791,6 +1791,19 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Keep the fixed Git indicators inside the pill as the title and path shrink. */
+@container session-header (width >= 500px) {
+  .environment-control-header,
+  .environment-control-header .environment-trigger {
+    min-width: min-content;
+  }
+}
+
+@container session-header (width < 500px) {
+  .environment-control-header .environment-git-count { display: none; }
+  .environment-control-header .environment-trigger { overflow: hidden; }
+}
+
 .environment-trigger {
   white-space: nowrap;
   max-width: 100%;
@@ -1837,6 +1850,10 @@ body {
 .child-worktree-control .environment-menu {
   left: auto;
   right: 0;
+}
+
+@container session-header (width < 720px) {
+  .child-worktree-control .environment-menu { left: 0; right: auto; }
 }
 
 .environment-workspace,
