@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.94] - 2026-11-08
+
 ### Added
 - Claude and Codex sessions can now message and open other sessions on any engine with native session peers, under the same approval rules as Core sessions. Read-only presets stay refused, and a restored Orchestrate tab regains peer access without being reopened.
 
