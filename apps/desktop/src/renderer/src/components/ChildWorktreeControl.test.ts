@@ -16,6 +16,7 @@ it("mounts durable resources, copies recovery values, toggles main policy and po
     await act(async () => root.render(createElement(ChildWorktreeControl, { tabId: "parent" })));
     expect((node.querySelector('input') as HTMLInputElement).checked).toBe(false);
     expect(node.textContent).toContain("Last creation refused:");
+    expect(node.querySelectorAll("ul > li")).toHaveLength(1);
     expect(node.textContent).toContain("Not a sandbox");
     expect(node.textContent).toContain("uncommitted files aren't copied");
     expect(node.textContent).not.toContain("Review retained work manually");
@@ -86,6 +87,7 @@ it("ignores an old parent's pending toggle after changing tabs and displays requ
     await act(async () => (node.querySelector('input') as HTMLInputElement).click());
     await act(async () => root.render(createElement(ChildWorktreeControl, { tabId: "second" })));
     expect((node.querySelector('input') as HTMLInputElement).disabled).toBe(false);
+    expect(node.querySelector("ul")).toBeNull();
     await act(async () => finish({ enabled: true, canToggle: true, resources: [] }));
     expect((node.querySelector('input') as HTMLInputElement).checked).toBe(false);
     await act(async () => root.render(createElement(ChildWorktreeControl, { tabId: "broken" })));

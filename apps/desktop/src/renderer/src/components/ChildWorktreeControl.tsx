@@ -59,7 +59,7 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
     {error && <p role="alert">{error}</p>}
     {view?.lastRefusal && <p role="alert">Last creation refused: {view.lastRefusal}</p>}
     {view?.unverified?.map(r => <p key={r.id}>Worktree receipt unverified · {r.id}: {r.reason} (project/session association unverified)</p>)}
-    <ul>{view?.resources.map(r => <li key={r.id}>
+    {!!view?.resources.length && <ul>{view.resources.map(r => <li key={r.id}>
       <strong>Worktree · cwd only</strong> · {r.phase === "active" ? "active (live)" : r.phase === "retained" ? "retained (kept)" : r.phase === "removed" ? "removed" : "unknown"} · {r.childSessionId}
       {!["intent", "not-created"].includes(r.phase) && <p>{r.path} <Button size="sm" variant="ghost" aria-label="Copy path" onClick={() => copy(r.path)}>{copied === r.path ? "Copied" : "Copy path"}</Button></p>}
       <p>{r.branch} <Button size="sm" variant="ghost" aria-label="Copy branch" onClick={() => copy(r.branch)}>{copied === r.branch ? "Copied" : "Copy branch"}</Button></p>
@@ -67,7 +67,7 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
       <p>{r.reason ?? (r.phase === "active" ? "Child checkout active." : r.phase === "retained"
         ? "Checkout and branch kept; inspect manually." : r.phase === "removed"
           ? "Folder removed; branch retained." : "Creation or completion unconfirmed; inspect the resource journal.")}</p>
-    </li>)}</ul>
+    </li>)}</ul>}
     </div>
   </details>;
 }

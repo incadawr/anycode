@@ -32,3 +32,18 @@ it("removes the separate header chips while keeping child worktree policy contro
   expect(header).not.toMatch(/session-header-worktree|session-header-browser-access/);
   expect(header).toContain("<ChildWorktreeControl");
 });
+
+it.skipIf(!existsSync(chrome))("keeps the child worktree label within its trigger under header pressure", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "child-worktree-layout-"));
+  const css = ["tokens.css", "app.css"].map(f => readFileSync(resolve(import.meta.dirname, "..", f), "utf8")).join("\n");
+  try {
+    const file = resolve(dir, "index.html");
+    writeFileSync(file, `<html><style>${css}</style>${[900, 450, 80].map(width => `<div style="display:flex;width:${width}px"><span style="min-width:0;flex:1 1 auto">A long session title that can shrink</span><details class="environment-control child-worktree-control"><summary class="environment-trigger"><span>Child worktrees · ON</span></summary></details><div style="min-width:0;flex:1 1 auto;overflow:hidden">Workspace / master ●2 ↑2306 ↓2767</div></div>`).join("")}<pre id="result"></pre><script>document.querySelector('#result').textContent=JSON.stringify([...document.querySelectorAll('summary')].map(s=>({width:s.clientWidth,scroll:s.scrollWidth,label:s.querySelector('span').getBoundingClientRect().width, labelScroll:s.querySelector('span').scrollWidth})));</script>`);
+    const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${dir}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30000 });
+    expect(run.status, run.stderr).toBe(0);
+    const rows = JSON.parse(run.stdout.match(/<pre id="result">([^<]+)<\/pre>/)![1]!) as Array<{width:number;scroll:number;label:number;labelScroll:number}>;
+    for (const row of rows) expect(row.scroll).toBeLessThanOrEqual(row.width + 1);
+    for (const row of rows.slice(0, 2)) expect(row.label + 1).toBeGreaterThanOrEqual(row.labelScroll);
+    expect(rows[2]!.label).toBeLessThan(rows[2]!.labelScroll);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60000);

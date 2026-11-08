@@ -1818,11 +1818,25 @@ body {
   height: 15px;
 }
 
+.child-worktree-control {
+  flex-shrink: 0;
+}
+
 .child-worktree-control .environment-trigger > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.child-worktree-control .environment-menu > p {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.child-worktree-control .environment-menu {
+  left: auto;
+  right: 0;
 }
 
 .environment-workspace,
