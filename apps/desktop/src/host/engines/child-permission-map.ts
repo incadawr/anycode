@@ -37,6 +37,7 @@
  */
 
 import type { PermissionMode } from "@anycode/core";
+import { codexAgentPermissionMode } from "./codex/dynamic-tool-bridge.js";
 
 /** Claude preset id (`presets.ts`'s `ClaudePermissionPresetDefinition.id`) an engine child boots with. */
 export function claudeChildPresetId(mode: PermissionMode): "read-only" | "ask" | "workspace" {
@@ -126,4 +127,34 @@ export function codexChildAutoAcceptsWorkspacePatches(mode: PermissionMode): boo
 export function claudeAgentPermissionMode(presetId: string): PermissionMode {
   if (presetId === "ask" || presetId === "workspace") return "build";
   return "plan";
+}
+
+const PERMISSION_MODE_RANK: Record<PermissionMode, number> = {
+  plan: 0,
+  build: 1,
+  edit: 2,
+  auto: 3,
+  yolo: 4,
+};
+
+/**
+ * The core `PermissionMode` a native Claude or Codex root publishes as its
+ * peer authority. Maps the applied preset through the engine's own mapping
+ * (`claudeAgentPermissionMode` / `codexAgentPermissionMode`). A pending preset,
+ * when given, can only narrow the result: the narrower of the applied and the
+ * pending mode wins, so a pending widening never counts before the engine
+ * adopts it, while a pending narrowing counts at once. Unknown ids map to
+ * `plan`.
+ */
+export function nativePeerAuthorityMode(
+  engine: "claude" | "codex",
+  applied: string,
+  pending?: string | null,
+): PermissionMode {
+  const mapPreset = (presetId: string): PermissionMode =>
+    engine === "claude" ? claudeAgentPermissionMode(presetId) : codexAgentPermissionMode(presetId);
+  const appliedMode = mapPreset(applied);
+  if (pending === undefined || pending === null) return appliedMode;
+  const pendingMode = mapPreset(pending);
+  return PERMISSION_MODE_RANK[pendingMode] < PERMISSION_MODE_RANK[appliedMode] ? pendingMode : appliedMode;
 }

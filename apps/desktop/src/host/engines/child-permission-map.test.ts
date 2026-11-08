@@ -19,7 +19,7 @@
 
 import { PERMISSION_MODES } from "@anycode/core";
 import { describe, expect, it } from "vitest";
-import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./child-permission-map.js";
+import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture, nativePeerAuthorityMode } from "./child-permission-map.js";
 import { CLAUDE_PERMISSION_PRESETS, findClaudePreset } from "./claude/presets.js";
 import { CODEX_PERMISSION_PRESETS, findCodexPreset } from "./codex/presets.js";
 
@@ -168,5 +168,71 @@ describe("codexChildAutoAcceptsWorkspacePatches", () => {
       ["auto", true],
       ["yolo", true],
     ]);
+  });
+});
+
+describe("nativePeerAuthorityMode (native peer authority)", () => {
+  it.each([
+    ["read-only", "plan"],
+    ["ask", "build"],
+    ["workspace", "build"],
+    ["bypassPermissions", "plan"],
+    ["dontAsk", "plan"],
+    ["auto", "plan"],
+    ["", "plan"],
+    ["future-preset", "plan"],
+  ])("maps the Claude preset %j to %s", (presetId, mode) => {
+    expect(nativePeerAuthorityMode("claude", presetId)).toBe(mode);
+  });
+
+  it.each([
+    ["read-only", "plan"],
+    ["child-ask", "plan"],
+    ["ask", "build"],
+    ["approve-for-me", "build"],
+    ["full-access", "yolo"],
+    ["never", "plan"],
+    ["", "plan"],
+  ])("maps the Codex preset %j to %s", (presetId, mode) => {
+    expect(nativePeerAuthorityMode("codex", presetId)).toBe(mode);
+  });
+
+  it("never returns yolo for a Claude root, over every known and forbidden id", () => {
+    const ids = [
+      ...CLAUDE_PERMISSION_PRESETS.map((preset) => preset.id),
+      ...FORBIDDEN_CLAUDE_MODES,
+      "yolo",
+      "full-access",
+      "approve-for-me",
+      "child-ask",
+      "",
+    ];
+    for (const id of ids) {
+      expect(nativePeerAuthorityMode("claude", id)).not.toBe("yolo");
+    }
+  });
+
+  it("lets a pending widening not count: applied ask + pending full-access gives build", () => {
+    expect(nativePeerAuthorityMode("codex", "ask", "full-access")).toBe("build");
+  });
+
+  it("lets a pending narrowing count at once: applied full-access + pending read-only gives plan", () => {
+    expect(nativePeerAuthorityMode("codex", "full-access", "read-only")).toBe("plan");
+  });
+
+  it("keeps the applied mode when there is no pending preset", () => {
+    expect(nativePeerAuthorityMode("codex", "full-access")).toBe("yolo");
+    expect(nativePeerAuthorityMode("codex", "full-access", null)).toBe("yolo");
+    expect(nativePeerAuthorityMode("codex", "full-access", undefined)).toBe("yolo");
+  });
+
+  it("applies the same narrowing rule to Claude", () => {
+    expect(nativePeerAuthorityMode("claude", "read-only", "ask")).toBe("plan");
+    expect(nativePeerAuthorityMode("claude", "ask", "read-only")).toBe("plan");
+    expect(nativePeerAuthorityMode("claude", "ask", "workspace")).toBe("build");
+  });
+
+  it("fails narrow when the pending preset is unknown", () => {
+    expect(nativePeerAuthorityMode("codex", "ask", "bogus")).toBe("plan");
   });
 });
