@@ -2,7 +2,7 @@
 
  * identity (same metadata OBJECT / same inputSchema as the inner Read),
  * byte-equivalent delegation on every non-image path, the fail-closed
- * capability gate (explicit error + zero images), the per-image byte cap, and
+ * capability gate, the per-image byte cap, and
  * sniff-authoritative routing (magic beats extension).
  */
 
@@ -12,7 +12,10 @@ import type { CorePorts } from "../ports/index.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import { IMAGE_MAX_BYTES } from "../types/config.js";
 import { readTool } from "./read.js";
-import { imageCapableReadTool } from "./read-image.js";
+import { defaultImageCapableReadTool as imageCapableReadTool } from "./read-image.js";
+import { createDefaultToolRegistry } from "./registry.js";
+import { getBuiltinCatalog } from "../provider/catalog-data.js";
+import { resolveImageInput } from "../provider/capabilities.js";
 
 // Real magic-byte payloads (design §2-A7).
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
@@ -120,27 +123,24 @@ describe("imageCapableReadTool — delegation is byte-equivalent to the inner Re
   });
 });
 
-describe("imageCapableReadTool — capability gate (fail-closed, poison-proof)", () => {
-  it("refuses with an explicit override-naming error and ZERO images when the model is not image-capable", async () => {
+describe("imageCapableReadTool — capability gate", () => {
+  it("uses text Read when the model is not image-capable", async () => {
     const files = { "/work/shot.png": PNG_BYTES };
     const result = await imageCapableReadTool.handler(
       { file_path: "/work/shot.png" },
       ctxFor(files, { media: mediaOff }),
     );
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("image-capable");
-    expect(result.error).toContain("ANYCODE_IMAGE_INPUT");
+    expect(result).toEqual(await readTool.handler({ file_path: "/work/shot.png" }, ctxFor(files, { media: mediaOff })));
     expect(result.images).toBeUndefined();
   });
 
-  it("refuses when no MediaCapabilityPort is present at all (absence = fail-closed lock)", async () => {
+  it("uses text Read when no MediaCapabilityPort is present", async () => {
     const files = { "/work/shot.png": PNG_BYTES };
     const result = await imageCapableReadTool.handler(
       { file_path: "/work/shot.png" },
       ctxFor(files),
     );
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("ANYCODE_IMAGE_INPUT");
+    expect(result).toEqual(await readTool.handler({ file_path: "/work/shot.png" }, ctxFor(files)));
     expect(result.images).toBeUndefined();
   });
 
@@ -158,7 +158,7 @@ describe("imageCapableReadTool — capability gate (fail-closed, poison-proof)",
     expect(result.images).toHaveLength(1);
   });
 
-  it("slice B2: still refuses when blind and recognizerConfigured() is false", async () => {
+  it("uses text Read when blind and recognizerConfigured() is false", async () => {
     const files = { "/work/shot.png": PNG_BYTES };
     const mediaBlindNoRecognizer: MediaCapabilityPort = {
       imageInputEnabled: () => false,
@@ -168,9 +168,22 @@ describe("imageCapableReadTool — capability gate (fail-closed, poison-proof)",
       { file_path: "/work/shot.png" },
       ctxFor(files, { media: mediaBlindNoRecognizer }),
     );
-    expect(result.ok).toBe(false);
+    expect(result).toEqual(await readTool.handler({ file_path: "/work/shot.png" }, ctxFor(files, { media: mediaBlindNoRecognizer })));
     expect(result.images).toBeUndefined();
   });
+});
+
+it("the default registry reads PNGs using the connection catalog capability", async () => {
+  const catalog = getBuiltinCatalog().providers.find(entry => entry.id === "minimax")!;
+  const files = { "/work/shot.png": PNG_BYTES };
+  const read = createDefaultToolRegistry().get("Read")!;
+  let model = "MiniMax-M3.1-Flash";
+  const media = { imageInputEnabled: () => resolveImageInput(model, catalog, undefined) };
+  const input = { file_path: "/work/shot.png" };
+  const result = await read.handler(input, ctxFor(files, { media }));
+  expect(result.images?.[0]).toMatchObject({ mediaType: "image/png", data: Buffer.from(PNG_BYTES).toString("base64") });
+  model = "unknown-model";
+  expect(await read.handler(input, ctxFor(files, { media }))).toEqual(await readTool.handler(input, ctxFor(files, { media })));
 });
 
 describe("imageCapableReadTool — attach path", () => {
