@@ -13,6 +13,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Native session peers are now on by default on macOS and Linux, packaged builds included, so Core, Claude and Codex sessions can message and open each other without a development flag. Set `ANYCODE_NATIVE_SESSIONS_ENABLED=0` to turn them off. Windows keeps them off unless `ANYCODE_NATIVE_SESSIONS_ENABLED=1` is set.
 
+### Fixed
+
+- The z.ai coding plan's OpenAI-compatible endpoint now has its own catalog entry, so GLM models such as `glm-5.3-flash` get their real context window instead of a 32k fallback, and the selected reasoning effort is sent.
+- The output reserve now takes at most 25% of the context window when the input budget is computed, and a model the catalog does not know defaults to a 128k window instead of 8k.
+- Factual reasoning summaries are no longer truncated or rejected for exceeding their target length. Short reasoning is kept as written without a summarising call, and a failed summary falls back to the original reasoning.
+
 ## [0.0.94] - 2026-11-08
 
 ### Added
