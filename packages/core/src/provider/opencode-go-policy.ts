@@ -129,7 +129,7 @@ export function openCodeGoCatalogEntry(
   }], retiredModels: [] };
 }
 
-/** Project the built-in inventory, with the stable default first. */
+/** Project the built-in inventory, with MiniMax M3 first in the picker (the boot default is OPENCODE_GO_DEFAULT_MODEL). */
 export function openCodeGoCatalogModels(entry: import("./catalog.js").CatalogProviderEntry): import("./catalog.js").CatalogModel[] {
   const ids = openCodeGoModelIds(entry.id);
   ids.sort((a, b) => a === "minimax-m3" ? -1 : b === "minimax-m3" ? 1 : 0);

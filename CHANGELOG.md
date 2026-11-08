@@ -16,7 +16,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Account source previews stay valid when unrelated credentials or plugin settings change, and idle sources no longer wake up unnecessarily.
 - Switching or creating-and-switching a branch in a worktree managed by AnyCode
   is now refused by the app itself, not only hidden in the interface.
-- A session reopens at the scroll position you left it, keeps following new output while it grows, and the minimap highlights the last turn when you are at the bottom.
+- Switching back to a session restores its scroll position, the transcript keeps following new output while it grows, and the minimap highlights the last turn when you are at the bottom.
 - Native sessions can read images with image-capable models.
 - The macOS app icon now has rounded transparent corners and the standard
   size and margin, instead of a square icon with black corners.
