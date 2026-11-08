@@ -91,6 +91,14 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
    * result never leaves the engine — decoder unit tests stay green while the
    * host-ready payload carries no quota at all.
    */
+  presetVerified(): boolean {
+    return !this.engine.presetProvisional;
+  }
+
+  onSettingsReconciled(listener: () => void): () => void {
+    return this.engine.onPresetReconciled(listener);
+  }
+
   quotaSnapshot(): CodexRateLimitsWire | null {
     return claudeQuotaToWire(this.engine.quotaSnapshot());
   }

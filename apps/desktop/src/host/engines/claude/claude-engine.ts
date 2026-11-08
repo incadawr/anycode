@@ -825,6 +825,8 @@ async function connectClaudeEngine(
       options.orchestrationRestricted,
     );
     engine.nativeMaterialized = resuming;
+    // A resumed session's preset is only the persisted row until its first init.
+    engine.presetProvisional = resuming;
     engine.offBootVerified = options.orchestrationRecovery !== undefined && recoveryProblem === undefined;
     engine.installOrchestration(options, initialForward);
     if (recoveryProblem) {
@@ -910,6 +912,14 @@ export class ClaudeEngine implements SessionEngine {
   private liveModel: string | null = null;
   /** The wire-level permission mode the CLI is ACTUALLY running (CC-D resume settle, cut §1.5 hazard (b)) — distinct from `activePresetId`, which is our own requested posture. */
   private livePermissionMode: ClaudeWirePermissionMode | null = null;
+  /** True while `settings.preset` is a persisted guess no `system/init` has confirmed (resume). */
+  presetProvisional = false;
+  private readonly presetReconciledListeners = new Set<() => void>();
+  /** Fires when an init changed the preset or confirmed a provisional one (peer authority follows it). */
+  onPresetReconciled(listener: () => void): () => void {
+    this.presetReconciledListeners.add(listener);
+    return () => this.presetReconciledListeners.delete(listener);
+  }
   /** Latch + one-shot observers for the FIRST turn-scoped `system/init` (`onFirstSystemInit`). */
   private firstInitSeen = false;
   private readonly firstInitListeners = new Set<(init: ClaudeSystemInitReport) => void>();
@@ -2269,7 +2279,15 @@ export class ClaudeEngine implements SessionEngine {
       this.mcpStatusNotices.push(...mcpServerFailureNotices([entry]));
     }
     this.nativeMaterialized = true;
+    const presetBefore = this.activePresetId;
+    const wasProvisional = this.presetProvisional;
     this.reconcileFromInit(init);
+    this.presetProvisional = false;
+    if (wasProvisional || this.activePresetId !== presetBefore) {
+      for (const listener of this.presetReconciledListeners) {
+        try { listener(); } catch { /* a republish failure must never fail a turn */ }
+      }
+    }
     // GitHub #3: a server can connect on one turn and fail on a later one, so
     // every init is news. Observers get the same payload as the first-init latch
     // below, once per init — BEFORE the latch so a one-shot listener's failure

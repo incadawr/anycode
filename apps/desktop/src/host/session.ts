@@ -297,6 +297,19 @@ export interface EngineSettingsSeam {
    */
   persistsOnApply?: boolean;
   /**
+   * False while the applied preset is only a persisted guess that the engine
+   * has not yet confirmed with its own runtime (a resumed Claude session before
+   * its first init). Peer authority stays closed until it is true. Absent =
+   * always verified.
+   */
+  presetVerified?(): boolean;
+  /**
+   * Fires whenever the engine reconciles its settings with the runtime's own
+   * report (Claude native init), a change that never goes through
+   * `onSettingsApplied`. Session republishes peer authority from it.
+   */
+  onSettingsReconciled?(listener: () => void): () => void;
+  /**
    * The engine's latest merged subscription-quota snapshot (codex-profiles
    * cut §6.1), read into `EnginePresentation.quota` on every `ui_ready` — a
    * renderer reload gets the freshest snapshot without any bind-time push.
@@ -1497,12 +1510,14 @@ export class Session {
   }
   /**
    * True while a native root must hold no peer authority: the restore is still
-   * in progress or the orchestration state is quarantined (posture or
-   * controller). The host bridge and the published report share this.
+   * in progress, the orchestration state is quarantined (posture or controller),
+   * or the engine has not yet verified its preset (a resumed Claude session's persisted preset is provisional until
+   * its first init). The host bridge and the published report share this.
    */
   peerAuthorityClosed(): boolean {
     if (this.engine.id === "core") return false;
-    return this.orchestrationPosture !== "stable" || this.orchestrationController?.state.status === "quarantined";
+    if (this.orchestrationPosture !== "stable" || this.orchestrationController?.state.status === "quarantined") return true;
+    return this.engineSettings?.presetVerified?.() === false;
   }
   /**
    * The Core-equivalent authority a peer caller holds. Core reports its live
@@ -2078,7 +2093,10 @@ export class Session {
       this.outbound.emit({type:"engine_settings_changed",...seam.snapshot(),...(this.imageInputEnabled ? {imageInput:this.imageInputEnabled()} : {}),...(this.imageFallbackAvailable ? {imageFallback:this.imageFallbackAvailable()} : {}),state:"applied",appliesFrom:"next_turn"});
       this.pushPendingEngineSettings();
     });
-    return () => { appliedSubscription(); rejectedSubscription?.(); };
+    const reconciledSubscription = seam.onSettingsReconciled?.(() => {
+      if (current()) this.publishPermissionAuthority();
+    });
+    return () => { appliedSubscription(); rejectedSubscription?.(); reconciledSubscription?.(); };
   }
 
   /** Attaches (or retargets) the UI wire: routes inbound messages, denies on close. */

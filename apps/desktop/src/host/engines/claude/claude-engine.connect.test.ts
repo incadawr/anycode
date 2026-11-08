@@ -234,6 +234,8 @@ describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
       expect(args).toContain("--session-id");
       expect(args).not.toContain("--resume");
       expect(connected.sessionRef).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
+      // A fresh spawn sends its own preset, so it is already the verified posture.
+      expect(connected.engineSettings.presetVerified()).toBe(true);
     } finally {
       await connected.engine.dispose("session-close");
     }
@@ -269,6 +271,8 @@ describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
       expect(args[args.indexOf("--resume") + 1]).toBe("persisted-ref-123");
       expect(args).not.toContain("--session-id");
       expect(connected.sessionRef).toBe("persisted-ref-123");
+      // The persisted preset is only a guess until the first init reports the CLI's own.
+      expect(connected.engine.presetProvisional).toBe(true);
     } finally {
       await connected.engine.dispose("session-close");
     }
