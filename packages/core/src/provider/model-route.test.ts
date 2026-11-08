@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OPENCODE_GO_OPENAI_URL, resolveModelRoute, type ModelRouteSnapshot } from "./model-route.js";
+import { OPENCODE_GO_OPENAI_URL, describeModelRouteRefusal, resolveModelRoute, type ModelRouteSnapshot } from "./model-route.js";
 
 const snapshot: ModelRouteSnapshot<{ context: number }> = {
   version: 1,
@@ -23,4 +23,11 @@ describe("model route", () => {
     expect(resolveModelRoute("opencode", "invalid", snapshot)).toMatchObject({ reason: "invalid-route" });
     expect(resolveModelRoute("opencode", "__proto__", snapshot)).toMatchObject({ reason: "unknown-model" });
   });
+});
+
+it("describes each refusal in readable language", () => {
+  expect(describeModelRouteRefusal("unknown-model")).toContain("model list");
+  expect(describeModelRouteRefusal("unsupported-model")).toContain("not supported");
+  expect(describeModelRouteRefusal("invalid-route")).toContain("invalid route");
+  expect(describeModelRouteRefusal("unsupported-provider")).toContain("not an OpenCode Go connection");
 });

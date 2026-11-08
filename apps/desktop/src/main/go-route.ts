@@ -1,4 +1,3 @@
-import { findCatalogEntry } from "@anycode/core/catalog";
 import { resolveGoBootModel } from "../host/go-boot-model.js";
 import { resolveOpenCodeGoEndpointPolicy } from "@anycode/core";
 import type { ProviderConnection } from "../shared/settings.js";
@@ -16,8 +15,7 @@ export function automaticGoBootRoute(connection: ProviderConnection | undefined,
   if (!route || route.kind === "route" || !connection) return route;
   try {
     const model = env.ANYCODE_MODEL?.trim() || connection.model || "";
-    const preferred = findCatalogEntry(connection.providerId)?.models[0]?.id;
-    const boot = resolveGoBootModel(connection.providerId, model, preferred, connection.modelRoutes);
+    const boot = resolveGoBootModel(connection.providerId, model, connection.modelRoutes);
     return resolveOpenCodeGoEndpointPolicy(connection.providerId, boot.model, connection.modelRoutes);
   } catch {
     return route;

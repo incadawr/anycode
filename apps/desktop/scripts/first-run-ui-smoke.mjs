@@ -194,7 +194,7 @@ try {
   await click('← Change');
   await click("OpenCode GoUse your OpenCode Go key");
   assert.equal(await evaluate("document.querySelector('.connection-drawer-create-key').value"), '');
-  assert.equal(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value"), "kimi-k3");
+  assert.equal(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value"), "minimax-m3.1-flash");
   assert(await evaluate("document.querySelector('.welcome-setup .ak-btn--primary').disabled"));
   await sleep(400);
   assert(await evaluate("(() => { const b = document.querySelector('.welcome-setup .ak-btn--primary').getBoundingClientRect(); return b.top > 0 && b.bottom <= 800; })()"), 'Connect must fit on one screen');
@@ -218,7 +218,7 @@ try {
   const settings = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8"));
   assert.equal(settings.provider.connections.length, 1);
   assert.equal(settings.provider.connections[0].providerId, "opencode");
-  assert.equal(settings.provider.connections[0].model, "kimi-k3");
+  assert.equal(settings.provider.connections[0].model, "minimax-m3.1-flash");
   assert(!settings.provider.connections[0].baseUrl);
   assert(!settings.provider.connections[0].transport);
   assert(settings.provider.connections[0].model);

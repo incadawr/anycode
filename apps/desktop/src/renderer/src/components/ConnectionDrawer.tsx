@@ -33,7 +33,7 @@ import { useEffect, useId, useReducer, useRef, useState, type ReactNode } from "
 import { useStore } from "zustand";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { openCodeGoModelIds, resolveOpenCodeGoEndpointPolicy } from "@anycode/core/opencode-go";
+import { OPENCODE_GO_DEFAULT_MODEL, openCodeGoModelIds, resolveOpenCodeGoEndpointPolicy } from "@anycode/core/opencode-go";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -1236,7 +1236,7 @@ export function liveModelSuggestions(
 
 /** Keep the Go default stable when a fetched list arrives in a different order. */
 export function prioritizeGoDefault<T extends { id: string }>(suggestions: T[]): T[] {
-  const index = suggestions.findIndex(item => item.id === "kimi-k3");
+  const index = suggestions.findIndex(item => item.id === OPENCODE_GO_DEFAULT_MODEL);
   if (index > 0) suggestions.unshift(...suggestions.splice(index, 1));
   return suggestions;
 }
@@ -1809,7 +1809,7 @@ export function ConnectionDrawerFields({
   // before it is saved.
   const automaticGo = isAutomaticGo(providerId, baseUrl, transport, proxySnapshot?.envOverrides);
   const automaticIds = automaticGo ? openCodeGoModelIds(providerId, targetConnection?.modelRoutes) : undefined;
-  if (automaticIds?.includes("kimi-k3")) automaticIds.unshift(...automaticIds.splice(automaticIds.indexOf("kimi-k3"), 1));
+  if (automaticIds?.includes(OPENCODE_GO_DEFAULT_MODEL)) automaticIds.unshift(...automaticIds.splice(automaticIds.indexOf(OPENCODE_GO_DEFAULT_MODEL), 1));
   const manualGo = !automaticGo && (providerId === "opencode" || providerId === "opencode-openai");
   const mergedSuggestions = liveModelSuggestions(
     isCustomRecordConnection ? null : fetchedModels,

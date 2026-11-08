@@ -488,8 +488,8 @@ describe("providerOptionGroups (one brand = one card)", () => {
 
 describe("liveModelSuggestions (stable union of fetched + persisted + hints)", () => {
   it("keeps the Go default first even if the fetched list arrives in another order", () => {
-    const suggestions = prioritizeGoDefault(liveModelSuggestions([{ id: "other" }, { id: "kimi-k3" }], undefined, []));
-    expect(modelAfterCatalogPrefill("", suggestions)).toBe("kimi-k3");
+    const suggestions = prioritizeGoDefault(liveModelSuggestions([{ id: "other" }, { id: "minimax-m3.1-flash" }], undefined, []));
+    expect(modelAfterCatalogPrefill("", suggestions)).toBe("minimax-m3.1-flash");
     expect(modelAfterCatalogPrefill("other", suggestions)).toBe("other");
   });
   const HINTS = [

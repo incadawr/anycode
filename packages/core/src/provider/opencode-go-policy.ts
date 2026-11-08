@@ -1,5 +1,12 @@
 import { OPENCODE_GO_MODELS } from "./opencode-go.js";
-import { resolveModelRoute, type ModelRouteSnapshot } from "./model-route.js";
+import { describeModelRouteRefusal, resolveModelRoute, type ModelRouteSnapshot } from "./model-route.js";
+
+/**
+ * The model an OpenCode Go connection uses when nothing else is chosen.
+ * One constant, so the drawer, the first-run screen and the boot recovery
+ * can never disagree about it.
+ */
+export const OPENCODE_GO_DEFAULT_MODEL = "minimax-m3.1-flash";
 
 export type OpenCodeGoEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -102,7 +109,7 @@ export function openCodeGoCatalogEntry(
   snapshot?: ModelRouteSnapshot<Record<string, unknown>>,
 ): import("./catalog.js").CatalogProviderEntry {
   const resolved = resolveOpenCodeGoEndpointPolicy(entry.id, model, snapshot);
-  if (resolved.kind === "refusal") throw new Error(`OpenCode Go model ${model} unavailable: ${resolved.reason}`);
+  if (resolved.kind === "refusal") throw new Error(`OpenCode Go model ${model} is unavailable because ${describeModelRouteRefusal(resolved.reason)}.`);
   const policy = resolved.route.policy;
   const reasoning = policy.capabilities?.reasoning;
   const levels = (reasoning?.effort ?? []).map(level => level === "none" ? "off" as const : level);
