@@ -103,7 +103,7 @@ describe("compact subscription navigation", () => {
     expect(container.querySelector(".welcome-selected-subscription strong")?.textContent).toBe("OpenCode Go");
     expect(container.querySelector<HTMLAnchorElement>(".welcome-key-link")?.href).toBe("https://opencode.ai/console");
     const model = container.querySelector<HTMLInputElement>("input[list=welcome-model-suggestions]")!;
-    expect(model.value).toBe("kimi-k3");
+    expect(model.value).toBe("minimax-m3.1-flash");
     expect([...model.labels!].map(label => label.textContent).join()).toBe("Model");
     expect(container.querySelector(".connection-drawer-model-line button")?.closest("label")).toBeNull();
     expect(container.querySelector(".connection-drawer-identity")).toBeNull();

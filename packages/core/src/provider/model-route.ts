@@ -4,6 +4,24 @@ export const OPENCODE_GO_ANTHROPIC_URL = "https://opencode.ai/inference/go/anthr
 export const OPENCODE_GO_OPENAI_URL = "https://opencode.ai/inference/go/openai/v1";
 
 export type ModelRouteRefusal = "unsupported-provider" | "unknown-model" | "unsupported-model" | "invalid-route";
+
+/**
+ * Plain-English rendering of a refusal, for messages a person reads.
+ * The internal `reason` token stays in the data (schemas keep it); only
+ * the user-facing sentence changes.
+ */
+export function describeModelRouteRefusal(reason: ModelRouteRefusal): string {
+  switch (reason) {
+    case "unsupported-provider":
+      return "it is not an OpenCode Go connection";
+    case "unknown-model":
+      return "it is not in this connection's OpenCode Go model list";
+    case "unsupported-model":
+      return "it is not supported on OpenCode Go";
+    case "invalid-route":
+      return "it has an invalid route in the OpenCode Go model list";
+  }
+}
 export interface ModelRoute<Metadata> {
   transport: ProviderTransport;
   baseUrl: string;

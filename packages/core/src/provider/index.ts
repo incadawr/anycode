@@ -14,7 +14,7 @@ export {
   normalizeAnthropicBaseUrl,
 } from "./anthropic.js";
 export { normalizeExplicitBaseUrl, applyAutomaticModelRoute } from "./endpoint.js";
-export { resolveOpenCodeGoEndpointPolicy, openCodeGoCatalogEntry, openCodeGoModelIds } from "./opencode-go-policy.js";
+export { resolveOpenCodeGoEndpointPolicy, openCodeGoCatalogEntry, openCodeGoModelIds, OPENCODE_GO_DEFAULT_MODEL } from "./opencode-go-policy.js";
 export type { OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
 export type { ModelRouteSnapshot } from "./model-route.js";
 export type { AnthropicEndpointConfig, EndpointConfig } from "./endpoint.js";

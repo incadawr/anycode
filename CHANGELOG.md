@@ -7,6 +7,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- OpenCode Go connections now default to MiniMax M3.1 Flash, and the fallback notice explains why a saved model was replaced.
+
 ## [0.0.92] - 2026-11-08
 
 ### Changed

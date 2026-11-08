@@ -6,6 +6,7 @@
  */
 
 import { resolveOpenCodeGoEndpointPolicy, type OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
+import { describeModelRouteRefusal } from "./model-route.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -153,6 +154,6 @@ export function normalizeExplicitBaseUrl(rawBaseUrl: string): string {
 export function applyAutomaticModelRoute(config: EndpointConfig, snapshot?: import("./model-route.js").ModelRouteSnapshot<Record<string, unknown>>): EndpointConfig {
   if (!config.automaticModelRouting) return config;
   const result = resolveOpenCodeGoEndpointPolicy(config.providerId ?? "", config.model, snapshot);
-  if (result.kind === "refusal") throw new Error(`OpenCode Go model ${config.model} unavailable: ${result.reason}`);
+  if (result.kind === "refusal") throw new Error(`OpenCode Go model ${config.model} is unavailable because ${describeModelRouteRefusal(result.reason)}.`);
   return { ...config, transport: result.route.transport, baseUrl: result.route.baseUrl, goModelPolicy: result.route.policy, modelMetadata: result.route.metadata };
 }

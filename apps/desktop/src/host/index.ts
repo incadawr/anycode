@@ -3189,7 +3189,7 @@ async function boot(): Promise<void> {
     const routingConnectionId = process.env[ENV_CONNECTION_ID]?.trim() || process.env.ANYCODE_MODEL_SETTINGS_CONNECTION_ID?.trim();
     let routeSnapshot = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined)?.modelRoutes;
     const goBoot = envConfig.automaticModelRouting && envConfig.providerId
-      ? resolveGoBootModel(envConfig.providerId, envConfig.model, catalogEntry?.models[0]?.id, routeSnapshot)
+      ? resolveGoBootModel(envConfig.providerId, envConfig.model, routeSnapshot)
       : undefined;
     if (goBoot) envConfig.model = goBoot.model;
     const modelPortFactory = (m: string): ModelPort => {
