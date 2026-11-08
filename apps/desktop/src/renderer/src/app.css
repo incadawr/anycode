@@ -1792,10 +1792,10 @@ body {
 }
 
 .environment-control-header .environment-git-count { flex-shrink: 0; }
+.environment-control-header .environment-trigger { overflow: hidden; }
 
-@container session-header (width < 500px) {
+@container session-header (width < 720px) {
   .environment-control-header .environment-git-count { display: none; }
-  .environment-control-header .environment-trigger { overflow: hidden; }
 }
 
 .environment-trigger {
