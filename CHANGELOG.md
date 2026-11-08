@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Improved account source connection recovery, preview errors, and model pricing visibility.
+
 ### Fixed
 - Account source previews stay valid when unrelated credentials or plugin settings change, and idle sources no longer wake up unnecessarily.
 

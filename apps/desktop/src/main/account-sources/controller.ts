@@ -2,7 +2,7 @@ import type { AccountBudget, AccountCatalogView, AccountSourceKey, AccountSource
 import { AccountHttpError, fetchAccountDocument } from "./client.js";
 
 type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
-export type AccountSourceRuntime = { key: AccountSourceKey; displayName: string; apiBaseUrl: string; accountId: string; connectionId: string; fetcher: Fetcher; apiKey?: string; needsCredential?: boolean; applyCatalog: (catalog: unknown, isCurrent: () => boolean) => Promise<unknown>; withAuthorization?: (fn: () => void) => Promise<void> };
+export type AccountSourceRuntime = { key: AccountSourceKey; displayName: string; apiBaseUrl: string; accountId: string; connectionId: string; fetcher: Fetcher; apiKey?: string; needsCredential?: boolean; needsConnection?: boolean; needsApproval?: boolean; applyCatalog: (catalog: unknown, isCurrent: () => boolean) => Promise<unknown>; withAuthorization?: (fn: () => void) => Promise<void> };
 type Source = AccountSourceRuntime;
 type State = { source: Source; generation: number; abort?: AbortController; inflight?: Promise<void>; view: AccountSourceView; catalog?: AccountCatalogView; lastCatalog: number; lastBudget: number; nextAttempt: number; failures: number };
 const keyOf = (key: AccountSourceKey) => JSON.stringify([key.plugin, key.source]);
@@ -37,12 +37,12 @@ export class AccountSourcesController {
     for (const state of this.states.values()) state.abort?.abort();
     this.states.clear();
     if (this.disposed) return;
-    for (const source of sources) this.states.set(keyOf(source.key), { source, generation: 0, view: { key: source.key, displayName: source.displayName, status: source.needsCredential ? "auth_required" : "loading" }, lastCatalog: -Infinity, lastBudget: -Infinity, nextAttempt: 0, failures: 0 });
+    for (const source of sources) this.states.set(keyOf(source.key), { source, generation: 0, view: { key: source.key, displayName: source.displayName, status: source.needsApproval ? "needs_approval" : source.needsConnection ? "needs_connection" : source.needsCredential ? "auth_required" : "loading" }, lastCatalog: -Infinity, lastBudget: -Infinity, nextAttempt: 0, failures: 0 });
     this.publish(); this.schedule();
   }
   async refresh(key: AccountSourceKey, force = true): Promise<void> {
     const state = this.states.get(keyOf(key));
-    if (!state || this.disposed || state.source.needsCredential) return;
+    if (!state || this.disposed || state.source.needsCredential || state.source.needsConnection || state.source.needsApproval) return;
     if (state.inflight) return state.inflight;
     if (!force && state.nextAttempt > this.now()) return;
     if (!force && this.now() < Math.min(state.lastBudget + BUDGET_INTERVAL, state.lastCatalog + CATALOG_INTERVAL)) return;
@@ -102,7 +102,7 @@ export class AccountSourcesController {
     this.timer = undefined;
     if (this.disposed) return;
     // Authorization failures wait for the user's Refresh.
-    const eligible = [...this.states.values()].filter((state) => !state.source.needsCredential && !state.inflight && !["auth_required", "access_denied", "needs_approval"].includes(state.view.status));
+    const eligible = [...this.states.values()].filter((state) => !state.source.needsCredential && !state.source.needsConnection && !state.source.needsApproval && !state.inflight && !["auth_required", "access_denied", "needs_approval"].includes(state.view.status));
     if (!eligible.length) return;
     const due = (state: State) => Math.max(state.nextAttempt, Math.min(state.lastBudget + BUDGET_INTERVAL, state.lastCatalog + CATALOG_INTERVAL));
     const delay = Math.min(MAX_TIMER_DELAY, Math.max(0, Math.min(...eligible.map(due)) - this.now()));

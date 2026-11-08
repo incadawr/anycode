@@ -1,3 +1,4 @@
+import { accountSourceTransportCompatible } from "../shared/account-sources.js";
 import { CONNECTION_ICON_COLORS } from "../shared/connection-icon.js";
 import { automaticGoBootRoute } from "./go-route.js";
 import { homedir } from "node:os";
@@ -2067,7 +2068,8 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // Normalized comparison: `""` and absent both mean "catalog default".
     const baseUrlChanged =
       req.baseUrl !== undefined && req.baseUrl.trim() !== (existing.baseUrl ?? "").trim();
-    if ((baseUrlChanged || (req.transport !== undefined && normalizedTransport !== existing.transport)) && draft.plugins?.accountSources) {
+    const sourceKind = loaded.settings.provider.custom?.find((record) => record.id === existing.providerId)?.kind;
+    if ((baseUrlChanged || (req.transport !== undefined && sourceKind !== undefined && !accountSourceTransportCompatible(sourceKind, normalizedTransport))) && draft.plugins?.accountSources) {
       draft.plugins.accountSources = draft.plugins.accountSources.filter((binding) => binding.connectionId !== req.id);
     }
     const updatedConnection: ProviderConnection = {

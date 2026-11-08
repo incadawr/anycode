@@ -98,3 +98,37 @@ it("restarts a bound source when its credential is written", async () => {
   await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
   api.dispose();
 });
+
+it("retains visible inactive sources and restores them when eligibility returns", async () => {
+  dir = await mkdtemp(join(tmpdir(), "account-ipc-"));
+  const path = join(dir, "settings.json");
+  const descriptor = accountSourceSchema.parse({ id: "cluster", protocol: "anycode.account.v1", displayName: "Company", gateway: { name: "Company", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible" }, apiBaseUrl: "https://gateway.example.com/account/" });
+  const hash = accountSourceHash(descriptor);
+  scan.mockResolvedValue([{ plugin: "company", descriptor, descriptorHash: hash }]);
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "conn", providerId: "custom:corp" }, { id: "other", providerId: "custom:corp" }];
+  settings.provider.custom = [{ id: "custom:corp", name: "Company", baseUrl: descriptor.gateway.baseUrl, kind: descriptor.gateway.kind, models: [], authOptional: true }];
+  settings.plugins = { accountSources: [{ plugin: "company", source: "cluster", descriptorHash: hash, connectionId: "conn", accountId: "a", ownership: {} }] };
+  await saveSettings(path, settings);
+  const frame = {}; const sender = { mainFrame: frame }; const event = { sender, senderFrame: frame };
+  setIpcGuardMainWindow(() => sender);
+  const fetcher = vi.fn(async () => new Response(null, { status: 503 }));
+  const api = registerAccountSourcesIpc({ fs: {} as FileSystemPort, home: dir, appVersion: "1.0.0", settingsPath: path, getSecret: async () => undefined, fetchFor: () => fetcher, publish: vi.fn(), settingsChanged: vi.fn() });
+  const status = () => (handlers.get(ACCOUNT_SOURCES_GET_CHANNEL)!(event) as { snapshot: { sources: { status: string }[] } }).snapshot.sources[0]?.status;
+  await vi.waitFor(() => expect(status()).toBe("needs_connection"));
+  expect(fetcher).not.toHaveBeenCalled();
+  settings.provider.connections.pop();
+  await saveSettings(path, settings);
+  await api.reconcile();
+  expect(status()).toBe("loading");
+  scan.mockResolvedValue([{ plugin: "company", descriptor, descriptorHash: "b".repeat(64) }]);
+  await api.reconcile();
+  expect(status()).toBe("needs_approval");
+  const calls = fetcher.mock.calls.length;
+  await handlers.get("anycode:account-sources-refresh")!(event, { plugin: "company", source: "cluster" });
+  expect(fetcher).toHaveBeenCalledTimes(calls);
+  scan.mockResolvedValue([{ plugin: "company", descriptor, descriptorHash: hash }]);
+  await api.reconcile();
+  expect(status()).toBe("loading");
+  api.dispose();
+});

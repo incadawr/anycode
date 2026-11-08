@@ -5542,3 +5542,20 @@ it("persists and clears connection icon overrides", async () => {
   expect((await handleConnectionCreate(deps, {providerId:"z-ai", iconText:"ABC"})).ok).toBe(false);
   expect((await handleConnectionCreate(deps, {providerId:"z-ai", iconColor:"#123456"})).ok).toBe(false);
 });
+
+describe("account source connection updates", () => {
+  it.each([
+    [{ transport: "openai-responses" as const }, true],
+    [{ transport: "anthropic-messages" as const }, false],
+    [{ baseUrl: "https://other.example/v1" }, false],
+  ])("retains binding only for compatible changes: %o", async (change, retained) => {
+    const settings = cloneDefaults();
+    settings.provider.connections = [{ id: "conn", providerId: "custom:corp", transport: "openai-chat-completions" }];
+    settings.provider.custom = [{ id: "custom:corp", name: "Corp", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible", models: [] }];
+    const binding = { plugin: "company", source: "cluster", descriptorHash: "a".repeat(64), connectionId: "conn", accountId: "a", ownership: { model: { model: { value: true as const } } } };
+    settings.plugins = { accountSources: [binding] };
+    await saveSettings(settingsPath, settings);
+    expect((await handleConnectionUpdate(makeDeps(), { id: "conn", ...change })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.plugins?.accountSources).toEqual(retained ? [binding] : []);
+  });
+});

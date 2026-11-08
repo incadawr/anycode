@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../../settings/files.js";
-import type { AccountSourceKey, AccountSourcePreviewResult } from "../../shared/account-sources.js";
+import { accountSourceTransportCompatible, type AccountSourceKey, type AccountSourcePreviewResult } from "../../shared/account-sources.js";
 import type { AnycodeSettings, SecretKey } from "../../shared/settings.js";
 import { customProviderSecretKey } from "../host-env.js";
-import { fetchAccountDocument } from "./client.js";
+import { AccountHttpError, fetchAccountDocument } from "./client.js";
 import type { AccountSourceCandidate } from "./candidates.js";
 
 interface Deps {
@@ -22,8 +22,7 @@ export function eligible(settings: AnycodeSettings, candidate: AccountSourceCand
   if (!connection?.providerId.startsWith("custom:")) return;
   const record = settings.provider.custom?.find((c) => c.id === connection.providerId);
   if (!record || record.kind !== candidate.descriptor.gateway.kind || !equalUrl(record.baseUrl, candidate.descriptor.gateway.baseUrl) || (connection.baseUrl && !equalUrl(connection.baseUrl, record.baseUrl))) return;
-  const transports = record.kind === "anthropic" ? ["anthropic-messages"] : ["openai-chat-completions", "openai-responses"];
-  if (connection.transport && !transports.includes(connection.transport)) return;
+  if (!accountSourceTransportCompatible(record.kind, connection.transport)) return;
   if (settings.provider.connections.filter((c) => c.providerId === record.id).length !== 1) return;
   if ((settings.plugins?.accountSources ?? []).some((b) => b.connectionId === connectionId && (b.plugin !== candidate.plugin || b.source !== candidate.descriptor.id))) return;
   return record.id;
@@ -48,8 +47,8 @@ export class AccountBindingService {
       return epoch === this.epoch ? { secret } : undefined;
     });
     if (!credentials) return { ok: false, reason: "connection_invalid" };
+    const controller = new AbortController();
     try {
-      const controller = new AbortController();
       if (epoch !== this.epoch) return { ok: false, reason: "stale" };
       this.previews.add(controller);
       const timer = setTimeout(() => controller.abort(), 10_000);
@@ -61,7 +60,7 @@ export class AccountBindingService {
       const token = randomUUID();
       this.pending.set(token, { candidate: fresh, connectionId, accountId: result.data.accountId, credentialDigest: credentialDigest(credentials.secret), expires: (this.deps.now ?? Date.now)() + 300_000 });
       return { ok: true, token, models: result.data.models.map(({ id, displayName, billing, ratesMicrosPerMillionTokens }) => ({ id, ...(displayName ? { displayName } : {}), billing, ...(ratesMicrosPerMillionTokens ? { ratesMicrosPerMillionTokens } : {}) })) };
-    } catch { return { ok: false, reason: "unavailable" }; }
+    } catch (error) { return { ok: false, reason: error instanceof AccountHttpError && error.status === 401 ? "auth_required" : error instanceof AccountHttpError && error.status === 403 ? "access_denied" : controller.signal.aborted || (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) ? "timeout" : "unavailable" }; }
   }
   async bind(token: string): Promise<boolean> {
     const pending = this.pending.get(token);
