@@ -127,6 +127,20 @@ it("backs off when authorization skips a received budget", async () => {
   expect(fetcher).toHaveBeenCalledTimes(3);
   controller.dispose();
 });
+it.each([401, 403])("backs off when authorization suppresses a %i response", async (status) => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn(async () => new Response(null, { status }));
+  const controller = new AccountSourcesController(vi.fn());
+  controller.replace([{ ...source(fetcher), withAuthorization: async () => {} }]);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(vi.getTimerCount()).toBe(1);
+  await vi.advanceTimersByTimeAsync(899);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  controller.dispose();
+});
 it("rearms after an early timer and clamps long retry delays", async () => {
   vi.useFakeTimers();
   let now = 1_000_000;
