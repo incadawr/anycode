@@ -210,7 +210,7 @@ describe("session peer matrix on the real TabHostManager", () => {
     expect(automatic.envelope).toMatchObject({ recipientSessionId: "s", replyTo: messageId });
   });
 
-  it.each(pairs)("terminal-driven reply: %s target auto-answers a %s sender only while it holds authority", async (senderEngine, targetEngine) => {
+  it.each(pairs)("terminal-driven reply: a %s sender gets an automatic answer from a %s target only while the target holds authority", async (senderEngine, targetEngine) => {
     const rig = await matrixRig(senderEngine, targetEngine);
     const results = () => [...rig.broker.ledger.messages.values()].filter(r => r.envelope.kind === "task_result");
     const ask = async (sequence: number) => {
