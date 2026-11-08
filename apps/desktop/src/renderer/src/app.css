@@ -4903,6 +4903,52 @@ button.environment-menu-row:hover,
   border-color: var(--border-strong);
 }
 
+/* ── Codex speed toggle (composer): the lightning bolt replaces the old
+   text chip — the attach button's 28px footprint, so the chip row keeps one
+   fixed height. Off = the icon alone; on = the icon plus the ×1.5 multiplier.
+   The state rides aria-pressed (same accent tint as the orchestrate toggle). ── */
+.speed-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-full);
+  background: var(--bg-control);
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.speed-toggle:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.speed-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.speed-toggle[aria-pressed="true"] {
+  width: auto;
+  padding: 0 7px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  border-color: var(--border-strong);
+}
+
+.speed-toggle-mult {
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 /* Footer hint: default visually hidden AND out of flow — never
    display:none (it is the textarea's aria-describedby target) and never a
    footer grid row, so a narrow split-pane composer is a single footer row.

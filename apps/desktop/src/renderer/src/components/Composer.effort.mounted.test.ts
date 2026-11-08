@@ -118,7 +118,11 @@ describe("Composer — native effort handoff", () => {
     await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
     try {
       const speed = container.querySelector<HTMLButtonElement>('button[aria-label="Codex speed"]')!;
-      expect(speed.textContent).toBe("Speed");
+      // Icon-only toggle: the tier is unknown, so the bolt is off and the
+      // ×1.5 multiplier is not on screen.
+      expect(speed.getAttribute("aria-pressed")).toBe("false");
+      expect(speed.textContent).not.toContain("×1.5");
+      expect(speed.textContent).not.toContain("Speed");
       await act(async () => speed.click());
       expect(send).toHaveBeenCalledWith("tab-1", { type: "set_engine_fast", fast: true });
     } finally { await act(async () => root.unmount()); }
@@ -134,9 +138,27 @@ describe("Composer — native effort handoff", () => {
     try {
       expect(container.querySelector('button[aria-label="Engine model and effort"]')?.textContent).toContain("Fast");
       const speed = container.querySelector<HTMLButtonElement>('button[aria-label="Codex speed"]')!;
+      expect(speed.getAttribute("aria-pressed")).toBe("true");
+      expect(speed.textContent).toContain("×1.5");
       expect(speed.title).toContain("consumes your usage limit faster");
       await act(async () => speed.click());
       expect(send).toHaveBeenCalledWith("tab-1", { type: "set_engine_fast", fast: false });
+    } finally { await act(async () => root.unmount()); }
+  });
+  it("marks the speed toggle on while a Fast change waits for the next turn", async () => {
+    const store = nativeStore();
+    store.setState({ engine: { ...store.getState().engine!, fast: true }, pendingEngineChange: { fast: false } });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
+    try {
+      const speed = container.querySelector<HTMLButtonElement>('button[aria-label="Codex speed"]')!;
+      // The pending change wins over the applied tier: the bolt reads off.
+      expect(speed.getAttribute("aria-pressed")).toBe("false");
+      expect(speed.textContent).not.toContain("×1.5");
+      expect(speed.title).toContain("(next turn)");
+      expect(speed.title).toContain("consumes your usage limit faster");
     } finally { await act(async () => root.unmount()); }
   });
 

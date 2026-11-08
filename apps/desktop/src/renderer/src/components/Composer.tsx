@@ -55,7 +55,7 @@ import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
 import { RolePickerDialog } from "./RolePickerDialog.js";
 import { needsRolePicker, orchestrateToggleNeedsRolePicker } from "../orchestrate-start.js";
-import { ArrowUp, ImageIcon, Orchestrate, Stop, X } from "./icons.js";
+import { ArrowUp, ImageIcon, Lightning, Orchestrate, Stop, X } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson): the same fixed-position
 // viewport-clamp ModelPill's own popover uses to escape `.composer-footer-*`'s
 // `overflow:hidden` (see ModelPill.tsx's import comment) — the ctx-popover
@@ -2369,10 +2369,12 @@ export function Composer() {
       : text.trim().length === 0 && attachedImages.length === 0
         ? "Type a message to send"
         : undefined;
-  // The speed chip mirrors the model pill's label containment: the span
-  // ellipsizes when the row runs out instead of painting past the pill
-  // border, and the tooltip carries the full state beside the explanation.
+  // The speed toggle is icon-only (a lightning bolt, like the orchestrate
+  // toggle): the old text chip wrapped to two lines and inflated the chip row.
+  // The state rides aria-pressed, the full label rides the tooltip, and the
+  // ×1.5 multiplier only shows while Fast is on.
   const speedLabel = `${engine?.fast === undefined ? "Speed" : engine.fast ? "Fast" : "Standard"}${pendingEngineChange?.fast !== undefined ? ` → ${pendingEngineChange.fast ? "Fast" : "Standard"} (next turn)` : ""}`;
+  const speedFastOn = pendingEngineChange?.fast ?? engine?.fast ?? false;
 
   return (
     <div
@@ -2628,8 +2630,17 @@ export function Composer() {
             />
           )}
           {engine?.id === "codex" && engine.model?.available.find((model) => model.id === (pendingEngineChange?.model ?? engine.model?.current))?.supportsFast && (
-            <button type="button" className="model-pill-chip" aria-label="Codex speed" disabled={engineControlDisabled(turn.status, queueInFlight, ready)} title={`${speedLabel}. Fast is quicker but consumes your usage limit faster. Changes apply on the next turn.`} onClick={() => sendToHost({ type: "set_engine_fast", fast: !(pendingEngineChange?.fast ?? engine.fast) })}>
-              <span className="model-pill-label">{speedLabel}</span>
+            <button
+              type="button"
+              className="speed-toggle"
+              aria-label="Codex speed"
+              aria-pressed={speedFastOn}
+              disabled={engineControlDisabled(turn.status, queueInFlight, ready)}
+              title={`${speedLabel}. Fast is quicker but consumes your usage limit faster. Changes apply on the next turn.`}
+              onClick={() => sendToHost({ type: "set_engine_fast", fast: !(pendingEngineChange?.fast ?? engine.fast) })}
+            >
+              <Lightning />
+              {speedFastOn && <span className="speed-toggle-mult">×1.5</span>}
             </button>
           )}
           {supportsImages && (

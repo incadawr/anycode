@@ -7,6 +7,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- The Codex speed control in the composer is now a lightning toggle that shows ×1.5 when Fast is on.
+
 ## [0.0.92] - 2026-11-08
 
 ### Changed

@@ -481,6 +481,15 @@ export function Orchestrate(props: IconProps) {
   );
 }
 
+/** Lightning — a bolt glyph (the composer's Fast-tier speed toggle). */
+export function Lightning(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <path d="M9.25 1.75L4.75 8.5h3.25L6.75 14.25 11.25 7.5H8l1.25-5.75z" />
+    </Icon>
+  );
+}
+
 /** Sparkle — a model/assistant identity glyph (Settings → Claude nav icon; distinct from Codex's Cube). */
 export function Sparkle(props: IconProps) {
   return (
