@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- The macOS app icon now has rounded transparent corners and the standard
+  size and margin, instead of a square icon with black corners.
+
 ## [0.0.92] - 2026-11-08
 
 ### Changed
