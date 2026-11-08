@@ -7,6 +7,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Account source previews stay valid when unrelated credentials or plugin settings change.
+
 ## [0.0.92] - 2026-11-08
 
 ### Changed

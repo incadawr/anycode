@@ -96,5 +96,14 @@ export function registerAccountSourcesIpc(deps: Deps) {
   guardedIpcHandle(ACCOUNT_SOURCES_RESET_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await binding.reset(key.data); });
   guardedIpcHandle(ACCOUNT_SOURCES_REFRESH_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await controller.refresh(key.data); });
   void reconcile(true);
-  return { reconcile, removePlugin: (name: string) => binding.removePlugin(name), dispose: () => { disposed = true; generation++; binding.invalidate(); controller.dispose(); } };
+  const secretWritten = async (key: SecretKey) => {
+    const { settings } = await loadSettings(deps.settingsPath);
+    if (disposed) return;
+    const bound = settings.plugins?.accountSources ?? [];
+    if (bound.some((b) => {
+      const connection = settings.provider.connections.find((c) => c.id === b.connectionId);
+      return connection && key === customProviderSecretKey(connection.providerId);
+    })) await reconcile(true);
+  };
+  return { reconcile, secretWritten, removePlugin: (name: string) => binding.removePlugin(name), dispose: () => { disposed = true; generation++; binding.invalidate(); controller.dispose(); } };
 }

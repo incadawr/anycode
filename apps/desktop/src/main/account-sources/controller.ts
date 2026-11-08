@@ -37,13 +37,14 @@ export class AccountSourcesController {
     this.states.clear();
     if (this.disposed) return;
     for (const source of sources) this.states.set(keyOf(source.key), { source, generation: 0, view: { key: source.key, displayName: source.displayName, status: source.needsCredential ? "auth_required" : "loading" }, lastCatalog: -Infinity, lastBudget: -Infinity, nextAttempt: 0, failures: 0 });
-    this.publish(); this.schedule(0);
+    this.publish(); this.schedule();
   }
   async refresh(key: AccountSourceKey, force = true): Promise<void> {
     const state = this.states.get(keyOf(key));
     if (!state || this.disposed || state.source.needsCredential) return;
     if (state.inflight) return state.inflight;
     if (!force && state.nextAttempt > this.now()) return;
+    if (!force && this.now() < Math.min(state.lastBudget + BUDGET_INTERVAL, state.lastCatalog + CATALOG_INTERVAL)) return;
     const generation = ++state.generation;
     const abort = new AbortController(); state.abort = abort;
     const timeout = setTimeout(() => abort.abort(), 10_000);
@@ -87,13 +88,18 @@ export class AccountSourcesController {
       if (failed) state.nextAttempt = Math.max(state.nextAttempt, now + Math.min(300_000, 1000 * 2 ** Math.min(state.failures, 8)));
       else state.nextAttempt = 0;
     };
-    state.inflight = run().finally(() => { clearTimeout(timeout); state.inflight = undefined; if (state.abort === abort) state.abort = undefined; this.schedule(BUDGET_INTERVAL); });
+    state.inflight = run().finally(() => { clearTimeout(timeout); state.inflight = undefined; if (state.abort === abort) state.abort = undefined; this.schedule(); });
     return state.inflight;
   }
-  private schedule(delay: number): void {
+  private schedule(): void {
     if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
     if (this.disposed) return;
-    this.timer = setTimeout(() => { for (const state of this.states.values()) if (state.nextAttempt <= this.now()) void this.refresh(state.source.key, false); this.schedule(1000); }, delay);
+    const eligible = [...this.states.values()].filter((state) => !state.source.needsCredential && !state.inflight && !["auth_required", "access_denied", "needs_approval"].includes(state.view.status));
+    if (!eligible.length) return;
+    const due = (state: State) => Math.max(state.nextAttempt, Math.min(state.lastBudget + BUDGET_INTERVAL, state.lastCatalog + CATALOG_INTERVAL));
+    const delay = Math.max(0, Math.min(...eligible.map(due)) - this.now());
+    this.timer = setTimeout(() => { this.timer = undefined; for (const state of eligible) if (due(state) <= this.now()) void this.refresh(state.source.key, false); }, delay);
   }
   dispose(): void { this.disposed = true; if (this.timer) clearTimeout(this.timer); for (const state of this.states.values()) state.abort?.abort(); this.states.clear(); }
 }
