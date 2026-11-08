@@ -42,6 +42,18 @@ export interface GitUiBridge {
 /** Ceiling on queued (incl. in-flight) git commands; a flood beyond this is refused, not enqueued (§6#5). */
 export const MAX_PENDING_GIT_COMMANDS = 8;
 
+/**
+ * Whether the checkout's branch is fixed by AnyCode: a worktree it created, or a
+ * child session's worktree (marked through the environment). Every engine boot
+ * uses this so the host refuses the same switches the renderer locks.
+ */
+export function isManagedWorktreeBranchLocked(
+  meta: { worktree?: { ownedByAnyCode?: boolean } } | null | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  return meta?.worktree?.ownedByAnyCode === true || env.ANYCODE_MANAGED_CHILD_WORKTREE === "1";
+}
+
 const GIT_UNAVAILABLE_REASON = "git is unavailable in this workspace (not a git repository)";
 const GIT_QUEUE_FULL_REASON = "git queue full; try again";
 const STAGE_UNAVAILABLE_REASON = "stage/unstage unavailable on this git port";

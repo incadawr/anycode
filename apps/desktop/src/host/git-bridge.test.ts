@@ -22,7 +22,7 @@ import type {
 import type { GitCommand, HostToUiMessage } from "../shared/protocol.js";
 import { GIT_STATUS_MAX_FILES, GIT_WIRE_DIFF_MAX_CHARS } from "../shared/protocol.js";
 import type { Outbound } from "./session.js";
-import { GitBridge, MAX_PENDING_GIT_COMMANDS, projectGitStatus } from "./git-bridge.js";
+import { GitBridge, isManagedWorktreeBranchLocked, MAX_PENDING_GIT_COMMANDS, projectGitStatus } from "./git-bridge.js";
 
 // ── message narrowing helpers ───────────────────────────────────────────────
 type GitResultMsg = Extract<HostToUiMessage, { type: "git_result" }>;
@@ -653,5 +653,27 @@ describe("GitBridge — managed worktree branch lock", () => {
       expect(git.switchCalls).toEqual(["other"]);
       expect(git.createCalls).toEqual([{ name: "feat", switch: true }]);
     }
+  });
+});
+
+describe("isManagedWorktreeBranchLocked", () => {
+  it("locks an AnyCode-owned worktree", () => {
+    expect(isManagedWorktreeBranchLocked({ worktree: { ownedByAnyCode: true } }, {})).toBe(true);
+  });
+
+  it("leaves an external worktree and a plain checkout switchable", () => {
+    expect(isManagedWorktreeBranchLocked({ worktree: { ownedByAnyCode: false } }, {})).toBe(false);
+    expect(isManagedWorktreeBranchLocked({}, {})).toBe(false);
+  });
+
+  it("locks a managed child worktree marked through the environment", () => {
+    expect(isManagedWorktreeBranchLocked({}, { ANYCODE_MANAGED_CHILD_WORKTREE: "1" })).toBe(true);
+    expect(isManagedWorktreeBranchLocked(undefined, { ANYCODE_MANAGED_CHILD_WORKTREE: "1" })).toBe(true);
+    expect(isManagedWorktreeBranchLocked(undefined, { ANYCODE_MANAGED_CHILD_WORKTREE: "0" })).toBe(false);
+  });
+
+  it("is unlocked without session meta or environment marker", () => {
+    expect(isManagedWorktreeBranchLocked(undefined, {})).toBe(false);
+    expect(isManagedWorktreeBranchLocked(null, {})).toBe(false);
   });
 });
