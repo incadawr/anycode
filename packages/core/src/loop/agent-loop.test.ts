@@ -5826,6 +5826,45 @@ describe("AgentLoop.runTurn — provider_quota forwarding", () => {
 });
 
 describe("reasoning compactor failure persistence", () => {
+  it.each(["failed", "cancelled"] as const)("replays the full original only on %s compaction", async mode => {
+    const { compactReasoningParts } = await import("../provider/reasoning-compactor.js");
+    const { toSdkMessages } = await import("../provider/sdk-mapping.js");
+    const { telemetryRecordFor } = await import("../telemetry/records.js");
+    const controller = new AbortController();
+    const source = { transport: "openai-chat-completions" as const, baseUrl: "http://fake.invalid", model: "fake", replayFactual: true };
+    const raw = new MockModelPort([[
+      { type: "reasoning_start", id: "r" },
+      { type: "reasoning_delta", id: "r", text: "abc😀extra" },
+      { type: "reasoning_end", id: "r", source },
+      { type: "finish", finishReason: "stop", usage: {} },
+    ]]);
+    const modelPort: ModelPort = {
+      streamText: request => raw.streamText(request),
+      reasoningReplaySource: () => source,
+      compactReasoning: parts => compactReasoningParts(parts, 1, "fake", async () => {
+        if (mode === "cancelled") controller.abort();
+        return { text: "", usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 } };
+      }),
+    };
+    const records: unknown[] = [];
+    const loop = makeLoop({ modelPort, eventTap: event => { records.push(telemetryRecordFor(event)); } });
+    await collect(loop.runTurn("go", { signal: controller.signal }));
+    const messages = loop.history.toMessages();
+    const mapped = JSON.stringify(toSdkMessages(messages, source.transport, source));
+    if (mode === "failed") {
+      expect(mapped).toContain("abc😀extra");
+      expect(messages[1]).toMatchObject({ content: expect.arrayContaining([expect.objectContaining({ text: "abc😀extra", factualSummary: expect.objectContaining({ text: "abc😀extra", tokenCap: 1 }) })]) });
+    } else {
+      expect(mapped).not.toContain("abc");
+      expect(messages[1]).toMatchObject({ content: expect.arrayContaining([expect.objectContaining({ text: "abc😀extra" })]) });
+      expect(JSON.stringify(messages[1])).not.toContain("factualSummary");
+    }
+    expect(records).toContainEqual(expect.objectContaining({
+      t: "context_usage", reasoningCompactorStatus: mode,
+      reasoningCompactorUsage: [{ inputTokens: 12, outputTokens: 3, totalTokens: 15 }],
+    }));
+  });
+
   it.each(["failed", "cancelled", "empty"] as const)("persists completed response on %s compaction", async mode => {
     const { ReasoningCompactionError } = await import("../provider/reasoning-compactor.js");
     const controller = new AbortController();
@@ -5865,6 +5904,30 @@ describe("reasoning compactor failure persistence", () => {
   });
 });
 
+it("reports no compactor usage when short reasoning is replayed as is", async () => {
+  const { compactReasoningParts } = await import("../provider/reasoning-compactor.js");
+  const source = { transport: "openai-chat-completions" as const, baseUrl: "http://fake.invalid", model: "fake", replayFactual: true };
+  const raw = new MockModelPort([[
+    { type: "reasoning_start", id: "r" },
+    { type: "reasoning_delta", id: "r", text: "short reasoning" },
+    { type: "reasoning_end", id: "r", source },
+    { type: "finish", finishReason: "stop", usage: {} },
+  ]]);
+  const generate = vi.fn();
+  const modelPort: ModelPort = {
+    streamText: request => raw.streamText(request),
+    reasoningReplaySource: () => source,
+    compactReasoning: parts => compactReasoningParts(parts, 500, "fake", generate),
+  };
+  const loop = makeLoop({ modelPort });
+  const events = await collect(loop.runTurn("go"));
+  expect(generate).not.toHaveBeenCalled();
+  const usage = events.find(event => event.type === "context_usage");
+  expect(usage).toBeDefined();
+  expect(usage).not.toHaveProperty("reasoningCompactorUsage");
+  expect(usage).not.toHaveProperty("reasoningCompactorStatus");
+});
+
 it("persists and traces a factual summary through the CLI wrapper chain", async () => {
   const { SwitchableModelPort } = await import("../cli/model.js");
   const { compactReasoningParts } = await import("../provider/reasoning-compactor.js");
@@ -5877,9 +5940,11 @@ it("persists and traces a factual summary through the CLI wrapper chain", async 
     transport: "openai-chat-completions", baseUrl: "http://fake.invalid",
     model: "fake", replayFactual: true,
   };
+  // Longer than the cap, so the compactor is actually called.
+  const reasoning = "original reasoning " + "step detail ".repeat(400);
   const raw = new MockModelPort([[
     { type: "reasoning_start", id: "r" },
-    { type: "reasoning_delta", id: "r", text: "original reasoning" },
+    { type: "reasoning_delta", id: "r", text: reasoning },
     { type: "reasoning_end", id: "r", source },
     { type: "text_delta", id: "t", text: "answer" },
     { type: "finish", finishReason: "stop", usage: {} },
@@ -5899,7 +5964,7 @@ it("persists and traces a factual summary through the CLI wrapper chain", async 
   await collect(loop.runTurn("go"));
   expect(compactReasoning).toHaveBeenCalledTimes(1);
   expect(loop.history.toMessages()[1]).toMatchObject({ content: [
-    { type: "reasoning", text: "original reasoning", factualSummary: { text: summary } },
+    { type: "reasoning", text: reasoning, factualSummary: { text: summary } },
     { type: "text", text: "answer" },
   ] });
   expect(records).toContainEqual(expect.objectContaining({

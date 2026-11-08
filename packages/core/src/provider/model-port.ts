@@ -936,7 +936,7 @@ export class AiSdkModelPort implements ModelPort {
         system,
         prompt,
       });
-    });
+    }, signal);
   }
 
   reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]): ReasoningSource | undefined {

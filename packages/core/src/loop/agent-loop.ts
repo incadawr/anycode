@@ -1605,14 +1605,17 @@ export class AgentLoop {
             assistantParts = await this.config.modelPort.compactReasoning(assistantParts, signal);
           }
           reasoningCompactorUsage = assistantParts.flatMap(part =>
-            part.type === "reasoning" && part.factualSummary !== undefined
+            // Empty usage marks reasoning replayed without a compactor call.
+            part.type === "reasoning" && part.factualSummary !== undefined &&
+            Object.keys(part.factualSummary.usage).length > 0
               ? [part.factualSummary.usage] : [],
           );
         } catch (error) {
           // A completed response must survive compactor failure, including cancellation.
           reasoningCompactorStatus = signal?.aborted ? "cancelled" : "failed";
-          if (error instanceof ReasoningCompactionError && error.usage !== undefined) {
-            reasoningCompactorUsage = [error.usage];
+          if (error instanceof ReasoningCompactionError) {
+            if (error.usage !== undefined) reasoningCompactorUsage = [error.usage];
+            if (!signal?.aborted && factualCompaction && error.fallback !== undefined) assistantParts = error.fallback;
           }
         }
         if (assistantParts.length > 0) this.history.append(

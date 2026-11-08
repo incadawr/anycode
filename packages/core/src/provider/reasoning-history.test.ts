@@ -7,7 +7,9 @@ vi.mock("ai", async original => ({ ...await original<typeof import("ai")>(), gen
 import { AiSdkModelPort, reasoningReplaySource } from "./model-port.js";
 const config = { transport: "openai-chat-completions" as const, baseUrl: "http://fake.invalid", model: "fake", apiKey: "fake", preserveReasoning: true };
 const source = reasoningReplaySource(config)!;
-const parts: AssistantPart[] = [{ type: "reasoning", text: "original reasoning", source }, { type: "text", text: "answer" }];
+// Longer than the 500-token cap, so factual mode has to compact it.
+const longReasoning = "original reasoning " + "step detail ".repeat(400);
+const parts: AssistantPart[] = [{ type: "reasoning", text: longReasoning, source }, { type: "text", text: "answer" }];
 const validSummary = [
   "Goal/stage: fix.",
   "Verified facts: none.",
@@ -32,7 +34,7 @@ it("retains provider gates in every mode", () => {
     expect(reasoningReplaySource({ ...config, transport: "openai-responses", reasoningHistory: mode }) !== undefined).toBe(mode === "full");
   }
 });
-it("summarizes once, keeps the audit original, bounds bytes and records separate usage", async () => {
+it("summarizes once, keeps the audit original and records separate usage", async () => {
   generate.mockResolvedValue({ text: validSummary, usage: { inputTokens: 100, outputTokens: 15, totalTokens: 115 } });
   const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500", reasoningCompactorModel: "compactor" });
   const compacted = await port.compactReasoning(parts);
@@ -40,8 +42,8 @@ it("summarizes once, keeps the audit original, bounds bytes and records separate
   expect(generate).toHaveBeenCalledTimes(1);
   const first = compacted[0];
   if (first === undefined || first.type !== "reasoning") throw Error("missing reasoning");
-  expect(first.text).toBe("original reasoning");
-  expect(Buffer.byteLength(first.factualSummary!.text)).toBeLessThanOrEqual(500);
+  expect(first.text).toBe(longReasoning);
+  expect(first.factualSummary!.text).toBe(validSummary);
   expect(first.factualSummary!.usage).toEqual({ inputTokens: 100, outputTokens: 15, totalTokens: 115 });
   expect(Object.isFrozen(first.factualSummary)).toBe(true);
   expect(JSON.stringify(toSdkMessages([{ role: "assistant", content: compacted }], config.transport, reasoningReplaySource({ ...config, reasoningHistory: "full" })))).toContain("original reasoning");
@@ -55,6 +57,7 @@ it("summarizes once, keeps the audit original, bounds bytes and records separate
 });
 it("uses one immutable summary for all reasoning blocks, including after hydration", async () => {
   generate.mockClear();
+  generate.mockResolvedValue({ text: validSummary, usage: { inputTokens: 100, outputTokens: 15, totalTokens: 115 } });
   const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500" });
   const compacted = await port.compactReasoning([...parts, { type: "reasoning", text: "second block", source }]);
   expect(generate).toHaveBeenCalledTimes(1);
@@ -62,7 +65,7 @@ it("uses one immutable summary for all reasoning blocks, including after hydrati
   const hydrated = JSON.parse(JSON.stringify(compacted));
   expect(await port.compactReasoning(hydrated)).toEqual(hydrated);
   expect(generate).toHaveBeenCalledTimes(1);
-  expect(compacted.filter(p => p.type === "reasoning").map(p => p.factualSummary?.text).join("").length).toBeLessThanOrEqual(500);
+  expect(compacted.filter(p => p.type === "reasoning").map(p => p.factualSummary?.text).join("")).toBe(validSummary);
 });
 
 it("unset replay ignores stored summaries byte for byte, while factual omits unsummarized parts", () => {
@@ -83,22 +86,34 @@ it("unset replay ignores stored summaries byte for byte, while factual omits uns
   }
 });
 
-it.each(["", "  ", "a".repeat(101)])("rejects unusable summary %j without mutating originals", async text => {
+it.each(["", "  "])("rejects empty summary %j with the full original fallback", async text => {
   generate.mockResolvedValueOnce({ text, usage: { inputTokens: 12, outputTokens: 3 } });
   const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500" });
-  await expect(port.compactReasoning(parts)).rejects.toMatchObject({
-    usage: { inputTokens: 12, outputTokens: 3 },
-  });
+  const error = await port.compactReasoning(parts).catch(e => e);
+  expect(error).toMatchObject({ usage: { inputTokens: 12, outputTokens: 3 } });
+  const fallback = error.fallback[0].factualSummary.text;
+  expect(fallback).toBe(longReasoning);
   expect(parts[0]).not.toHaveProperty("factualSummary");
 });
 
-it("retains complete lines and reserves separate reasoning headroom", async () => {
-  generate.mockResolvedValueOnce({ text: validSummary + "\n" + "x".repeat(500), usage: {} });
+it("replays reasoning within the cap as is, without a compactor call", async () => {
+  generate.mockClear();
+  const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500" });
+  const short: AssistantPart[] = [{ type: "reasoning", text: "short reasoning", source }, { type: "text", text: "answer" }];
+  const compacted = await port.compactReasoning(short);
+  expect(generate).not.toHaveBeenCalled();
+  expect(compacted[0]).toMatchObject({ text: "short reasoning", factualSummary: { text: "short reasoning", usage: {} } });
+});
+
+it("keeps an over-long summary whole and reserves separate reasoning headroom", async () => {
+  const text = validSummary + "\n" + "x ".repeat(2000);
+  generate.mockResolvedValueOnce({ text, usage: {} });
   const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500" });
   const compacted = await port.compactReasoning(parts);
-  expect(compacted[0]).toMatchObject({ factualSummary: { text: validSummary } });
+  const kept = (compacted[0] as { factualSummary: { text: string } }).factualSummary.text;
+  expect(kept).toBe(text);
   expect(generate.mock.lastCall![0].maxOutputTokens).toBeGreaterThan(500);
-  expect(generate.mock.lastCall![0].system).toContain("at most 500 tokens");
+  expect(generate.mock.lastCall![0].system).toContain("aim for about 500 tokens");
 });
 
 it("replays a usable factual summary even when the first reasoning block was empty", async () => {
@@ -116,17 +131,13 @@ it("replays a usable factual summary even when the first reasoning block was emp
 });
 
 it.each([
-  { text: "arbitrary prose", cap: 500 },
-  { text: validSummary.replace("Goal/stage: fix.", "Goal/stageX"), cap: 500 },
-  { text: validSummary, cap: Buffer.byteLength(validSummary) - 1 },
-  { text: validSummary.replace("Next intended action: read.", "Next intended action: "), cap: 500 },
-])("rejects summaries missing required fields after truncation ($cap)", async ({ text, cap }) => {
+  { text: "arbitrary prose", expected: "arbitrary prose" },
+  { text: validSummary.replace("Next intended action: read.", "Next intended action: "), expected: validSummary.replace("Next intended action: read.", "Next intended action: ") },
+])("keeps a summary missing fields ($expected.length)", async ({ text, expected }) => {
   generate.mockResolvedValueOnce({ text, usage: { inputTokens: 12, outputTokens: 3 } });
-  const port = new AiSdkModelPort({ ...config, reasoningHistory: `factual_${cap}` });
-  await expect(port.compactReasoning(parts)).rejects.toMatchObject({
-    usage: { inputTokens: 12, outputTokens: 3 },
-  });
-  expect(parts[0]).not.toHaveProperty("factualSummary");
+  const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500" });
+  const compacted = await port.compactReasoning(parts);
+  expect(compacted[0]).toMatchObject({ factualSummary: { text: expected, usage: { inputTokens: 12, outputTokens: 3 } } });
 });
 
 it("resolves a factual compactor through its own Go route and policy", async () => {
@@ -141,4 +152,20 @@ it("resolves a factual compactor through its own Go route and policy", async () 
   expect(options.model.modelId).toBe("grok-4.7");
   expect(options.providerOptions.openai.store).toBe(false);
   expect(options.providerOptions.openai.reasoningEffort).toBeUndefined();
+});
+
+it("preserves the full original reasoning on generation error", async () => {
+  generate.mockRejectedValueOnce(new Error("compactor down"));
+  const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500" });
+  const reasoning = "  " + "original detail ".repeat(1000) + "  ";
+  const error = await port.compactReasoning([{ type: "reasoning", text: reasoning, source }]).catch(e => e);
+  expect(error.fallback[0].factualSummary.text).toBe(reasoning);
+});
+
+it("builds no fallback for a cancelled compaction", async () => {
+  const controller = new AbortController();
+  generate.mockImplementationOnce(async () => { controller.abort(); throw new Error("aborted"); });
+  const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_500" });
+  const error = await port.compactReasoning(parts, controller.signal).catch(e => e);
+  expect(error.fallback).toBeUndefined();
 });
