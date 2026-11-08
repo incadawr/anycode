@@ -4,7 +4,7 @@ import { SUBAGENT_BASH_RESULT_MAX_BYTES } from "../types/config.js";
 import type { AnyToolDefinition, ToolDefinition, ToolMetadata } from "../types/tools.js";
 import type { WebSearchInput, WebSearchOutput } from "./schemas.js";
 import { gitTool } from "./git.js";
-import { readTool } from "./read.js";
+import { defaultImageCapableReadTool } from "./read-image.js";
 import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
 import { bashTool } from "./bash.js";
@@ -99,7 +99,7 @@ export interface CreateDefaultToolRegistryOptions {
  */
 export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOptions): ToolRegistry {
   const registry = new ToolRegistry();
-  registry.register(readTool);
+  registry.register(defaultImageCapableReadTool);
   registry.register(gitTool);
   registry.register(writeTool);
   registry.register(editTool);

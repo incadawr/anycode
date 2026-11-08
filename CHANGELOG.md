@@ -7,6 +7,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Native sessions can read images with image-capable models.
+
 ## [0.0.92] - 2026-11-08
 
 ### Changed

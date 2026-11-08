@@ -1,24 +1,16 @@
 /**
- * Image-capable Read wrapper (Phase 6 slice 6.2, design §2-C5). Registered by the
- * CLI wiring OVER the default Read (same name "Read"); the default tool registry,
- * the desktop model-facing surface, and every subagent registry never see it
-
-
- * needsApproval, hooks, rules — is byte-identical and no new tool NAME exists.
+ * Image-capable Read wrapper registered under the same name as Read.
+ * Metadata, approval rules, hooks and input schema are shared with text Read.
  *
  * Handler routing (design §2-C5, in order):
  *   1. non-image extension                 -> delegate to inner Read byte-for-byte.
  *   2. no binary-read capability on the fs -> delegate (fail-soft to today).
  *   3. read bytes; a read error returns the inner Read's error shape (read.ts:24-26).
  *   4. bytes do not sniff as a supported image (text under a .png) -> delegate.
- *   5. the current model is not image-capable -> explicit, actionable error
- *      naming the ANYCODE_IMAGE_INPUT override (fail-closed, never a silent drop).
+ *   5. the current model cannot receive images -> text fallback or an error.
  *   6. over the per-image byte cap -> explicit size+limit error.
  *   7. otherwise attach: a ReadOutput-shaped placeholder (so the default
- *      formatResultForModel renders it unchanged) + the ImageAttachment on
-
- *
-
+ *      formatResultForModel renders it unchanged) plus an image attachment.
  */
 
 import type { ToolDefinition } from "../types/tools.js";
@@ -34,8 +26,9 @@ function basenameOf(path: string): string {
   return slash === -1 ? path : path.slice(slash + 1);
 }
 
-/* */
-export const imageCapableReadTool: ToolDefinition<ReadInput, ReadOutput> = {
+/** The default registry retains text fallback; the CLI retains its explicit error. */
+function createImageCapableReadTool(textFallback: boolean): ToolDefinition<ReadInput, ReadOutput> {
+return {
 
   // tool name. NOT a copy — the shared reference makes the invariant structural
   // (the test asserts imageCapableReadTool.metadata === readTool.metadata).
@@ -65,16 +58,10 @@ export const imageCapableReadTool: ToolDefinition<ReadInput, ReadOutput> = {
       return readTool.handler(input, ctx);
     }
 
-    // history, with an actionable error naming the override. plan §3
-    // widens this: a blind model with a configured vision recognizer attaches
-    // exactly like a sighted one — agent-loop.ts's tool-result annotation
-    // (slice B1) appends the model-visible stub afterward.
     const canAttachImage = ctx.media?.imageInputEnabled() === true || ctx.media?.recognizerConfigured?.() === true;
     if (!canAttachImage) {
-      return {
-        ok: false,
-        error: `${input.file_path} is an image, and the current model is not marked image-capable (switch /model, or set ANYCODE_IMAGE_INPUT=on to override)`,
-      };
+      if (textFallback) return readTool.handler(input, ctx);
+      return { ok: false, error: `${input.file_path} is an image, and the current model is not marked image-capable (switch /model, or set ANYCODE_IMAGE_INPUT=on to override)` };
     }
     if (bytes.length > IMAGE_MAX_BYTES) {
       return {
@@ -98,3 +85,7 @@ export const imageCapableReadTool: ToolDefinition<ReadInput, ReadOutput> = {
     };
   },
 };
+}
+
+export const imageCapableReadTool = createImageCapableReadTool(false);
+export const defaultImageCapableReadTool = createImageCapableReadTool(true);
