@@ -465,6 +465,36 @@ export function shouldShowJumpButton(follow: boolean, blockCount: number): boole
 }
 
 /**
+ * Sticky-follow decision core — exported pure for unit tests.
+ *
+ * A scroll event does not always mean the USER scrolled: content that grows
+ * under the viewport (markdown, syntax highlighting, images) pushes the
+ * bottom away while `scrollTop` stays exactly where it was, and a naive
+ * "not at the bottom → stop following" reading mistakes that growth for a
+ * manual scroll-up — the transcript then stays parked mid-history. So follow
+ * is dropped ONLY when `scrollTop` actually moved UP; growth alone (or a
+ * move down that has not reached the bottom yet) keeps the previous state.
+ */
+export function nextFollow(
+  prevFollow: boolean,
+  prevScrollTop: number,
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+): boolean {
+  if (isAtBottom(scrollTop, scrollHeight, clientHeight)) {
+    return true;
+  }
+  // The user really moved up (1px tolerance for fractional scroll offsets).
+  if (scrollTop < prevScrollTop - 1) {
+    return false;
+  }
+  // Content grew (or the user moved down without reaching the bottom):
+  // keep whatever the follow state was.
+  return prevFollow;
+}
+
+/**
  * Snap-dedup helper (codex P7.3-F finding 4) — given the container's current
  * geometry and whether a write was already flushed this frame, returns
  * whether a `scrollTop = scrollHeight` write is actually needed. Reused by
@@ -816,6 +846,11 @@ export function MessageList({
   const columnRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
   const [follow, setFollow] = useState(true);
+  // Last observed scrollTop — the reference the follow decision compares
+  // against to tell "the user scrolled up" from "content grew under us"
+  // (the browser also fires scroll for programmatic writes and for
+  // scroll-anchoring adjustments, neither of which is a user scroll-up).
+  const lastScrollTopRef = useRef(0);
 
   // the internal full-size image viewer. Opened by a
   // thumbnail click; the block id + clicked index are looked up from `blocks`
@@ -878,6 +913,9 @@ export function MessageList({
       return;
     }
     el.scrollTop = el.scrollHeight;
+    // The write itself queues a scroll event; remember where we landed so
+    // the handler does not read it as a user scroll-up.
+    lastScrollTopRef.current = el.scrollTop;
     snappedThisFrameRef.current = true;
     // Cleared at the START of the next frame (not a microtask) so it stays
     // true across BOTH the synchronous layout effect and the browser's own
@@ -920,7 +958,18 @@ export function MessageList({
     if (!el) {
       return;
     }
-    const next = isAtBottom(el.scrollTop, el.scrollHeight, el.clientHeight);
+    // Content growth (markdown, highlighting, images) moves the bottom away
+    // WITHOUT the user scrolling — the old "not at bottom → stop following"
+    // reading treated that growth as a manual scroll-up and left the
+    // transcript parked mid-history. Only a real upward move drops follow.
+    const next = nextFollow(
+      followRef.current,
+      lastScrollTopRef.current,
+      el.scrollTop,
+      el.scrollHeight,
+      el.clientHeight,
+    );
+    lastScrollTopRef.current = el.scrollTop;
     if (followRef.current !== next) {
       followRef.current = next;
       setFollow(next);
