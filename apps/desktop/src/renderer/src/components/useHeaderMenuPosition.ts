@@ -6,7 +6,10 @@ export function placeHeaderMenu(menu: HTMLElement): void {
   if (!anchor) return;
   menu.style.left = "0px";
   const bounds = menu.getBoundingClientRect();
-  const shift = Math.max(0, Math.min(bounds.left, window.innerWidth - bounds.width)) - bounds.left;
+  const spacing = getComputedStyle(menu).getPropertyValue("--sp-4").trim();
+  const size = Number.parseFloat(spacing) || 0;
+  const gutter = spacing.endsWith("rem") ? size * (Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) : size;
+  const shift = Math.max(gutter, Math.min(bounds.left, window.innerWidth - gutter - bounds.width)) - bounds.left;
   menu.style.left = `${shift}px`;
 }
 
