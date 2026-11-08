@@ -22,7 +22,7 @@ import type {
 import type { GitCommand, HostToUiMessage } from "../shared/protocol.js";
 import { GIT_STATUS_MAX_FILES, GIT_WIRE_DIFF_MAX_CHARS } from "../shared/protocol.js";
 import type { Outbound } from "./session.js";
-import { GitBridge, MAX_PENDING_GIT_COMMANDS, projectGitStatus } from "./git-bridge.js";
+import { GitBridge, isManagedWorktreeBranchLocked, MAX_PENDING_GIT_COMMANDS, projectGitStatus } from "./git-bridge.js";
 
 // ── message narrowing helpers ───────────────────────────────────────────────
 type GitResultMsg = Extract<HostToUiMessage, { type: "git_result" }>;
@@ -56,13 +56,13 @@ function makeOutbound(): { emitted: HostToUiMessage[]; direct: HostToUiMessage[]
   return { emitted, direct, outbound };
 }
 
-function makeBridge(git: GitPort | null): {
+function makeBridge(git: GitPort | null, branchSwitchLocked?: boolean): {
   bridge: GitBridge;
   emitted: HostToUiMessage[];
   direct: HostToUiMessage[];
 } {
   const o = makeOutbound();
-  const bridge = new GitBridge({ git, outbound: o.outbound });
+  const bridge = new GitBridge({ git, outbound: o.outbound, ...(branchSwitchLocked !== undefined ? { branchSwitchLocked } : {}) });
   return { bridge, emitted: o.emitted, direct: o.direct };
 }
 
@@ -76,6 +76,8 @@ class MockGitPort implements GitPort {
   active = 0;
   maxActive = 0;
   hold = false;
+  switchCalls: string[] = [];
+  createCalls: Array<{ name: string; switch: boolean | undefined }> = [];
   statusFails = false;
   statusValue: GitStatusSummary = summary();
   diffValue = "diff-body";
@@ -120,10 +122,12 @@ class MockGitPort implements GitPort {
   diff(): Promise<GitOpResult<string>> {
     return this.track<GitOpResult<string>>(() => ({ ok: true, value: this.diffValue }));
   }
-  switchBranch(): Promise<GitOpResult<null>> {
+  switchBranch(name?: string): Promise<GitOpResult<null>> {
+    this.switchCalls.push(name ?? "");
     return this.track<GitOpResult<null>>(() => ({ ok: true, value: null }));
   }
-  createBranch(): Promise<GitOpResult<null>> {
+  createBranch(name?: string, opts?: { switch?: boolean }): Promise<GitOpResult<null>> {
+    this.createCalls.push({ name: name ?? "", switch: opts?.switch });
     return this.track<GitOpResult<null>>(() => ({ ok: true, value: null }));
   }
   stageAll(): Promise<GitOpResult<null>> {
@@ -612,5 +616,64 @@ describe("GitBridge — destructive tail forwarding + fresh-status follow (§2.4
     });
     await tick(6);
     expect(calls.discard).toEqual([["a.ts"]]);
+  });
+});
+
+describe("GitBridge — managed worktree branch lock", () => {
+  const MANAGED_REASON = "Branch switching is disabled in a worktree managed by AnyCode.";
+
+  async function run(git: MockGitPort, locked: boolean | undefined, command: GitCommand) {
+    const { bridge, direct } = makeBridge(git, locked);
+    bridge.handleCommand({ requestId: "r", command });
+    await tick();
+    return direct.filter(isResult)[0]?.outcome;
+  }
+
+  it("refuses switch_branch and a switching create_branch without touching git", async () => {
+    const git = new MockGitPort();
+    expect(await run(git, true, { op: "switch_branch", name: "other" })).toEqual({ ok: false, reason: MANAGED_REASON });
+    expect(await run(git, true, { op: "create_branch", name: "feat", switch: true })).toEqual({ ok: false, reason: MANAGED_REASON });
+    expect(git.switchCalls).toEqual([]);
+    expect(git.createCalls).toEqual([]);
+    expect(git.spawns).toBe(0);
+  });
+
+  it("still allows a create_branch that does not switch", async () => {
+    const git = new MockGitPort();
+    const outcome = await run(git, true, { op: "create_branch", name: "feat" });
+    expect(outcome?.ok).toBe(true);
+    expect(git.createCalls).toEqual([{ name: "feat", switch: undefined }]);
+  });
+
+  it("allows switching in a normal checkout", async () => {
+    for (const locked of [undefined, false]) {
+      const git = new MockGitPort();
+      expect((await run(git, locked, { op: "switch_branch", name: "other" }))?.ok).toBe(true);
+      expect((await run(git, locked, { op: "create_branch", name: "feat", switch: true }))?.ok).toBe(true);
+      expect(git.switchCalls).toEqual(["other"]);
+      expect(git.createCalls).toEqual([{ name: "feat", switch: true }]);
+    }
+  });
+});
+
+describe("isManagedWorktreeBranchLocked", () => {
+  it("locks an AnyCode-owned worktree", () => {
+    expect(isManagedWorktreeBranchLocked({ worktree: { ownedByAnyCode: true } }, {})).toBe(true);
+  });
+
+  it("leaves an external worktree and a plain checkout switchable", () => {
+    expect(isManagedWorktreeBranchLocked({ worktree: { ownedByAnyCode: false } }, {})).toBe(false);
+    expect(isManagedWorktreeBranchLocked({}, {})).toBe(false);
+  });
+
+  it("locks a managed child worktree marked through the environment", () => {
+    expect(isManagedWorktreeBranchLocked({}, { ANYCODE_MANAGED_CHILD_WORKTREE: "1" })).toBe(true);
+    expect(isManagedWorktreeBranchLocked(undefined, { ANYCODE_MANAGED_CHILD_WORKTREE: "1" })).toBe(true);
+    expect(isManagedWorktreeBranchLocked(undefined, { ANYCODE_MANAGED_CHILD_WORKTREE: "0" })).toBe(false);
+  });
+
+  it("is unlocked without session meta or environment marker", () => {
+    expect(isManagedWorktreeBranchLocked(undefined, {})).toBe(false);
+    expect(isManagedWorktreeBranchLocked(null, {})).toBe(false);
   });
 });

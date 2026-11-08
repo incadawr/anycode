@@ -475,7 +475,7 @@ function hostProfileHome(): string {
   return resolveExtensionsHomeOverride(process.env) ?? homedir();
 }
 import { buildCheckpointService } from "./checkpoints.js";
-import { GitBridge } from "./git-bridge.js";
+import { GitBridge, isManagedWorktreeBranchLocked } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime, persistedCoreMode } from "./engine-switch-runtime.js";
 import { createProductionCoreResolver } from "./core-switch-resolver.js";
@@ -1953,7 +1953,11 @@ async function bootCodexSession(
   const codexIsGitRepo = await fs.exists(`${workspace}/.git`);
   const codexGitEnabled = codexIsGitRepo && typeof codexExecAdapter.runBinary === "function";
   const codexGitService = new NodeGitAdapter({ exec: codexExecAdapter, cwd: workspace, signal: gitAbort.signal });
-  gitBridge = new GitBridge({ git: codexGitEnabled ? codexGitService : null, outbound });
+  gitBridge = new GitBridge({
+    git: codexGitEnabled ? codexGitService : null,
+    outbound,
+    branchSwitchLocked: isManagedWorktreeBranchLocked(connected.sessionMeta, process.env),
+  });
   // The AnyCode terminal (PTY shell) is wired unconditionally at module
   // scope (`terminals`, top of this file) regardless of engine -- always
   // available for a Codex session too.
@@ -2753,7 +2757,11 @@ async function bootClaudeSession(
   const claudeIsGitRepo = await fs.exists(`${workspace}/.git`);
   const claudeGitEnabled = claudeIsGitRepo && typeof claudeExecAdapter.runBinary === "function";
   const claudeGitService = new NodeGitAdapter({ exec: claudeExecAdapter, cwd: workspace, signal: gitAbort.signal });
-  gitBridge = new GitBridge({ git: claudeGitEnabled ? claudeGitService : null, outbound });
+  gitBridge = new GitBridge({
+    git: claudeGitEnabled ? claudeGitService : null,
+    outbound,
+    branchSwitchLocked: isManagedWorktreeBranchLocked(connected.sessionMeta, process.env),
+  });
   const shell: ShellCapabilitiesProjection = {
     gitReadOnly: claudeGitEnabled,
     gitUserMutations: claudeGitEnabled,
@@ -4056,7 +4064,10 @@ async function boot(): Promise<void> {
 
     const gitService = new NodeGitAdapter({ exec: execAdapter, cwd: workspace, signal: gitAbort.signal });
     const gitEnabled = systemPromptEnv.isGitRepo === true && typeof execAdapter.runBinary === "function";
-    gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound });
+    // The renderer locks the branch for an AnyCode-created worktree or a child
+    // session's worktree; refuse the same switches here, not only in the UI.
+    const branchSwitchLocked = isManagedWorktreeBranchLocked(sessionMeta, process.env);
+    gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound, branchSwitchLocked });
 
     const media = createCoreRuntimeMedia({
       registry,
