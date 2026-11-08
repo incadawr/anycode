@@ -41,7 +41,15 @@ export function orchestrationAvailability(policy?: OrchestrationPolicy): ReturnT
 /** Session owns admission; this helper never publishes an unverified transition. */
 export class OrchestrationController {
   private generation = 0;
-  state: OrchestrationState = { status: "off" };
+  private current: OrchestrationState = { status: "off" };
+  /** Fired on every assignment of a quarantined state (transition, invalidate, explicit). */
+  onQuarantine?: () => void;
+
+  get state(): OrchestrationState { return this.current; }
+  set state(value: OrchestrationState) {
+    this.current = value;
+    if (value.status === "quarantined") this.onQuarantine?.();
+  }
 
   constructor(private readonly policy?: OrchestrationPolicy) {}
 

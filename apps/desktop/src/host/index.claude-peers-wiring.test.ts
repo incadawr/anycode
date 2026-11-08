@@ -21,6 +21,7 @@ async function fixture() {
   let pending: string | null = null;
   const raw = { snapshot: () => ({ activePresetId: preset }) };
   const session = Object.create(Session.prototype);
+  session.orchestrationPosture = "stable"; // Object.create skips the class field initializers.
   const request = vi.fn(async () => ({ status: "ok", sessions: [] }));
   const broker = { requestPermission: vi.fn(async () => ({ behavior: "allow" })) };
   let authority!: Parameters<typeof createSessionPeerBridge>[0]["authority"];
@@ -58,6 +59,7 @@ async function fixture() {
   const call = (name = "sessions_list", args = {}) => resolved.options.stamp.callTool(name, args, new AbortController().signal, { toolUseId: "use" });
   expect(resolved.options.bootNotices).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Built-in AnyCode skills are unavailable after switching engines. Start a new Claude session to use them." }));
   return { raw, runtime, session, request, broker, authority: () => authority(), call,
+    posture: (value: string) => { session.orchestrationPosture = value; },
     preset: (value: string) => { preset = value; }, pending: (value: string | null) => { pending = value; }, close: () => resolved.options.mcpBridge.close() };
 }
 
@@ -126,5 +128,21 @@ it("switched Claude peer mode narrows at once on a pending preset and ignores a 
     expect(f.authority().mode).toBe("build");
     f.preset("read-only"); f.pending("ask");
     expect(f.authority().mode).toBe("plan");
+  } finally { await f.close(); }
+});
+
+it("switched Claude peers are refused outside a turn while the session is transitioning or quarantined", async () => {
+  const f = await fixture();
+  try {
+    const input = { sessionId: "peer", payload: "hello" };
+    for (const posture of ["transitioning", "quarantined"]) {
+      f.posture(posture);
+      expect(f.authority()).toMatchObject({ root: true, mode: "plan", orchestrate: false });
+      expect((await f.call("session_send", input)).isError).toBe(true);
+    }
+    expect(f.broker.requestPermission).not.toHaveBeenCalled();
+    expect(f.request).not.toHaveBeenCalled();
+    f.posture("stable");
+    expect(f.authority().mode).toBe("build");
   } finally { await f.close(); }
 });

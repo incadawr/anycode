@@ -1496,22 +1496,34 @@ export class Session {
     this.publishPermissionAuthority();
   }
   /**
+   * True while a native root must hold no peer authority: the restore is still
+   * in progress or the orchestration state is quarantined (posture or
+   * controller). The host bridge and the published report share this.
+   */
+  peerAuthorityClosed(): boolean {
+    if (this.engine.id === "core") return false;
+    return this.orchestrationPosture !== "stable" || this.orchestrationController?.state.status === "quarantined";
+  }
+  /**
    * The Core-equivalent authority a peer caller holds. Core reports its live
    * mode; a native engine's own display mode is not authority, so it reports
-   * the mapped preset (narrower of applied and pending). Fails closed when the
-   * native posture is quarantined or the engine has no settings seam.
+   * the mapped preset (narrower of applied and pending). Fails closed (plan)
+   * whenever `peerAuthorityClosed()` holds.
    */
   private peerAuthorityMode(): PermissionMode {
     const engine = this.engine;
     if (engine.id === "core") return engine.mode();
-    if (this.orchestrationPosture === "quarantined" || this.engineSettings === undefined) return "plan";
+    if (this.engineSettings === undefined || this.peerAuthorityClosed()) return "plan";
     return nativePeerAuthorityMode(engine.id, this.engineSettings.snapshot().activePresetId, this.engineSettings.pendingSnapshot?.()?.activePresetId);
   }
   private publishPermissionAuthority(): void {
     const engine = this.engine.id;
-    const quarantined = engine !== "core" && this.orchestrationPosture === "quarantined";
     this.permissionModeListener?.(this.peerAuthorityMode(), engine);
-    this.orchestrateListener?.(quarantined ? false : this.orchestrate, engine);
+    this.orchestrateListener?.(this.peerAuthorityClosed() ? false : this.orchestrate, engine);
+  }
+  /** Posture changes that only matter to a native root; Core's authority is its live mode. */
+  private republishNativeAuthority(): void {
+    if (this.engine.id !== "core") this.publishPermissionAuthority();
   }
   private get busy(): boolean { return this.busyValue; }
   private set busy(value: boolean) {
@@ -6755,6 +6767,8 @@ export class Session {
     const composition = engine.orchestrationComposition;
     let nativeAuthority: { mode: PermissionMode } | undefined;
     let saving = false;
+    // A saved overlay already starts the posture at transitioning (constructor); publish only a real change.
+    if (this.orchestrationPosture === "stable") { this.orchestrationPosture = "transitioning"; this.republishNativeAuthority(); }
     this.orchestrationPosture = "transitioning";
     const proveOff = async () => {
       if (engine.id === "core") {
@@ -6799,6 +6813,7 @@ export class Session {
       if (!this.ownsRuntime(engine)) return;
       console.warn("[host] saved orchestration could not be restored",error);
       this.orchestrationPosture = "quarantined";
+      this.republishNativeAuthority();
       let message = "Orchestration recovery requires a verified OFF runtime and a successful settings save. Close and reopen this conversation to retry.";
       let clearing = false;
       try {
@@ -6860,7 +6875,10 @@ export class Session {
         return snapshot;
       },
     };
-    this.orchestrationController = new OrchestrationController(policy);
+    const controller = new OrchestrationController(policy);
+    this.orchestrationController = controller;
+    // Every real entry into quarantine revokes peer authority at once.
+    controller.onQuarantine = () => { if (this.orchestrationController === controller && this.engine === engine) this.republishNativeAuthority(); };
     if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id !== "core" ? { mode: this.preOrchestrateMode ?? "plan" } : this.preOrchestrateMode ?? "plan" };
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
@@ -6963,6 +6981,7 @@ export class Session {
       this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
     } catch (error) {
       this.orchestrationPosture = "quarantined";
+      this.republishNativeAuthority();
       throw error;
     } finally { this.orchestrationWriteActive = false; }
   }

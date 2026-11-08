@@ -96,22 +96,15 @@ describe("Session — native peer authority", () => {
     } finally { h.close(); }
   });
 
-  it("fails closed without a settings seam and while the posture is quarantined", () => {
+  it("fails closed without a settings seam", () => {
     const bare = createHarness({ steps: [], engine: nativeEngine("claude") });
-    const fake = fakeSeam("full-access");
-    const quarantined = createHarness({ steps: [], engine: nativeEngine("codex"), engineSettings: fake.seam });
     try {
       expect(observe(bare).modes).toEqual([["plan", "claude"]]);
-      (quarantined.session as unknown as { orchestrate: boolean; orchestrationPosture: string }).orchestrate = true;
-      const seen = observe(quarantined);
-      expect(seen.last()).toEqual(["yolo", "codex"]);
-      expect(seen.orchestrate).toEqual([[true, "codex"]]);
-      (quarantined.session as unknown as { orchestrationPosture: string }).orchestrationPosture = "quarantined";
-      quarantined.outbound.emit({ type: "orchestrate_changed", enabled: true });
-      expect(seen.last()).toEqual(["plan", "codex"]);
-      expect(seen.orchestrate.at(-1)).toEqual([false, "codex"]);
-    } finally { bare.close(); quarantined.close(); }
+    } finally { bare.close(); }
   });
+
+  // The real quarantine paths (failed OFF save, failed restore) are driven in
+  // session-peer-quarantine.test.ts; a hand-set posture proves nothing there.
 
   it("keeps forwarding Core mode and orchestrate reports tagged core", async () => {
     const h = createHarness({ steps: [], mode: "plan" });
