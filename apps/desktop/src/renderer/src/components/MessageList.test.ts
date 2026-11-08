@@ -9,6 +9,7 @@ import {
   formatStreamRetryLine,
   groupTranscriptBlocks,
   isAtBottom,
+  isAtTranscriptBottom,
   isTerminalStatus,
   needsSnap,
   nextFollow,
@@ -1025,6 +1026,39 @@ describe("topmostVisibleUserIndex (minimap scroll-spy core, 4086 follow-up)", ()
   it("a single bubble above the midpoint is index 0", () => {
     expect(spy([200], 100, 500)).toBe(0);
     expect(spy([900], 100, 500)).toBe(null);
+  });
+});
+
+describe("isAtTranscriptBottom (minimap scroll-spy bottom detector)", () => {
+  it("is true at the exact bottom", () => {
+    expect(isAtTranscriptBottom(1000, 1500, 500)).toBe(true);
+  });
+
+  it("tolerates 2px of slack but not 3px", () => {
+    expect(isAtTranscriptBottom(998, 1500, 500)).toBe(true);
+    expect(isAtTranscriptBottom(997, 1500, 500)).toBe(false);
+  });
+
+  it("handles sub-pixel offsets", () => {
+    expect(isAtTranscriptBottom(999.5, 1500, 500)).toBe(true);
+    expect(isAtTranscriptBottom(996.5, 1500, 500)).toBe(false);
+  });
+
+  it("is false in the middle of the transcript", () => {
+    expect(isAtTranscriptBottom(0, 1500, 500)).toBe(false);
+  });
+
+  it("a short last turn below the midpoint still wins at the bottom", () => {
+    // Container top 100, height 500 -> midpoint 350. The last user bubble
+    // (top 480) is below the midpoint, so the midpoint rule alone yields
+    // the second-to-last turn (index 1) — at the bottom the last turn
+    // (index 2) must be the active one.
+    const tops = [120, 240, 480];
+    const midpointSpy = topmostVisibleUserIndex(tops.length, (i) => tops[i]!, 100, 500);
+    expect(midpointSpy).toBe(1);
+    expect(isAtTranscriptBottom(1000, 1500, 500)).toBe(true);
+    const atBottom = tops.length - 1;
+    expect(atBottom).toBe(2);
   });
 });
 

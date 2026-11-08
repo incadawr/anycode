@@ -744,6 +744,19 @@ export function showStandaloneRetry(
 }
 
 /**
+ * Transcript-bottom detector for the minimap scroll-spy — exported pure
+ * for unit tests. True when the scroller is (within 2px of) the very
+ * bottom of its content.
+ */
+export function isAtTranscriptBottom(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+): boolean {
+  return scrollHeight - scrollTop - clientHeight <= 2;
+}
+
+/**
  * Minimap scroll-spy core (4086 follow-up) — exported pure for unit
  * tests. Given the monotone `top`s of human bubbles and agent delivery cards
  * (one per minimap turn, DOM order == mark order)
@@ -1092,12 +1105,19 @@ export function MessageList({
       return;
     }
     const bubbles = el.querySelectorAll<HTMLElement>(".message-user[data-block-id], .minimap-turn[data-block-id]");
-    const candidate = topmostVisibleUserIndex(
+    let candidate = topmostVisibleUserIndex(
       bubbles.length,
       (i) => bubbles[i]!.getBoundingClientRect().top,
       el.getBoundingClientRect().top,
       el.clientHeight,
     );
+    // At the very bottom of the transcript the last turn is the active one,
+    // even when its user bubble sits below the viewport midpoint (a short
+    // final turn). The midpoint rule alone would highlight the
+    // second-to-last turn there.
+    if (bubbles.length > 0 && isAtTranscriptBottom(el.scrollTop, el.scrollHeight, el.clientHeight)) {
+      candidate = bubbles.length - 1;
+    }
     // Above the first bubble still highlights turn 1 (nothing earlier exists).
     const nextActive = activeMarkIndex(minimapMarks, candidate ?? (bubbles.length > 0 ? 0 : null));
     setMinimapActive((prev) => (prev === nextActive ? prev : nextActive));
