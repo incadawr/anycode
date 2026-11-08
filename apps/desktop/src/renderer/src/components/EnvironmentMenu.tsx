@@ -19,6 +19,7 @@ import { EnvironmentBranchPicker } from "./EnvironmentBranchPicker.js";
 import { gitAheadBehindLabel, gitPillLabel } from "./GitPill.js";
 
 import { EnvironmentWorktree } from "./EnvironmentWorktree.js";
+import { useHeaderMenuPosition } from "./useHeaderMenuPosition.js";
 
 type EnvironmentPlacement = "header" | "composer";
 
@@ -106,6 +107,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const [switchPending, setSwitchPending] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  useHeaderMenuPosition(open, panelRef, placement === "header");
   const returning = useRef(false);
   const branchRef = useRef<HTMLButtonElement>(null);
   const copyTimer = useRef<number | undefined>(undefined);

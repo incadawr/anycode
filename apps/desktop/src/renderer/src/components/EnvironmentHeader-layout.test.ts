@@ -73,3 +73,24 @@ it.skipIf(!existsSync(chrome))("keeps crowded header controls and Git indicators
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 60000);
+
+it.skipIf(!existsSync(chrome))("keeps both header menus within the viewport across layouts", async () => {
+  const { placeHeaderMenu } = await import("./useHeaderMenuPosition.js");
+  const dir = mkdtempSync(resolve(tmpdir(), "header-menus-"));
+  const css = ["tokens.css", "app.css"].map(f => readFileSync(resolve(import.meta.dirname, "..", f), "utf8")).join("\n");
+  try {
+    const file = resolve(dir, "index.html");
+    const frames = ["darwin", "win32"].flatMap(platform => [false, true].flatMap(sidebar => [false, true].flatMap(long => [520, 560, 700, 800, 1000, 1136].map(width => ({ platform, sidebar, long, width })))));
+    const documentFor = ({ platform, sidebar, long, width }: typeof frames[number]) => `<html data-platform="${platform}"><style>${css}</style><div style="display:flex"><div style="flex:0 0 ${sidebar ? 264 : 0}px"></div><header class="session-header" style="width:${width}px"><span class="session-header-title">${long ? "A crowded session header demonstrating child worktree layout and review" : "New"}</span><span class="engine-identity session-header-engine">Codex</span><details open class="environment-control child-worktree-control"><summary class="environment-trigger"><span>Child worktrees · ON</span></summary><div class="environment-menu">Child menu</div></details><div class="environment-control environment-control-header"><button class="environment-trigger environment-trigger-has-branch"><svg></svg><span class="environment-workspace">a-very-long-workspace-folder-name</span><span class="environment-separator">/</span><svg></svg><span class="environment-branch">feature/some-long-branch-name-for-review</span><span class="environment-git-count">●2</span><span class="environment-git-count">↑2306 ↓2767</span><span>⌄</span></button><div class="environment-menu">Environment menu</div></div><button class="session-extensions-trigger"><svg width="16"></svg><span class="session-extensions-label">Extensions</span></button><span class="session-header-connection"><svg width="8"></svg></span></header></div><script>const placeHeaderMenu = ${placeHeaderMenu.toString()}; document.querySelectorAll('.environment-menu').forEach(placeHeaderMenu); parent.postMessage({key:${JSON.stringify(`${platform}-${sidebar}-${long}-${width}`)}, viewport:innerWidth, menus:[...document.querySelectorAll('.environment-menu')].map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right}})}, '*');<\/script></html>`;
+    const inputs = frames.map(f => ({ width: f.width + (f.sidebar ? 264 : 0), html: documentFor(f) }));
+    writeFileSync(file, `<html><body><pre id="result"></pre><script>const inputs=${JSON.stringify(inputs).replace(/</g, "\\u003c")}; const rows=[]; window.addEventListener('message',e=>{rows.push(e.data);if(rows.length===inputs.length)document.querySelector('#result').textContent=JSON.stringify(rows)});for(const input of inputs){const f=document.createElement('iframe');f.style.width=input.width+'px';f.style.height='120px';f.srcdoc=input.html;document.body.append(f)}</script></body></html>`);
+    const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", "--virtual-time-budget=5000", `--user-data-dir=${dir}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30000 });
+    expect(run.status, run.stderr).toBe(0);
+    const rows = JSON.parse(run.stdout.match(/<pre id="result">([^<]+)<\/pre>/)![1]!) as Array<{key:string;viewport:number;menus:Array<{left:number;right:number}>}>;
+    expect(rows).toHaveLength(frames.length);
+    for (const row of rows) for (const menu of row.menus) {
+      expect(menu.left, row.key).toBeGreaterThanOrEqual(-1);
+      expect(menu.right, row.key).toBeLessThanOrEqual(row.viewport + 1);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60000);

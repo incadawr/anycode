@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Checkbox } from "../ui/index.js";
 import type { ChildWorktreeView } from "../../../shared/child-worktree-view.js";
+import { useHeaderMenuPosition } from "./useHeaderMenuPosition.js";
 
 /** Self-contained so the header menu can move this control without new state wiring. */
 export function ChildWorktreeControl({ tabId }: { tabId: string }) {
   const [view, setView] = useState<ChildWorktreeView | null>(null);
   const [open, setOpen] = useState(false), [error, setError] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
+  useHeaderMenuPosition(open, menuRef);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState("");
   const revision = useRef(0), mutating = useRef(false);
@@ -51,7 +54,7 @@ export function ChildWorktreeControl({ tabId }: { tabId: string }) {
   };
   return <details className="environment-control child-worktree-control" onToggle={event => setOpen(event.currentTarget.open)}>
     <summary className="environment-trigger"><span>Child worktrees{view?.enabled ? " · ON" : ""}</span></summary>
-    <div className="environment-menu" style={{ maxHeight: "75vh", overflow: "auto", overflowWrap: "anywhere" }}>
+    <div ref={menuRef} className="environment-menu" style={{ maxHeight: "75vh", overflow: "auto", overflowWrap: "anywhere" }}>
     <Checkbox label="New session children in worktrees" checked={view?.enabled ?? false}
       disabled={!view?.canToggle || busy} onCheckedChange={enabled => void toggle(enabled)} />
     <p>Each new child session works in its own Git checkout of the last commit (uncommitted files aren't copied). Not a sandbox: shell commands can still change files outside it.</p>
