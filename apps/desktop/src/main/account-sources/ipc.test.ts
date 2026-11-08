@@ -87,6 +87,11 @@ it("restarts a bound source when its credential is written", async () => {
   const snapshot = () => (handlers.get(ACCOUNT_SOURCES_GET_CHANNEL)!(event) as { snapshot: { sources: { status: string }[] } }).snapshot;
   await vi.waitFor(() => expect(snapshot().sources[0]?.status).toBe("auth_required"));
   expect(fetcher).not.toHaveBeenCalled();
+  const beforeUnrelated = snapshot();
+  const scans = scan.mock.calls.length;
+  await api.secretWritten(customProviderSecretKey("custom:other"));
+  expect(scan).toHaveBeenCalledTimes(scans);
+  expect(snapshot()).toEqual(beforeUnrelated);
   secret = "new-key";
   await api.secretWritten(customProviderSecretKey("custom:corp"));
   expect(snapshot().sources[0]?.status).toBe("loading");

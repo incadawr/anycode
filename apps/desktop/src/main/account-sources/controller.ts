@@ -8,6 +8,7 @@ type State = { source: Source; generation: number; abort?: AbortController; infl
 const keyOf = (key: AccountSourceKey) => JSON.stringify([key.plugin, key.source]);
 const BUDGET_INTERVAL = 60_000;
 const CATALOG_INTERVAL = 900_000;
+const MAX_TIMER_DELAY = 2_147_483_647;
 
 /** One app-level scheduler. Call replace after descriptor, key, or plugin lifecycle changes. */
 export class AccountSourcesController {
@@ -57,17 +58,22 @@ export class AccountSourcesController {
     const run = async () => {
       const now = this.now();
       let failed = false;
+      let unapplied = false;
       for (const endpoint of ["catalog", "budget"] as const) {
         if (!force && now - (endpoint === "catalog" ? state.lastCatalog : state.lastBudget) < (endpoint === "catalog" ? CATALOG_INTERVAL : BUDGET_INTERVAL)) continue;
         try {
           const result = await fetchAccountDocument(state.source.fetcher, state.source.apiBaseUrl, endpoint, state.source.apiKey, abort.signal);
+          // A response that cannot be applied must not cause an immediate retry.
+          state.nextAttempt = Math.max(state.nextAttempt, this.now() + 1000);
           if (!isCurrent()) return;
           if (result.data.accountId !== state.source.accountId) { await update(() => { delete state.view.budget; delete state.catalog; state.view.status = "needs_approval"; }); return; }
-          if (result.kind === "catalog") { await state.source.applyCatalog(result.data, isCurrent); if (!isCurrent()) return; await update(() => { state.catalog = { connectionId: state.source.connectionId, models: result.data.models.map(({ id, displayName, billing, ratesMicrosPerMillionTokens }) => ({ id, ...(displayName ? { displayName } : {}), billing, ...(ratesMicrosPerMillionTokens ? { ratesMicrosPerMillionTokens } : {}) })) }; state.lastCatalog = now; }); }
+          let applied = false;
+          if (result.kind === "catalog") { await state.source.applyCatalog(result.data, isCurrent); if (!isCurrent()) return; await update(() => { state.catalog = { connectionId: state.source.connectionId, models: result.data.models.map(({ id, displayName, billing, ratesMicrosPerMillionTokens }) => ({ id, ...(displayName ? { displayName } : {}), billing, ...(ratesMicrosPerMillionTokens ? { ratesMicrosPerMillionTokens } : {}) })) }; state.lastCatalog = now; applied = true; }); }
           else {
-            const publishBudget = () => { if (!isCurrent()) return; state.view.budget = result.data as AccountBudget; state.view.status = "ready"; state.view.fetchedAt = new Date(now).toISOString(); state.lastBudget = now; this.publish(); };
+            const publishBudget = () => { if (!isCurrent()) return; state.view.budget = result.data as AccountBudget; state.view.status = "ready"; state.view.fetchedAt = new Date(now).toISOString(); state.lastBudget = now; applied = true; this.publish(); };
             if (state.source.withAuthorization) await state.source.withAuthorization(publishBudget); else publishBudget();
           }
+          if (!applied) unapplied = true;
         } catch (error) {
           if (!isLive()) return;
           failed = true;
@@ -86,7 +92,7 @@ export class AccountSourcesController {
       }
       state.failures = failed ? state.failures + 1 : 0;
       if (failed) state.nextAttempt = Math.max(state.nextAttempt, now + Math.min(300_000, 1000 * 2 ** Math.min(state.failures, 8)));
-      else state.nextAttempt = 0;
+      else if (!unapplied) state.nextAttempt = 0;
     };
     state.inflight = run().finally(() => { clearTimeout(timeout); state.inflight = undefined; if (state.abort === abort) state.abort = undefined; this.schedule(); });
     return state.inflight;
@@ -95,11 +101,12 @@ export class AccountSourcesController {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     if (this.disposed) return;
+    // Authorization failures wait for the user's Refresh.
     const eligible = [...this.states.values()].filter((state) => !state.source.needsCredential && !state.inflight && !["auth_required", "access_denied", "needs_approval"].includes(state.view.status));
     if (!eligible.length) return;
     const due = (state: State) => Math.max(state.nextAttempt, Math.min(state.lastBudget + BUDGET_INTERVAL, state.lastCatalog + CATALOG_INTERVAL));
-    const delay = Math.max(0, Math.min(...eligible.map(due)) - this.now());
-    this.timer = setTimeout(() => { this.timer = undefined; for (const state of eligible) if (due(state) <= this.now()) void this.refresh(state.source.key, false); }, delay);
+    const delay = Math.min(MAX_TIMER_DELAY, Math.max(0, Math.min(...eligible.map(due)) - this.now()));
+    this.timer = setTimeout(() => { this.timer = undefined; for (const state of eligible) if (due(state) <= this.now()) void this.refresh(state.source.key, false); this.schedule(); }, delay);
   }
   dispose(): void { this.disposed = true; if (this.timer) clearTimeout(this.timer); for (const state of this.states.values()) state.abort?.abort(); this.states.clear(); }
 }

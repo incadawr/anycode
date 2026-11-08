@@ -112,3 +112,34 @@ it("does not publish an answer when authorization changes during the request", a
   expect(controller.snapshot().sources[0]?.budget).toBeUndefined();
   controller.dispose();
 });
+
+it("backs off when authorization skips a received budget", async () => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith("catalog") ? catalog : budget)));
+  const runtime = { ...source(fetcher), withAuthorization: async (publish: () => void) => { if (fetcher.mock.calls.length === 1) publish(); } };
+  const controller = new AccountSourcesController(vi.fn());
+  controller.replace([runtime]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  controller.dispose();
+});
+it("rearms after an early timer and clamps long retry delays", async () => {
+  vi.useFakeTimers();
+  let now = 1_000_000;
+  const fetcher = vi.fn(async () => new Response(null, { status: 429, headers: { "retry-after": "3000000" } }));
+  const controller = new AccountSourcesController(vi.fn(), () => now);
+  controller.replace([source(fetcher)]);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(2_147_483_647);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(vi.getTimerCount()).toBe(1);
+  now += 3_000_000_000;
+  await vi.advanceTimersByTimeAsync(2_147_483_647);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  controller.dispose();
+});
