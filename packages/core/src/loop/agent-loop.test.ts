@@ -4180,7 +4180,7 @@ describe("AgentLoop.contextInfo / setContextWindow (slice 6.4)", () => {
     }
 
     const estimate = loop.contextInfo().estimatedTokens;
-    expect(estimate).toBeGreaterThan(1_000);
+    expect(estimate).toBeGreaterThan(2_760);
     expect(estimate).toBeLessThan(161_920);
 
     // Turn 1 on the DEFAULT (200k) window: no auto-compaction; denominator 176 000.
@@ -4190,17 +4190,17 @@ describe("AgentLoop.contextInfo / setContextWindow (slice 6.4)", () => {
       budgetTokens: 176_000,
     });
 
-    // Re-budget to a tight window: ew=1_000, threshold=920. The manager's
+    // Re-budget to a tight window: ew=3_000, threshold=2_760. The manager's
     // compaction threshold follows the new window (not just the denominator).
     loop.setContextWindow(4_000);
-    expect(loop.contextInfo().effectiveWindowTokens).toBe(1_000);
-    expect(loop.contextInfo().compactThresholdTokens).toBe(920);
+    expect(loop.contextInfo().effectiveWindowTokens).toBe(3_000);
+    expect(loop.contextInfo().compactThresholdTokens).toBe(2_760);
 
     // Turn 2 now trips auto-compaction, and context_usage carries the new budget.
     const smallEvents = await collect(loop.runTurn("small window turn"));
     expect(smallEvents.some((e) => e.type === "compaction_start")).toBe(true);
     expect(smallEvents.find((e) => e.type === "context_usage")).toMatchObject({
-      budgetTokens: 1_000,
+      budgetTokens: 3_000,
     });
   });
 });

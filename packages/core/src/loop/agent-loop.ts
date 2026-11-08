@@ -65,6 +65,7 @@ import { ContextManager } from "../context/manager.js";
 import {
   compactThresholdTokens,
   effectiveWindowTokens,
+  MAX_OUTPUT_RESERVE_WINDOW_FRACTION,
   resolveContextBudgetConfig,
   type ContextBudgetConfig,
 } from "../context/budget.js";
@@ -2002,7 +2003,7 @@ export class AgentLoop {
       estimatedTokens: estimate.tokens,
       source: estimate.source,
       contextWindowTokens: budget.contextWindowTokens,
-      outputReserveTokens: Math.min(budget.outputReserveTokens, Math.floor(budget.contextWindowTokens * 0.25)),
+      outputReserveTokens: Math.min(budget.outputReserveTokens, Math.floor(budget.contextWindowTokens * MAX_OUTPUT_RESERVE_WINDOW_FRACTION)),
       effectiveWindowTokens: this.budgetTokens,
       compactThresholdTokens: compactThresholdTokens(budget),
       breakerTripped: this.context.breakerTripped(),

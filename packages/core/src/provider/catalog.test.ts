@@ -57,6 +57,10 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + W5)", () => {
     }
   });
 
+  it("declares both z.ai transports", () => {
+    expect(findCatalogEntry("z-ai")?.supportedTransports).toEqual(["anthropic-messages", "openai-chat-completions"]);
+  });
+
   it("declares the new public OpenAI-family entries (W5)", () => {
     expect(findCatalogEntry("openai")).toMatchObject({
       baseUrl: "https://api.openai.com/v1",

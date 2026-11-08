@@ -1,14 +1,11 @@
 /**
- * Token-budget math (design §2.5, task 1.2; degraded-window floor amendment,
- * phase1-tails-and-phase2-ruling §2):
- *   effectiveWindow  = max(contextWindow - min(outputReserve, 25% of contextWindow),
- *                          ceil(contextWindow * MIN_EFFECTIVE_WINDOW_FRACTION))
+ * Token-budget math:
+ *   effectiveWindow  = contextWindow - min(outputReserve, 25% of contextWindow)
  *   compactThreshold = max(buffered > 0 ? min(byPercent, buffered) : byPercent, 1)
  *     where byPercent = floor(effectiveWindow * pct / 100), buffered = effectiveWindow - buffer
  */
 
 import { describe, expect, it } from "vitest";
-import { MIN_EFFECTIVE_WINDOW_FRACTION } from "../types/config.js";
 import {
   DEFAULT_CONTEXT_BUDGET,
   compactThresholdTokens,
@@ -100,7 +97,7 @@ describe("microcompactThresholdTokens", () => {
   });
 });
 
-describe("degraded-window floor (MIN_EFFECTIVE_WINDOW_FRACTION amendment)", () => {
+describe("capped output reserve", () => {
   it("live-smoke repro: {contextWindow:8000, outputReserve:24000} no longer collapses to a non-positive/every-turn threshold", () => {
     const config = resolveContextBudgetConfig({
       contextWindowTokens: 8_000,
@@ -148,7 +145,4 @@ describe("degraded-window floor (MIN_EFFECTIVE_WINDOW_FRACTION amendment)", () =
     },
   );
 
-  it("MIN_EFFECTIVE_WINDOW_FRACTION is 0.25", () => {
-    expect(MIN_EFFECTIVE_WINDOW_FRACTION).toBe(0.25);
-  });
 });

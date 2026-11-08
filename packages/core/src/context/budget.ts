@@ -17,8 +17,10 @@ import {
   MICROCOMPACT_KEEP_RECENT_TOOL_RESULTS,
   MICROCOMPACT_MIN_SAVINGS_TOKENS,
   MICROCOMPACT_THRESHOLD_PERCENT,
-  MIN_EFFECTIVE_WINDOW_FRACTION,
 } from "../types/config.js";
+
+/** Maximum fraction of the context window reserved for output in budget calculations. */
+export const MAX_OUTPUT_RESERVE_WINDOW_FRACTION = 0.25;
 
 export interface ContextBudgetConfig {
   /** DEFAULT 200_000; env ANYCODE_CONTEXT_WINDOW. */
@@ -59,8 +61,10 @@ export function resolveContextBudgetConfig(
  * collapse the input budget. This affects budget math, not the output limit.
  */
 export function effectiveWindowTokens(config: ContextBudgetConfig): number {
-  const raw = config.contextWindowTokens - Math.min(config.outputReserveTokens, Math.floor(config.contextWindowTokens * 0.25));
-  return Math.max(raw, Math.ceil(config.contextWindowTokens * MIN_EFFECTIVE_WINDOW_FRACTION));
+  return config.contextWindowTokens - Math.min(
+    config.outputReserveTokens,
+    Math.floor(config.contextWindowTokens * MAX_OUTPUT_RESERVE_WINDOW_FRACTION),
+  );
 }
 
 /**
