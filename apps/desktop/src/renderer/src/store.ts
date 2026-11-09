@@ -4535,14 +4535,17 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           // episode identity, and an ordinary retry means the port was never
           // parked (no waiting_for_network was emitted for it).
           if (event.waitedMs !== undefined) {
-            const source = event.waitSource ?? "parent";
-            const current = get().networkWaitEpisodes;
-            const decremented = Math.max(0, (current[source] ?? 0) - 1);
-            const episodes = { ...current, [source]: decremented };
-            set({
-              networkWaitEpisodes: episodes,
-              waitingForNetwork: episodes.parent + episodes.subagent > 0,
-            });
+            // An inline-subagent episode is closed by its `network_wait_end`
+            // (below); decrementing it here too would count it twice, so a
+            // recovery retry labelled "subagent" leaves the counts alone.
+            if ((event.waitSource ?? "parent") === "parent") {
+              const current = get().networkWaitEpisodes;
+              const episodes = { ...current, parent: Math.max(0, current.parent - 1) };
+              set({
+                networkWaitEpisodes: episodes,
+                waitingForNetwork: episodes.parent + episodes.subagent > 0,
+              });
+            }
           } else {
             set({
               networkWaitEpisodes: { parent: 0, subagent: 0 },
@@ -5137,8 +5140,24 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // byte-identical for now.
         case "permission_auto_decided":
         case "reasoning_replay_metadata":
-        case "network_wait_end":
           return;
+
+        // The inline runner never forwards a subagent's recovery
+        // `stream_retry`, so its wait episode is closed here (any outcome:
+        // recovered, failed or cancelled). The parent's own episode is closed
+        // by its recovery `stream_retry` — ignoring its `network_wait_end`
+        // keeps one wait from being decremented by both events.
+        case "network_wait_end": {
+          if (event.waitSource === "subagent") {
+            const current = get().networkWaitEpisodes;
+            const episodes = { ...current, subagent: Math.max(0, current.subagent - 1) };
+            set({
+              networkWaitEpisodes: episodes,
+              waitingForNetwork: episodes.parent + episodes.subagent > 0,
+            });
+          }
+          return;
+        }
 
         default: {
           const _exhaustive: never = event;

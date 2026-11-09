@@ -561,13 +561,56 @@ describe("desktop store — waiting for network", () => {
     event(store, { type: "waiting_for_network", waitSource: "subagent" });
     expect(store.getState().waitingForNetwork).toBe(true);
     // The child recovers first: the parent is still parked.
-    event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 4_000, waitSource: "subagent", reason: "connect timeout" });
+    event(store, { type: "network_wait_end", waitId: "c1", waitSource: "subagent", outcome: "recovered" });
     expect(store.getState().waitingForNetwork).toBe(true);
     expect(store.getState().networkWaitEpisodes).toEqual({ parent: 1, subagent: 0 });
     // Then the parent recovers: the banner clears.
     event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 6_000, waitSource: "parent", reason: "connect timeout" });
     expect(store.getState().waitingForNetwork).toBe(false);
     expect(store.getState().networkWaitEpisodes).toEqual({ parent: 0, subagent: 0 });
+  });
+
+  it("a subagent wait clears the banner on its network_wait_end (no recovery stream_retry is forwarded)", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network", waitSource: "subagent", waitId: "c1" });
+    expect(store.getState().waitingForNetwork).toBe(true);
+    event(store, { type: "network_wait_end", waitId: "c1", waitSource: "subagent", outcome: "recovered" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+    expect(store.getState().networkWaitEpisodes).toEqual({ parent: 0, subagent: 0 });
+  });
+
+  it("a failed or cancelled subagent wait also closes its episode", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network", waitSource: "subagent", waitId: "c1" });
+    event(store, { type: "network_wait_end", waitId: "c1", waitSource: "subagent", outcome: "failed" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+  });
+
+  it("overlapping parent and subagent waits keep the banner until both end", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network", waitSource: "parent", waitId: "p1" });
+    event(store, { type: "waiting_for_network", waitSource: "subagent", waitId: "c1" });
+    event(store, { type: "network_wait_end", waitId: "c1", waitSource: "subagent", outcome: "recovered" });
+    expect(store.getState().waitingForNetwork).toBe(true);
+    expect(store.getState().networkWaitEpisodes).toEqual({ parent: 1, subagent: 0 });
+    event(store, { type: "network_wait_end", waitId: "p1", waitSource: "parent", outcome: "recovered" });
+    // The parent's end event alone does not decrement; its recovery retry does.
+    expect(store.getState().waitingForNetwork).toBe(true);
+    event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 6_000, waitSource: "parent", reason: "connect timeout" });
+    expect(store.getState().waitingForNetwork).toBe(false);
+  });
+
+  it("does not double-decrement: wait_end plus a labelled recovery retry closes one episode", () => {
+    const store = runningStore();
+    event(store, { type: "waiting_for_network", waitSource: "parent", waitId: "p1" });
+    event(store, { type: "waiting_for_network", waitSource: "subagent", waitId: "c1" });
+    event(store, { type: "waiting_for_network", waitSource: "subagent", waitId: "c2" });
+    event(store, { type: "network_wait_end", waitId: "c1", waitSource: "subagent", outcome: "recovered" });
+    event(store, { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 4_000, waitSource: "subagent", reason: "connect timeout" });
+    expect(store.getState().networkWaitEpisodes).toEqual({ parent: 1, subagent: 1 });
+    event(store, { type: "network_wait_end", waitId: "p1", outcome: "recovered" });
+    expect(store.getState().networkWaitEpisodes).toEqual({ parent: 1, subagent: 1 });
+    expect(store.getState().waitingForNetwork).toBe(true);
   });
 
   it("an unlabeled waiting event counts as the parent (legacy wire)", () => {
