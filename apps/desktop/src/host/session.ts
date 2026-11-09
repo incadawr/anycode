@@ -2890,7 +2890,7 @@ export class Session {
         }
         return this.agentDeliveries.get(envelope.messageId)!;
       }
-      // rework (Opus defect 4): agent-to-agent steers into a NATIVE engine
+      // Agent-to-agent steers into a NATIVE engine
       // keep the PRE-BRANCH protocol and timing verbatim — the native
       // app-server takes the input on its own channel.
       if (!this.busy || !this.engine.steer) {
