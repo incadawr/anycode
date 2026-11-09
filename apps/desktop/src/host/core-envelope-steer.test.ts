@@ -52,6 +52,34 @@ function durableFrames(h: { engine: SessionEngine }, marker: string): number {
     .filter((item) => item.message.role === "user" && JSON.stringify(item.message.content).includes(marker)).length;
 }
 
+/** A CHILD session over its OWN real core loop and model port. */
+function childFixture(steps: ModelStreamEvent[][], parkAfterIndex: number) {
+  const donor = createHarness({ steps: [] });
+  const port = new GatedModelPort(steps, parkAfterIndex);
+  const broker = new IpcPermissionBroker(() => {});
+  const config: AgentLoopConfig = { ...donor.config, modelPort: port, permissionBroker: broker };
+  const engine = new CoreEngine({ loop: new AgentLoop(config), config });
+  const terminal = vi.fn();
+  const child = new Session({
+    outbound: new Outbound(),
+    engine,
+    broker,
+    fs: donor.toolFs,
+    workspace: "/workspace",
+    projectRoot: "/workspace",
+    model: "fixture",
+    sessionId: "child-session",
+    bootHistory: [],
+    rules: new SessionPermissionRules(),
+    child: { onReady: () => {}, onProgress: () => {}, flushHistory: async () => {}, onTerminal: terminal },
+  });
+  const envelope = (messageId: string, mode: "next_turn" | "steer" = "steer", payload = BODY): AgentEnvelope => ({
+    messageId, sender: "test-supervisor", recipientSessionId: "child-session", kind: "agent_message", payload, mode,
+    createdAt: new Date().toISOString(),
+  });
+  return { donor, port, child, terminal, envelope };
+}
+
 describe("core envelope steer", () => {
   it("queues a core steer at once and injects it at the seam after the blocked tool", async () => {
     const { h, port, envelope } = coreFixture([
@@ -175,6 +203,13 @@ describe("core envelope steer", () => {
       // No silent next-turn fallback: the envelope did not start a turn.
       expect(durableFrames(h, BODY)).toBe(0);
       expect(h.session.communicationMessageResult("m1")).toMatchObject({ state: "rejected" });
+
+      // A LATER turn never inherits the stale injection: the message stays
+      // rejected and is not correlated with the new turn.
+      await h.session.receiveAgentMessage(envelope("second", "next_turn", "SECOND_TURN"));
+      await vi.waitFor(() => expect(port.requests.length).toBeGreaterThan(1));
+      expect(h.session.agentMessageStatus("m1")?.state).toBe("rejected");
+      expect(h.session.communicationMessageResult("m1")).toMatchObject({ state: "rejected" });
     } finally {
       h.close();
     }
@@ -189,13 +224,22 @@ describe("core envelope steer", () => {
       await h.session.receiveAgentMessage(envelope("start", "next_turn", "START_TURN"));
       await h.waitFor(isPermissionRequest);
       expect((await h.session.receiveAgentMessage(envelope("m1"))).state).toBe("queued");
+      // A queued NEXT-TURN envelope waits for the same terminal boundary.
+      expect((await h.session.receiveAgentMessage(envelope("pending", "next_turn", "PENDING_TURN"))).state).toBe("queued");
 
       h.send({ type: "cancel_turn" });
       await vi.waitFor(() => expect(h.session.agentMessageStatus("m1")?.state).toBe("rejected"));
       expect(h.session.agentMessageStatus("m1")?.detail).toContain("Stop");
       expect(h.session.communicationMessageResult("m1")).toMatchObject({ state: "rejected" });
+      // The queued next-turn envelope is rejected with its own reason.
+      expect(h.session.agentMessageStatus("pending")).toMatchObject({
+        state: "rejected",
+        detail: "Cancelled by Stop before queued delivery",
+      });
+      expect(h.session.communicationMessageResult("pending")).toMatchObject({ state: "rejected" });
       // Stop does NOT silently run the message as another turn.
       expect(durableFrames(h, BODY)).toBe(0);
+      expect(durableFrames(h, "PENDING_TURN")).toBe(0);
     } finally {
       h.close();
     }
@@ -246,32 +290,40 @@ describe("core envelope steer", () => {
     }
   });
 
+  it("publishes the core steer's transitions on the delivery observer", async () => {
+    const { h, envelope } = coreFixture([
+      toolStep("w1", "Write", { file_path: "/workspace/a.txt", content: "x" }),
+      finishStep(),
+    ]);
+    const observed: { id: string; state: string; kind?: string }[] = [];
+    h.session.observeAgentDeliveries((delivery) => {
+      observed.push({ id: delivery.envelope.messageId, state: delivery.state, kind: delivery.deliveryKind });
+    });
+    try {
+      await h.session.receiveAgentMessage(envelope("start", "next_turn", "START_TURN"));
+      const ask = await h.waitFor(isPermissionRequest);
+      await h.session.receiveAgentMessage(envelope("m1"));
+      // The queued receipt is published BEFORE the injection settles.
+      expect(observed.filter((o) => o.id === "m1").map((o) => o.state)).toEqual(["queued"]);
+      h.send({ type: "permission_response", requestId: ask.requestId, behavior: "allow" });
+      await vi.waitFor(() => expect(h.session.agentMessageStatus("m1")?.state).toBe("acknowledged"));
+      // The eventual delivery rides the SAME channel.
+      expect(observed.filter((o) => o.id === "m1")).toEqual([
+        { id: "m1", state: "queued", kind: undefined },
+        { id: "m1", state: "acknowledged", kind: "core_seam" },
+      ]);
+    } finally {
+      h.close();
+    }
+  });
+
   it("injects a core steer into a running CHILD session", async () => {
     // The child runs the REAL core loop over its OWN model port: the model
     // parks mid-step, so the steer lands while the child's turn is alive.
-    const donor = createHarness({ steps: [] });
-    const port = new GatedModelPort([toolStep("r1", "Read", { file_path: "/workspace/a.txt" }), finishStep()], 1);
-    const broker = new IpcPermissionBroker(() => {});
-    const config: AgentLoopConfig = { ...donor.config, modelPort: port, permissionBroker: broker };
-    const engine = new CoreEngine({ loop: new AgentLoop(config), config });
-    const terminal = vi.fn();
-    const child = new Session({
-      outbound: new Outbound(),
-      engine,
-      broker,
-      fs: donor.toolFs,
-      workspace: "/workspace",
-      projectRoot: "/workspace",
-      model: "fixture",
-      sessionId: "child-session",
-      bootHistory: [],
-      rules: new SessionPermissionRules(),
-      child: { onReady: () => {}, onProgress: () => {}, flushHistory: async () => {}, onTerminal: terminal },
-    });
-    const envelope = (messageId: string, mode: "next_turn" | "steer" = "steer", payload = BODY): AgentEnvelope => ({
-      messageId, sender: "test-supervisor", recipientSessionId: "child-session", kind: "agent_message", payload, mode,
-      createdAt: new Date().toISOString(),
-    });
+    const { donor, port, child, terminal, envelope } = childFixture([
+      toolStep("r1", "Read", { file_path: "/workspace/a.txt" }),
+      finishStep(),
+    ], 1);
     try {
       expect(child.startProgrammaticTurn("child work")).toEqual({ ok: true });
       await vi.waitFor(() => expect(port.requests).toHaveLength(1));
@@ -282,6 +334,26 @@ describe("core envelope steer", () => {
       await vi.waitFor(() => expect(child.agentMessageStatus("m1")?.state).toBe("acknowledged"));
       expect(child.agentMessageStatus("m1")).toMatchObject({ state: "acknowledged", deliveryKind: "core_seam" });
       expect(port.requests[1]!.messages.filter((m) => JSON.stringify(m).includes(BODY))).toHaveLength(1);
+    } finally {
+      await child.shutdown();
+      donor.close();
+    }
+  });
+
+  it("rejects a pending core injection in a CHILD session when the child terminal lands", async () => {
+    // The child's only step finishes: there is no seam, so the queued frame
+    // dies with the turn and the child's terminal refuses it honestly.
+    const { donor, port, child, terminal, envelope } = childFixture([finishStep()], 0);
+    try {
+      expect(child.startProgrammaticTurn("child work")).toEqual({ ok: true });
+      await vi.waitFor(() => expect(port.requests).toHaveLength(1));
+      expect((await child.receiveAgentMessage(envelope("m1"))).state).toBe("queued");
+
+      port.release();
+      await vi.waitFor(() => expect(terminal).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(child.agentMessageStatus("m1")?.state).toBe("rejected"));
+      expect(child.agentMessageStatus("m1")?.detail).toContain("before injection");
+      expect(child.communicationMessageResult("m1")).toMatchObject({ state: "rejected" });
     } finally {
       await child.shutdown();
       donor.close();

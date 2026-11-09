@@ -2746,17 +2746,24 @@ export class Session {
         const receivingTurnId = this.turnId;
         this.pendingCoreInjections.set(envelope.messageId, { envelope, hostTurnId: receivingTurnId });
         const engine = this.engine;
-        void engine.steer!(agentMessageText(envelope)).then(
-          (ack) => {
-            this.settleCoreInjection(envelope.messageId, { state: "acknowledged", nativeTurnId: ack.turnId });
-          },
-          (error: unknown) => {
-            // No silent next-turn fallback for an EXPLICIT steer: the
-            // caller asked for a mid-turn injection and the host reports
-            // honestly that the frame did not reach the model.
-            this.settleCoreInjection(envelope.messageId, { state: "rejected", detail: describeError(error) });
-          },
-        );
+        const settleRejected = (error: unknown): void => {
+          // No silent next-turn fallback for an EXPLICIT steer: the caller
+          // asked for a mid-turn injection and the host reports honestly
+          // that the frame did not reach the model.
+          this.settleCoreInjection(envelope.messageId, { state: "rejected", detail: describeError(error) });
+        };
+        try {
+          void engine.steer!(agentMessageText(envelope)).then(
+            (ack) => {
+              this.settleCoreInjection(envelope.messageId, { state: "acknowledged", nativeTurnId: ack.turnId });
+            },
+            settleRejected,
+          );
+        } catch (error) {
+          // An engine that refuses SYNCHRONOUSLY must still settle the
+          // delivery — a queued injection may never stay queued forever.
+          settleRejected(error);
+        }
         return this.agentDeliveries.get(envelope.messageId)!;
       }
       // rework (Opus defect 4): agent-to-agent steers into a NATIVE engine
