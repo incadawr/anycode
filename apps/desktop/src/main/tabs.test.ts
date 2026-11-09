@@ -9931,6 +9931,39 @@ describe("Agent managed worktree admission", () => {
 });
 
 describe("network activity", () => {
+  it("caches waits, clears on recovery and exit, and ignores malformed or stale hosts", () => {
+    const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/allowed", sessionId: "activity", resume: false });
+    const host = rig.hosts[0]!;
+    const wait = { source: "parent", startedAt: 10, deadlineAt: 20, failureCode: "network" };
+    host.emit("message", { type: "session_activity", state: "waiting_network", snapshot: { state: "waiting_network", networkWait: wait } });
+    expect(manager.listTabs()[0]).toMatchObject({ activityState: "waiting_network", activitySnapshot: { networkWait: wait } });
+    host.emit("message", { type: "session_activity", state: "running", snapshot: { state: "running" } });
+    expect(manager.listTabs()[0]).toMatchObject({ activityState: "running", activitySnapshot: { state: "running" } });
+    expect(manager.listTabs()[0]?.activitySnapshot?.networkWait).toBeUndefined();
+    host.emit("message", { type: "session_activity", state: "waiting_network", snapshot: { state: "waiting_network", networkWait: { source: "bad", deadlineAt: Infinity } } });
+    expect(manager.listTabs()[0]?.activitySnapshot?.networkWait).toBeUndefined();
+    host.emit("exit", 1);
+    expect(manager.listTabs()[0]?.activitySnapshot).toBeUndefined();
+    host.emit("message", { type: "session_activity", state: "waiting_network", snapshot: { state: "waiting_network", networkWait: wait } });
+    expect(manager.listTabs()[0]?.activityState).toBe("idle");
+    expect(manager.listTabs()[0]?.activitySnapshot).toBeUndefined();
+  });
+  it("retains the earliest of overlapping waits until each ends", async () => {
+    const { NetworkWaitState } = await import("../host/network-wait-state.js");
+    const waits = new NetworkWaitState();
+    const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/allowed", sessionId: "activity", resume: false });
+    const publish = () => { const networkWait = waits.summary; const state = networkWait ? "waiting_network" : "running"; rig.hosts[0]!.emit("message", { type: "session_activity", state, snapshot: { state, ...(networkWait ? { networkWait } : {}) } }); };
+    waits.observe({ type: "waiting_for_network", waitId: "a", startedAt: 10 } as Parameters<typeof waits.observe>[0]);
+    waits.observe({ type: "waiting_for_network", waitId: "b", startedAt: 20 } as Parameters<typeof waits.observe>[0]); publish();
+    expect(manager.listTabs()[0]?.activitySnapshot?.networkWait?.startedAt).toBe(10);
+    waits.observe({ type: "network_wait_end", waitId: "a" } as Parameters<typeof waits.observe>[0]); publish();
+    expect(manager.listTabs()[0]).toMatchObject({ activityState: "waiting_network", activitySnapshot: { networkWait: { startedAt: 20 } } });
+    waits.observe({ type: "network_wait_end", waitId: "b" } as Parameters<typeof waits.observe>[0]); publish();
+    expect(manager.listTabs()[0]).toMatchObject({ activityState: "running", activitySnapshot: { state: "running" } });
+    expect(manager.listTabs()[0]?.activitySnapshot?.networkWait).toBeUndefined();
+  });
   it("validates activity telemetry independently", async () => {
     const { validateActivitySnapshot } = await import("./activity-snapshot.js");
     expect(validateActivitySnapshot({ state: "waiting_network", networkWait: { source: "parent", startedAt: 10, failureCode: "timeout" } })).toEqual({ state: "waiting_network", networkWait: { source: "parent", startedAt: 10, failureCode: "timeout" } });
