@@ -434,6 +434,8 @@ export interface WireBackgroundChild {
   agentType: string;
   description: string;
   startedAt: number; // epoch ms
+  /** Frozen end time (epoch ms) of a failed row; presentation timing only, never sent by the host. */
+  endedAt?: number;
   /**
    * GitHub #17 slice E: light optional progress. Absent when the
    * child has not reported that fact (an engine that reports no turns keeps

@@ -142,6 +142,7 @@ import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, isSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
+import { dismissFailedChild, recordFailedChild } from "./failed-background-children.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 // the global settings-store (NOT part of DesktopState) — the
 // provider_quota case projects the observation onto its snapshot's matching
@@ -1483,6 +1484,12 @@ export interface DesktopState {
   backgroundChildren: WireBackgroundChild[];
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
+  /**
+   * Report identities of failed rows the user dismissed in this session, so a
+   * replayed child_report cannot bring a dismissed row back. Cleared by
+   * `reset()` only, never by a parent turn.
+   */
+  dismissedFailedChildReports: string[];
   /** Model turns this tab finished (`turn_end` count) — a live child's "turn N" while its loop still runs. */
   modelTurns: number;
   /**
@@ -1733,6 +1740,8 @@ export interface DesktopState {
    */
   recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string, trackDirect?: boolean): void;
   dismissRejectedDelivery(requestId: string): void;
+  /** Local presentation only: drops one failed background row; never touches the child, its worktree or its report. */
+  dismissFailedBackgroundChild(childSessionId: string): void;
   claimRecoveryAttempt(sourceId: string, requestId: string, text: string, images: readonly QueuedPromptImage[], picks: QueuedPrompt["initialPicks"], opts?: {orchestrate?:"enable"; pickerId?:string; bindDraft?:boolean}): boolean;
   enqueueRecoveryPrompt(sourceId: string, item: Omit<QueuedPrompt,"id" | "recoverySourceId">): boolean;
   markOrchestrationDeliveryUnknown(requestId: string): void;
@@ -5152,6 +5161,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
+      dismissedFailedChildReports: [],
       orchestration: { available: false, posture: "off", protocol: null, pendingToggle: null, pendingSubmit: null, observedEnabled: null },
       orchestrationDeliveries: [],
       queueEditDraft: null,
@@ -6294,9 +6304,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const childTerminal = message.childTerminal;
             if (childTerminal?.status === "error" && childTerminal.failureReason) {
               set((state) => {
-                const child = [...state.backgroundChildren, ...state.recentBackgroundChildren].find((item) => item.spawnToolCallId === message.id);
-                if (!child) return {};
-                return { failedBackgroundChildren: [...state.failedBackgroundChildren.filter((item) => item.childSessionId !== child.childSessionId), { ...child, failureReason: childTerminal.failureReason }].slice(-20) };
+                const failed = recordFailedChild(
+                  state.failedBackgroundChildren,
+                  state.dismissedFailedChildReports,
+                  [...state.backgroundChildren, ...state.recentBackgroundChildren],
+                  { reportId: message.id, failureReason: childTerminal.failureReason!, durationMs: childTerminal.durationMs },
+                  Date.now(),
+                );
+                return failed === null ? {} : { failedBackgroundChildren: failed };
               });
             }
             // a cancelled terminal patches too — the card must read
@@ -6719,6 +6734,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryUnknown(item) : item)}));
       },
 
+      dismissFailedBackgroundChild(childSessionId: string): void {
+        set((state) => {
+          const next = dismissFailedChild(state.failedBackgroundChildren, state.dismissedFailedChildReports, childSessionId);
+          return next === null ? {} : { failedBackgroundChildren: next.failed, dismissedFailedChildReports: next.dismissedReportIds };
+        });
+      },
+
       dismissRejectedDelivery(requestId: string): void {
         set((state) => {
           if (!canDismissRejectedDelivery(state, requestId)) return {};
@@ -6809,7 +6831,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       reset(): void {
         pendingSentMessages.clear();
-        set((state) => ({ restoredComposerDraft: null, ...holdInFlightUnknown(state), promptQueue:[], queueEditDraft:null, queuePaused:false, composerRolePicker: null, contextWindowDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+        set((state) => ({ restoredComposerDraft: null, dismissedFailedChildReports: [], ...holdInFlightUnknown(state), promptQueue:[], queueEditDraft:null, queuePaused:false, composerRolePicker: null, contextWindowDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.

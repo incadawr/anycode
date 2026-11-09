@@ -8284,6 +8284,78 @@ describe("desktop store — background_children (detached agents strip)", () => 
   });
 });
 
+describe("desktop store — failed detached child rows", () => {
+  const live = (n: number) => ({ childSessionId: `child-${n}`, spawnToolCallId: `spawn-${n}`, agentType: "worker", description: `task ${n}`, startedAt: 1_000 * n });
+  const fail = (store: ReturnType<typeof createDesktopStore>, n: number, durationMs = 100) =>
+    store.getState().applyHostMessage({ type: "child_report", id: `spawn-${n}`, text: `report ${n}`, childTerminal: { status: "error", durationMs, failureReason: `boom ${n}` } });
+  const setup = () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    return store;
+  };
+
+  it("keeps the description of a delayed-start child whose terminal arrives after it left the live snapshot", () => {
+    const store = setup();
+    store.getState().applyHostMessage({ type: "background_children", children: [live(1), live(2)] });
+    store.getState().applyHostMessage({ type: "background_children", children: [live(2)] });
+    store.getState().applyHostMessage({ type: "background_children", children: [] });
+    fail(store, 1, 400);
+    expect(store.getState().failedBackgroundChildren).toEqual([
+      { ...live(1), failureReason: "boom 1", endedAt: 1_400 },
+    ]);
+  });
+
+  it("a duplicate report does not reset endedAt and the report is still enqueued once", () => {
+    const store = setup();
+    store.getState().applyHostMessage({ type: "background_children", children: [live(1)] });
+    store.getState().applyHostMessage({ type: "background_children", children: [] });
+    fail(store, 1, 400);
+    fail(store, 1, 9_000);
+    expect(store.getState().failedBackgroundChildren).toHaveLength(1);
+    expect(store.getState().failedBackgroundChildren[0]?.endedAt).toBe(1_400);
+  });
+
+  it("a report with no retained snapshot adds no row and keeps the report queued", () => {
+    const store = setup();
+    fail(store, 5);
+    expect(store.getState().failedBackgroundChildren).toEqual([]);
+    expect(store.getState().promptQueue.some((prompt) => prompt.originId === "spawn-5") || store.getState().queueInFlight?.item.originId === "spawn-5").toBe(true);
+  });
+
+  it("dismiss removes only the named row; a replayed report cannot resurrect it; a new failure stays visible", () => {
+    const store = setup();
+    store.getState().applyHostMessage({ type: "background_children", children: [live(1), live(2), live(3)] });
+    store.getState().applyHostMessage({ type: "background_children", children: [] });
+    fail(store, 1);
+    fail(store, 2);
+    store.getState().dismissFailedBackgroundChild("child-1");
+    expect(store.getState().failedBackgroundChildren.map((c) => c.childSessionId)).toEqual(["child-2"]);
+    fail(store, 1);
+    expect(store.getState().failedBackgroundChildren.map((c) => c.childSessionId)).toEqual(["child-2"]);
+    fail(store, 3);
+    expect(store.getState().failedBackgroundChildren.map((c) => c.childSessionId)).toEqual(["child-2", "child-3"]);
+    store.getState().dismissFailedBackgroundChild("missing");
+    expect(store.getState().failedBackgroundChildren).toHaveLength(2);
+  });
+
+  it("a parent turn does not clear failed rows or the dismissed set; reset() clears both", () => {
+    const store = setup();
+    store.getState().applyHostMessage({ type: "background_children", children: [live(1), live(2)] });
+    store.getState().applyHostMessage({ type: "background_children", children: [] });
+    fail(store, 1);
+    fail(store, 2);
+    store.getState().dismissFailedBackgroundChild("child-1");
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "turn-1" });
+    store.getState().applyHostMessage({ type: "turn_end", turnId: "turn-1", reason: "completed" } as never);
+    expect(store.getState().failedBackgroundChildren.map((c) => c.childSessionId)).toEqual(["child-2"]);
+    expect(store.getState().dismissedFailedChildReports).toEqual(["spawn-1"]);
+    store.getState().reset();
+    expect(store.getState().failedBackgroundChildren).toEqual([]);
+    expect(store.getState().dismissedFailedChildReports).toEqual([]);
+  });
+});
+
 describe("projectHistoryToBlocks createdAt -> at", () => {
   it("projects createdAt onto user_text.at", () => {
     const blocks = projectHistoryToBlocks([
