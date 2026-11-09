@@ -7,7 +7,7 @@ const d = await createPeerSmoke({pngDir:resolve(pngDir)});
 const delay = () => new Promise(r => setTimeout(r,400));
 const check = async (name, expression) => { try { const value = await d.evaluate(expression); console.log(`${value ? 'PASS' : 'FAIL'} ${name}: ${JSON.stringify(value)}`); return value; } catch(e) { console.log(`FAIL ${name}: ${e.message}`); return false; } };
 const shot = async (name, expression) => { if (await check(name,expression)) await d.screenshot(name+'.png'); };
-const key = async (key, code, n) => { await d.cdp.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n}); await d.cdp.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n}); await delay(); };
+const key = async (key, code, n, modifiers=0) => { await d.cdp.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,modifiers}); await d.cdp.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n,modifiers}); await delay(); };
 try {
   await d.start();
   const [a] = d.tabs;
@@ -53,8 +53,12 @@ try {
     await check('overlay preview hidden while open',`document.body.innerText.includes('Preview hidden')`);
     await check('search focused',`!!document.activeElement?.closest('.session-peers-search')`);
     await check('dialog overflow',`(()=>{const e=document.querySelector('.session-peers-dialog');return !!e && e.scrollWidth<=e.clientWidth})()`);
-    await key('Tab','Tab',9);
-    await check('Tab stays in dialog',`!!document.activeElement?.closest('.session-peers-dialog')`);
+    const ends = `(()=>{const d=document.querySelector('.session-peers-dialog'); const a=[...d.querySelectorAll('button:not(:disabled),input:not(:disabled),[tabindex]:not([tabindex="-1"])')].filter(e=>e.getClientRects().length); window.__tabEnds=[a[0],a.at(-1)]; return a.length})()`;
+    console.log('TAB CONTROLS',await d.evaluate(ends));
+    await d.evaluate('window.__tabEnds[1].focus()'); await key('Tab','Tab',9);
+    await check('Tab last to first',`document.activeElement===window.__tabEnds[0]`);
+    await key('Tab','Tab',9,8);
+    await check('Shift+Tab first to last',`document.activeElement===window.__tabEnds[1]`);
     await d.evaluate(`(()=>{const x=document.querySelector('.session-peers-search input');if(x){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(x,'fixture-01');x.dispatchEvent(new Event('input',{bubbles:true}))}})()`); await delay();
     await shot(`search-match-${theme}-${width}`,`document.querySelectorAll('.session-peers-row').length===1 && document.querySelector('.session-peers-row')?.getAttribute('aria-label')?.includes('fixture-01')`);
     await d.evaluate(`(()=>{const x=document.querySelector('.session-peers-search input');if(x){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(x,'no-such-project');x.dispatchEvent(new Event('input',{bubbles:true}))}})()`); await delay();
@@ -65,6 +69,14 @@ try {
     console.log('ACTIVE AFTER ESCAPE',JSON.stringify(await d.evaluate(`(()=>{const e=document.activeElement;return {tag:e?.tagName,aria:e?.getAttribute('aria-label'),text:e?.textContent?.trim().slice(0,100),class:e?.className}})()`)));
     await check('real Escape focus returned',`!!document.activeElement?.matches('button.environment-trigger[aria-label^=Environment]')`);
     await check('overlay preview restored',`!document.body.innerText.includes('Preview hidden')`);
+    for (const how of ['close button','outside']) {
+      await menu(); await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage…'))?.click()`); await delay();
+      if (how==='close button') await d.evaluate(`document.querySelector('.session-peers-dialog button[aria-label="Close"]').click()`);
+      else { await d.cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',x:2,y:2,button:'left',clickCount:1}); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:2,y:2,button:'left',clickCount:1}); }
+      await delay(); console.log('ACTIVE AFTER '+how.toUpperCase(),JSON.stringify(await d.evaluate(`(()=>{const e=document.activeElement;return {tag:e?.tagName,aria:e?.getAttribute('aria-label'),text:e?.textContent?.trim().slice(0,100)}})()`)));
+      await check(how+' closed and focus returned',`!document.querySelector('.session-peers-dialog') && !!document.activeElement?.matches('button.environment-trigger[aria-label^=Environment]')`);
+    }
+
     await d.evaluate(`document.querySelector('.environment-menu') && document.querySelector('.environment-trigger').click()`);
   }
   await attempt('hover help',async()=>{await menu(); const q=await d.evaluate(`(()=>{const e=document.querySelector('.row-help-button');if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`); if(!q)throw Error('help button missing'); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',...q}); await delay(); await shot('help-hover',`!!document.querySelector('[role=tooltip][data-open=true]')`); await dismiss();});
