@@ -132,7 +132,7 @@ unknown or stale, rather than a live authentication check or a promise of admiss
 | Tool | What it does |
 |---|---|
 | `list_sessions` | Lists the shared sessions. No transcript or credentials. |
-| `get_session_status` | Engine, running/idle state, the selected model and effort, the model's supported effort levels and whether an effort change is still pending. |
+| `get_session_status` | Engine, activity state (including a network wait summary), the selected model and effort, the model's supported effort levels and whether an effort change is still pending. |
 | `get_session_result` | Latest completed public answer and its turn identity. No reasoning. |
 | `send_message` | Sends a message. `mode: next_turn` queues it for the next turn; `mode: steer` steers an active Codex turn. |
 | `get_message_status` | Delivery state of a message you sent. |
@@ -313,11 +313,46 @@ time is refused with `not_ready` instead, and no tab is left behind.
 ### Session status
 
 `list_sessions` and `get_session_status` report the same activity state: `idle`,
-`running`, `waiting_approval` (including queued human interaction), or `closing`.
-A pending approval is reported even when External approvals is off. Terminal
+`running`, `waiting_approval` (including queued human interaction),
+`waiting_network` (a provider request is waiting for the network or provider to
+come back), or `closing`. When several states apply, the order is `closing`, then
+`waiting_approval`, then `waiting_network`, then `running`, then `idle`; an
+approval can therefore be reported while a network wait is still active. A
+pending approval is reported even when External approvals is off. Terminal
 sessions report `crash_looped` or `missing_workspace`. Listing reads the latest
 activity known to the application without waiting for hosts, including while a
 host restarts. Clients should accept the full state vocabulary.
+
+While a session is waiting on the network, both tools add a `networkWait`
+summary. If several requests wait at once (the session itself and its
+subagents), the summary describes the earliest one that is still active; it
+disappears when the last wait ends. All timestamps are epoch milliseconds.
+
+```json
+{
+  "state": "waiting_network",
+  "networkWait": {
+    "source": "subagent",
+    "startedAt": 1767225600000,
+    "deadlineAt": 1767227400000,
+    "failureCode": "network"
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `networkWait.source` | `parent` for the session's own request, `subagent` for a subagent's. |
+| `networkWait.startedAt` | When that wait began. Omitted when the producer did not report it. |
+| `networkWait.deadlineAt` | When the wait gives up, projected from the time the session still has left to wait (the allowance is cumulative), not a fresh full allowance per episode. Omitted when unknown. |
+| `networkWait.failureCode` | A safe failure category such as `network`, `tls`, `proxy_unreachable` or `rate_limited`; never provider text. Omitted when unknown. |
+| `turnStartedAt` | When the running turn started, or `null` when no turn is active. |
+| `lastProviderActivityAt` | When the model last produced output or completed a step in this turn, or `null` before the first one and for engines that give no reliable signal. Retries, network checks, tool execution and message delivery do not move it. `list_sessions` repeats these two values from the application's last known activity, so they can lag `get_session_status`. |
+
+These are observations, not guarantees: a timestamp does not prove that the
+provider or the model read or applied anything, and a missing `networkWait` does
+not prove the network is healthy. Retrying early is not available through this
+API; the Retry now button in the session's own window is unchanged.
 
 `get_session_status` also answers the engine and these effort fields:
 
