@@ -6,7 +6,7 @@ const pngDir = process.env.ANYCODE_SHOTS_DIR || '/Users/incadawr/projects/tools/
 const d = await createPeerSmoke({pngDir:resolve(pngDir)});
 const delay = () => new Promise(r => setTimeout(r,400));
 const check = async (name, expression) => { try { const value = await d.evaluate(expression); console.log(`${value ? 'PASS' : 'FAIL'} ${name}: ${JSON.stringify(value)}`); return value; } catch(e) { console.log(`FAIL ${name}: ${e.message}`); return false; } };
-const shot = async (name, expression) => { if (await check(name,expression)) await d.screenshot(name+'.png'); };
+const shot = async (name, expression) => { await d.evaluate(`document.querySelectorAll('details.child-worktree-control[open]').forEach(e=>e.open=false)`); await delay(); if (await check(name,expression)) await d.screenshot(name+'.png'); };
 const key = async (key, code, n, modifiers=0) => { await d.cdp.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,modifiers}); await d.cdp.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n,modifiers}); await delay(); };
 try {
   await d.start();
@@ -106,7 +106,7 @@ try {
     await dismiss(); await menu();
     const inactiveSeen=await d.evaluate(`new Promise(resolve=>{const end=Date.now()+4000;const probe=()=>{const m=document.querySelector('.environment-menu');const t=m?.querySelector('.native-access-summary')?.innerText||'';if(t.includes('Currently inactive')||Date.now()>end)resolve(t);else setTimeout(probe,100)};probe()})`);
     console.log('MENU SUMMARY',JSON.stringify(inactiveSeen));
-    await shot('currently-inactive',`!!document.querySelector('.environment-menu .native-access-summary')?.innerText.includes('Currently inactive')`); await dismiss();
+    await shot('currently-inactive',`!!document.querySelector('.environment-menu .native-access-summary-state')?.innerText.includes('Currently inactive')`); await dismiss();
   });
   await attempt('untrusted disabled reason',async()=>{
     const trustPath=join(d.root,'.anycode','workspace-trust.json'); const trust=JSON.parse(readFileSync(trustPath,'utf8')); delete trust.folders[a.workspace]; writeFileSync(trustPath,JSON.stringify(trust));
