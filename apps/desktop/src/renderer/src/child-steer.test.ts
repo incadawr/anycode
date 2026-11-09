@@ -286,6 +286,24 @@ describe("child host-queued steer (store-level event orders)", () => {
     expect(state.pendingSteers).toHaveLength(0);
   });
 
+  it("the refused-steer notice says held on a child surface and queued on the root, for both recovery paths", () => {
+    const refusal = { type: "steer_requeued", requestId: "s1", reason: "No active core turn", text: "STEER_ONE" } as HostToUiMessage;
+    // Reload recovery (no pending entry).
+    const child = childStore();
+    child.getState().applyHostMessage(refusal);
+    expect(child.getState().notice?.text).toBe("Steer not delivered — held; restore the draft to send it again.");
+    // Live pending entry.
+    const live = childStore();
+    live.getState().recordPendingSteer("s1", "STEER_ONE", undefined, { text: "STEER_ONE", images: [] });
+    live.getState().markUiSteer("s1");
+    live.getState().applyHostMessage(refusal);
+    expect(live.getState().notice?.text).toContain("held");
+    expect(live.getState().notice?.text).not.toContain("queued for the next turn");
+    const root = createDesktopStore({ schedule: (fn) => fn() });
+    root.getState().applyHostMessage(refusal);
+    expect(root.getState().notice?.text).toBe("Steer not delivered into the running turn — queued for the next turn.");
+  });
+
   it("a root steer keeps the renderer-owned requeue at loop_end", () => {
     const store = createDesktopStore({ schedule: (fn) => fn() });
     store.getState().applyHostMessage(started("initial", "t1"));

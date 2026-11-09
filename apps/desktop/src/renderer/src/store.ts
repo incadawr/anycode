@@ -928,6 +928,13 @@ export interface GitSlice {
   lastError: { label: string; reason: string } | null;
 }
 
+/** Root refusals are re-sent by the drainer; a child surface holds the text until the user restores it. */
+function steerRefusedNotice(childSurface: boolean): string {
+  return childSurface
+    ? "Steer not delivered — held; restore the draft to send it again."
+    : "Steer not delivered into the running turn — queued for the next turn.";
+}
+
 function initialGitSlice(): GitSlice {
   return {
     status: null,
@@ -5628,7 +5635,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             if (pending !== undefined) {
               get().requeuePendingSteer(message.requestId);
-              set({ notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." } });
+              set((state) => ({ notice: { kind: "steer_requeued", text: steerRefusedNotice(state.childSurface) } }));
               return;
             }
             if (typeof message.text === "string" && message.text.length > 0 && !get().steerRequeueSeen.includes(message.requestId)) {
@@ -5640,7 +5647,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 promptQueue: [...state.promptQueue, { id: message.requestId, text: message.text as string, images: [], ...(state.childSurface ? { requiresRestore: true } : {}) }],
                 ...(state.childSurface ? { queuePaused: true, queuePauseReason: "rejected" as const } : {}),
                 steerRequeueSeen: [...state.steerRequeueSeen, message.requestId],
-                notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." },
+                notice: { kind: "steer_requeued", text: steerRefusedNotice(state.childSurface) },
               }));
             }
             return;

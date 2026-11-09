@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { createCommunicationLedger, type CommunicationRecord } from "./communication-ledger.js";
+import { applyDeliveryUpdate, createCommunicationLedger, type CommunicationRecord } from "./communication-ledger.js";
 import { createCommunicationDispatch, type CommunicationPrincipal, type CommunicationSendInput } from "./communication-dispatch.js";
 import type { CommunicationManager } from "./communication-server.js";
 import type { AgentDelivery, AgentDisplayCard, AgentEnvelope } from "../shared/communication.js";
@@ -94,7 +94,7 @@ export async function createCommunicationBroker(options: {
           if (waiting.size) deferredRestores.set(key, waiting); else deferredRestores.delete(key);
           for (const record of eligible.filter((r) => r.state === "queued")) {
             const current = await manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
-            if (record.state === "queued" && !await markLostGeneration(record) && current && (current.state !== record.state || current.detail !== record.detail)) { record.state = current.state; record.detail = current.detail; await persist(); }
+            if (record.state === "queued" && !await markLostGeneration(record) && current && (current.state !== record.state || current.detail !== record.detail)) { applyDeliveryUpdate(record, current); await persist(); }
           }
         }
       } catch { /* a closing/crashed host cannot authorize replay */ }
@@ -121,7 +121,7 @@ export async function createCommunicationBroker(options: {
         try {
           const current = await manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
           if (current && record.state === "queued" && (current.state !== record.state || current.detail !== record.detail)) {
-            record.state = current.state; record.detail = current.detail; await persist();
+            applyDeliveryUpdate(record, current); await persist();
           }
         } catch { /* closing host; display remains recoverable */ }
       }
@@ -170,7 +170,7 @@ export async function createCommunicationBroker(options: {
       const tab = manager.listTabs().find(t => t.sessionId === sessionId);
       if (closed || !record?.peer || record.envelope.recipientSessionId !== sessionId || tab?.pid !== record.hostPid ||
           JSON.stringify(record.envelope) !== JSON.stringify(delivery.envelope) || delivery.detail === "Dispatch pending") return;
-      record.state = delivery.state; record.detail = delivery.detail;
+      applyDeliveryUpdate(record, delivery);
       const task = persist().catch(() => {});
       pending.add(task); void task.finally(() => pending.delete(task));
     }) ?? (() => {}),

@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
-import type { createCommunicationLedger, CommunicationRecord } from "./communication-ledger.js";
+import { applyDeliveryUpdate, deliveryExtras, type createCommunicationLedger, type CommunicationRecord } from "./communication-ledger.js";
 
 /** Main-owned identity, never decoded from tool arguments. */
 export type CommunicationPrincipal = { kind: "external" } | { kind: "session"; sessionId: string; tabId: string };
 export type CommunicationSendInput = Pick<AgentEnvelope, "payload" | "mode" | "kind" | "correlationId" | "replyTo"> & { sessionId: string; idempotencyKey?: string };
 const unavailable = "Host response unavailable; do not blindly resend";
-function projectResponse(raw: unknown): Pick<AgentDelivery, "state" | "detail"> {
+function projectResponse(raw: unknown): Pick<AgentDelivery, "state" | "detail" | "deliveryKind" | "reasonCode"> {
   if (!raw || typeof raw !== "object") return { state: "unknown", detail: unavailable };
   const { state, detail } = raw as Record<string, unknown>;
   if (!["queued", "acknowledged", "rejected", "unknown"].includes(state as string) || (detail !== undefined && typeof detail !== "string")) return { state: "unknown", detail: unavailable };
-  return { state: state as AgentDelivery["state"], detail: detail === "Dispatch pending" ? unavailable : detail as string | undefined };
+  return { state: state as AgentDelivery["state"], detail: detail === "Dispatch pending" ? unavailable : detail as string | undefined, ...deliveryExtras(raw) };
 }
 
 export function createCommunicationDispatch(options: {
@@ -81,7 +81,7 @@ export function createCommunicationDispatch(options: {
         if (signal?.aborted) return record;
         try {
           const response = projectResponse(await options.post(input.sessionId, envelope, recipient.workspace));
-          record.state = response.state; record.detail = response.detail;
+          applyDeliveryUpdate(record, response);
         } catch { record.state = "unknown"; record.detail = unavailable; }
       } finally { inFlight.delete(envelope.messageId); }
       await options.markLostGeneration(record);

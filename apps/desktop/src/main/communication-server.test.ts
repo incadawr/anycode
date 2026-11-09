@@ -408,6 +408,19 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(value(await status()).state).toBe("acknowledged");
     expect(f.request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(1);
   });
+  it("reports deliveryKind on get_message_status once the recipient acknowledges at the Core seam", async () => {
+    const f = await fixture();
+    const record = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "allowed", payload: "steer", mode: "steer" } }));
+    expect(record.state).toBe("queued"); expect(record).not.toHaveProperty("deliveryKind");
+    f.request.mockImplementation(async (_session, op) => op === "get_message_status"
+      ? { envelope: record.envelope, state: "acknowledged", detail: "Inserted at Core loop boundary", deliveryKind: "core_seam" } : undefined);
+    const status = value(await f.client.callTool({ name: "get_message_status", arguments: { messageId: record.envelope.messageId } }));
+    expect(status).toMatchObject({ state: "acknowledged", deliveryKind: "core_seam" });
+    const ledger = JSON.parse(await readFile(`${f.discoveryFile}.messages`, "utf8"));
+    expect(ledger[0]).toMatchObject({ state: "acknowledged", deliveryKind: "core_seam" });
+    const tools = (await f.client.listTools()).tools;
+    expect(tools.find((t) => t.name === "send_message")?.description).toContain("deliveryKind");
+  });
   it("persists unknown when a queued recipient closes or disappears between polls", async () => {
     for (const lost of ["closing", "removed", "during query"] as const) {
       const f = await fixture();

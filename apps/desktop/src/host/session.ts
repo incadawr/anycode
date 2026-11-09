@@ -2591,7 +2591,12 @@ export class Session {
   observeAgentDeliveries(observer: (delivery: AgentDelivery) => void): void { this.agentDeliveryObserver = observer; }
 
   private publishAgentDelivery(delivery: AgentDelivery): void {
-    if (delivery.state === "rejected") this.registeredPeerMessages.delete(delivery.envelope.messageId);
+    if (delivery.state === "rejected") {
+      this.registeredPeerMessages.delete(delivery.envelope.messageId);
+      // Every rejection of a queued downgraded envelope (Stop, close, terminal
+      // drain, refused turn) retires its marker; the drain path reads it first.
+      this.nextTurnDowngrades.delete(delivery.envelope.messageId);
+    }
     this.agentDeliveries.set(delivery.envelope.messageId, { ...delivery });
     this.outbound.emit({ type: "agent_message", delivery: { ...delivery } });
     try { this.agentDeliveryObserver?.({ ...delivery }); } catch { /* persistence observation cannot affect delivery */ }

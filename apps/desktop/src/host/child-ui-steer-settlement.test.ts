@@ -477,6 +477,48 @@ describe("owning-parent steer while the Core seam is not active", () => {
     }
   });
 
+  it("rejects the downgraded steer with Inbox full when the inbox is at its bound, without queueing it", async () => {
+    const f = await childFixture([textStep("FIRST_ANSWER")], { seamNotReady: true });
+    try {
+      const seen = observe(f);
+      f.session.startProgrammaticTurn("INITIAL_PROMPT");
+      await f.waitUntil(() => f.port.requests.length === 1);
+      const filler = (i: number): AgentEnvelope => ({ ...parentEnvelope(`fill-${i}`, "test-supervisor"), mode: "next_turn", payload: "FILLER_BODY" });
+      for (let i = 0; i < 32; i++) expect((await f.session.receiveAgentMessage(filler(i))).state).toBe("queued");
+      const receipt = await f.session.receiveAgentMessage(parentEnvelope("p-full"));
+      expect(receipt).toMatchObject({ state: "rejected", detail: "Inbox full" });
+      expect(receipt.deliveryKind).toBeUndefined();
+      expect(f.session.agentMessageStatus("p-full")).toMatchObject({ state: "rejected", detail: "Inbox full" });
+      expect(seen.filter((d) => d.envelope.messageId === "p-full").map((d) => d.state)).toEqual(["rejected"]);
+      expect((f.session as unknown as { nextTurnDowngrades: Set<string> }).nextTurnDowngrades.has("p-full")).toBe(false);
+      f.port.release();
+      await f.waitUntil(() => f.terminal.mock.calls.length > 0);
+      await settle();
+      // The refused text never reached any model request.
+      expect(f.port.requests.map((_, index) => requestText(f.port, index)).some((text) => text.includes("PARENT_BODY"))).toBe(false);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("leaves no downgrade marker behind when a queued downgraded steer is cancelled", async () => {
+    const f = await childFixture([textStep("FIRST_ANSWER")], { seamNotReady: true });
+    try {
+      const markers = (f.session as unknown as { nextTurnDowngrades: Set<string> }).nextTurnDowngrades;
+      f.session.startProgrammaticTurn("INITIAL_PROMPT");
+      await f.waitUntil(() => f.port.requests.length === 1);
+      expect(await f.session.receiveAgentMessage(parentEnvelope("p-cancel"))).toMatchObject({ state: "queued", deliveryKind: "next_turn" });
+      expect(markers.has("p-cancel")).toBe(true);
+      f.send({ type: "cancel_turn" });
+      await f.waitUntil(() => f.session.agentMessageStatus("p-cancel")?.state === "rejected");
+      expect(f.session.agentMessageStatus("p-cancel")).toMatchObject({ state: "rejected", detail: "Cancelled by Stop before queued delivery" });
+      expect(markers.has("p-cancel")).toBe(false);
+      expect(markers.size).toBe(0);
+    } finally {
+      f.close();
+    }
+  });
+
   it("does not downgrade a peer or another session's steer", async () => {
     const f = await childFixture([textStep("FIRST_ANSWER")]);
     try {
