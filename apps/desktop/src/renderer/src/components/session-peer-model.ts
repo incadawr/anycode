@@ -1,5 +1,6 @@
 export const nativeAccessText = {
   title: "Native session access",
+  short: "On for trusted sessions in this folder",
   default: "Recommended default: On for trusted root sessions in this exact folder. You can turn this project Off.",
   off: "Native sessions are unavailable in this build (feature flag Off).",
   invalid: "The folder selection changed. Reopen this menu and try again.",

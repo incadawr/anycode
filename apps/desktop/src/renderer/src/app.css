@@ -9333,3 +9333,9 @@ dialog.role-picker-dialog {
 .connection-icon-swatches button.connection-icon-auto { background: linear-gradient(135deg, transparent 44%, var(--text-3) 44%, var(--text-3) 56%, transparent 56%); border: 1px dashed var(--border-strong); }
 .connection-icon-auto-label { color: var(--text-3); font-size: var(--fs-2xs); }
 .connection-icon-reset { align-self: flex-start; height: auto; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+
+.native-access-summary {
+  padding: 0 12px 4px 36px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}

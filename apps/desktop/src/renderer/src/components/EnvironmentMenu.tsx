@@ -4,6 +4,8 @@
  * rare, detailed work into the existing Git inspector drawer.
  */
 import { branchLockReason, isBranchLocked, useTabsStore } from "../tabs-store.js";
+import { useNativeSessionAccess } from "./useNativeSessionAccess.js";
+import { SessionPeersDialog } from "./SessionPeersDialog.js";
 import { NativeSessionAccess } from "./NativeSessionAccess.js";
 import { SessionAccessRow, type SessionAccessBridge } from "./SessionAccessRow.js";
 import { DiagnosticsExportSection } from "./DiagnosticsExportSection.js";
@@ -86,6 +88,9 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const gitAvailable = status !== null;
   const [open, setOpen] = useState(false);
+  const [peersOpen, setPeersOpen] = useState(false);
+  const native = useNativeSessionAccess(tabId, peersOpen ? "dialog" : open ? "menu" : undefined);
+  useEffect(() => { setPeersOpen(false); }, [tabId]);
   // A tab switch clears the state; a reopen refetches and keeps the last value while loading.
   useEffect(() => { setSessionsEnabled(false); }, [tabId]);
   // In-menu changes still arrive through SessionAccessRow's onEnabledChange.
@@ -336,7 +341,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             <div className="environment-menu-title">Session access <span className="environment-menu-scope">{accessCount ? `${accessCount} on` : "this session only"}</span></div>
             {/* the per-session Sessions API switch (any engine; main owns the state). */}
             <SessionAccessRow onEnabledChange={onSessionsEnabledChange} />
-            {tabId && <NativeSessionAccess key={tabId} tabId={tabId} />}
+            {tabId && <NativeSessionAccess controller={native} onManage={() => { setOpen(false); setPeersOpen(true); }} />}
             {/* the per-session "Full browser access" switch (asks before turning ON). */}
             <BrowserAccessRow onStateChange={setBrowserAccess} />
           </section>
@@ -344,6 +349,10 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
           </>}
         </div>
       )}
+      {tabId && native.view?.available !== false && <SessionPeersDialog open={peersOpen} tabId={tabId}
+        view={native.view} busy={native.busy} error={native.error}
+        onClose={() => { setPeersOpen(false); triggerRef.current?.focus(); }}
+        onChange={(peerKey, enabled) => void native.save({ peerKey, enabled })} />}
     </div>
   );
 }

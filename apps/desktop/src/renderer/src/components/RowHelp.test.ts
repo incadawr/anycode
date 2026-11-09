@@ -65,6 +65,21 @@ describe("RowHelp", () => {
     expect(tooltip(container).dataset.open).toBe("false");
   });
 
+  it("does not intercept Escape when hover is open and focus is elsewhere", () => {
+    const onEscape = vi.fn();
+    const { container } = mount(createElement("div", { onKeyDown: onEscape },
+      createElement(RowHelp, { text: EXPLANATION }), createElement("button", null, "Other")));
+    const other = container.querySelectorAll("button")[1]!;
+    act(() => other.focus());
+    hover(helpButton(container), true);
+    act(() => other.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    act(() => helpButton(container).focus());
+    act(() => helpButton(container).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(tooltip(container).dataset.open).toBe("false");
+  });
+
   it("pointer hover shows the tooltip and leaving hides it", () => {
     const { container } = mount(createElement(RowHelp, { text: EXPLANATION }));
     hover(helpButton(container), true);

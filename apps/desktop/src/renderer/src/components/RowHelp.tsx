@@ -12,7 +12,7 @@
  * The tooltip holds no focusable content, so it cannot trap the tab order: the
  * only stop is the button itself.
  */
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Info } from "./icons.js";
 
 export interface RowHelpProps {
@@ -32,6 +32,7 @@ export function RowHelp({ text, label = "More information", tooltipId: givenTool
   const generatedId = useId();
   const tooltipId = givenTooltipId ?? generatedId;
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   // Escape closes the tooltip only. It is caught on the capture phase, before
   // the menu's own Escape handling (which closes the menu) can see it, so the
@@ -39,7 +40,7 @@ export function RowHelp({ text, label = "More information", tooltipId: givenTool
   useEffect(() => {
     if (!open) return;
     function onKeyDown(event: KeyboardEvent): void {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || document.activeElement !== buttonRef.current) return;
       event.stopPropagation();
       setOpen(false);
     }
@@ -54,6 +55,7 @@ export function RowHelp({ text, label = "More information", tooltipId: givenTool
       onMouseLeave={() => setOpen(false)}
     >
       <button
+        ref={buttonRef}
         type="button"
         className="row-help-button"
         aria-label={label}

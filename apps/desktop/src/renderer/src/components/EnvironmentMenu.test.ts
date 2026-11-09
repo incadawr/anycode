@@ -900,3 +900,44 @@ it("resolves a child worktree's parent title live and omits unavailable attribut
     if (bridge) Object.defineProperty(window, "anycode", bridge); else Reflect.deleteProperty(window, "anycode");
   }
 });
+
+it("manages peers outside the menu, refetches on reopen and restores focus on Escape", async () => {
+  const original = Object.getOwnPropertyDescriptor(window, "anycode");
+  const project = { key: "/current", name: "current", enabled: true, trusted: true, granted: false };
+  let peer = { key: "/other/peer", name: "peer", enabled: true, trusted: true, granted: false };
+  const get = vi.fn(async () => ({ ok: true as const, view: { available: true, project, peers: [peer] } }));
+  const set = vi.fn(async ({ enabled }: { enabled: boolean }) => {
+    peer = { ...peer, granted: enabled };
+    return { ok: true as const, view: { available: true, project, peers: [peer] } };
+  });
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication: { get: async () => ({ ok: false }) },
+    browserAccess: { get: async () => ({ ok: false }), onChanged: () => () => {} },
+    sessionPeers: { get, set },
+  } });
+  const store = createDesktopStore(); store.setState({ workspace: "/current" });
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const trigger = () => host.querySelector<HTMLButtonElement>(".environment-trigger")!;
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+    await act(async () => trigger().click());
+    expect(host.textContent).toContain("Communicates with 0 projects");
+    expect(host.querySelector(".session-peers-row")).toBeNull();
+    expect(host.querySelector('button[aria-label="Native session access"]')).not.toBeNull();
+    await clickText(host, "Manage…");
+    expect(host.querySelector('[aria-label="Environment"]')).toBeNull();
+    expect(host.querySelector(".session-peers-row")).not.toBeNull();
+    expect(get).toHaveBeenCalledTimes(2);
+    await act(async () => host.querySelector<HTMLButtonElement>('.session-peers-row button[role="switch"]')!.click());
+    expect(host.querySelector('.session-peers-summary')?.textContent).toContain("configured with the peer project");
+    await act(async () => host.querySelector<HTMLInputElement>('input[type="search"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(host.querySelector(".session-peers-row")).toBeNull();
+    expect(document.activeElement).toBe(trigger());
+    await act(async () => trigger().click());
+    expect(host.textContent).toContain("Communicates with 1 project");
+    expect(get).toHaveBeenCalledTimes(3);
+  } finally {
+    await act(async () => root.unmount()); host.remove();
+    if (original) Object.defineProperty(window, "anycode", original); else Reflect.deleteProperty(window, "anycode");
+  }
+});
