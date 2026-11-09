@@ -1927,6 +1927,7 @@ body {
 }
 
 .environment-menu-row {
+  position: relative;
   height: auto;
   line-height: 1.4;
   font-weight: var(--w-normal);
@@ -1967,14 +1968,13 @@ button.environment-menu-row:hover,
 }
 
 /* The help button that carries a row's long explanation. Scoped to the
-   environment menu so no other tooltip in the app changes. */
-.environment-menu-row .row-help {
-  position: relative;
+   help component's own classes so no other tooltip in the app changes. */
+.row-help {
   display: inline-flex;
   flex-shrink: 0;
 }
 
-.environment-menu-row .row-help-button {
+.row-help-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1988,17 +1988,17 @@ button.environment-menu-row:hover,
   cursor: pointer;
 }
 
-.environment-menu-row .row-help-button:hover {
+.row-help-button:hover {
   color: var(--text-1);
   background: var(--bg-hover);
 }
 
-.environment-menu-row .row-help-button:focus-visible {
+.row-help-button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
-.environment-menu-row .row-help-tooltip {
+.row-help-tooltip {
   position: absolute;
   z-index: 21;
   top: calc(100% + var(--sp-1));
@@ -2017,14 +2017,14 @@ button.environment-menu-row:hover,
   text-align: left;
   white-space: normal;
   opacity: 0;
-  visibility: hidden;
   pointer-events: none;
   transition: opacity var(--dur-1) var(--ease-out);
 }
 
-.environment-menu-row .row-help-tooltip[data-open="true"] {
+/* The tooltip text stays in the DOM either way: aria-describedby must
+   resolve to it, so it is faded out rather than removed. */
+.row-help-tooltip[data-open="true"] {
   opacity: 1;
-  visibility: visible;
 }
 
 .environment-menu-row-detail {

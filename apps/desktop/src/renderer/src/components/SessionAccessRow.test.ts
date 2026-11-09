@@ -10,6 +10,7 @@ import { SessionAccessRow, SessionApprovalsField, SessionHandleField, commitSess
 import {
   handleErrorText,
   SESSION_APPROVALS_ARIA_LABEL,
+  SESSION_APPROVALS_DETAIL,
   SESSION_APPROVALS_NOTE,
   SESSION_HANDLE_DETAIL,
   SESSION_HANDLE_HINT,
@@ -95,7 +96,8 @@ describe("SessionAccessRow External approvals", () => {
     const html = renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }));
     expect(html).toContain("External approvals on");
     expect(html).toContain("environment-menu-row-detail-prose");
-    expect(html).not.toContain("<svg");
+    // The row carries no decorative icon of its own (the help button's glyph is inside it).
+    expect(html).not.toMatch(/environment-menu-row" role="group" aria-label="External approvals"><svg/);
     expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
     expect(html.indexOf("environment-menu-actions")).toBeLessThan(html.indexOf('data-environment-action="sessions-api-approvals"'));
   });
@@ -103,8 +105,54 @@ describe("SessionAccessRow External approvals", () => {
   it("T30 sessions-api-model pins the labels and the caption", () => {
     expect(SESSION_APPROVALS_ARIA_LABEL).toBe("Allow approving this session's tool requests from outside");
     expect(SESSION_APPROVALS_NOTE).toBe("Whoever holds the Sessions API token can allow or deny this session's tool requests.");
+    expect(SESSION_APPROVALS_DETAIL).toBe("Token holder can answer tool requests");
     expect(sessionApprovalsLabel(true)).toBe("External approvals on");
     expect(sessionApprovalsLabel(false)).toBe("External approvals off");
+  });
+});
+
+describe("SessionAccessRow explanations", () => {
+  /** Ids the row points at with aria-describedby: the help button and the control share one. */
+  function tooltipIds(html: string): string[] {
+    const ids = [...html.matchAll(/aria-describedby="([^"]+)"/g)].map((match) => match[1] ?? "");
+    return [...new Set(ids)];
+  }
+
+  it("the approvals row shows the short detail and keeps the full sentence behind the help button", () => {
+    const html = renderToStaticMarkup(createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }));
+    expect(html).toContain(SESSION_APPROVALS_DETAIL);
+    expect(html).toContain(SESSION_APPROVALS_NOTE.replace(/'/g, "&#x27;"));
+    expect(html).toContain('role="tooltip"');
+    // The button points at the tooltip that carries the full sentence.
+    const ids = tooltipIds(html);
+    expect(ids).toHaveLength(1);
+    expect(html).toContain(`id="${ids[0]}"`);
+  });
+
+  it("the handle row shows the short detail and keeps the hint in the tooltip", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionHandleField, { value: "build-bot", error: null, onChange: () => {}, onCommit: () => {} }),
+    );
+    expect(html).toContain(SESSION_HANDLE_DETAIL);
+    expect(html).toContain(SESSION_HANDLE_HINT);
+    expect(html).toContain('role="tooltip"');
+    const ids = tooltipIds(html);
+    expect(ids).toHaveLength(1);
+    expect(html).toContain(`id="${ids[0]}"`);
+  });
+
+  it("two rows in the same menu get their own tooltip ids", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        "div",
+        null,
+        createElement(SessionApprovalsField, { approvals: true, onChange: () => {} }),
+        createElement(SessionHandleField, { value: "build-bot", error: null, onChange: () => {}, onCommit: () => {} }),
+      ),
+    );
+    const ids = tooltipIds(html);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 });
 
@@ -113,11 +161,13 @@ describe("SessionAccessRow layout", () => {
     const html = renderToStaticMarkup(
       createElement(SessionHandleField, { value: "build-bot", error: null, onChange: () => {}, onCommit: () => {} }),
     );
-    expect(html).not.toContain("<svg");
+    expect(html).not.toMatch(/environment-menu-row" role="group" aria-label="Session handle"><svg/);
     expect(html).toContain('placeholder="Agent name"');
     expect(html).toContain(SESSION_HANDLE_LABEL);
     expect(html).toContain(SESSION_HANDLE_DETAIL);
-    expect(html).toContain(`title="${SESSION_HANDLE_HINT}"`);
+    // The hint is not an HTML title on the field: it is the help tooltip.
+    expect(html).not.toContain(`title="${SESSION_HANDLE_HINT}"`);
+    expect(html).toContain(SESSION_HANDLE_HINT);
     expect(html).toContain("environment-menu-text-input");
     expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
     expect(html.indexOf("environment-menu-actions")).toBeLessThan(html.indexOf('data-environment-action="sessions-api-handle"'));

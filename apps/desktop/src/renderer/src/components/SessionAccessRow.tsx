@@ -9,11 +9,12 @@
  * line, control on the right), so nothing is clipped and the text field no
  * longer dangles beside a checkbox.
  */
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useId, useState } from "react";
 import { TabContext } from "../tab-context.js";
 import { handleErrorText, sessionApprovalsLabel, sessionSwitchDetail, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_DETAIL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
+import { RowHelp } from "./RowHelp.js";
 import { Switch } from "../ui/index.js";
 import { Robot } from "./icons.js";
 
@@ -32,16 +33,18 @@ export interface SessionAccessBridge {
  * row's help tooltip, reachable by hover and by keyboard.
  */
 export function SessionApprovalsField({ approvals, onChange }: { approvals: boolean; onChange: (next: boolean) => void }) {
+  const noteId = useId();
   return (
     <EnvironmentMenuRow
       icon={null}
       title={sessionApprovalsLabel(approvals)}
       detail={SESSION_APPROVALS_DETAIL}
-      help={SESSION_APPROVALS_NOTE}
+      help={<RowHelp text={SESSION_APPROVALS_NOTE} tooltipId={noteId} />}
       ariaLabel="External approvals"
       control={
         <Switch
           aria-label={SESSION_APPROVALS_ARIA_LABEL}
+          aria-describedby={noteId}
           data-environment-action="sessions-api-approvals"
           checked={approvals}
           onCheckedChange={onChange}
@@ -63,12 +66,13 @@ export function SessionHandleField({
   onChange: (next: string) => void;
   onCommit: (next: string) => void;
 }) {
+  const hintId = useId();
   return (
     <EnvironmentMenuRow
       icon={null}
       title={SESSION_HANDLE_LABEL}
       detail={SESSION_HANDLE_DETAIL}
-      help={SESSION_HANDLE_HINT}
+      help={<RowHelp text={SESSION_HANDLE_HINT} tooltipId={hintId} />}
       ariaLabel="Session handle"
       error={error}
       control={
@@ -76,9 +80,9 @@ export function SessionHandleField({
           type="text"
           className="environment-menu-text-input"
           aria-label={SESSION_HANDLE_LABEL}
+          aria-describedby={hintId}
           data-environment-action="sessions-api-handle"
           placeholder={SESSION_HANDLE_PLACEHOLDER}
-          title={SESSION_HANDLE_HINT}
           maxLength={200}
           value={value}
           onChange={(event) => onChange(event.target.value)}
