@@ -140,25 +140,14 @@ export function BackgroundAgents() {
                   Open
                 </button>
               )}
-              {isFailed ? (
-                <button
-                  type="button"
-                  className="background-agents-action"
-                  aria-label={`Dismiss failed background agent ${label}`}
-                  onClick={() => dismiss(child)}
-                >
-                  Dismiss
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="background-agents-action"
-                  aria-label={`Stop background agent ${label}`}
-                  onClick={() => stop(child)}
-                >
-                  Stop
-                </button>
-              )}
+              <button
+                type="button"
+                className="background-agents-action"
+                aria-label={isFailed ? `Dismiss failed background agent ${label}` : `Stop background agent ${label}`}
+                onClick={() => (isFailed ? dismiss(child) : stop(child))}
+              >
+                {isFailed ? "Dismiss" : "Stop"}
+              </button>
             </li>
           );
         })}
