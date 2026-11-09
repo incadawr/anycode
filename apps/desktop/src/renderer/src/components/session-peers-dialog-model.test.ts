@@ -71,7 +71,7 @@ describe("the grant state", () => {
     expect(grantedSummary([peer("/w/alpha", { granted: true }), peer("/w/beta")]))
       .toBe("Communication is configured with 1 of the 2 peer projects.");
     expect(grantedSummary([peer("/w/alpha")]))
-      .toBe("Communication is not configured with any of the 1 peer projects.");
+      .toBe("Communication is not configured with the peer project.");
   });
 });
 

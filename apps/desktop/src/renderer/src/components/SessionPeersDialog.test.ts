@@ -33,6 +33,9 @@ async function mount(props: Partial<Parameters<typeof SessionPeersDialog>[0]> = 
     host,
     onChange,
     onClose,
+    async rerender(next: Partial<Parameters<typeof SessionPeersDialog>[0]>) {
+      await act(async () => root.render(createElement(SessionPeersDialog, { open: true, onClose, tabId: "tab-1", view: view(), busy: false, onChange, ...props, ...next })));
+    },
     async unmount() {
       await act(async () => root.unmount());
       host.remove();
@@ -146,7 +149,7 @@ it("locks the rows while a save runs and shows the error of the last save", asyn
   try {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("Could not save native access.");
     expect(host.textContent).toContain("Saving…");
-    expect(switches(host)[0]?.disabled).toBe(true);
+    expect(switches(host)[0]?.getAttribute("aria-disabled")).toBe("true");
   } finally { await unmount(); }
 });
 
@@ -200,4 +203,32 @@ it("renders nothing while it is closed", async () => {
     expect(host.querySelector("dialog")).toBeNull();
     expect(rows(host)).toHaveLength(0);
   } finally { await unmount(); }
+});
+
+
+it("preserves search across saves and resets it for a new tab or reopening", async () => {
+  const dialog = await mount({ view: view({}, many) });
+  try {
+    await act(async () => type(dialog.host, "project-07"));
+    await dialog.rerender({ view: view({}, [...many]) });
+    expect(searchInput(dialog.host).value).toBe("project-07");
+    await dialog.rerender({ tabId: "tab-2", view: view({}, many) });
+    expect(searchInput(dialog.host).value).toBe("");
+    await act(async () => type(dialog.host, "project-07"));
+    await dialog.rerender({ open: false });
+    await dialog.rerender({ open: true });
+    expect(searchInput(dialog.host).value).toBe("");
+  } finally { await dialog.unmount(); }
+});
+
+it("keeps a focused switch inert while saving", async () => {
+  const dialog = await mount({ view: view({}, [peer("/w/other")]) });
+  try {
+    const control = switches(dialog.host)[0]!;
+    await act(async () => control.focus());
+    await dialog.rerender({ busy: true });
+    expect(document.activeElement).toBe(control);
+    await act(async () => control.click());
+    expect(dialog.onChange).not.toHaveBeenCalled();
+  } finally { await dialog.unmount(); }
 });

@@ -2108,12 +2108,10 @@ button.environment-menu-row:hover,
 .session-peers-row-reason {
   flex: 0 0 auto;
   max-width: 14rem;
-  overflow: hidden;
   color: var(--text-3);
   font-size: var(--fs-2xs);
   text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .environment-menu-open {

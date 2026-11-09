@@ -146,6 +146,8 @@ export function shortenPath(path: string, segments = 2): string {
 export function grantedSummary(peers: readonly NativeProjectView[]): string {
   const granted = countGranted(peers);
   const total = peers.length;
+  if (total === 0) return "No peer projects are known.";
+  if (total === 1) return granted ? "Communication is configured with the peer project." : "Communication is not configured with the peer project.";
   return granted === 0
     ? `Communication is not configured with any of the ${total} peer projects.`
     : `Communication is configured with ${granted} of the ${total} peer projects.`;
