@@ -3371,33 +3371,54 @@ export class TabHostManager {
     // Out-of-scope #2 (core-only slice): an engine child's host steers its CLI
     // differently; the receiveAgentMessage/agentInbox path is a core contract.
     if (childTab.engine !== "core") return fail(CHILD_SEND_ENGINE_MESSAGE);
+    // ONE message id for this delivery: it rides on the envelope AND comes
+    // back on the `sent` ack, so the parent can ask the transport later what
+    // became of this exact message. The child's own delivery transitions
+    // (queued -> acknowledged / rejected) ride the EXISTING communication
+    // observer channel (host -> main -> the communication ledger); main keeps
+    // NO second ledger of delivery states for this path.
+    const messageId = randomUUID();
     void this.communicationRequest(
       msg.childSessionId,
       "send_message",
       {
-        messageId: randomUUID(),
+        messageId,
         sender: `parent-session:${parentTab.sessionId}`,
         recipientSessionId: msg.childSessionId,
         payload: msg.text,
-        mode: "next_turn",
+        // A parent follow-up to a RUNNING core child is a mid-turn steer:
+        // the child receives it at its next legal loop seam. Main never waits
+        // for that seam — the child's transport answers `queued` at once.
+        mode: "steer",
         kind: "agent_message",
         createdAt: new Date().toISOString(),
       } satisfies AgentEnvelope,
     )
       .then((delivery) => {
         const d = delivery as AgentDelivery;
-        this.replyChildRunEvent(
-          parentTab,
-          d.state === "queued"
-            ? { type: CHILD_RUN_EVENT_TYPE, requestId: msg.requestId, kind: "sent" }
-            : {
-                type: CHILD_RUN_EVENT_TYPE,
-                requestId: msg.requestId,
-                kind: "rejected",
-                reason: "spawn_failed",
-                message: `Agent: delivery state "${d.state}"${d.detail ? ` (${d.detail})` : ""}.`,
-              },
-        );
+        // Only a state that PROVES the message was accepted may become a
+        // successful send. A rejected/unknown outcome keeps its own honest
+        // reason and never becomes "sent" — the receipt would then claim a
+        // delivery the transport refused to make.
+        if (d.state === "queued" || d.state === "acknowledged") {
+          this.replyChildRunEvent(parentTab, {
+            type: CHILD_RUN_EVENT_TYPE,
+            requestId: msg.requestId,
+            kind: "sent",
+            state: d.state,
+            messageId,
+            ...(d.deliveryKind !== undefined ? { deliveryKind: d.deliveryKind } : {}),
+            ...(d.detail !== undefined ? { detail: d.detail } : {}),
+          });
+          return;
+        }
+        this.replyChildRunEvent(parentTab, {
+          type: CHILD_RUN_EVENT_TYPE,
+          requestId: msg.requestId,
+          kind: "rejected",
+          reason: "spawn_failed",
+          message: `Agent: delivery state "${d.state}"${d.detail ? ` (${d.detail})` : ""}.`,
+        });
       })
       .catch(() =>
         this.replyChildRunEvent(parentTab, {

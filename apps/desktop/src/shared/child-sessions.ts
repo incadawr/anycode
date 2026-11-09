@@ -202,6 +202,7 @@ const CHILD_RUN_REJECT_REASONS: readonly ChildRunRejectReason[] = [
 ];
 
 /**
+ * Keep these states and ChildSendDeliveryKind in parity with AgentDelivery in communication.ts.
  * The delivery states a `sent` receipt may carry. Deliberately the SAME
  * vocabulary as the shared delivery-state enum (`queued | acknowledged |
  * rejected | unknown`) — a `sent` ack never invents a state of its own.

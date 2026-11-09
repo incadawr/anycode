@@ -190,7 +190,7 @@ export type SessionSubagentDeliveryState = "queued" | "acknowledged" | "rejected
 
 /**
  * Which seam carried the message into the recipient's input — mirrors the
- * shared `deliveryKind` vocabulary.
+ * AgentDelivery state and deliveryKind vocabularies in apps/desktop/src/shared/communication.ts.
  */
 export type SessionSubagentDeliveryKind = "core_seam" | "next_turn" | "native_input";
 

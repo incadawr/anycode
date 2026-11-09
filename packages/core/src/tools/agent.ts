@@ -528,7 +528,8 @@ async function runInlineTier(
  * beyond what the reported state supports.
  */
 function sendReceiptText(childSessionId: string, sent: Extract<SessionSubagentSendResult, { ok: true }>): string {
-  const kindClause = sent.deliveryKind === undefined ? "" : ` Delivery kind: ${sent.deliveryKind}.`;
+  const kindClause = sent.deliveryKind === undefined ? " Delivery seam was not reported." : ` Delivery kind: ${sent.deliveryKind}.`;
+  const seam = sent.deliveryKind === "core_seam" ? "injected at the next loop boundary" : sent.deliveryKind === "next_turn" ? "accepted as the next turn’s input" : sent.deliveryKind === "native_input" ? "passed to the native engine" : "accepted with no delivery seam reported";
   const detailClause = sent.detail === undefined || sent.detail.length === 0 ? "" : ` Detail: ${sent.detail.slice(0, 300)}.`;
   switch (sent.state) {
     case "queued": {
@@ -536,10 +537,10 @@ function sendReceiptText(childSessionId: string, sent: Extract<SessionSubagentSe
         sent.messageId === undefined
           ? "The transport reported no message id, so its status cannot be checked."
           : `Check message status with this id: ${sent.messageId}.`;
-      return `Agent: message to running child ${childSessionId}: Queued for injection at the next safe boundary; Stop may reject it. ${idClause}${kindClause}${detailClause}`;
+      return `Agent: message to running child ${childSessionId}: Queued to be ${seam}; Stop may reject it. ${idClause}${kindClause}${detailClause}`;
     }
     case "acknowledged":
-      return `Agent: message to running child ${childSessionId}: Acknowledged — injected into the model's input, which is not proof the model saw or acted on it.${
+      return `Agent: message to running child ${childSessionId}: Acknowledged — ${seam}; this is not proof the model saw or acted on it.${
         sent.messageId === undefined ? "" : ` Message id: ${sent.messageId}.`
       }${kindClause}${detailClause}`;
     case "rejected":
@@ -605,6 +606,7 @@ async function runSessionTier(
     if (!sent.ok) {
       return { ok: false, error: sent.message };
     }
+    if (sent.state === "rejected") return { ok: false, error: sendReceiptText(input.send_to, sent) };
     return {
       ok: true,
       output: {

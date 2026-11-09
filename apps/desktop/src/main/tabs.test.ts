@@ -7189,7 +7189,7 @@ describe("child spawn — profile-declared connection routing", () => {
 // its OWN STILL-RUNNING child, delivered through communicationRequest into the
 // existing receiveAgentMessage/agentInbox path. Every test drives main purely
 // via host.emit("message", ...) on fake hosts, like the suites above.
-describe("TabHostManager — send to a running own child", () => {
+describe("TabHostManager — ChildRunSend running child", () => {
   /**
    * One root tab plus ONE still-running core child: spawnRequest accepted
    * (hosts[0] -> hosts[1]), child-ready emitted, NO terminal — the child tab
@@ -7229,7 +7229,7 @@ describe("TabHostManager — send to a running own child", () => {
       sender: "parent-session:root-send-happy",
       recipientSessionId: childSessionId,
       payload: "re-review with these edits",
-      mode: "next_turn",
+      mode: "steer",
       kind: "agent_message",
     });
     expect(commPacket(rootHost, "send_message")).toBeUndefined();
@@ -7237,7 +7237,16 @@ describe("TabHostManager — send to a running own child", () => {
     // Child host answers queued -> the parent receives { kind: "sent", requestId }.
     childHost.emit("message", { type: "communication_response", requestId: packet!.requestId, result: { state: "queued", envelope: { messageId: "m1" } } });
     await flush();
-    expect(childRunEvents(rootHost).find((e) => e.requestId === "s1")).toMatchObject({ kind: "sent" });
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "s1")).toMatchObject({ kind: "sent", state: "queued", messageId: packet!.payload.messageId });
+  });
+
+  it("forwards an acknowledgement that races the RPC response", async () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-fast");
+    rootHost.emit("message", runSend("fast", childSessionId));
+    const packet = commPacket(childHost, "send_message")!;
+    childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "acknowledged", deliveryKind: "core_seam", detail: "inserted" } });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "fast")).toMatchObject({ kind: "sent", state: "acknowledged", messageId: packet.payload.messageId, deliveryKind: "core_seam", detail: "inserted" });
   });
 
   it("a rejected delivery state (e.g. inbox full) reaches the parent as kind rejected", async () => {
@@ -7251,6 +7260,15 @@ describe("TabHostManager — send to a running own child", () => {
     const event = childRunEvents(rootHost).find((e) => e.requestId === "s2");
     expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
     expect(event?.kind === "rejected" && event.message).toContain("rejected");
+  });
+
+  it("does not report an unknown delivery as sent", async () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-unknown-state");
+    rootHost.emit("message", runSend("unknown-state", childSessionId));
+    const packet = commPacket(childHost, "send_message")!;
+    childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "unknown", detail: "host lost contact" } });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "unknown-state")).toMatchObject({ kind: "rejected", message: expect.stringContaining("host lost contact") });
   });
 
   it("another parent's child is refused (not yours) and NO communication_request is posted anywhere", async () => {
