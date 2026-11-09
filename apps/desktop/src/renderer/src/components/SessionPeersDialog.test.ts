@@ -157,6 +157,7 @@ it("tells the two empty states apart", async () => {
   const empty = await mount({ view: view({}, []) });
   try {
     expect(empty.host.textContent).toContain("No other projects are known yet");
+    expect(empty.host.querySelector(".session-peers-summary")).toBeNull();
     expect(empty.host.textContent).not.toContain("No projects found");
   } finally { await empty.unmount(); }
 

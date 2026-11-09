@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { isOverlayOpen } from "../preview/overlay-flag.js";
 import { describe, expect, it, vi } from "vitest";
 // Mount the real rows: switches must retain the same tab-scoped bridge calls.
 import { act, createElement } from "react";
@@ -927,12 +928,14 @@ it("manages peers outside the menu, refetches on reopen and restores focus on Es
     await clickText(host, "Manage…");
     expect(host.querySelector('[aria-label="Environment"]')).toBeNull();
     expect(host.querySelector(".session-peers-row")).not.toBeNull();
+    expect(isOverlayOpen()).toBe(true);
     expect(get).toHaveBeenCalledTimes(2);
     await act(async () => host.querySelector<HTMLButtonElement>('.session-peers-row button[role="switch"]')!.click());
     expect(host.querySelector('.session-peers-summary')?.textContent).toContain("configured with the peer project");
     await act(async () => host.querySelector<HTMLInputElement>('input[type="search"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(host.querySelector(".session-peers-row")).toBeNull();
     expect(document.activeElement).toBe(trigger());
+    expect(isOverlayOpen()).toBe(false);
     await act(async () => trigger().click());
     expect(host.textContent).toContain("Communicates with 1 project");
     expect(get).toHaveBeenCalledTimes(3);

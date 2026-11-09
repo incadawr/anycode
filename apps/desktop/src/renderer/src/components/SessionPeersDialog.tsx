@@ -10,6 +10,7 @@
  * that decides what is shown lives in `session-peers-dialog-model.ts`.
  */
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Modal, SearchInput, Switch } from "../ui/index.js";
 import type { NativeProjectView, SessionPeerView } from "../../../shared/session-peer-view.js";
 import {
@@ -40,6 +41,7 @@ export interface SessionPeersDialogProps {
 }
 
 export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, onChange }: SessionPeersDialogProps) {
+  useOverlayFlag(open);
   const [query, setQuery] = useState("");
   const searchHost = useRef<HTMLDivElement>(null);
   // The search field takes the initial focus. SearchInput does not forward a
@@ -68,7 +70,7 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
           <SearchInput value={query} onValueChange={setQuery} label={peersDialogText.searchLabel}
             placeholder={peersDialogText.searchPlaceholder} />
         </div>
-        {view && <p className="session-peers-summary">{grantedSummary(knownPeers)}</p>}
+        {view && knownPeers.length > 0 && <p className="session-peers-summary">{grantedSummary(knownPeers)}</p>}
         {note && <p className="session-peers-note">{note}</p>}
         {error && <div role="alert" className="session-peers-error">{error}</div>}
         {!project && !error && <p className="session-peers-empty">{peersDialogText.loading}</p>}

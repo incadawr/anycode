@@ -77,3 +77,27 @@ it("ignores old tab get and set responses", async () => {
     expect(t.host.querySelector('button[aria-label="Native session access"]')?.getAttribute("aria-checked")).toBe("true");
   } finally { await t.close(); }
 });
+
+it.each(["invalid", "unavailable", "io_error"] as const)("shows the %s save error", async reason => {
+  const { nativeAccessText } = await import("./session-peer-model.js");
+  const t = await mount({ get: async () => ({ ok: true, view: makeView("a") }), set: async () => ({ ok: false, reason }) });
+  try {
+    await click(t.host.querySelector('button[aria-label="Native session access"]'));
+    expect(t.host.querySelector('[role="alert"]')?.textContent).toBe(nativeAccessText[reason]);
+  } finally { await t.close(); }
+});
+
+it("keeps loading disabled until the view is known", async () => {
+  const t = await mount({ get: () => new Promise(() => {}), set: vi.fn() });
+  try {
+    expect(t.host.textContent).toContain("Loading…");
+    expect(t.host.querySelector<HTMLButtonElement>('button[aria-label="Native session access"]')?.disabled).toBe(true);
+  } finally { await t.close(); }
+});
+
+it.each([{ enabled: false }, { trusted: false }])("marks configured grants inactive when the current project is %o", async state => {
+  const base = makeView("a", true);
+  const t = await mount({ get: async () => ({ ok: true, view: { ...base, project: { ...base.project, ...state } } }), set: vi.fn() });
+  try { expect(t.host.querySelector('.native-access-summary')?.textContent).toContain("Communicates with 1 project · Currently inactive"); }
+  finally { await t.close(); }
+});
