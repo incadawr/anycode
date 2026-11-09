@@ -258,19 +258,6 @@ const CHILD_SEND_STARTING_MESSAGE =
   "Agent: that child session is still starting and is not running yet; retry the send in a moment.";
 const CHILD_SEND_HOST_UNREACHABLE_MESSAGE =
   "Agent: the child session host could not be reached for delivery; the message was not delivered.";
-/**
- * True when a child host refused a steer ONLY because its Core steering seam
- * is not active yet (no running turn, no steer hook, loop not ready), as
- * opposed to a terminal/posture/closed refusal. The structured
- * `reasonCode` is the contract; the detail-text check is a bridge for hosts
- * that only publish the text ("Core steering ...; use next_turn") and can go
- * once every host sets the code.
- */
-function isCoreSeamInactiveRefusal(delivery: AgentDelivery): boolean {
-  if (delivery.reasonCode !== undefined) return delivery.reasonCode === "core_seam_inactive";
-  const detail = delivery.detail;
-  return typeof detail === "string" && detail.startsWith("Core steering ") && detail.endsWith("use next_turn");
-}
 /** Core-only slice (out-of-scope #2): engine children are not addressable yet. */
 const CHILD_SEND_ENGINE_MESSAGE =
   "Agent: running engine children are not addressable yet; only AnyCode (core) children accept a running follow-up.";
@@ -3372,10 +3359,11 @@ export class TabHostManager {
    * channel; main keeps no delivery ledger of its own). `rejected`/`unknown`
    * stay `rejected` with the `spawn_failed` reason and their own text.
    *
-   * Exception: when the child refuses ONLY because its Core steering seam is
-   * not active yet (see `isCoreSeamInactiveRefusal`), main retries that one
-   * send once as next_turn under a fresh message id, because the parent
-   * cannot choose a mode. Terminal/posture/closed refusals are never retried.
+   * Main sends exactly once. When the child's Core seam is not active yet
+   * (no running turn) the CHILD HOST accepts the steer from its owning parent
+   * as next_turn under the same id, so the ack arrives as `queued` with
+   * `deliveryKind: "next_turn"` and is forwarded as is. Terminal/posture/
+   * closed refusals stay rejected.
    */
   private handleChildRunSend(parentTab: TabHost, sender: UtilityProcess, msg: ChildRunSend): void {
     const fail = (message: string): void => {
@@ -3404,7 +3392,7 @@ export class TabHostManager {
     // NO second ledger of delivery states for this path.
     const reject = (message: string): void =>
       this.replyChildRunEvent(parentTab, { type: CHILD_RUN_EVENT_TYPE, requestId: msg.requestId, kind: "rejected", reason: "spawn_failed", message });
-    const attempt = (mode: AgentEnvelope["mode"], retried: boolean): void => {
+    const attempt = (): void => {
       const messageId = randomUUID();
       void this.communicationRequest(
         msg.childSessionId,
@@ -3417,9 +3405,9 @@ export class TabHostManager {
           // A parent follow-up to a RUNNING core child is a mid-turn steer:
           // the child receives it at its next legal loop seam. Main never
           // waits for that seam — the child's transport answers `queued` at
-          // once. The one retry (mode next_turn) covers only a seam that is
-          // not active yet.
-          mode,
+          // once. A seam that is not active yet is downgraded to next_turn by
+          // the child host itself, never by a second send from here.
+          mode: "steer",
           kind: "agent_message",
           createdAt: new Date().toISOString(),
         } satisfies AgentEnvelope,
@@ -3442,15 +3430,11 @@ export class TabHostManager {
             });
             return;
           }
-          if (!retried && d.state === "rejected" && isCoreSeamInactiveRefusal(d)) {
-            attempt("next_turn", true);
-            return;
-          }
           reject(`Agent: delivery state "${d.state}"${d.detail ? ` (${d.detail})` : ""}.`);
         })
         .catch(() => reject(CHILD_SEND_HOST_UNREACHABLE_MESSAGE));
     };
-    attempt("steer", false);
+    attempt();
   }
 
   /**

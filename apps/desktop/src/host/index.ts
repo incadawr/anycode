@@ -1222,8 +1222,10 @@ function buildChildSessionOptions(
   wrapUpRescue?: () => Promise<string>,
   responseModel?: () => string | undefined,
   onTerminalFinalized?: () => void,
+  parentSessionId?: string,
 ): ChildSessionOptions {
   return {
+    ...(parentSessionId !== undefined ? { parentSessionId } : {}),
     // present ONLY for core-engine children — codex/claude have no
     // core loop/ModelPort to run the tool-free wrap-up call against, so
     // their empty max_turns terminal falls back to the explicit
@@ -4993,6 +4995,8 @@ async function boot(): Promise<void> {
               () => historySink!.flushChecked(),
               () => runWrapUp(config, loop, "", SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS).then((r) => r.text),
               () => modelPort.lastResponseModel,
+              undefined,
+              args.child.parentSessionId,
             ),
           }
         : {}),

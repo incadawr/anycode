@@ -7257,47 +7257,26 @@ describe("ChildRunSend", () => {
     expect(childRunEvents(rootHost).find((e) => e.requestId === "fast")).toMatchObject({ kind: "sent", state: "acknowledged", messageId: envelope!.messageId, deliveryKind: "core_seam", detail: "inserted" });
   });
 
-  it("falls back to one next_turn send when the child refuses only because its Core seam is not active yet", async () => {
+  it("sends once and forwards the host's queued next_turn receipt for a seam that is not active yet", async () => {
     const { rootHost, childHost, childSessionId } = runningChild("root-send-seam-fallback");
     const sent: Array<{ requestId: string; payload: Record<string, unknown> }> = [];
     childHost.postMessage.mockImplementation((raw: unknown) => {
       const packet = raw as { type: string; requestId: string; payload: Record<string, unknown> };
       if (packet.type !== "communication_request") return;
       sent.push(packet);
-      const result = sent.length === 1
-        ? { state: "rejected", envelope: packet.payload, detail: "Core steering requires a running core turn; use next_turn", reasonCode: "core_seam_inactive" }
-        : { state: "queued", envelope: packet.payload, deliveryKind: "next_turn" };
-      childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result });
+      // The child host downgrades the owning parent's steer itself.
+      childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "queued", envelope: packet.payload, deliveryKind: "next_turn" } });
     });
     rootHost.emit("message", runSend("seam", childSessionId, "go on"));
     await flush();
-    expect(sent).toHaveLength(2);
-    expect(sent[0]!.payload).toMatchObject({ mode: "steer", payload: "go on" });
-    expect(sent[1]!.payload).toMatchObject({ mode: "next_turn", payload: "go on", sender: "parent-session:root-send-seam-fallback" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.payload).toMatchObject({ mode: "steer", payload: "go on", sender: "parent-session:root-send-seam-fallback" });
     const events = childRunEvents(rootHost).filter((e) => e.requestId === "seam");
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ kind: "sent", state: "queued", deliveryKind: "next_turn", messageId: sent[1]!.payload.messageId });
+    expect(events[0]).toMatchObject({ kind: "sent", state: "queued", deliveryKind: "next_turn", messageId: sent[0]!.payload.messageId });
   });
 
-  it("also falls back when a host publishes only the seam-inactive text", async () => {
-    const { rootHost, childHost, childSessionId } = runningChild("root-send-seam-text");
-    const modes: unknown[] = [];
-    childHost.postMessage.mockImplementation((raw: unknown) => {
-      const packet = raw as { type: string; requestId: string; payload: Record<string, unknown> };
-      if (packet.type !== "communication_request") return;
-      modes.push(packet.payload.mode);
-      const result = modes.length === 1
-        ? { state: "rejected", envelope: packet.payload, detail: "Core steering is not ready for injection; use next_turn" }
-        : { state: "queued", envelope: packet.payload };
-      childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result });
-    });
-    rootHost.emit("message", runSend("seam-text", childSessionId));
-    await flush();
-    expect(modes).toEqual(["steer", "next_turn"]);
-    expect(childRunEvents(rootHost).find((e) => e.requestId === "seam-text")).toMatchObject({ kind: "sent", state: "queued" });
-  });
-
-  it("does not retry a terminal or posture refusal and keeps it rejected", async () => {
+  it("sends once for a terminal or posture refusal and keeps it rejected", async () => {
     for (const detail of ["Session unavailable", "Session posture unavailable"]) {
       const { rootHost, childHost, childSessionId } = runningChild(`root-send-terminal-${detail.length}`);
       let requests = 0;
@@ -7314,7 +7293,7 @@ describe("ChildRunSend", () => {
     }
   });
 
-  it("retries the next_turn fallback only once", async () => {
+  it("does not resend a seam-inactive refusal from a host that did not downgrade it", async () => {
     const { rootHost, childHost, childSessionId } = runningChild("root-send-seam-twice");
     let requests = 0;
     childHost.postMessage.mockImplementation((raw: unknown) => {
@@ -7325,7 +7304,7 @@ describe("ChildRunSend", () => {
     });
     rootHost.emit("message", runSend("twice", childSessionId));
     await flush();
-    expect(requests).toBe(2);
+    expect(requests).toBe(1);
     expect(childRunEvents(rootHost).find((e) => e.requestId === "twice")).toMatchObject({ kind: "rejected" });
   });
 

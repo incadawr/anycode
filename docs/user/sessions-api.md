@@ -102,7 +102,9 @@ Limits and uncertainty:
   input at a safe point of the running turn. That means inserted, never that the
   model read or followed it, and there is no separate "read" state. Poll
   `get_message_status` for the final state. Sessions that send to each other
-  (`SessionSend`) cannot steer; use `next_turn`. `rejected` means delivery was
+  (`SessionSend`) cannot steer; use `next_turn`. A parent's `send_to` to a
+  running child whose turn has not started yet is delivered as `next_turn` and
+  reported with `deliveryKind: "next_turn"`. `rejected` means delivery was
   refused, for example because the inbox is full or authorization fails before
   drain. A steer that has not been inserted when the turn is stopped, closed or
   runs out of budget becomes `rejected` with the message id and a reason, and

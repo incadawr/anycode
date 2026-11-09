@@ -569,6 +569,12 @@ export type ChildProgressReport =
  */
 export interface ChildSessionOptions {
   /**
+   * The owning parent's session id. Only a steer stamped
+   * `parent-session:<this id>` may be accepted as next_turn when the Core
+   * seam is not active yet; without it no steer is ever downgraded.
+   */
+  parentSessionId?: string;
+  /**
    * DI seam for the turn-limit wrap-up rescue. CORE-ONLY: a callback
    * exists only when the child runs the core loop with an in-process ModelPort
    * (host/index.ts wires it to core's runWrapUp). CLI-engine children
@@ -2765,6 +2771,23 @@ export class Session {
     else void rerun.then(release, () => release("blocked"));
   }
 
+  /** Messages accepted as next_turn after a seam-inactive steer; they keep their kind on the later acknowledgement. */
+  private nextTurnDowngrades = new Set<string>();
+
+  /**
+   * True only for a steer from THIS child's owning parent (main stamps
+   * `parent-session:<parent id>`; peers and every other sender never match)
+   * that the Core seam refuses solely because it is not active yet. Terminal,
+   * posture and closed refusals carry no `core_seam_inactive` code and stay
+   * rejected.
+   */
+  private downgradesSteerToNextTurn(envelope: AgentEnvelope): boolean {
+    if (envelope.mode !== "steer" || this.engine.id !== "core") return false;
+    const parent = this.child?.parentSessionId;
+    if (parent === undefined || envelope.sender !== `parent-session:${parent}`) return false;
+    return this.coreSeamRefusal()?.reasonCode === "core_seam_inactive";
+  }
+
   async receiveAgentMessage(envelope: AgentEnvelope, mainRegistered = false): Promise<AgentDelivery> {
     const existing = this.agentDeliveries.get(envelope.messageId);
     if (existing) return existing;
@@ -2777,6 +2800,20 @@ export class Session {
       const delivery: AgentDelivery = { envelope, state: "rejected", detail: "Session unavailable" };
       this.publishAgentDelivery(delivery);
       return delivery;
+    }
+    if (this.downgradesSteerToNextTurn(envelope)) {
+      // The owning parent's steer met a Core seam that is not active yet (no
+      // running turn): accept it on the next_turn path under the SAME id, as
+      // ONE ledger record. No rejected record is ever published first.
+      if (this.agentInbox.length >= 32) {
+        this.publishAgentDelivery({ envelope, state: "rejected", detail: "Inbox full" });
+        return this.agentDeliveries.get(envelope.messageId)!;
+      }
+      this.nextTurnDowngrades.add(envelope.messageId);
+      this.publishAgentDelivery({ envelope, state: "queued", deliveryKind: "next_turn" });
+      this.agentInbox.push(envelope);
+      this.drainAgentInbox();
+      return this.agentDeliveries.get(envelope.messageId)!;
     }
     const delivery: AgentDelivery = { envelope, state: "queued" };
     this.publishAgentDelivery(delivery);
@@ -2907,7 +2944,13 @@ export class Session {
     if (settledChild) this.busy = false;
     const started = this.acceptUserMessage(envelope.messageId, agentMessageText(envelope), undefined, "system");
     if (started) this.messageTurns.set(envelope.messageId, { hostTurnId: this.turnId });
-    this.publishAgentDelivery({ envelope, state: started ? "acknowledged" : "rejected", detail: started ? "Host started a next turn; model application unverified" : "Turn refused" });
+    const downgraded = this.nextTurnDowngrades.delete(envelope.messageId);
+    this.publishAgentDelivery({
+      envelope,
+      state: started ? "acknowledged" : "rejected",
+      detail: started ? "Host started a next turn; model application unverified" : "Turn refused",
+      ...(started && downgraded ? { deliveryKind: "next_turn" as const } : {}),
+    });
     return started;
   }
 

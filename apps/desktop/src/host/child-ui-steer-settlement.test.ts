@@ -25,7 +25,8 @@ import { GatedModelPort, createHarness, finishStep, nodeWirePort, textStep, tool
 import { CoreEngine } from "./engines/core-engine.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session, type ChildTerminalReport } from "./session.js";
-import type { AgentEnvelope } from "../shared/communication.js";
+import type { AgentDelivery, AgentEnvelope } from "../shared/communication.js";
+import { CHILD_STEER_QUEUE_MAX } from "../shared/child-sessions.js";
 import type { HostToUiMessage } from "../shared/protocol.js";
 
 type Requeued = Extract<HostToUiMessage, { type: "steer_requeued" }>;
@@ -58,7 +59,7 @@ interface Fixture {
  */
 async function childFixture(
   steps: ModelStreamEvent[][],
-  options: { parkAfterIndex?: number; manualSteer?: boolean; maxTurns?: number } = {},
+  options: { parkAfterIndex?: number; manualSteer?: boolean; maxTurns?: number; seamNotReady?: boolean } = {},
 ): Promise<Fixture> {
   const donor = createHarness({ steps: [] });
   const port = new GatedModelPort(steps, options.parkAfterIndex ?? 0);
@@ -71,7 +72,7 @@ async function childFixture(
   };
   const real = new CoreEngine({ loop: new AgentLoop(config), config });
   const manual: Deferred[] = [];
-  const engine = options.manualSteer
+  const manualEngine = options.manualSteer
     ? Object.assign(Object.create(real) as CoreEngine, {
         steer: (): Promise<{ turnId: string }> =>
           new Promise((resolve, reject) => {
@@ -79,6 +80,11 @@ async function childFixture(
           }),
       })
     : real;
+  const engine = options.seamNotReady
+    ? Object.assign(Object.create(manualEngine) as CoreEngine, {
+        steeringStatus: (): { supported: boolean; ready: boolean } => ({ supported: true, ready: false }),
+      })
+    : manualEngine;
 
   const channel = new MessageChannel();
   const received: HostToUiMessage[] = [];
@@ -98,7 +104,7 @@ async function childFixture(
     sessionId: "child-session",
     bootHistory: [],
     rules: new SessionPermissionRules(),
-    child: { onReady: () => {}, onProgress: () => {}, flushHistory, onTerminal: terminal },
+    child: { parentSessionId: PARENT_SESSION_ID, onReady: () => {}, onProgress: () => {}, flushHistory, onTerminal: terminal },
   });
   session.bindPort(nodeWirePort(channel.port2));
   channel.port1.postMessage({ type: "ui_ready" });
@@ -119,6 +125,7 @@ async function childFixture(
   };
 }
 
+const PARENT_SESSION_ID = "parent-session-1";
 const requestText = (port: GatedModelPort, index: number): string => JSON.stringify(port.requests[index]?.messages ?? []);
 const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 const steer = (requestId: string, text: string) => ({ type: "steer_message", requestId, text });
@@ -375,6 +382,129 @@ describe("child UI steer settlement", () => {
       expect(f.port.requests).toHaveLength(2);
       expect(occurrences(requestText(f.port, 1), "STEER_ONE")).toBe(1);
       expect(f.received.filter(isRequeued)).toHaveLength(0);
+    } finally {
+      f.close();
+    }
+  });
+});
+
+describe("child UI steer fallback with a full child steer queue", () => {
+  it("rejects the text as busy, emits no steer_requeued, and still publishes the terminal once", async () => {
+    // One initial turn plus one turn per queued steer.
+    const steps = Array.from({ length: CHILD_STEER_QUEUE_MAX + 1 }, (_, index) => textStep(`ANSWER_${index}`));
+    const f = await childFixture(steps, { manualSteer: true });
+    try {
+      f.session.startProgrammaticTurn("INITIAL_PROMPT");
+      await f.waitUntil(() => f.port.requests.length === 1);
+      // The UI steer is accepted into the running turn first (its promise stays pending).
+      f.send(steer("ui-steer", "UI_STEER_TEXT"));
+      await f.waitUntil(() => f.manual.length === 1);
+      // Fill the child steer queue to its bound with busy-time messages.
+      for (let i = 0; i < CHILD_STEER_QUEUE_MAX; i++) f.send({ type: "user_message", requestId: `fill-${i}`, text: `FILL_${i}` });
+      await settle();
+      expect(f.received.filter(isRejected)).toHaveLength(0);
+
+      // The engine refuses the steer: the fallback finds the queue full.
+      f.manual[0]!.reject(new Error("core turn ended before injection"));
+      await f.waitUntil(() => f.received.some((m) => isRejected(m) && m.requestId === "ui-steer"));
+      expect(f.received.filter(isRejected).filter((m) => m.requestId === "ui-steer")).toEqual([
+        expect.objectContaining({ requestId: "ui-steer", reason: "busy" }),
+      ]);
+      expect(f.received.filter(isRequeued)).toHaveLength(0);
+
+      f.port.release();
+      await f.waitUntil(() => f.terminal.mock.calls.length > 0);
+      await settle();
+      expect(f.terminal).toHaveBeenCalledTimes(1);
+      // The rejected text was reported, never run as a hidden turn.
+      expect(f.port.requests.map((_, index) => requestText(f.port, index)).some((text) => text.includes("UI_STEER_TEXT"))).toBe(false);
+      expect(f.received.filter(isRequeued)).toHaveLength(0);
+    } finally {
+      f.close();
+    }
+  });
+});
+
+describe("owning-parent steer while the Core seam is not active", () => {
+  const parentEnvelope = (messageId: string, sender = `parent-session:${PARENT_SESSION_ID}`): AgentEnvelope => ({
+    messageId, sender, recipientSessionId: "child-session", kind: "agent_message", payload: "PARENT_BODY", mode: "steer",
+    createdAt: new Date().toISOString(),
+  });
+  const observe = (f: Fixture): AgentDelivery[] => {
+    const seen: AgentDelivery[] = [];
+    f.session.observeAgentDeliveries((delivery) => seen.push(delivery));
+    return seen;
+  };
+
+  it("downgrades to next_turn under the same id with one ledger record and no rejected publish", async () => {
+    const f = await childFixture([textStep("FIRST_ANSWER"), textStep("SECOND_ANSWER")], { seamNotReady: true });
+    try {
+      const seen = observe(f);
+      f.session.startProgrammaticTurn("INITIAL_PROMPT");
+      await f.waitUntil(() => f.port.requests.length === 1);
+      const receipt = await f.session.receiveAgentMessage(parentEnvelope("p1"));
+      expect(receipt).toMatchObject({ state: "queued", deliveryKind: "next_turn" });
+      expect(receipt.reasonCode).toBeUndefined();
+      expect(receipt.envelope.messageId).toBe("p1");
+      expect(seen.map((d) => d.state)).toEqual(["queued"]);
+      f.port.release();
+      await f.waitUntil(() => f.terminal.mock.calls.length > 0);
+      await settle();
+      // Same id throughout: queued then acknowledged as the next turn; never rejected.
+      expect(seen.every((d) => d.envelope.messageId === "p1")).toBe(true);
+      expect(seen.map((d) => d.state)).toEqual(["queued", "acknowledged"]);
+      expect(seen[1]).toMatchObject({ deliveryKind: "next_turn" });
+      expect(f.session.agentMessageStatus("p1")).toMatchObject({ state: "acknowledged", deliveryKind: "next_turn" });
+      expect(f.terminal).toHaveBeenCalledTimes(1);
+      expect(occurrences(requestText(f.port, f.port.requests.length - 1), "PARENT_BODY")).toBe(1);
+      // A duplicate id never creates a second record.
+      await f.session.receiveAgentMessage(parentEnvelope("p1"));
+      expect(seen).toHaveLength(2);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("starts the next turn at once on an idle child and reports it as next_turn", async () => {
+    const f = await childFixture([textStep("PARENT_ANSWER")]);
+    try {
+      const seen = observe(f);
+      const receipt = await f.session.receiveAgentMessage(parentEnvelope("p2"));
+      expect(receipt).toMatchObject({ state: "acknowledged", deliveryKind: "next_turn" });
+      expect(seen.map((d) => d.state)).toEqual(["queued", "acknowledged"]);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("does not downgrade a peer or another session's steer", async () => {
+    const f = await childFixture([textStep("FIRST_ANSWER")]);
+    try {
+      const seen = observe(f);
+      for (const [id, sender] of [["x1", "session:peer-1"], ["x2", "parent-session:someone-else"], ["x3", "test-supervisor"]] as const) {
+        const receipt = await f.session.receiveAgentMessage(parentEnvelope(id, sender));
+        expect(receipt).toMatchObject({ state: "rejected", reasonCode: "core_seam_inactive" });
+        expect(receipt.deliveryKind).toBeUndefined();
+      }
+      expect(f.port.requests).toHaveLength(0);
+      expect(seen.every((d) => d.state !== "acknowledged")).toBe(true);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("does not downgrade a terminal refusal of the owning parent's steer", async () => {
+    const f = await childFixture([textStep("DONE")]);
+    try {
+      f.session.startProgrammaticTurn("INITIAL_PROMPT");
+      await f.waitUntil(() => f.port.requests.length === 1);
+      f.port.release();
+      await f.waitUntil(() => f.terminal.mock.calls.length > 0);
+      const receipt = await f.session.receiveAgentMessage(parentEnvelope("p3"));
+      expect(receipt.state).toBe("rejected");
+      expect(receipt.reasonCode).toBeUndefined();
+      expect(receipt.deliveryKind).toBeUndefined();
+      expect(f.port.requests).toHaveLength(1);
     } finally {
       f.close();
     }

@@ -148,7 +148,10 @@ For Native Core children, `Agent` with `continue_session` sends a follow-up to
 a finished child; `send_to` delivers `prompt` to a running child. These are
 session-tier operations. `send_to` cannot combine with provider routing,
 `detach: true` or `continue_session`; engine-profile children do not support
-these follow-ups. A continued child keeps its original connection.
+these follow-ups. A running child receives `send_to` at its next safe point;
+if its turn has not started yet, the message is delivered as that child's next
+turn instead and the receipt reports `next_turn`. A continued child keeps its
+original connection.
 
 `AgentStatus` lists children in pages of 20 or reads one by id, retaining up
 to 64 recent children per tier. Codex calls it `anycode_agent_status`, Claude
