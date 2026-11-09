@@ -1829,6 +1829,11 @@ describe("AiSdkModelPort — networkWaitMaxMs (wait for the network)", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(run.state.done).toBe(true);
     expect((run.state.error as Error).message).toBe("fetch failed");
+    const start = run.events.find((e) => e.type === "waiting_for_network")!;
+    expect(start.deadlineAt).toBe((start.startedAt as number) + 60_000);
+    expect(start.failureCode).toBe("network");
+    expect(run.events.filter((e) => e.type === "network_wait_end")).toEqual([expect.objectContaining({ waitId: start.waitId, outcome: "failed" })]);
+    expect(waiter.listenerCount()).toBe(0);
     expect(mockStreamText).toHaveBeenCalledTimes(1);
     expect(waiter.probes).toBeGreaterThan(1);
     await run.pump;
@@ -1850,6 +1855,7 @@ describe("AiSdkModelPort — networkWaitMaxMs (wait for the network)", () => {
     expect(types.indexOf("waiting_for_network")).toBeGreaterThanOrEqual(0);
     expect(types.indexOf("waiting_for_network")).toBeLessThan(types.indexOf("stream_retry"));
     expect(run.events.find((e) => e.type === "stream_retry")).toMatchObject({ attempt: 1, maxAttempts: 1, delayMs: 0, waitedMs: 15_000 });
+    expect(run.events.filter((e) => e.type === "network_wait_end")).toEqual([expect.objectContaining({ waitId: run.events.find((e) => e.type === "waiting_for_network")!.waitId, outcome: "recovered" })]);
     expect(types.at(-1)).toBe("finish");
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     await run.pump;
@@ -1960,6 +1966,9 @@ describe("AiSdkModelPort — networkWaitMaxMs (wait for the network)", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(run.events.filter((e) => e.type === "waiting_for_network")).toHaveLength(2);
     expect(run.events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
+    const starts = run.events.filter((e) => e.type === "waiting_for_network");
+    expect(starts[1]!.deadlineAt).toBe((starts[1]!.startedAt as number) + 35_000);
+    expect(starts[0]!.waitId).not.toBe(starts[1]!.waitId);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(run.state.done).toBe(false);
 
@@ -1997,7 +2006,28 @@ describe("AiSdkModelPort — networkWaitMaxMs (wait for the network)", () => {
     expect(run.state.error).toBe(reason);
     expect(waiter.probes).toBe(probesBefore);
     expect(waiter.listenerCount()).toBe(0);
+    expect(run.events.filter((e) => e.type === "network_wait_end")).toEqual([expect.objectContaining({ waitId: run.events.find((e) => e.type === "waiting_for_network")!.waitId, outcome: "cancelled" })]);
     await run.pump;
+  });
+
+  it("network wait telemetry identifies concurrent episodes independently", async () => {
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(connectTimeout())]));
+    const waiter = makeWaiter(false);
+    const controller = new AbortController();
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 60_000 }), networkWaiter: waiter, networkWaitSource: "subagent" });
+    const a = pumpEvents(port.streamText({ ...baseRequest, abortSignal: controller.signal }));
+    const b = pumpEvents(port.streamText({ ...baseRequest, abortSignal: controller.signal }));
+    await vi.advanceTimersByTimeAsync(0);
+    const starts = [a, b].map((run) => run.events.find((e) => e.type === "waiting_for_network")!);
+    expect(starts[0]).toMatchObject({ waitSource: "subagent", waitId: expect.any(String) });
+    expect(starts[0]!.waitId).not.toBe(starts[1]!.waitId);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    for (const [i, run] of [a, b].entries()) {
+      await run.pump;
+      expect(run.events.filter((e) => e.type === "network_wait_end")).toEqual([expect.objectContaining({ waitId: starts[i]!.waitId, waitSource: "subagent", outcome: "cancelled" })]);
+    }
+    expect(waiter.listenerCount()).toBe(0);
   });
 
   it("the deadline is measured on the monotonic clock, so wall time spent asleep does not count", async () => {

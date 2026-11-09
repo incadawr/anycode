@@ -173,7 +173,8 @@ export type ModelStreamEvent =
    * count episodes per source instead (set on +1, cleared on 0). Absent on
    * replays from before the field existed; treat absence as the parent.
    */
-  | { type: "waiting_for_network"; waitSource?: "parent" | "subagent" }
+  | { type: "waiting_for_network"; waitSource?: "parent" | "subagent"; waitId?: string; startedAt?: number; deadlineAt?: number; failureCode?: string }
+  | { type: "network_wait_end"; waitId: string; waitSource?: "parent" | "subagent"; outcome: "recovered" | "failed" | "cancelled" }
   /**
    * Provider-reported quota from response headers.
    * Emitted after a model attempt completes, at most once per attempt;

@@ -70,6 +70,7 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
     // a waiting status is not output either; the replay gate
     // only closes on real model content.
     case "waiting_for_network":
+    case "network_wait_end":
       return false;
     default: {
       // Compile-time exhaustiveness: a new ModelStreamEvent variant must be
