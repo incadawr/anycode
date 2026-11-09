@@ -2698,6 +2698,15 @@ export class Session {
       void this.receiveAgentMessage({ messageId: requestId, sender: "local-supervisor-ui", recipientSessionId: this.sessionId, kind: "agent_message", payload: text, mode: "steer", createdAt: new Date().toISOString() });
       return;
     }
+    if (this.child !== undefined && !this.shuttingDown && (!this.busy || this.relocating)) {
+      // A child surface has no renderer prompt queue to drain a `steer_requeued`
+      // text, and its composer sends a steer whenever its turn looks running (the
+      // verdict is a stale host_ready snapshot), so a steer that reaches an idle
+      // child is the ordinary user message it would have been: the host starts
+      // the turn (or refuses it) under the same request id, exactly once.
+      this.onUserMessage(requestId, text);
+      return;
+    }
     if (this.shuttingDown || !this.busy || this.relocating) {
       // Cross-review F2: the text rides the refusal so a renderer that
       // reloaded between send and refusal (its pendingSteers entry died with

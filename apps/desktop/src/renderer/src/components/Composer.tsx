@@ -1506,7 +1506,6 @@ export function Composer() {
   // the engine's live steering verdict — true means
   // a send while running becomes a mid-turn steer instead of a queued prompt.
   const steerSupported = useTabStore((s) => s.steering?.supported === true);
-  const steerReady = useTabStore((s) => s.steering?.ready === true);
   const isNewSession = useTabStore((state) => state.transcript.length === 0);
   const sessionWorkspace = useTabStore((state) => state.workspace);
   // §3.7 (part B): tab-scoped orchestrate flag (part A keeps it
@@ -2100,14 +2099,16 @@ export function Composer() {
       sizeBytes: image.sizeBytes,
       attachment: image.attachment,
     }));
-    if (turn.status !== "idle" && images.length === 0 && steerSupported && (!childSurface || steerReady) && !recoverySourceId) {
+    if (turn.status !== "idle" && images.length === 0 && steerSupported && !recoverySourceId) {
       // Text steering is inserted at the next safe boundary. The steer frame
       // is text-only, so an image draft stays on the next-turn queue path
-      // below. A child surface takes the seam only while its loop can accept
-      // one (`steering.ready`); otherwise it falls through to the user_message
-      // branch, whose fallback is host-owned: the child host queues the text
-      // in its own steer queue and runs it as the next turn (`hostQueued`),
-      // so nothing is parked in a renderer queue that no child surface drains.
+      // below. `steering.ready` is only the host_ready snapshot (idle at
+      // that moment), so it never gates the route: the host decides. A running
+      // child turn injects at the seam; when the seam cannot take the text
+      // (turn ending, between steps) the host queues it in its own steer queue
+      // and runs it as the next turn (`hostQueued`), or starts the turn when
+      // the child is idle — nothing is parked in a renderer queue that no
+      // child surface drains.
       const requestId = crypto.randomUUID();
       if (!sendNewSteer(requestId, outgoing, [], { type: "steer_message", requestId, text: outgoing }, () => {
         tabStore.getState().recordPendingSteer(requestId, outgoing, undefined, { text: outgoing, images: [] });

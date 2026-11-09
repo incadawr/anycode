@@ -165,6 +165,25 @@ describe("child UI steer settlement", () => {
     }
   });
 
+  it("runs a steer that reaches an idle child as its own turn once, never as a renderer-owned requeue", async () => {
+    // The pane sends steer_message whenever its turn looks running; a stale
+    // host_ready verdict or a turn that just ended can leave the host idle.
+    const f = await childFixture([textStep("STEER_ANSWER")]);
+    try {
+      f.send(steer("s-idle", "IDLE_STEER"));
+      await f.waitUntil(() => f.port.requests.length === 1);
+      f.port.release();
+      await f.waitUntil(() => f.terminal.mock.calls.length > 0);
+      await settle();
+      expect(f.received.filter(isRequeued)).toHaveLength(0);
+      expect(f.received.filter((m) => m.type === "turn_started" && m.requestId === "s-idle")).toHaveLength(1);
+      expect(f.port.requests).toHaveLength(1);
+      expect(occurrences(requestText(f.port, 0), "IDLE_STEER")).toBe(1);
+    } finally {
+      f.close();
+    }
+  });
+
   it("holds the terminal while the loop is finalized and the steer promise is still pending, then drains it", async () => {
     const f = await childFixture([textStep("FIRST_ANSWER"), textStep("SECOND_ANSWER")], { manualSteer: true });
     try {

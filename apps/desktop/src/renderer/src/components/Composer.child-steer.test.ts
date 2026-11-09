@@ -11,7 +11,7 @@ import { tabRegistry } from "../tab-registry.js";
 afterEach(() => { document.body.replaceChildren(); vi.restoreAllMocks(); });
 
 async function scenario(childSurface: boolean, supported: boolean, image = false, ready = true) {
-  const seam = supported && !image && (!childSurface || ready);
+  const seam = supported && !image;
   Object.defineProperty(window, "anycode", { configurable: true, value: { listSessions: async () => [] } });
   const store = createDesktopStore();
   store.setState({ connection: "ready", childSurface, steering: { supported, ready }, turn: { status: "running", turnId: "turn", requestId: "original" } });
@@ -43,5 +43,5 @@ it("routes a running Core child at the seam", async () => scenario(true, true));
 it("keeps root seam routing", async () => scenario(false, true));
 it("queues an unsupported child for the next turn", async () => scenario(true, false));
 it("queues a child image for the next turn", async () => scenario(true, true, true));
-it("sends a not-ready child as a host-owned user message, not a seam steer", async () => scenario(true, true, false, false));
+it("routes a running child at the seam although host_ready reported it idle", async () => scenario(true, true, false, false));
 it("keeps a root steer on the seam even before the loop reports ready", async () => scenario(false, true, false, false));
