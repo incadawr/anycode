@@ -19,12 +19,12 @@ const metadata: ToolMetadata = {
   name: "Bash",
   description:
     "Execute a shell command and return its stdout, stderr and exit code.\n" +
-    "- Each call runs in a fresh shell process (bash when available) that starts in the workspace directory. " +
+    "- Each command runs in a fresh shell process starting in the workspace directory. On POSIX the local shell is /bin/bash when available, otherwise the default shell; on Windows it is the default shell. " +
     "`cd`, exported variables and shell state do NOT persist between calls: use `cd DIR && command` in the same call, or absolute paths.\n" +
-    "- The exit code of a pipeline is the exit code of its LAST command, so `make | tail` reports 0 even when make fails. " +
-    "When the result matters, put `set -o pipefail;` before the pipeline, or redirect to a log file and check the producer's exit code before reading the log.\n" +
-    "- exitCode 0 means the command succeeded; any other exitCode means it failed, even though the tool call itself returned normally.\n" +
-    "- timeout is in milliseconds (default 120000, max 600000).",
+    "- In POSIX shells, a pipeline normally reports the exit code of its LAST command, so `make | tail` can report 0 even when make fails. " +
+    "When supported by the shell, use `set -o pipefail;` before the pipeline, or redirect to a log file and check the producer's exit code before reading the log.\n" +
+    "- A nonzero exitCode means the command failed, even if the tool call returned normally. A null exitCode means no exit code is available; check status. Background starts return a task id instead of an exit code.\n" +
+    "- timeout is in milliseconds (max 600000); the default is 120000 for foreground commands and 21600000 for background commands.",
   readOnly: false,
   destructive: true,
   concurrentSafe: false,
