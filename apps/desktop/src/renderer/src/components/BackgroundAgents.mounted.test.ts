@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDesktopStore } from "../store.js";
 import { tabRegistry } from "../tab-registry.js";
+import { childRelationStore } from "../child-sessions.js";
+import { useTabsStore } from "../tabs-store.js";
 import { TabContext } from "../tab-context.js";
 import { BackgroundAgents } from "./BackgroundAgents.js";
 
@@ -113,7 +115,7 @@ it("a failed-only strip keeps a frozen clock, stops the tick and names its headi
   }
 });
 
-it("Dismiss by keyboard removes only the failed row and sends no host request", async () => {
+it("Dismiss is a focusable button; activating it removes only the failed row and sends no host request", async () => {
   const sendSpy = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => undefined as never);
   const store = createDesktopStore();
   const { container, root } = await mount(store);
@@ -135,11 +137,16 @@ it("Dismiss by keyboard removes only the failed row and sends no host request", 
     expect(failedRow.textContent).not.toContain("Open");
     const dismiss = failedRow.querySelector("button") as HTMLButtonElement;
     expect(dismiss.getAttribute("aria-label")).toBe(`Dismiss failed background agent ${longDescription}`);
+    // Native button semantics are what make Enter/Space work without a key handler.
+    expect(dismiss.tagName).toBe("BUTTON");
+    expect(dismiss.type).toBe("button");
+    expect(dismiss.disabled).toBe(false);
+    expect(dismiss.tabIndex).toBeGreaterThanOrEqual(0);
+    container.ownerDocument.body.appendChild(container);
     await act(async () => {
       dismiss.focus();
-      expect(document.activeElement === dismiss || dismiss.type === "button").toBe(true);
-      dismiss.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      dismiss.click(); // a browser turns Enter on a focused button into this click
+      expect(document.activeElement).toBe(dismiss);
+      dismiss.click(); // a browser turns Enter/Space on a focused button into this click
     });
     expect(container.textContent).not.toContain("Investigate");
     expect(container.textContent).toContain("Still running");
@@ -149,7 +156,7 @@ it("Dismiss by keyboard removes only the failed row and sends no host request", 
     // A repeated report does not bring the dismissed row back.
     await failChild(store, "s-bad", longReason);
     expect(container.textContent).not.toContain("Investigate");
-  } finally { await act(async () => root.unmount()); }
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
 it("falls back to the agent type in the Dismiss name and treats an empty reason as failed", async () => {
@@ -164,4 +171,29 @@ it("falls back to the agent type in the Dismiss name and treats an empty reason 
     expect(container.querySelector(".background-agents-failure")?.textContent).toBe("Failed");
     expect(container.textContent).not.toContain("Stop");
   } finally { await act(async () => root.unmount()); }
+});
+
+it("a failed row still offers Open next to Dismiss when a relation is registered", async () => {
+  const store = createDesktopStore();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const child = { childSessionId: "bad", spawnToolCallId: "s-bad", agentType: "codex", description: "Doomed", startedAt: Date.now() };
+  useTabsStore.getState().addTab({ tabId: "tab", workspace: "/ws" });
+  useTabsStore.getState().setSessionId("tab", "parent-session");
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(BackgroundAgents))));
+    await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [child] }));
+    await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [] }));
+    await failChild(store, "s-bad", "boom");
+    const buttons = () => Array.from(container.querySelectorAll(".background-agents-item button")).map((button) => button.textContent);
+    // Without a relation there is only Dismiss.
+    expect(buttons()).toEqual(["Dismiss"]);
+    await act(async () => childRelationStore.getState().registerChild("parent-session", "s-bad", "child-tab", "bad"));
+    expect(buttons()).toEqual(["Open", "Dismiss"]);
+    expect(container.textContent).not.toContain("Stop");
+  } finally {
+    await act(async () => root.unmount());
+    childRelationStore.getState().removeRelationsForParentSession("parent-session");
+    useTabsStore.getState().removeTab("tab");
+  }
 });

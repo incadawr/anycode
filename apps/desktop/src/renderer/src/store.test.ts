@@ -8314,6 +8314,11 @@ describe("desktop store — failed detached child rows", () => {
     fail(store, 1, 9_000);
     expect(store.getState().failedBackgroundChildren).toHaveLength(1);
     expect(store.getState().failedBackgroundChildren[0]?.endedAt).toBe(1_400);
+    const reports = [
+      ...store.getState().promptQueue.filter((prompt) => prompt.originId === "spawn-1"),
+      ...(store.getState().queueInFlight?.item.originId === "spawn-1" ? [store.getState().queueInFlight!.item] : []),
+    ];
+    expect(reports).toHaveLength(1);
   });
 
   it("a report with no retained snapshot adds no row and keeps the report queued", () => {
@@ -8347,7 +8352,9 @@ describe("desktop store — failed detached child rows", () => {
     fail(store, 2);
     store.getState().dismissFailedBackgroundChild("child-1");
     store.getState().applyHostMessage({ type: "turn_started", requestId: "req-1", turnId: "turn-1" });
-    store.getState().applyHostMessage({ type: "turn_end", turnId: "turn-1", reason: "completed" } as never);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-1", event: { type: "turn_end", turn: 1, finishReason: "stop" } });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-1", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
     expect(store.getState().failedBackgroundChildren.map((c) => c.childSessionId)).toEqual(["child-2"]);
     expect(store.getState().dismissedFailedChildReports).toEqual(["spawn-1"]);
     store.getState().reset();
