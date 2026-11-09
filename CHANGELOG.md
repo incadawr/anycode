@@ -7,6 +7,22 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.96] - 2026-11-10
+
+### Added
+
+- The Sessions API reports when a session is parked waiting for the network: `get_session_status` and `list_sessions` show `waiting_network` with a `networkWait` summary (source, start, deadline and failure code) that disappears when the last wait ends.
+
+### Changed
+
+- Session access lists peers in a separate dialog instead of inline in the environment menu, with one reason line per state and short descriptions whose explanations moved into tooltips.
+- Failed background agents keep a short failure line with the full reason in the tooltip, stop their clock, and can be dismissed from the composer strip.
+- When a managed worktree child's host reports at startup that it must move into the child's own checkout, AnyCode restarts the host once in that checkout instead of failing the child. If the old host does not stop or the restart fails, the row ends as failed and the checkout and branch are kept for inspection.
+
+### Fixed
+
+- Messages from a parent to a running Core child and text typed in a running Core child's pane are now inserted at the child's next safe point in the same turn instead of waiting for the next turn. The Sessions API can steer a running Core session the same way with `mode: steer`; the message status reports whether the text was inserted at that point or delivered as the next turn, and a steer that was not yet inserted when the turn is stopped is rejected.
+
 ## [0.0.95] - 2026-11-09
 
 ### Changed
