@@ -510,6 +510,37 @@ describe("agentTool handler — send_to", () => {
     expect(text).not.toMatch(/\bread\b/);
   });
 
+  it("a queued receipt with no delivery kind says queued for the next safe boundary and names the missing seam once", async () => {
+    const { port } = sendPort({ ok: true, state: "queued", messageId: "msg-43" });
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    const text = result.ok ? (result.output?.finalText ?? "") : "";
+    expect(text).toContain("Queued for injection at the next safe boundary; the transport did not report which seam will carry it");
+    expect(text).toContain("msg-43");
+    expect(text).toContain("Stop may reject it");
+    expect(text).not.toContain("Delivery kind:");
+    expect(text).not.toContain("not reported");
+    expect(text.match(/seam/g)?.length).toBe(1);
+    expect(text).not.toContain("delivered");
+  });
+
+  it("a queued receipt with next_turn says it waits as the next turn's input", async () => {
+    const { port } = sendPort({ ok: true, state: "queued", messageId: "msg-44", deliveryKind: "next_turn" });
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    const text = result.ok ? (result.output?.finalText ?? "") : "";
+    expect(text).toContain("Queued to be accepted as the next turn’s input");
+    expect(text).toContain("Delivery kind: next_turn");
+    expect(text).not.toContain("loop boundary");
+    expect(text).not.toContain("delivered");
+  });
+
   it("an acknowledged receipt says the message was injected into the model's input, not that the model acted on it", async () => {
     const { port } = sendPort({ ok: true, state: "acknowledged", messageId: "msg-7", deliveryKind: "core_seam" });
     const result = await full.handler(
@@ -519,6 +550,8 @@ describe("agentTool handler — send_to", () => {
     expect(result.ok).toBe(true);
     const text = result.ok ? (result.output?.finalText ?? "") : "";
     expect(text).toContain("Acknowledged");
+    expect(text).toContain("inserted at the loop boundary of the running turn");
+    expect(text).not.toContain("at the next loop boundary");
     expect(text).toContain("msg-7");
     expect(text).toContain("not proof the model saw or acted on it");
     expect(text).not.toContain("delivered");

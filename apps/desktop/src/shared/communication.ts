@@ -29,6 +29,14 @@ export interface AgentDelivery {
    * the model input, not that the model read or obeyed it.
    */
   deliveryKind?: "core_seam" | "next_turn" | "native_input";
+  /**
+   * Additive: a stable machine reason next to the human `detail` of a
+   * `rejected` delivery. `core_seam_inactive` means the recipient refused a
+   * steer ONLY because its Core steering seam is not active yet (no running
+   * turn, steering unavailable or not ready) — a next_turn send would be
+   * accepted. Terminal, posture and closed refusals never carry it.
+   */
+  reasonCode?: "core_seam_inactive";
 }
 /** Ledger projection for display only; never an inbox or model input. */
 export interface AgentDisplayCard extends AgentDelivery {

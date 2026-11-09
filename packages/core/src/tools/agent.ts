@@ -528,8 +528,26 @@ async function runInlineTier(
  * beyond what the reported state supports.
  */
 function sendReceiptText(childSessionId: string, sent: Extract<SessionSubagentSendResult, { ok: true }>): string {
-  const kindClause = sent.deliveryKind === undefined ? " Delivery seam was not reported." : ` Delivery kind: ${sent.deliveryKind}.`;
-  const seam = sent.deliveryKind === "core_seam" ? "injected at the next loop boundary" : sent.deliveryKind === "next_turn" ? "accepted as the next turn’s input" : sent.deliveryKind === "native_input" ? "passed to the native engine" : "accepted with no delivery seam reported";
+  const kindClause = sent.deliveryKind === undefined ? "" : ` Delivery kind: ${sent.deliveryKind}.`;
+  // The seam clause names where the message goes. An absent kind is its own
+  // honest sentence for the queued state; elsewhere the kind clause stays off
+  // and the seam text already says the transport named no seam.
+  const queuedSeam =
+    sent.deliveryKind === "core_seam"
+      ? "Queued for injection at the next loop boundary"
+      : sent.deliveryKind === "next_turn"
+        ? "Queued to be accepted as the next turn’s input"
+        : sent.deliveryKind === "native_input"
+          ? "Queued to be passed to the native engine"
+          : "Queued for injection at the next safe boundary; the transport did not report which seam will carry it";
+  const ackSeam =
+    sent.deliveryKind === "core_seam"
+      ? "inserted at the loop boundary of the running turn"
+      : sent.deliveryKind === "next_turn"
+        ? "accepted as the next turn’s input"
+        : sent.deliveryKind === "native_input"
+          ? "passed to the native engine"
+          : "accepted; the transport did not report which seam carried it";
   const detailClause = sent.detail === undefined || sent.detail.length === 0 ? "" : ` Detail: ${sent.detail.slice(0, 300)}.`;
   switch (sent.state) {
     case "queued": {
@@ -537,10 +555,10 @@ function sendReceiptText(childSessionId: string, sent: Extract<SessionSubagentSe
         sent.messageId === undefined
           ? "The transport reported no message id, so its status cannot be checked."
           : `Check message status with this id: ${sent.messageId}.`;
-      return `Agent: message to running child ${childSessionId}: Queued to be ${seam}; Stop may reject it. ${idClause}${kindClause}${detailClause}`;
+      return `Agent: message to running child ${childSessionId}: ${queuedSeam}; Stop may reject it. ${idClause}${kindClause}${detailClause}`;
     }
     case "acknowledged":
-      return `Agent: message to running child ${childSessionId}: Acknowledged — ${seam}; this is not proof the model saw or acted on it.${
+      return `Agent: message to running child ${childSessionId}: Acknowledged — ${ackSeam}; this is not proof the model saw or acted on it.${
         sent.messageId === undefined ? "" : ` Message id: ${sent.messageId}.`
       }${kindClause}${detailClause}`;
     case "rejected":
