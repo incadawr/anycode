@@ -66,28 +66,39 @@ try {
   console.log('DIAG child session access:', access.ok ? 'enabled' : 'refused');
   const apiArgs = {sessionId:childId, mode:'steer', payload:process.env.T1_CANCEL === '1' ? 'synthetic api cancel' : 'synthetic api steer', idempotencyKey:'t1-smoke-fixed-key'};
   const apiReceipt = await call('send_message',apiArgs);
-  console.log('API receipt:', JSON.stringify({state:apiReceipt.state,deliveryKind:apiReceipt.deliveryKind,detail:apiReceipt.detail}));
+  console.log('API receipt:', JSON.stringify({messageId:apiReceipt.envelope.messageId,state:apiReceipt.state,deliveryKind:apiReceipt.deliveryKind,detail:apiReceipt.detail}));
   const apiId = apiReceipt.envelope.messageId;
   const retry = await call('send_message',apiArgs);
   assert.equal(retry.envelope.messageId, apiId);
   console.log('PASS API retry returns same message id');
-  if (process.env.T1_UI === '1') {
+  if (process.env.T1_UI === '1' || process.env.T1_LATE === '1') {
     const identity = JSON.parse(readFileSync(join(driver.root,'identity.json'),'utf8'));
     const ppid = Number(execFileSync('ps',['-o','ppid=','-p',String(identity.pid)],{encoding:'utf8'}).trim());
     const cdp = await connectIsolatedCdp({profile:driver.root,env:{REMOTE_DEBUGGING_PORT:'0',ANYCODE_SMOKE_IDENTITY:identity.nonce,ANYCODE_EXPECTED_DESKTOP_ROOT:identity.desktopRoot},launcher:{pid:ppid},wait});
     try {
       assert((await driver.api(`/tabs/${parent.tabId}/child/open`,{spawnToolCallId:child.view.child.spawnToolCallId})).ok);
+      if (process.env.T1_LATE === '1') { const remaining = 44000 - (Date.now() - barrierStart); if (remaining > 0) await new Promise(r => setTimeout(r,remaining)); }
       const focus = await wait(() => driver.evaluate(`(() => { const el = document.querySelector('textarea'); if (!el) return false; el.focus(); return true; })()`),15000);
       assert(focus);
       await cdp.call('Input.insertText',{text:'synthetic pane instruction'});
       await cdp.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
       await cdp.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
       const pending = await wait(() => driver.evaluate(`document.body.innerText.includes('synthetic pane instruction')`),15000);
-      assert(pending); await driver.screenshot('child-pending.png'); console.log('PASS child pending screenshot');
-      await wait(() => driver.native('core').some(ms => ms.some(m => m.role === 'user' && typeof m.content === 'string' && m.content === 'synthetic pane instruction')),90000);
+      assert(pending);
+      const wrongQueue = await driver.evaluate(`document.body.innerText.includes('Queued — delivered after this turn')`);
+      console.log('DIAG after-turn queue label:',wrongQueue);
+      if (process.env.T1_UI === '1') { assert.equal(wrongQueue,false); await driver.screenshot('child-pane-pending-r6.png'); }
+
+      const paneRequest = await wait(() => driver.native('core').find(ms => ms.some(m => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(childCommand)) && ms.some(m => m.role === 'user' && m.content === 'synthetic pane instruction')),90000);
+      const paneCount = paneRequest.filter(m => m.role === 'user' && m.content === 'synthetic pane instruction').length;
+      const paneIndex = paneRequest.findIndex(m => m.role === 'user' && m.content === 'synthetic pane instruction');
+      const toolIndex = paneRequest.findLastIndex(m => m.role === 'tool');
+      console.log('DIAG pane request:',JSON.stringify({paneCount,paneIndex,toolIndex,elapsedMs:Date.now()-barrierStart}));
+      assert.equal(paneCount,1); assert(toolIndex >= 0 && paneIndex > toolIndex); assert(!paneRequest.slice(toolIndex + 1, paneIndex).some(m => m.role === 'assistant'), 'Pane input arrived after a model response');
+
       const count = await driver.evaluate(`Array.from(document.querySelectorAll('.message-list [data-block-id]')).filter(el => el.innerText.includes('synthetic pane instruction')).length`);
       console.log('DIAG child bubble count before reload:',count);
-      assert.equal(count,1); await driver.screenshot('child-injected.png');
+      assert.equal(count,1); if (process.env.T1_UI === '1') await driver.screenshot('child-pane-injected-r6.png');
       await cdp.call('Page.reload');
       await wait(() => driver.evaluate(`typeof window.anycode?.createTab === 'function' && !!window.__anycodeAutomation`),30000);
       const reopened = await wait(async () => { try { const result = await driver.api(`/tabs/${parent.tabId}/child/open`,{spawnToolCallId:child.view.child.spawnToolCallId}); return result.ok ? result : null; } catch { return null; } },30000);
@@ -96,7 +107,7 @@ try {
       await wait(() => driver.evaluate(`Array.from(document.querySelectorAll('.message-list [data-block-id]')).some(el => el.innerText.includes('synthetic pane instruction'))`),30000);
       const after = await driver.evaluate(`Array.from(document.querySelectorAll('.message-list [data-block-id]')).filter(el => el.innerText.includes('synthetic pane instruction')).length`);
       console.log('DIAG child bubble count after reload:',after);
-      assert.equal(after,1); await driver.screenshot('child-reload.png');
+      assert.equal(after,1); await new Promise(r => setTimeout(r,1000)); if (process.env.T1_UI === '1') await driver.screenshot('child-pane-reload-r6.png');
       console.log('PASS child bubble and reload');
     } finally { cdp.ws.close(); }
     throw new Error('T1_UI_COMPLETE');
