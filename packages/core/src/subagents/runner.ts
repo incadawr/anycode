@@ -1527,6 +1527,10 @@ export function createSubagentRunner(
           // SIGTERM/SIGKILL cascade through the existing chain — no new kill path.
           for await (const event of loop.runTurn(req.prompt, { signal })) {
             switch (event.type) {
+              case "waiting_for_network":
+              case "network_wait_end":
+                runOpts.onNetworkWait?.({ ...event, waitSource: "subagent" });
+                break;
               case "turn_start":
                 currentTurnText = "";
                 statusTextSnapshot = "";

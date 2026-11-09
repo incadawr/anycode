@@ -480,6 +480,7 @@ async function runInlineTier(
         },
         onApproval: (waiting, toolName) => status.update(id, { state: waiting ? "waiting for approval" : "running", ...(waiting && toolName ? { currentTool: toolName } : {}) }),
         onStatusReset: () => status.resetAssistant(id),
+        onNetworkWait: (event) => ctx.emit?.(event),
         onProgress: (progress) => {
           if (progress.kind === "progress") status.update(id, { turns: progress.turns, toolCalls: progress.toolCalls });
           const event = mapProgressToEvent(progress, ctx.toolCallId);

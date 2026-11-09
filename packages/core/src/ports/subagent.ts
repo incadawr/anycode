@@ -245,6 +245,7 @@ export type SubagentProgress =
     };
 
 export interface SubagentRunOptions {
+  onNetworkWait?: (event: Extract<import("../types/events.js").AgentEvent, { type: "waiting_for_network" | "network_wait_end" }>) => void;
   /** Bounded model-facing live transcript, scoped by the caller. */
   onStatusItem?: (item: import("../subagents/status.js").ChildStatusItem, currentTool?: string) => void;
   onApproval?: (waiting: boolean, toolName?: string) => void;
