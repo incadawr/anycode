@@ -347,7 +347,7 @@ disappears when the last wait ends. All timestamps are epoch milliseconds.
 | `networkWait.deadlineAt` | When the wait gives up, projected from the time the session still has left to wait (the allowance is cumulative), not a fresh full allowance per episode. Omitted when unknown. |
 | `networkWait.failureCode` | A safe failure category such as `network`, `tls`, `proxy_unreachable` or `rate_limited`; never provider text. Omitted when unknown. |
 | `turnStartedAt` | When the running turn started, or `null` when no turn is active. |
-| `lastProviderActivityAt` | When the model last produced output or completed a step in this turn, or `null` before the first one and for engines that give no reliable signal. Retries, network checks, tool execution and message delivery do not move it. `list_sessions` repeats these two values from the application's last known activity, so they can lag `get_session_status`. |
+| `lastProviderActivityAt` | When the model last produced output or completed a step in this turn, or `null` before the first one and for engines that give no reliable signal. Retries, network checks, tool execution and message delivery do not move it. `list_sessions` repeats these two values from the application's last known activity (published when a turn starts, when a wait or approval changes, and when a turn ends), so they are last-known values that can briefly lag `get_session_status`. |
 
 These are observations, not guarantees: a timestamp does not prove that the
 provider or the model read or applied anything, and a missing `networkWait` does

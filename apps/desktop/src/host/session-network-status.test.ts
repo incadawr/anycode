@@ -55,6 +55,19 @@ describe("session network status", () => {
       expect(h.session.communicationStatus().networkWait).toBeUndefined();
     } finally { stop(); h.close(); }
   });
+  it("publishes a real turn start as soon as the turn begins", async () => {
+    const { h, stop } = fixture();
+    const listener = vi.fn();
+    h.session.observeActivity(listener);
+    try {
+      h.send({ type: "user_message", requestId: "one", text: "hello" });
+      await h.waitUntil(() => h.session.communicationStatus().turnStartedAt != null);
+      const snapshot = listener.mock.lastCall?.[1];
+      expect(snapshot).toMatchObject({ state: "running", lastProviderActivityAt: null });
+      expect(typeof snapshot?.turnStartedAt).toBe("number");
+      expect(snapshot?.networkWait).toBeUndefined();
+    } finally { stop(); h.close(); }
+  });
   it("updates provider activity for output, but not tool execution or network status", async () => {
     const { h, push, stop } = fixture();
     try {

@@ -108,6 +108,31 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(status).not.toHaveProperty("networkWait");
     expect(status).not.toHaveProperty("lastProviderActivityAt");
   });
+  it("falls back to the cached wait and timestamps when the host status request fails", async () => {
+    const f = await fixture();
+    const wait = { startedAt: 100, deadlineAt: 200, failureCode: "network", source: "parent" as const };
+    f.manager.listTabs = () => [{
+      sessionId: "allowed", workspace: f.dir, state: "running", activityState: "waiting_network", pid: 10,
+      activitySnapshot: { state: "waiting_network", networkWait: wait, turnStartedAt: 90, lastProviderActivityAt: 95 },
+    }];
+    f.request.mockRejectedValue(new Error("timeout"));
+    const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+    expect(status).toMatchObject({ state: "waiting_network", networkWait: wait, turnStartedAt: 90, lastProviderActivityAt: 95 });
+    expect(status).not.toHaveProperty("activitySnapshot");
+    expect(status).not.toHaveProperty("activityState");
+  });
+  it("keeps the internal activity cache out of get_session_result", async () => {
+    const f = await fixture();
+    f.manager.listTabs = () => [{
+      sessionId: "allowed", workspace: f.dir, state: "running", activityState: "waiting_network", pid: 10,
+      activitySnapshot: { state: "waiting_network", networkWait: { startedAt: 100, deadlineAt: 200, failureCode: "network", source: "parent" as const }, turnStartedAt: 90 },
+    }];
+    const result = value(await f.client.callTool({ name: "get_session_result", arguments: { sessionId: "allowed" } }));
+    expect(result).not.toHaveProperty("activitySnapshot");
+    expect(result).not.toHaveProperty("activityState");
+    expect(result).not.toHaveProperty("networkWait");
+    expect(result).toMatchObject({ sessionId: "allowed", availability: "available", latestResult: { publicAnswer: "PUBLIC_ANSWER", turnId: "host-turn" } });
+  });
   it("does not reveal waits for inaccessible or unshared sessions", async () => {
     const exposed = new Set(["on"]);
     const f = await approvalFixture({ approvals: new Set(), exposed });

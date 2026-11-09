@@ -506,7 +506,9 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       case "get_session_result": {
         const input = sessionSchema.parse(raw); const tab = await requireSession(input.sessionId);
         const result = await options.manager.communicationRequest(input.sessionId, name, undefined, tab.workspace);
-        return { ...tab, ...(result as object) };
+        // The result tool promises text and turn identity only: keep the internal activity cache out.
+        const { activityState: _state, activitySnapshot: _snapshot, ...identity } = tab;
+        return { ...identity, ...(result as object) };
       }
       case "send_message": {
         return sendMessage(parseOr(messageSchema, raw, 'send_message expects sessionId, payload (1..32000 chars) and mode ("next_turn" or "steer"); optional: kind, correlationId, replyTo, idempotencyKey'), signal);

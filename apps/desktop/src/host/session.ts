@@ -5895,6 +5895,9 @@ export class Session {
     this.networkWaitState.clear();
     this.lastProviderActivityAt = null;
     this.turnStartedAt = Date.now();
+    // The `busy` publish ran before the turn identity existed: publish once more so
+    // the cached activity carries this turn's start instead of null.
+    this.publishActivity();
     this.presentationJournal.start(turnId, requestId, this.turnStartedAt, text, attachments, origin);
     this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
     // the supervisor idle-watchdog's turn-start signal, fired at
