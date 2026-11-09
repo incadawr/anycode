@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { applyDeliveryUpdate, createCommunicationLedger, type CommunicationRecord } from "./communication-ledger.js";
+import { applyDeliveryUpdate, createCommunicationLedger, deliveryExtras, type CommunicationRecord } from "./communication-ledger.js";
 import { createCommunicationDispatch, type CommunicationPrincipal, type CommunicationSendInput } from "./communication-dispatch.js";
 import type { CommunicationManager } from "./communication-server.js";
 import type { AgentDelivery, AgentDisplayCard, AgentEnvelope } from "../shared/communication.js";
@@ -39,6 +39,11 @@ export async function createCommunicationBroker(options: {
     dispatchTimeoutMs: options.dispatchTimeoutMs, nativeSessionsEnabled: options.nativeSessionsEnabled,
     post: (id, envelope, workspace) => manager.communicationRequest(id, "send_message", envelope, workspace),
   });
+  const changed = (record: CommunicationRecord, current: AgentDelivery) => {
+    const extras = deliveryExtras(current);
+    return current.state !== record.state || current.detail !== record.detail
+      || extras.deliveryKind !== record.deliveryKind || extras.reasonCode !== record.reasonCode;
+  };
   const observe = ({ tabs, requireSession }: Access) => {
     if (closed) throw new Error("Communication broker closed");
     let stopped = false;
@@ -49,7 +54,7 @@ export async function createCommunicationBroker(options: {
         const workspace = await resolvePath(tab.workspace);
         if (closed || stopped) return;
         const existing = messages.get(delivery.envelope.messageId);
-        if (existing && delivery.detail !== "Dispatch pending") { existing.state = delivery.state; existing.detail = delivery.detail; }
+        if (existing && delivery.detail !== "Dispatch pending") { applyDeliveryUpdate(existing, delivery); }
         else if (!existing && !ledger.isFull()) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
         await persist();
       })().catch(() => { /* closing or no longer authorized */ });
@@ -94,7 +99,7 @@ export async function createCommunicationBroker(options: {
           if (waiting.size) deferredRestores.set(key, waiting); else deferredRestores.delete(key);
           for (const record of eligible.filter((r) => r.state === "queued")) {
             const current = await manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
-            if (record.state === "queued" && !await markLostGeneration(record) && current && (current.state !== record.state || current.detail !== record.detail)) { applyDeliveryUpdate(record, current); await persist(); }
+            if (record.state === "queued" && !await markLostGeneration(record) && current && changed(record, current)) { applyDeliveryUpdate(record, current); await persist(); }
           }
         }
       } catch { /* a closing/crashed host cannot authorize replay */ }
@@ -120,7 +125,7 @@ export async function createCommunicationBroker(options: {
         if (record.state !== "queued" || !tab || dispatch.inFlight.has(record.envelope.messageId)) continue;
         try {
           const current = await manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
-          if (current && record.state === "queued" && (current.state !== record.state || current.detail !== record.detail)) {
+          if (current && record.state === "queued" && changed(record, current)) {
             applyDeliveryUpdate(record, current); await persist();
           }
         } catch { /* closing host; display remains recoverable */ }

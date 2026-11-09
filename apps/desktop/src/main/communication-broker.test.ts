@@ -61,6 +61,33 @@ it("keeps native delivery and display recovery alive without HTTP, sharing one c
   expect(manager.communicationRequest.mock.calls.filter(([, op]) => op === "send_message")).toHaveLength(1);
 });
 
+it("keeps deliveryKind and reasonCode from a host push with no reconcile poll", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "communication-push-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const listeners = new Set<(id: string, delivery: AgentDelivery) => void>();
+  const tab = { sessionId: "peer", workspace: dir, state: "running", pid: 1 };
+  const post = vi.fn(async (_id: string, op: string) => op === "send_message" ? { state: "queued", detail: "Queued for the next turn" } : undefined);
+  const ledgerFile = join(dir, "ledger");
+  const broker = await createCommunicationBroker({ ledgerFile,
+    manager: { listTabs: () => [tab], communicationRequest: post,
+      onCommunicationDelivery: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; } } });
+  cleanup.push(() => broker.dispose());
+  const access = { tabs: async () => [tab], requireSession: async () => tab };
+  broker.observe(access);
+  const sent = await broker.send({ kind: "session", sessionId: "sender", tabId: "tab" },
+    { sessionId: "peer", payload: "hello", mode: "next_turn", kind: "agent_message" }, access.requireSession);
+  const id = sent.envelope.messageId;
+  for (const listener of listeners) listener("peer", { ...sent, state: "acknowledged", detail: "Delivered at a tool seam", deliveryKind: "core_seam" });
+  await vi.waitFor(() => expect(broker.ledger.messages.get(id)?.deliveryKind).toBe("core_seam"));
+  expect(broker.ledger.messages.get(id)).toMatchObject({ state: "acknowledged", detail: "Delivered at a tool seam" });
+  await vi.waitFor(async () => expect(JSON.parse(await readFile(ledgerFile, "utf8"))[0].deliveryKind).toBe("core_seam"));
+  expect(post.mock.calls.some(([, op]) => op === "get_message_status")).toBe(false);
+  // A later push without the optional fields clears them, like the poll paths.
+  for (const listener of listeners) listener("peer", { envelope: sent.envelope, state: "acknowledged", detail: "Seen" });
+  await vi.waitFor(() => expect(broker.ledger.messages.get(id)?.detail).toBe("Seen"));
+  expect(broker.ledger.messages.get(id)).not.toHaveProperty("deliveryKind");
+});
+
 it("shares the durability barrier for native and external sends", async () => {
   const dir = await mkdtemp(join(tmpdir(), "communication-writer-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
