@@ -10,6 +10,23 @@ export interface PeerMessageBudget { chainId: string; startedAt: number; hop: nu
 
 export type CommunicationRecord = AgentDelivery & { subscription?: { state: "pending" | "explicit" | "auto" | "unknown"; messageId?: string }; peer?: PeerMessageBudget; idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
 
+const DELIVERY_KINDS = ["core_seam", "next_turn", "native_input"];
+const REASON_CODES = ["core_seam_inactive"];
+/** Optional, additive delivery fields from a host reply; unknown values (older/newer hosts) are dropped. */
+export function deliveryExtras(raw: unknown): Pick<AgentDelivery, "deliveryKind" | "reasonCode"> {
+  const { deliveryKind, reasonCode } = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    ...(DELIVERY_KINDS.includes(deliveryKind as string) ? { deliveryKind: deliveryKind as AgentDelivery["deliveryKind"] } : {}),
+    ...(REASON_CODES.includes(reasonCode as string) ? { reasonCode: reasonCode as AgentDelivery["reasonCode"] } : {}),
+  };
+}
+/** Copies a host-reported delivery observation onto the ledger record; absent optional fields clear stale ones. */
+export function applyDeliveryUpdate(record: CommunicationRecord, current: Pick<AgentDelivery, "state" | "detail"> & Partial<Pick<AgentDelivery, "deliveryKind" | "reasonCode">>): void {
+  record.state = current.state; record.detail = current.detail;
+  delete record.deliveryKind; delete record.reasonCode;
+  Object.assign(record, deliveryExtras(current));
+}
+
 /** Atomic private write (mode 0600, temp file + rename); the default ledger and discovery writer. */
 export async function writePrivateFile(path: string, text: string): Promise<void> {
   const temporary = `${path}.${randomUUID()}.tmp`;

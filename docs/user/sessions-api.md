@@ -46,7 +46,7 @@ force the new tab to be shared externally; the normal new-session default applie
 |---|---|
 | `SessionsList` | Up to 20 accessible live root sessions by default (maximum 50): session/tab ids, workspace, engine, activity, addressability, optional title/model/effort and up to five recent paths in the caller's folder. `scope: "granted"` includes granted folders. Cursor pagination and `ownMessageId` queries currently return `unavailable`. |
 | `WhoEdits` | Evidence for one exact path in the caller's workspace: successful Edit/Write/NotebookEdit reports (`reported_write`), shell candidates (`observed_during_shell`), observation start time, sampler coverage/freshness and limitations. It returns no file contents or command text. |
-| `SessionSend` | A message id and delivery state, without waiting for the answer. Payloads are limited to 32,000 characters. Only `next_turn` works; native `steer` returns `unavailable`. |
+| `SessionSend` | A message id and delivery state, without waiting for the answer. Payloads are limited to 32,000 characters. Only `next_turn` works between sessions; `steer` returns `unavailable` with a reason and a hint to use `next_turn`. |
 | `SessionOpen` | A new independent root's session/tab ids, optional label and first-message delivery receipt. Workspace and engine default to the caller's. Model/effort still pass creation checks. It does not create a child managed by `Agent`. |
 
 Core roots can send/open in Build, Edit, Auto, `yolo` and Orchestrate, under
@@ -97,8 +97,19 @@ Limits and uncertainty:
   are limited to 20/minute per sender and 60/minute per workspace. Creation shares
   the HTTP budget of 5/minute and 8 live agent-opened tabs.
 - `queued` is inbox admission; `acknowledged` is turn start, not proof the model
-  applied the message. `rejected` means delivery was refused, for example because
-  the inbox is full or authorization fails before drain. `unknown` can mean
+  applied the message. A Core steer is first `queued`; it becomes `acknowledged`
+  with `deliveryKind: "core_seam"` once the message is inserted into the model
+  input at a safe point of the running turn. That means inserted, never that the
+  model read or followed it, and there is no separate "read" state. Poll
+  `get_message_status` for the final state. Sessions that send to each other
+  (`SessionSend`) cannot steer; use `next_turn`. A parent's `send_to` to a
+  running child whose turn has not started yet is delivered as `next_turn` and
+  reported with `deliveryKind: "next_turn"`. `rejected` means delivery was
+  refused, for example because the inbox is full or authorization fails before
+  drain. A steer that has not been inserted when the turn is stopped, closed or
+  runs out of budget becomes `rejected` with the message id and a reason, and
+  is not run later on its own; send it again as `next_turn` if it is still
+  wanted. Stop can therefore reject steers that were still waiting. `unknown` can mean
   receipt/completion is unconfirmed, an open was rolled back before publication
   (with known session/tab ids), or an internal error was caught. Known ids alone
   do not prove a tab still exists. First-message delivery can be uncertain
@@ -134,7 +145,7 @@ unknown or stale, rather than a live authentication check or a promise of admiss
 | `list_sessions` | Lists the shared sessions. No transcript or credentials. |
 | `get_session_status` | Engine, activity state (including a network wait summary), the selected model and effort, the model's supported effort levels and whether an effort change is still pending. |
 | `get_session_result` | Latest completed public answer and its turn identity. No reasoning. |
-| `send_message` | Sends a message. `mode: next_turn` queues it for the next turn; `mode: steer` steers an active Codex turn. |
+| `send_message` | Sends a message. `mode: next_turn` queues it for the next turn; `mode: steer` steers the running turn of a Core or Codex session. A Core steer returns `queued` at once and is inserted at the next safe point in the loop, so a long tool call finishes first. |
 | `get_message_status` | Delivery state of a message you sent. |
 | `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
 | `cancel_turn` | Stops the running turn of a shared session, like the Stop button. Queued messages are rejected and parked approvals are denied. An idle session answers `cancelled: false`, which is not an error. |
@@ -475,7 +486,7 @@ rest of `settings.json` keeps working.
    The message queues for that session's next turn.
 3. Call `get_message_status` with the returned `messageId`. A state of
    `acknowledged` means the session took the message. It does not prove the
-   model has applied it.
+   model has read or applied it.
 4. `wait_for_result` defaults to 30 seconds on the server and accepts at most
    120 seconds. Call `wait_for_result` with the same `sessionId` and `messageId` to get the
    answer. Give a request timeout longer than `timeoutMs` in your MCP client

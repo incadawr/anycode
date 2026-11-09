@@ -2,6 +2,7 @@ import { createChildLayoutStore } from "../renderer/src/child-layout.js";
 import { NodeGitAdapter } from "@anycode/core/node-git";
 import * as childCleanup from "./child-worktree-cleanup.js";
 import { ChildWorktreeResources, type ChildWorktreeReceipt, type ChildWorktreeSnapshot } from "./child-worktree-resource.js";
+import { createCommunicationBroker } from "./communication-broker.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
@@ -7189,20 +7190,20 @@ describe("child spawn — profile-declared connection routing", () => {
 // its OWN STILL-RUNNING child, delivered through communicationRequest into the
 // existing receiveAgentMessage/agentInbox path. Every test drives main purely
 // via host.emit("message", ...) on fake hosts, like the suites above.
-describe("TabHostManager — send to a running own child", () => {
+describe("ChildRunSend", () => {
   /**
    * One root tab plus ONE still-running core child: spawnRequest accepted
    * (hosts[0] -> hosts[1]), child-ready emitted, NO terminal — the child tab
    * stays state "running" with a live proc, exactly the addressable window
    * send_to exists for.
    */
-  function runningChild(sessionId: string) {
+  function runningChild(sessionId: string, engine: EngineId = "core") {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
-    const manager = childManager(fork, window, { validateChildModel: () => {} });
+    const manager = childManager(fork, window, { validateChildModel: () => {}, engineReady: () => true });
     expect(manager.createTab({ workspace: "/ws", sessionId, resume: false }).ok).toBe(true);
     const rootHost = hosts[0]!;
-    rootHost.emit("message", spawnRequest({ requestId: "first" }));
+    rootHost.emit("message", spawnRequest({ requestId: "first", ...(engine === "core" ? {} : { engine }) }));
     const accepted = childRunEvents(rootHost).find((e) => e.requestId === "first" && e.kind === "accepted");
     const childSessionId = accepted?.kind === "accepted" ? accepted.childSessionId : "";
     hosts[1]!.emit("message", childReadyMsg());
@@ -7218,7 +7219,7 @@ describe("TabHostManager — send to a running own child", () => {
       | undefined;
   }
 
-  it("happy path: delivers via communication_request to the CHILD host, sender parent-session:<id>, and acks kind sent on a queued delivery", async () => {
+  it("running owned child: sends a steer envelope to the CHILD host, sender parent-session:<id>, and acks kind sent with the queued receipt", async () => {
     const { hosts, rootHost, childHost, childSessionId } = runningChild("root-send-happy");
     rootHost.emit("message", runSend("s1", childSessionId, "re-review with these edits"));
     await flush();
@@ -7229,15 +7230,128 @@ describe("TabHostManager — send to a running own child", () => {
       sender: "parent-session:root-send-happy",
       recipientSessionId: childSessionId,
       payload: "re-review with these edits",
-      mode: "next_turn",
+      mode: "steer",
       kind: "agent_message",
     });
     expect(commPacket(rootHost, "send_message")).toBeUndefined();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "s1")).toBeUndefined();
     void hosts;
     // Child host answers queued -> the parent receives { kind: "sent", requestId }.
     childHost.emit("message", { type: "communication_response", requestId: packet!.requestId, result: { state: "queued", envelope: { messageId: "m1" } } });
     await flush();
-    expect(childRunEvents(rootHost).find((e) => e.requestId === "s1")).toMatchObject({ kind: "sent" });
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "s1")).toMatchObject({ kind: "sent", state: "queued", messageId: packet!.payload.messageId });
+  });
+
+  it("forwards an acknowledgement that races the RPC return", async () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-fast");
+    let envelope: Record<string, unknown> | undefined;
+    childHost.postMessage.mockImplementation((raw: unknown) => {
+      const packet = raw as { type: string; requestId: string; payload: Record<string, unknown> };
+      if (packet.type === "communication_request") {
+        envelope = packet.payload;
+        childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "acknowledged", deliveryKind: "core_seam", detail: "inserted" } });
+      }
+    });
+    rootHost.emit("message", runSend("fast", childSessionId));
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "fast")).toMatchObject({ kind: "sent", state: "acknowledged", messageId: envelope!.messageId, deliveryKind: "core_seam", detail: "inserted" });
+  });
+
+  it("sends once and forwards the host's queued next_turn receipt for a seam that is not active yet", async () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-seam-fallback");
+    const sent: Array<{ requestId: string; payload: Record<string, unknown> }> = [];
+    childHost.postMessage.mockImplementation((raw: unknown) => {
+      const packet = raw as { type: string; requestId: string; payload: Record<string, unknown> };
+      if (packet.type !== "communication_request") return;
+      sent.push(packet);
+      // The child host downgrades the owning parent's steer itself.
+      childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "queued", envelope: packet.payload, deliveryKind: "next_turn" } });
+    });
+    rootHost.emit("message", runSend("seam", childSessionId, "go on"));
+    await flush();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.payload).toMatchObject({ mode: "steer", payload: "go on", sender: "parent-session:root-send-seam-fallback" });
+    const events = childRunEvents(rootHost).filter((e) => e.requestId === "seam");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "sent", state: "queued", deliveryKind: "next_turn", messageId: sent[0]!.payload.messageId });
+  });
+
+  it("sends once for a terminal or posture refusal and keeps it rejected", async () => {
+    for (const detail of ["Session unavailable", "Session posture unavailable"]) {
+      const { rootHost, childHost, childSessionId } = runningChild(`root-send-terminal-${detail.length}`);
+      let requests = 0;
+      childHost.postMessage.mockImplementation((raw: unknown) => {
+        const packet = raw as { type: string; requestId: string; payload: Record<string, unknown> };
+        if (packet.type !== "communication_request") return;
+        requests += 1;
+        childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "rejected", envelope: packet.payload, detail } });
+      });
+      rootHost.emit("message", runSend("closed", childSessionId));
+      await flush();
+      expect(requests).toBe(1);
+      expect(childRunEvents(rootHost).find((e) => e.requestId === "closed")).toMatchObject({ kind: "rejected", message: expect.stringContaining(detail) });
+    }
+  });
+
+  it("does not resend a seam-inactive refusal from a host that did not downgrade it", async () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-seam-twice");
+    let requests = 0;
+    childHost.postMessage.mockImplementation((raw: unknown) => {
+      const packet = raw as { type: string; requestId: string; payload: Record<string, unknown> };
+      if (packet.type !== "communication_request") return;
+      requests += 1;
+      childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "rejected", envelope: packet.payload, detail: "Core steering requires a running core turn; use next_turn", reasonCode: "core_seam_inactive" } });
+    });
+    rootHost.emit("message", runSend("twice", childSessionId));
+    await flush();
+    expect(requests).toBe(1);
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "twice")).toMatchObject({ kind: "rejected" });
+  });
+
+  it("refuses a cancelling child without sending", () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-cancelling");
+    rootHost.emit("message", runCancel("first"));
+    rootHost.emit("message", runSend("cancel-send", childSessionId));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "cancel-send")).toMatchObject({ kind: "rejected" });
+    expect(commPacket(childHost, "send_message")).toBeUndefined();
+  });
+
+  it("refuses a non-Core child without sending", () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-native", "claude");
+    rootHost.emit("message", runSend("native-send", childSessionId));
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "native-send")).toMatchObject({ kind: "rejected" });
+    expect(commPacket(childHost, "send_message")).toBeUndefined();
+  });
+
+  it("refuses when the host response times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { rootHost, childSessionId } = runningChild("root-send-timeout");
+      rootHost.emit("message", runSend("timeout-send", childSessionId));
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(childRunEvents(rootHost).find((e) => e.requestId === "timeout-send")).toMatchObject({ kind: "rejected" });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("records the later rejection after cancellation on the communication ledger", async () => {
+    const { manager, rootHost, childHost, childSessionId } = runningChild("root-send-later");
+    const broker = await createCommunicationBroker({ manager, ledgerFile: join(tmpdir(), `send-test-${randomUUID()}`), writeLedger: async () => {}, realpath: async (path) => path });
+    const access = { tabs: async () => manager.listTabs(), requireSession: async (id: string) => manager.listTabs().find((tab) => tab.sessionId === id)! };
+    broker.observe(access);
+    try {
+      rootHost.emit("message", runSend("later-send", childSessionId));
+      const packet = commPacket(childHost, "send_message")!;
+      const envelope = packet.payload;
+      childHost.emit("message", { type: "communication_delivery", delivery: { envelope, state: "queued" } });
+      childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "queued", envelope } });
+      await flush();
+      const sent = childRunEvents(rootHost).find((e) => e.requestId === "later-send");
+      expect(sent).toMatchObject({ kind: "sent", messageId: envelope.messageId });
+      await vi.waitFor(() => expect(broker.ledger.messages.get(envelope.messageId as string)?.state).toBe("queued"));
+      rootHost.emit("message", runCancel("first"));
+      childHost.emit("message", { type: "communication_delivery", delivery: { envelope, state: "rejected", detail: "cancelled before insertion" } });
+      await vi.waitFor(() => expect(broker.ledger.messages.get(envelope.messageId as string)).toMatchObject({ state: "rejected", detail: "cancelled before insertion" }));
+    } finally { await broker.dispose(); }
   });
 
   it("a rejected delivery state (e.g. inbox full) reaches the parent as kind rejected", async () => {
@@ -7251,6 +7365,15 @@ describe("TabHostManager — send to a running own child", () => {
     const event = childRunEvents(rootHost).find((e) => e.requestId === "s2");
     expect(event).toMatchObject({ kind: "rejected", reason: "spawn_failed" });
     expect(event?.kind === "rejected" && event.message).toContain("rejected");
+  });
+
+  it("does not report an unknown delivery as sent", async () => {
+    const { rootHost, childHost, childSessionId } = runningChild("root-send-unknown-state");
+    rootHost.emit("message", runSend("unknown-state", childSessionId));
+    const packet = commPacket(childHost, "send_message")!;
+    childHost.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "unknown", detail: "host lost contact" } });
+    await flush();
+    expect(childRunEvents(rootHost).find((e) => e.requestId === "unknown-state")).toMatchObject({ kind: "rejected", message: expect.stringContaining("host lost contact") });
   });
 
   it("another parent's child is refused (not yours) and NO communication_request is posted anywhere", async () => {

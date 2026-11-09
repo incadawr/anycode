@@ -2262,6 +2262,39 @@ describe("send / sendToChild (wire)", () => {
     await expect(pending).resolves.toEqual({ ok: true });
   });
 
+  it("carries a sent ack's optional receipt onto the successful result", async () => {
+    const { port, emit } = harness();
+    const pending = port.send({ childSessionId: "child-1", text: "hello" });
+    await Promise.resolve();
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "sent",
+      state: "queued",
+      messageId: "msg-1",
+      deliveryKind: "core_seam",
+      detail: "waiting for a seam",
+    });
+    await expect(pending).resolves.toEqual({
+      ok: true,
+      state: "queued",
+      messageId: "msg-1",
+      deliveryKind: "core_seam",
+      detail: "waiting for a seam",
+    });
+  });
+
+  it("invents no delivery state for a legacy payload-less sent ack", async () => {
+    const { port, emit } = harness();
+    const pending = port.send({ childSessionId: "child-1", text: "hello" });
+    await Promise.resolve();
+    emit({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent" });
+    const result = await pending;
+    // No state, no id, no kind: "the transport accepted it" and nothing more.
+    expect(result).toEqual({ ok: true });
+    expect(result.ok && result.state).toBeUndefined();
+  });
+
   it("resolves { ok: false } carrying main's refusal message on a rejected ack", async () => {
     const { port, emit } = harness();
     const pending = port.send({ childSessionId: "child-1", text: "hello" });
@@ -2439,8 +2472,37 @@ describe("createChildSessionPort × core agentTool handler — the interface sea
     const result = await pending;
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.output?.finalText).toContain("delivered");
+      // A payload-less (legacy) ack carries no receipt, so the tool's text
+      // says the transport accepted the message and nothing more.
       expect(result.output?.finalText).toContain("child-77");
+      expect(result.output?.finalText).toContain("delivery is unconfirmed");
+      expect(result.output?.finalText).not.toContain("delivered");
+    }
+  });
+
+  it("the seam carries the sent ack's receipt through to the tool's text", async () => {
+    const { port, emit } = harness();
+    const tool = createAgentTool({ sessionTier: true });
+    const pending = tool.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      agentCtx(port),
+    );
+    await Promise.resolve();
+    emit({
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "sent",
+      state: "queued",
+      messageId: "msg-99",
+      deliveryKind: "core_seam",
+    });
+    const result = await pending;
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.output?.finalText).toContain("Queued");
+      expect(result.output?.finalText).toContain("msg-99");
+      expect(result.output?.finalText).toContain("Stop may reject it");
+      expect(result.output?.finalText).not.toContain("delivered");
     }
   });
 

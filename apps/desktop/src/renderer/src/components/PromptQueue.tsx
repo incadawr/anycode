@@ -42,6 +42,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
   // steers already on the wire to the host's steer queue, awaiting
   // their turn_started. Host-owned — no renderer edit/delete controls.
   const pendingSteers = useTabStore((state) => state.pendingSteers);
+  const uiSteerPending = useTabStore((state) => state.uiSteerPending);
   const tabStore = useTabStoreApi();
   const editing = useTabStore((state) => state.queueEditDraft);
 
@@ -143,7 +144,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
           {pendingSteers.map((entry) => (
             <li key={entry.requestId} className="steer-queue-item">
               <span className="steer-queue-text">{entry.text}</span>
-              <span className="steer-queue-badge">Queued — delivered after this turn</span>
+              <span className="steer-queue-badge">{uiSteerPending.includes(entry.requestId) ? "Queued — next safe boundary" : "Queued — delivered after this turn"}</span>
             </li>
           ))}
         </ol>

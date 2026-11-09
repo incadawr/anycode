@@ -67,6 +67,18 @@ it("posts only the durable envelope and projects host responses without acceptin
   expect(Object.keys(result)).toEqual(["envelope", "state", "detail", "idempotencyKey", "workspace", "hostPid"]);
   expect((await f.send(external, input)).envelope.messageId).toBe(result.envelope.messageId);
 });
+it("passes the optional deliveryKind and reasonCode through, dropping unknown values and tolerating older hosts", async () => {
+  const f = await fixture();
+  f.post.mockResolvedValueOnce({ state: "acknowledged", detail: "inserted", deliveryKind: "core_seam" });
+  const seam = await f.send(external, { ...input, idempotencyKey: "seam", mode: "steer" });
+  expect(seam).toMatchObject({ state: "acknowledged", deliveryKind: "core_seam" }); expect(seam).not.toHaveProperty("reasonCode");
+  f.post.mockResolvedValueOnce({ state: "rejected", detail: "no seam", reasonCode: "core_seam_inactive", deliveryKind: "bogus" });
+  const refused = await f.send(external, { ...input, idempotencyKey: "refused", mode: "steer" });
+  expect(refused).toMatchObject({ state: "rejected", reasonCode: "core_seam_inactive" }); expect(refused).not.toHaveProperty("deliveryKind");
+  const older = await f.send(external, { ...input, idempotencyKey: "older" });
+  expect(older).not.toHaveProperty("deliveryKind");
+  expect(JSON.parse(await readFile(f.path, "utf8"))[0].deliveryKind).toBe("core_seam");
+});
 it.each([{ state: "invented", detail: "bad" }, { state: "acknowledged", detail: { secret: "sentinel" } }, null])("fails closed on malformed host response %j", async (response) => {
   const f = await fixture(); f.post.mockResolvedValueOnce(response);
   const result = await f.send(external, input);

@@ -69,7 +69,7 @@ export function createSessionPeersHandler(deps: {
           ...(result.handle ? { label: result.handle } : {}), ...(result.delivery ? { delivery: result.delivery } : {}) });
       }
       if (request.operation === "send" && deps.send) {
-        if (request.input.mode === "steer") return { status: "unavailable" };
+        if (request.input.mode === "steer") return { status: "unavailable", reason: "steer_unsupported", detail: "Native peer steering is unavailable; use mode next_turn, or parent send_to for your own running Core child." };
         const authorize = async (id: string) => {
           const sender = current();
           const target = deps.targets().find(t => t.sessionId === id);

@@ -202,6 +202,25 @@ const CHILD_RUN_REJECT_REASONS: readonly ChildRunRejectReason[] = [
 ];
 
 /**
+ * Keep these states and ChildSendDeliveryKind in parity with AgentDelivery in communication.ts.
+ * The delivery states a `sent` receipt may carry. Deliberately the SAME
+ * vocabulary as the shared delivery-state enum (`queued | acknowledged |
+ * rejected | unknown`) — a `sent` ack never invents a state of its own.
+ */
+export type ChildSendReceiptState = "queued" | "acknowledged" | "rejected" | "unknown";
+
+const CHILD_SEND_RECEIPT_STATES: readonly ChildSendReceiptState[] = ["queued", "acknowledged", "rejected", "unknown"];
+
+/**
+ * Which seam carried the message into the recipient's input. Mirrors the
+ * shared `deliveryKind` vocabulary; an ABSENT kind is unknown, never
+ * `native_input` by default.
+ */
+export type ChildSendDeliveryKind = "core_seam" | "next_turn" | "native_input";
+
+const CHILD_SEND_DELIVERY_KINDS: readonly ChildSendDeliveryKind[] = ["core_seam", "next_turn", "native_input"];
+
+/**
  * main -> parent host. One `requestId` correlates a whole run's lifecycle:
  * exactly one `accepted` XOR `rejected`, then zero or more `progress`/
  * `activity`/`attention`, then exactly one `terminal` (§0.5/§0.6).
@@ -260,10 +279,24 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
   /**
    * Additive: ack for a `ChildRunSend` — the follow-up message
    * was queued for the parent's OWN RUNNING child (main already verified
-   * ownership and the child's running state). Carries no payload: the ack
-   * waiter in the parent host only needs the requestId correlation.
+   * ownership and the child's running state). Carries no payload by default:
+   * the ack waiter in the parent host only needs the requestId correlation.
+   *
+   * The receipt fields are OPTIONAL and additive. A legacy ack carries none
+   * of them and still means exactly what it always meant — the transport
+   * accepted the message — and NEVER implies the message was read.
    */
-  | { kind: "sent" }
+  | {
+      kind: "sent";
+      /** The delivery state, when the transport reports one. */
+      state?: ChildSendReceiptState;
+      /** The id of the delivered message, when the transport reports one. */
+      messageId?: string;
+      /** Which seam carried the message, when the transport reports one. */
+      deliveryKind?: ChildSendDeliveryKind;
+      /** Free-text transport detail (never model output). */
+      detail?: string;
+    }
 );
 
 // ── child host <-> main ──
@@ -689,7 +722,7 @@ const CHILD_RUN_EVENT_ACCEPTED_KEYS = [
   "maxTurns",
 ] as const;
 const CHILD_RUN_EVENT_REJECTED_KEYS = ["type", "requestId", "kind", "reason", "message"] as const;
-const CHILD_RUN_EVENT_SENT_KEYS = ["type", "requestId", "kind"] as const;
+const CHILD_RUN_EVENT_SENT_KEYS = ["type", "requestId", "kind", "state", "messageId", "deliveryKind", "detail"] as const;
 const CHILD_RUN_EVENT_PROGRESS_KEYS = ["type", "requestId", "kind", "turns", "toolCalls", "lastTool"] as const;
 const CHILD_RUN_EVENT_ACTIVITY_KEYS = ["type", "requestId", "kind", "toolName", "summary"] as const;
 const CHILD_RUN_EVENT_STATUS_KEYS = ["type", "requestId", "kind", "itemKind", "text", "toolName"] as const;
@@ -833,11 +866,38 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       };
     }
     case "sent": {
-      // ack for ChildRunSend — requestId correlation only, no payload.
+      // ack for ChildRunSend — requestId correlation, plus an OPTIONAL
+      // delivery receipt. A legacy payload-less ack still parses (and still
+      // means only "the transport accepted it"); the receipt fields are
+      // validated strictly, so a malformed state/kind REFUSES the whole
+      // event rather than being silently downgraded to "no receipt".
       if (!hasOnlyKeys(msg, CHILD_RUN_EVENT_SENT_KEYS)) {
         return null;
       }
-      return { type: CHILD_RUN_EVENT_TYPE, requestId, kind: "sent" };
+      if (msg.state !== undefined && !CHILD_SEND_RECEIPT_STATES.includes(msg.state as ChildSendReceiptState)) {
+        return null;
+      }
+      if (
+        msg.deliveryKind !== undefined &&
+        !CHILD_SEND_DELIVERY_KINDS.includes(msg.deliveryKind as ChildSendDeliveryKind)
+      ) {
+        return null;
+      }
+      if (msg.messageId !== undefined && !isIdString(msg.messageId, CHILD_ID_MAX_CHARS)) {
+        return null;
+      }
+      if (msg.detail !== undefined && !isCappedString(msg.detail, CHILD_SUMMARY_MAX_CHARS)) {
+        return null;
+      }
+      return {
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId,
+        kind: "sent",
+        ...(msg.state !== undefined ? { state: msg.state as ChildSendReceiptState } : {}),
+        ...(msg.messageId !== undefined ? { messageId: msg.messageId } : {}),
+        ...(msg.deliveryKind !== undefined ? { deliveryKind: msg.deliveryKind as ChildSendDeliveryKind } : {}),
+        ...(msg.detail !== undefined ? { detail: msg.detail } : {}),
+      };
     }
     case "terminal": {
       if (!hasOnlyKeys(msg, CHILD_RUN_EVENT_TERMINAL_KEYS)) {

@@ -116,3 +116,15 @@ it("accepts minimal opened receipts and rejects private creator data", () => {
   expect(parseSessionPeerResponse({ ...result, workspace: "/private" })).toEqual({ status: "unknown" });
   expect(parseSessionPeerResponse({ ...result, delivery: { state: "rejected" } })).toEqual({ ...result, delivery: { state: "rejected" } });
 });
+
+it("preserves the actionable steering refusal in the tool result", async () => {
+  const refusal = { status: "unavailable" as const, reason: "steer_unsupported" as const,
+    detail: "Native peer steering is unavailable; use mode next_turn, or parent send_to for your own running Core child." };
+  expect(parseSessionPeerResponse(refusal)).toEqual(refusal);
+  expect(parseSessionPeerResponse({ status: "unavailable" })).toEqual({ status: "unavailable" });
+  expect(parseSessionPeerResponse({ ...refusal, reason: "other" })).toEqual({ status: "unknown" });
+  const tool = createSessionPeerTools(() => ({ mode: "yolo" }))[2]!;
+  const result = await tool.handler({ sessionId: "peer", payload: "hello", mode: "steer" },
+    { sessionPeers: { request: async () => parseSessionPeerResponse(refusal) } } as never);
+  expect(result).toMatchObject({ ok: true, output: refusal });
+});

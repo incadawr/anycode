@@ -2099,7 +2099,22 @@ export function Composer() {
       sizeBytes: image.sizeBytes,
       attachment: image.attachment,
     }));
-    if (childSurface && turn.status !== "idle") {
+    if (turn.status !== "idle" && images.length === 0 && steerSupported && !recoverySourceId) {
+      // Text steering is inserted at the next safe boundary. The steer frame
+      // is text-only, so an image draft stays on the next-turn queue path
+      // below. `steering.ready` is only the host_ready snapshot (idle at
+      // that moment), so it never gates the route: the host decides. A running
+      // child turn injects at the seam; when the seam cannot take the text
+      // (turn ending, between steps) the host queues it in its own steer queue
+      // and runs it as the next turn (`hostQueued`), or starts the turn when
+      // the child is idle — nothing is parked in a renderer queue that no
+      // child surface drains.
+      const requestId = crypto.randomUUID();
+      if (!sendNewSteer(requestId, outgoing, [], { type: "steer_message", requestId, text: outgoing }, () => {
+        tabStore.getState().recordPendingSteer(requestId, outgoing, undefined, { text: outgoing, images: [] });
+        tabStore.getState().markUiSteer(requestId);
+      })) return;
+    } else if (childSurface && turn.status !== "idle") {
       // (child surface): the host's steer queue accepts this
       // user_message immediately, so send it on the wire as usual — but the
       // transcript write is DEFERRED to the matching turn_started (delivery
@@ -2115,19 +2130,6 @@ export function Composer() {
       } as const;
       if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message,recordSteer)) return; }
       else if (!sendNewSteer(requestId, outgoing, images, message, recordSteer)) return;
-    } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported && !recoverySourceId) {
-      // a supported running CORE session takes the
-      // message as a mid-turn steer (optimistic pendingSteer bubble; the
-      // user_injected event confirms delivery into the turn; the queue is the
-      // honest fallback everywhere else). Images while running keep the queue
-      // path (engine.steer is text-only). 4110 rework: the steer is marked
-      // UI-owned (`markUiSteer`) so a turn end / steer_requeued without
-      // delivery re-queues it into the prompt queue — the text is never lost.
-      const requestId = crypto.randomUUID();
-      if (!sendNewSteer(requestId, outgoing, [], { type: "steer_message", requestId, text: outgoing }, () => {
-        tabStore.getState().recordPendingSteer(requestId, outgoing, undefined, { text: outgoing, images: [] });
-        tabStore.getState().markUiSteer(requestId);
-      })) return;
     } else if (shouldEnqueue(turn.status, queueInFlight, childSurface)) {
       // NOT truly idle: either a turn is running, or a queued item was already
       // drained and is still in flight (turn momentarily "idle" but its

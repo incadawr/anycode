@@ -516,6 +516,58 @@ describe("parseChildRunEvent", () => {
     expect(parseChildRunEvent(msg)).toBeNull();
   });
 
+  it("roundtrips a sent event carrying the full delivery receipt", () => {
+    const msg = {
+      type: CHILD_RUN_EVENT_TYPE,
+      requestId: "req-1",
+      kind: "sent",
+      state: "queued",
+      messageId: "msg-1",
+      deliveryKind: "core_seam",
+      detail: "waiting for a seam",
+    };
+    expect(parseChildRunEvent(msg)).toEqual(msg);
+  });
+
+  it.each(["queued", "acknowledged", "rejected", "unknown"])("accepts a sent event with the %s state", (state) => {
+    const msg = { type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", state };
+    expect(parseChildRunEvent(msg)).toEqual(msg);
+  });
+
+  it("rejects a sent event with an unknown delivery state", () => {
+    expect(parseChildRunEvent({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", state: "delivered" })).toBeNull();
+    expect(parseChildRunEvent({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", state: "read" })).toBeNull();
+    expect(parseChildRunEvent({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", state: 1 })).toBeNull();
+  });
+
+  it("rejects a sent event with an unknown delivery kind", () => {
+    expect(
+      parseChildRunEvent({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", deliveryKind: "smoke-signal" }),
+    ).toBeNull();
+  });
+
+  it("accepts every delivery kind and rejects an over-long receipt detail", () => {
+    for (const deliveryKind of ["core_seam", "next_turn", "native_input"]) {
+      const msg = { type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", deliveryKind };
+      expect(parseChildRunEvent(msg)).toEqual(msg);
+    }
+    expect(
+      parseChildRunEvent({
+        type: CHILD_RUN_EVENT_TYPE,
+        requestId: "req-1",
+        kind: "sent",
+        detail: "x".repeat(CHILD_SUMMARY_MAX_CHARS + 1),
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects a sent event with a malformed message id", () => {
+    expect(parseChildRunEvent({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", messageId: "" })).toBeNull();
+    expect(
+      parseChildRunEvent({ type: CHILD_RUN_EVENT_TYPE, requestId: "req-1", kind: "sent", messageId: "with space" }),
+    ).toBeNull();
+  });
+
   it("accepts a terminal event", () => {
     const msg = {
       type: CHILD_RUN_EVENT_TYPE,

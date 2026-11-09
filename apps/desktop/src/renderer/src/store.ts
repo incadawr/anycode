@@ -929,6 +929,13 @@ export interface GitSlice {
   lastError: { label: string; reason: string } | null;
 }
 
+/** Root refusals are re-sent by the drainer; a child surface holds the text until the user restores it. */
+function steerRefusedNotice(childSurface: boolean): string {
+  return childSurface
+    ? "Steer not delivered — held; restore the draft to send it again."
+    : "Steer not delivered into the running turn — queued for the next turn.";
+}
+
 function initialGitSlice(): GitSlice {
   return {
     status: null,
@@ -4394,7 +4401,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           // microtask, and the replay ring duplicates it) and must find the
           // id already seen instead of enqueueing the text a second time.
           set((state) => {
-            const uiPending = get().uiSteerPending;
+            // A child surface never re-queues here: the child host owns every
+            // outcome of its UI steers (injected, host-queued, or rejected)
+            // and answers before its terminal, so a renderer-side copy would
+            // either be parked in a queue nothing drains or sent twice.
+            const uiPending = state.childSurface ? [] : get().uiSteerPending;
             const requeue = state.pendingSteers.filter((entry) => uiPending.includes(entry.requestId));
             const queueAdditions: QueuedPrompt[] = requeue.map((entry) => ({
               id: entry.requestId,
@@ -4407,7 +4418,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => (event.reason === "completed" || event.reason === "error" || event.reason === "cancelled" || event.reason === "max_turns") && (item.status === "started" || item.status === "conflict") && item.turnId === turnId && item.requestId === state.turn.requestId ? { ...item, ...(item.status === "started" && item.parentRequestId ? { status: "finished" as const } : {}), terminalReason: event.reason } : item) }, turnId, event.reason),
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
-              uiSteerPending: [],
+              uiSteerPending: state.childSurface ? state.uiSteerPending : [],
               ...(requeue.length > 0
                 ? { steerRequeueSeen: [...state.steerRequeueSeen, ...requeue.map((entry) => entry.requestId)] }
                 : {}),
@@ -5070,7 +5081,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               }
               return event.step < boundary;
             })();
-          if (!injectedCovered && !injectedBelowCut) {
+          // A structured agent-message card already renders this envelope; the
+          // injected wrapper text must not stack a raw second copy beside it.
+          if (!injectedCovered && !injectedBelowCut && !displayWrappers.has(event.text)) {
             appendBlock({
               kind: "user_text",
               id: `injected:${turnId}:${event.step}:${injectedSeq++}`,
@@ -5465,7 +5478,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // starts match nothing and leave other entries pending.
             const steer = get().pendingSteers.find((entry) => entry.requestId === message.requestId);
             if (steer !== undefined && get().engine?.id !== "claude") {
-              appendBlock({ kind: "user_text", id: steer.requestId, text: steer.text, ...(steer.images?.length ? { images: steer.images } : {}), at: Date.now() });
+              // Identity, not text: an echo that already rendered this request
+              // (history hydration, a replayed acknowledgement, or the host's
+              // `pending_prompt` bubble for THIS turn, which precedes
+              // turn_started for a host-queued steer) is reconciled with the
+              // pending row instead of adding a second bubble.
+              const pendingBubbleId = `pending:${message.turnId}`;
+              const hydrated = causalFoldEngaged && durableSteps.has(`${message.turnId}:0`);
+              if (!hydrated && !get().transcript.some((block) => block.kind === "user_text" && (block.id === steer.requestId || block.id === pendingBubbleId))) {
+                appendBlock({ kind: "user_text", id: steer.requestId, text: steer.text, ...(steer.images?.length ? { images: steer.images } : {}), at: Date.now() });
+              }
               set((state) => ({
                 pendingSteers: state.pendingSteers.filter((entry) => entry.requestId !== steer.requestId),
                 uiSteerPending: state.uiSteerPending.filter((id) => id !== steer.requestId),
@@ -5596,9 +5618,35 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // time across BOTH sites, so a steer refused late never jumps an
             // ordinary prompt typed (and queued) before it.
             const pending = get().pendingSteers.find((entry) => entry.requestId === message.requestId);
+            if (message.hostQueued === true) {
+              // The child host moved this text into its own steer queue and
+              // runs it as the next turn under this very id. The renderer only
+              // keeps the pending row (until that turn starts) and gives up
+              // ownership: neither loop_end nor the prompt-queue drainer may
+              // send it again, and a loop_end that already re-queued it
+              // (the refusal can trail the loop end) hands the item back.
+              const text = pending?.text ?? message.text;
+              if (typeof text !== "string" || text.length === 0) return;
+              if (get().steerRequeueSeen.includes(message.requestId) && pending === undefined && !get().promptQueue.some((item) => item.id === message.requestId)) return;
+              set((state) => {
+                const queued = state.promptQueue.find((item) => item.id === message.requestId);
+                const held = queued !== undefined && state.queueInFlight?.requestId !== message.requestId;
+                const row = pending ?? (queued !== undefined && held
+                  ? { requestId: message.requestId, text: queued.text, sentMessage: { text: queued.text, images: queued.images } }
+                  : { requestId: message.requestId, text, sentMessage: { text, images: [] as QueuedPromptImage[] } });
+                return {
+                  pendingSteers: pending !== undefined ? state.pendingSteers : [...state.pendingSteers, row],
+                  uiSteerPending: state.uiSteerPending.filter((id) => id !== message.requestId),
+                  promptQueue: held ? state.promptQueue.filter((item) => item.id !== message.requestId) : state.promptQueue,
+                  steerRequeueSeen: state.steerRequeueSeen.includes(message.requestId) ? state.steerRequeueSeen : [...state.steerRequeueSeen, message.requestId],
+                  notice: { kind: "steer_requeued", text: "Steer will run as the next turn." },
+                };
+              });
+              return;
+            }
             if (pending !== undefined) {
               get().requeuePendingSteer(message.requestId);
-              set({ notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." } });
+              set((state) => ({ notice: { kind: "steer_requeued", text: steerRefusedNotice(state.childSurface) } }));
               return;
             }
             if (typeof message.text === "string" && message.text.length > 0 && !get().steerRequeueSeen.includes(message.requestId)) {
@@ -5607,9 +5655,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               // steer_message it could not deliver — the text is owed a
               // next-turn send through the ordinary drainer.
               set((state) => ({
-                promptQueue: [...state.promptQueue, { id: message.requestId, text: message.text as string, images: [] }],
+                promptQueue: [...state.promptQueue, { id: message.requestId, text: message.text as string, images: [], ...(state.childSurface ? { requiresRestore: true } : {}) }],
+                ...(state.childSurface ? { queuePaused: true, queuePauseReason: "rejected" as const } : {}),
                 steerRequeueSeen: [...state.steerRequeueSeen, message.requestId],
-                notice: { kind: "steer_requeued", text: "Steer not delivered into the running turn — queued for the next turn." },
+                notice: { kind: "steer_requeued", text: steerRefusedNotice(state.childSurface) },
               }));
             }
             return;
@@ -6034,7 +6083,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             });
             // A refused steer that became a later turn has already been sent.
             // Its original request id survives queue draining in the journal.
-            set((state) => ({ steerRequeueSeen: [...new Set([...state.steerRequeueSeen, ...message.turns.map((turn) => turn.requestId)])] }));
+            set((state) => {
+              const started = new Set(message.turns.map((turn) => turn.requestId));
+              return {
+                steerRequeueSeen: [...new Set([...state.steerRequeueSeen, ...started])],
+                // A host-queued steer whose turn the snapshot already rebuilt
+                // has its bubble now; its pending row is retired with it.
+                pendingSteers: state.pendingSteers.filter((entry) => state.uiSteerPending.includes(entry.requestId) || !started.has(entry.requestId)),
+              };
+            });
             presentationReplayTurns = known;
             return;
           }
@@ -6566,6 +6623,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           set(state => ({ pendingSteers: state.pendingSteers.map(entry => entry.requestId === id ? { ...entry, pendingEcho: true as const } : entry) }));
           return;
         }
+        // The same id is the same message: a repeated echo (replay, a second
+        // acknowledgement) must not stack another bubble. Identical TEXT under
+        // a different id is a deliberate second prompt and still appends.
+        if (get().transcript.some((block) => block.kind === "user_text" && block.id === id)) return;
         appendBlock({ kind: "user_text", id, text, ...(images?.length ? { images } : {}), ...(origin !== undefined ? { origin } : {}), at: Date.now() });
       },
 
@@ -6592,7 +6653,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => {
           const entry = state.pendingSteers.find((e) => e.requestId === requestId);
           if (entry === undefined) return {};
-          const queueItem: QueuedPrompt = { id: requestId, text: entry.sentMessage.text, images: entry.sentMessage.images };
+          // A child surface has no prompt-queue drainer, so its refused steer
+          // is held for an explicit Restore instead of being parked silently.
+          const queueItem: QueuedPrompt = { id: requestId, text: entry.sentMessage.text, images: entry.sentMessage.images, ...(state.childSurface ? { requiresRestore: true } : {}) };
           const at = index !== undefined && index >= 0 && index <= state.promptQueue.length ? index : state.promptQueue.length;
           const promptQueue = [...state.promptQueue.slice(0, at), queueItem, ...state.promptQueue.slice(at)];
           // Opus2 F1 (2026-10-24): mark the id seen — the host may STILL emit
@@ -6603,6 +6666,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             pendingSteers: state.pendingSteers.filter((e) => e.requestId !== requestId),
             uiSteerPending: state.uiSteerPending.filter((id) => id !== requestId),
             promptQueue,
+            ...(state.childSurface ? { queuePaused: true, queuePauseReason: "rejected" as const } : {}),
             steerRequeueSeen: [...state.steerRequeueSeen, requestId],
           };
         });

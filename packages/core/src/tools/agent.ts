@@ -61,7 +61,7 @@ import {
   formatRoleFallbackNotice,
   type RoleRouteResolution,
 } from "../subagents/role-route.js";
-import type { SessionSubagentRequest } from "../ports/session-subagent.js";
+import type { SessionSubagentRequest, SessionSubagentSendResult } from "../ports/session-subagent.js";
 import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
 import { getPersona, isKnownPersona, listPersonaNames, ROLE_TURN_BUDGETS, type RolePersonaName } from "../subagents/personas.js";
 import {
@@ -510,6 +510,74 @@ async function runInlineTier(
 }
 
 /**
+ * The model-visible receipt for a `send_to` delivery.
+ *
+ * It reports ONLY what the transport actually proved, and each state's
+ * wording names its own limitation:
+ *  - `queued` — the message waits for a legal injection boundary, so Stop
+ *    may still reject it; the receipt carries the message id whose status
+ *    the caller can check.
+ *  - `acknowledged` — the message was injected into the model's input.
+ *    That is NOT proof the model saw or acted on it, and the text says so.
+ *  - `rejected` — the child's transport refused the message.
+ *  - `unknown` — the transport could not say what happened.
+ *  - no receipt at all (a legacy transport that only knows "accepted") —
+ *    the transport accepted the message and NOTHING more, which the text
+ *    states as "delivery unconfirmed".
+ *
+ * No wording here claims a message was delivered, injected, or acted upon
+ * beyond what the reported state supports.
+ */
+function sendReceiptText(childSessionId: string, sent: Extract<SessionSubagentSendResult, { ok: true }>): string {
+  const kindClause = sent.deliveryKind === undefined ? "" : ` Delivery kind: ${sent.deliveryKind}.`;
+  // The seam clause names where the message goes. An absent kind is its own
+  // honest sentence for the queued state; elsewhere the kind clause stays off
+  // and the seam text already says the transport named no seam.
+  const queuedSeam =
+    sent.deliveryKind === "core_seam"
+      ? "Queued for injection at the next loop boundary"
+      : sent.deliveryKind === "next_turn"
+        ? "Queued to be accepted as the next turn’s input"
+        : sent.deliveryKind === "native_input"
+          ? "Queued to be passed to the native engine"
+          : "Queued for injection at the next safe boundary; the transport did not report which seam will carry it";
+  const ackSeam =
+    sent.deliveryKind === "core_seam"
+      ? "inserted at the loop boundary of the running turn"
+      : sent.deliveryKind === "next_turn"
+        ? "accepted as the next turn’s input"
+        : sent.deliveryKind === "native_input"
+          ? "passed to the native engine"
+          : "accepted; the transport did not report which seam carried it";
+  const detailClause = sent.detail === undefined || sent.detail.length === 0 ? "" : ` Detail: ${sent.detail.slice(0, 300)}.`;
+  switch (sent.state) {
+    case "queued": {
+      const idClause =
+        sent.messageId === undefined
+          ? "The transport reported no message id, so its status cannot be checked."
+          : `Check message status with this id: ${sent.messageId}.`;
+      return `Agent: message to running child ${childSessionId}: ${queuedSeam}; Stop may reject it. ${idClause}${kindClause}${detailClause}`;
+    }
+    case "acknowledged":
+      return `Agent: message to running child ${childSessionId}: Acknowledged — ${ackSeam}; this is not proof the model saw or acted on it.${
+        sent.messageId === undefined ? "" : ` Message id: ${sent.messageId}.`
+      }${kindClause}${detailClause}`;
+    case "rejected":
+      return `Agent: message to running child ${childSessionId}: Rejected by the child's transport; the message was not injected.${
+        sent.messageId === undefined ? "" : ` Message id: ${sent.messageId}.`
+      }${kindClause}${detailClause}`;
+    case "unknown":
+      return `Agent: message to running child ${childSessionId}: delivery state unknown — the transport could not confirm what happened to it.${
+        sent.messageId === undefined ? "" : ` Message id: ${sent.messageId}.`
+      }${kindClause}${detailClause}`;
+    default:
+      // A legacy transport reported no state at all: it accepted the message
+      // and nothing more. Say exactly that — never "delivered".
+      return `Agent: message to running child ${childSessionId}: the transport accepted the message; delivery is unconfirmed.${kindClause}${detailClause}`;
+  }
+}
+
+/**
  * Session tier (CUT-S2 §2.1/§2.2). Fail-closed when the host wired
  * no SessionSubagentPort — this is non-recursion lock #2 firing at runtime
  * (buildChildConfig never copies `sessionSubagents`, so every child session
@@ -557,11 +625,12 @@ async function runSessionTier(
     if (!sent.ok) {
       return { ok: false, error: sent.message };
     }
+    if (sent.state === "rejected") return { ok: false, error: sendReceiptText(input.send_to, sent) };
     return {
       ok: true,
       output: {
         status: "completed",
-        finalText: `Agent: message delivered to running child ${input.send_to}; it will run as the child's next input.`,
+        finalText: sendReceiptText(input.send_to, sent),
         truncated: false,
         turns: 0,
         toolCalls: 0,

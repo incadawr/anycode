@@ -3360,16 +3360,29 @@ export class TabHostManager {
 
   /**
    * wire: delivers a follow-up to the sender's OWN
-   * STILL-RUNNING core child (`ChildRunSend`). Never spawns, never resumes —
-   * the message rides the EXISTING `receiveAgentMessage`/`agentInbox` path as
-   * an `AgentEnvelope` (mode "next_turn", sender `parent-session:<id>`), so a
-   * busy child runs it as its next input BEFORE its terminal commits
-   * (session.ts's drain order). Ownership is re-derived from `childOf`, never
-   * from the payload: the sender must be the parent's live proc AND a root
-   * tab (recursion lock #3 symmetry — a child tab's send is refused), and the
-   * target must be a child tab of THIS parent, still running, core-engine.
-   * Refusals reuse the `spawn_failed` reject reason with their own texts; the
-   * ack on success is the additive `{ kind: "sent" }` `ChildRunEvent`.
+   * STILL-RUNNING core child (`ChildRunSend`). Never spawns, never resumes.
+   * The message is an `AgentEnvelope` (mode "steer", sender
+   * `parent-session:<id>`) sent to the child host through
+   * `communicationRequest`; the child's Core steering seam injects it at its
+   * next legal loop boundary, so it does NOT go through `agentInbox` and is
+   * not a next turn. Ownership is re-derived from `childOf`, never from the
+   * payload: the sender must be the parent's live proc AND a root tab
+   * (recursion lock #3 symmetry — a child tab's send is refused), and the
+   * target must be a child tab of THIS parent, running (ledger "running",
+   * not starting/cancelling), core-engine.
+   *
+   * One message id is minted before dispatch; it rides the envelope and comes
+   * back on the ack. A `queued`/`acknowledged` delivery becomes the
+   * `{ kind: "sent", state, messageId, deliveryKind?, detail? }` receipt
+   * (the child's later transitions travel the communication observer
+   * channel; main keeps no delivery ledger of its own). `rejected`/`unknown`
+   * stay `rejected` with the `spawn_failed` reason and their own text.
+   *
+   * Main sends exactly once. When the child's Core seam is not active yet
+   * (no running turn) the CHILD HOST accepts the steer from its owning parent
+   * as next_turn under the same id, so the ack arrives as `queued` with
+   * `deliveryKind: "next_turn"` and is forwarded as is. Terminal/posture/
+   * closed refusals stay rejected.
    */
   private handleChildRunSend(parentTab: TabHost, sender: UtilityProcess, msg: ChildRunSend): void {
     const fail = (message: string): void => {
@@ -3390,43 +3403,57 @@ export class TabHostManager {
     // Out-of-scope #2 (core-only slice): an engine child's host steers its CLI
     // differently; the receiveAgentMessage/agentInbox path is a core contract.
     if (childTab.engine !== "core") return fail(CHILD_SEND_ENGINE_MESSAGE);
-    void this.communicationRequest(
-      msg.childSessionId,
-      "send_message",
-      {
-        messageId: randomUUID(),
-        sender: `parent-session:${parentTab.sessionId}`,
-        recipientSessionId: msg.childSessionId,
-        payload: msg.text,
-        mode: "next_turn",
-        kind: "agent_message",
-        createdAt: new Date().toISOString(),
-      } satisfies AgentEnvelope,
-    )
-      .then((delivery) => {
-        const d = delivery as AgentDelivery;
-        this.replyChildRunEvent(
-          parentTab,
-          d.state === "queued"
-            ? { type: CHILD_RUN_EVENT_TYPE, requestId: msg.requestId, kind: "sent" }
-            : {
-                type: CHILD_RUN_EVENT_TYPE,
-                requestId: msg.requestId,
-                kind: "rejected",
-                reason: "spawn_failed",
-                message: `Agent: delivery state "${d.state}"${d.detail ? ` (${d.detail})` : ""}.`,
-              },
-        );
-      })
-      .catch(() =>
-        this.replyChildRunEvent(parentTab, {
-          type: CHILD_RUN_EVENT_TYPE,
-          requestId: msg.requestId,
-          kind: "rejected",
-          reason: "spawn_failed",
-          message: CHILD_SEND_HOST_UNREACHABLE_MESSAGE,
-        }),
-      );
+    // ONE message id per delivery attempt: it rides on the envelope AND comes
+    // back on the `sent` ack, so the parent can ask the transport later what
+    // became of this exact message. The child's own delivery transitions
+    // (queued -> acknowledged / rejected) ride the EXISTING communication
+    // observer channel (host -> main -> the communication ledger); main keeps
+    // NO second ledger of delivery states for this path.
+    const reject = (message: string): void =>
+      this.replyChildRunEvent(parentTab, { type: CHILD_RUN_EVENT_TYPE, requestId: msg.requestId, kind: "rejected", reason: "spawn_failed", message });
+    const attempt = (): void => {
+      const messageId = randomUUID();
+      void this.communicationRequest(
+        msg.childSessionId,
+        "send_message",
+        {
+          messageId,
+          sender: `parent-session:${parentTab.sessionId}`,
+          recipientSessionId: msg.childSessionId,
+          payload: msg.text,
+          // A parent follow-up to a RUNNING core child is a mid-turn steer:
+          // the child receives it at its next legal loop seam. Main never
+          // waits for that seam — the child's transport answers `queued` at
+          // once. A seam that is not active yet is downgraded to next_turn by
+          // the child host itself, never by a second send from here.
+          mode: "steer",
+          kind: "agent_message",
+          createdAt: new Date().toISOString(),
+        } satisfies AgentEnvelope,
+      )
+        .then((delivery) => {
+          const d = delivery as AgentDelivery;
+          // Only a state that PROVES the message was accepted may become a
+          // successful send. A rejected/unknown outcome keeps its own honest
+          // reason and never becomes "sent" — the receipt would then claim a
+          // delivery the transport refused to make.
+          if (d.state === "queued" || d.state === "acknowledged") {
+            this.replyChildRunEvent(parentTab, {
+              type: CHILD_RUN_EVENT_TYPE,
+              requestId: msg.requestId,
+              kind: "sent",
+              state: d.state,
+              messageId,
+              ...(d.deliveryKind !== undefined ? { deliveryKind: d.deliveryKind } : {}),
+              ...(d.detail !== undefined ? { detail: d.detail } : {}),
+            });
+            return;
+          }
+          reject(`Agent: delivery state "${d.state}"${d.detail ? ` (${d.detail})` : ""}.`);
+        })
+        .catch(() => reject(CHILD_SEND_HOST_UNREACHABLE_MESSAGE));
+    };
+    attempt();
   }
 
   /**
