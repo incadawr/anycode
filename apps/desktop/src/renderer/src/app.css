@@ -2082,11 +2082,12 @@ button.environment-menu-row:hover,
   display: flex;
   flex: 1;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  gap: var(--sp-2);
 }
 
 .session-peers-row-name {
+  flex: 0 1 auto;
   overflow: hidden;
   color: var(--text-1);
   font-size: var(--fs-sm);
@@ -2095,6 +2096,7 @@ button.environment-menu-row:hover,
 }
 
 .session-peers-row-path {
+  flex: 1 1 auto;
   overflow: hidden;
   color: var(--text-3);
   font-family: var(--font-mono);
@@ -2106,9 +2108,12 @@ button.environment-menu-row:hover,
 .session-peers-row-reason {
   flex: 0 0 auto;
   max-width: 14rem;
+  overflow: hidden;
   color: var(--text-3);
   font-size: var(--fs-2xs);
   text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .environment-menu-open {
