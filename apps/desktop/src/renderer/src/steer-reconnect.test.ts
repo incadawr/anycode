@@ -158,4 +158,43 @@ describe("rendered reconnect (Session -> fresh desktopStore)", () => {
     });
   }
 
+describe("reconnect with a host-queued child steer", () => {
+  const requeued: HostToUiMessage = { type: "steer_requeued", requestId: "s1", reason: "core turn ended before injection", text: "same words", hostQueued: true };
+  const snapshot = (): HostToUiMessage => ({
+    type: "presentation_snapshot",
+    coveredTurnIds: ["t2"],
+    items: [],
+    truncated: false,
+    historyTracksTurns: true,
+    turns: [{ requestId: "s1", turnId: "t2", startedAt: 1, text: "same words", events: [{ step: 1, event: { type: "loop_end", reason: "completed", turns: 1 } }] }],
+  } as HostToUiMessage);
+  const fresh = () => {
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().setChildSurface();
+    return store;
+  };
+
+  it("keeps the announced steer as a pending row until its turn starts, once", () => {
+    const store = fresh();
+    store.getState().applyHostMessage(requeued);
+    store.getState().applyHostMessage(requeued);
+    expect(store.getState().promptQueue).toHaveLength(0);
+    expect(store.getState().pendingSteers.map((entry) => entry.requestId)).toEqual(["s1"]);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "s1", turnId: "t2" });
+    expect(texts(store).filter((text) => text === "same words")).toHaveLength(1);
+    expect(store.getState().pendingSteers).toHaveLength(0);
+  });
+
+  it("a snapshot that already rebuilt the started turn retires the pending row without a second bubble", () => {
+    const store = fresh();
+    store.getState().applyHostMessage(requeued);
+    store.getState().applyHostMessage(snapshot());
+    store.getState().applyHostMessage(requeued);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "s1", turnId: "t2" });
+    expect(texts(store).filter((text) => text === "same words")).toHaveLength(1);
+    expect(store.getState().pendingSteers).toHaveLength(0);
+    expect(store.getState().promptQueue).toHaveLength(0);
+  });
+});
+
 });
