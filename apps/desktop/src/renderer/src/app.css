@@ -1998,11 +1998,13 @@ button.environment-menu-row:hover,
   outline-offset: 1px;
 }
 
+/* The tooltip is anchored to the menu row, so it starts at the menu's
+   content edge and never runs past it. It floats over the rows below. */
 .row-help-tooltip {
   position: absolute;
   z-index: 21;
-  top: calc(100% + var(--sp-1));
-  left: 0;
+  top: 100%;
+  left: var(--sp-2);
   width: max-content;
   max-width: min(20rem, calc(100vw - 2 * var(--sp-4)));
   padding: var(--sp-1) var(--sp-2);
