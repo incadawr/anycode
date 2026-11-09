@@ -5670,8 +5670,11 @@ button.environment-menu-row:hover,
   list-style: none;
 }
 
+/* One shared grid so the clock, the status text and the buttons line up between
+   running and failed rows: type | description | clock | status | Open | Stop/Dismiss. */
 .background-agents-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(14ch, 1fr) 4em minmax(0, 36%) minmax(3.75rem, auto) minmax(3.75rem, auto);
   min-width: 0;
   align-items: center;
   gap: var(--sp-2);
@@ -5682,15 +5685,19 @@ button.environment-menu-row:hover,
   font-size: var(--fs-xs);
 }
 
+.background-agents-item > * {
+  grid-row: 1;
+}
+
 .background-agents-type {
-  flex-shrink: 0;
+  grid-column: 1;
   color: var(--text-2);
   font-weight: var(--w-medium);
 }
 
 .background-agents-description {
-  flex: 1;
-  min-width: 0;
+  grid-column: 2;
+  min-width: 14ch;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -5698,7 +5705,8 @@ button.environment-menu-row:hover,
 }
 
 .background-agents-elapsed {
-  flex-shrink: 0;
+  grid-column: 3;
+  text-align: right;
   color: var(--text-3);
   font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums;
@@ -5706,7 +5714,7 @@ button.environment-menu-row:hover,
 
 /* GitHub #17 slice E: optional per-child progress and the blocked-on-ask line. */
 .background-agents-progress {
-  flex: 0 1 auto;
+  grid-column: 4;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -5716,7 +5724,7 @@ button.environment-menu-row:hover,
 }
 
 .background-agents-waiting {
-  flex: 0 1 auto;
+  grid-column: 4;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -5726,19 +5734,41 @@ button.environment-menu-row:hover,
   font-weight: var(--w-medium);
 }
 
+.background-agents-item-failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.background-agents-failure {
+  grid-column: 4;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-normal);
+}
+
 .background-agents-action {
-  flex-shrink: 0;
+  grid-column: 5;
   padding: 0.15rem 0.4rem;
-  border: none;
+  border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: transparent;
-  color: var(--text-3);
+  color: var(--text-2);
   font-size: var(--fs-2xs);
+  text-align: center;
   cursor: pointer;
 }
 
-.background-agents-action:first-of-type {
-  margin-left: auto;
+/* Stop / Dismiss is always the last button; Open (when present) sits before it. */
+.background-agents-action:last-child {
+  grid-column: 6;
+}
+
+.background-agents-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 .background-agents-action:hover {

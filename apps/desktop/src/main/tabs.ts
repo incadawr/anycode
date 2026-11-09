@@ -85,6 +85,7 @@ import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/
 import { PROVIDER_QUOTA_EVENT_TYPE } from "../shared/provider-quota.js";
 import { childSessionLimitMessage, clampSessionLimit, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { RecognizerConfigChanged } from "../shared/recognizer.js";
+import { evaluateManagedStartupTransition } from "./managed-child-startup.js";
 import { ENV_CONNECTION_ID, ENV_MODEL, ENV_REASONING_EFFORT, ENV_REASONING_EFFORT_MODEL, ENV_SUBAGENT_MAX_TURNS } from "./host-env.js";
 import type { CloseTabResult } from "../shared/tabs.js";
 import { sessionToolEnv } from "../shared/session-env.js";
@@ -214,6 +215,8 @@ const CHILD_START_TIMEOUT_MESSAGE =
   'Agent: the child session did not become ready in time and was shut down; it never started on the task. Retry, or use tier "inline".';
 /** §10.8.2 item 3 — ratified verbatim as-is; reused for both the drain-cascade and the explicit `child-run-cancel` path. */
 const CHILD_CANCELLED_MESSAGE = "Agent: the child session was cancelled.";
+const childStartupRecoveryFailedMessage = (path: string, detail: string): string =>
+  `Agent: the child session could not start in its worktree (${detail}). The checkout is retained at ${path}.`;
 /**
  * §10.11.2's ratified tombstone text for the ADMINISTRATIVE reap: a
  * `drainChildren` deadline expiring on a child whose host was force-killed
@@ -576,6 +579,12 @@ interface ChildRunLedgerEntry {
   prompt: string;
   /** Cleared (and the field deleted) on `child-ready`; fires `handleChildStartTimeout` otherwise. */
   startDeadline?: ReturnType<typeof setTimeout>;
+  /**
+   * Startup workspace recovery (managed children only): "recovering" while the
+   * first host is being replaced, "used" once the single replacement fork was
+   * made. A second mismatch never recovers again.
+   */
+  startupRecovery?: "recovering" | "used";
 }
 
 /**
@@ -1437,6 +1446,8 @@ export class TabHostManager {
   private readonly uncertainWorktreeWriters = new WeakSet<TabHost>();
   private readonly worktreeHosts = new WeakMap<TabHost, UtilityProcess>();
   private readonly hostShutdowns = new WeakMap<UtilityProcess, Promise<void>>();
+  /** Hosts being replaced by a startup recovery: their exit is expected and never finalizes the run. */
+  private readonly recoveringHosts = new WeakSet<UtilityProcess>();
   private readonly worktreeSettlements = new WeakMap<ChildWorktreeReceipt, Promise<{ phase: string; reason: string }>>();
   private readonly settlingChildRuns = new Map<string, Promise<void>>();
 
@@ -2413,6 +2424,7 @@ export class TabHostManager {
       return;
     }
     if (data.type === CHILD_TERMINAL_TYPE) {
+      if (this.recoveringHosts.has(child)) return;
       const terminal = parseChildTerminal(message);
       if (terminal !== null) {
         this.handleChildTerminal(tab, child, terminal);
@@ -3758,7 +3770,7 @@ export class TabHostManager {
       return;
     }
     const entry = this.childRuns.get(tab.childOf.requestId);
-    if (entry === undefined || entry.state !== "starting") {
+    if (entry === undefined || entry.state !== "starting" || entry.startupRecovery === "recovering") {
       // Unknown (already finalized), or a late/duplicate ready after the run
       // already moved on (e.g. a cancel raced in) — never restart a run that
       // is not, in fact, still starting.
@@ -4052,6 +4064,66 @@ export class TabHostManager {
     return { ok: true };
   }
 
+  /**
+   * A managed child's host booted somewhere other than its allocated checkout
+   * and found the persisted workspace to be that checkout. While the run is
+   * still `starting` this is repaired exactly once: the old host is shut down,
+   * then ONE replacement resumes the same session with cwd = the receipt path.
+   * Every other transition (any other target, a started run, a closing parent, a
+   * second mismatch) is not relocated: the run fails with the reason and the
+   * checkout stays retained. Never publishes child-ready or releases the held
+   * prompt; the replacement host does that itself on its own ready.
+   */
+  private async recoverManagedChildStartup(tab: TabHost, oldHost: UtilityProcess, message: WorktreeTransitionMessage): Promise<void> {
+    const requestId = tab.childOf?.requestId;
+    const entry = requestId !== undefined ? this.childRuns.get(requestId) : undefined;
+    const receipt = tab.childWorktree;
+    if (requestId === undefined || entry === undefined || receipt === undefined || entry.startupRecovery === "recovering") return;
+    const parent = this.tabs.get(entry.parentTabId);
+    const verdict = evaluateManagedStartupTransition({
+      message, sessionId: tab.sessionId, parentSessionId: entry.parentSessionId,
+      tabWorkspace: tab.workspace, tabProjectRoot: tab.projectRoot,
+      receipt: this.managedSessions.get(tab.sessionId) === receipt ? receipt : undefined,
+      runState: entry.state, recoveryUsed: entry.startupRecovery === "used",
+      parentClosing: this.quitting || parent === undefined || parent.state !== "running" ||
+        this.drainingParents.has(parent.tabId) || this.closingTabs.has(parent.tabId),
+      receiptSettling: this.settlingChildRuns.has(requestId) || this.worktreeSettlements.has(receipt) || tab.pendingWorktreeCleanup !== undefined,
+    });
+    const elapsed = (): number => Math.max(0, this.now() - tab.spawnedAt);
+    if (!verdict.ok) {
+      this.logger.warn(`[main] child ${tab.tabId} startup transition not recovered: ${verdict.reason}`);
+      if (entry.state === "starting") {
+        this.crashedWorktrees.set(tab, "Startup recovery failed; checkout and branch require inspection");
+        this.finalizeChildRun(requestId, { status: "error", finalText: childStartupRecoveryFailedMessage(receipt.path, verdict.reason),
+          truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
+      }
+      return;
+    }
+    // Synchronous from the verdict to here: nothing can interleave before the marks.
+    entry.startupRecovery = "recovering";
+    this.recoveringHosts.add(oldHost);
+    await this.shutdownTabHost(tab);
+    if (this.childRuns.get(requestId) !== entry || this.settlingChildRuns.has(requestId) || this.tabs.get(tab.tabId) !== tab || this.quitting) return;
+    const live = this.tabs.get(entry.parentTabId);
+    if (entry.state !== "starting" || live === undefined || live.state !== "running" || this.drainingParents.has(live.tabId)) {
+      this.finalizeChildRun(requestId, { status: "cancelled", finalText: CHILD_CANCELLED_MESSAGE, truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
+      return;
+    }
+    entry.startupRecovery = "used";
+    tab.workspace = verdict.target;
+    tab.initialResume = true;
+    let forked = false;
+    try { forked = this.spawnTabHost(tab, { firstSpawn: false }) !== false && tab.proc !== null; }
+    catch (error) { this.logger.error(`[main] child ${tab.tabId} startup recovery fork threw`, error); }
+    if (!forked) {
+      this.crashedWorktrees.set(tab, "Startup recovery failed; checkout and branch require inspection");
+      this.finalizeChildRun(requestId, { status: "error", finalText: childStartupRecoveryFailedMessage(receipt.path, "the replacement host did not start"),
+        truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
+      return;
+    }
+    this.deliverTabPort(tab);
+  }
+
   /** Gracefully replaces one host with a resume host rooted at the transition target. */
   private async relocateTab(
     tab: TabHost,
@@ -4061,6 +4133,7 @@ export class TabHostManager {
     if (tab.proc === child && tab.childWorktree) {
       tab.childWorktreeRefusal = "Managed worktree sessions cannot relocate. Start a new session in the desired checkout.";
       this.logger.warn(tab.childWorktreeRefusal);
+      if (tab.childOf !== undefined) await this.recoverManagedChildStartup(tab, child, message);
       return;
     }
     const current = tab.proc === child;
@@ -4135,6 +4208,14 @@ export class TabHostManager {
     const forceKilledRegistration = this.forceKilledExits.get(child);
     const forceKilled = this.forceKilledExits.delete(child);
     this.reapEngineProcess(tab, child, forceKilledRegistration);
+    if (this.recoveringHosts.delete(child)) {
+      // The startup recovery replaces this host; its own exit is not the run's.
+      if (tab.proc === child) {
+        tab.proc = null;
+        this.deps.onFileActivityLifecycle?.(tab.tabId);
+      }
+      return;
+    }
     if (tab.childOf !== undefined) {
       // CUT-S2 §2.6.4: a child tab's exit is never a respawn
       // decision — it is caught (and finalized) here unconditionally,
