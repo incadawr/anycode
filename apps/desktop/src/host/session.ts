@@ -1,3 +1,4 @@
+import { NetworkWaitState } from "./network-wait-state.js";
 import { runtimeSettingsSchema } from "@anycode/core";
 import { checkedNativeBase, savedNativeRecovery } from "./native-base.js";
 import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
@@ -6,7 +7,7 @@ import { manualCompactionUnavailableReason } from "../shared/manual-compaction.j
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
 import type { SessionPeerTurnPublication } from "../shared/session-peers.js";
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type AgentDisplayCard, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type AgentDisplayCard, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SessionActivitySnapshot, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -1507,7 +1508,9 @@ export class Session {
   private readonly sendPreviewArtifacts: SessionOptions["postPreviewArtifacts"];
 
   private busyValue = false;
-  private activityListener?: (state: SessionActivityState) => void;
+  private activityListener?: (state: SessionActivityState, snapshot?: SessionActivitySnapshot) => void;
+  private readonly networkWaitState = new NetworkWaitState();
+  private lastProviderActivityAt: number | null = null;
   private permissionModeListener?: (mode: PermissionMode, engine: EngineId) => void;
   private orchestrateListener?: (enabled: boolean, engine: EngineId) => void;
   /** Host control-plane authority, independent of renderer connect/replay. */
@@ -1556,9 +1559,9 @@ export class Session {
     this.publishActivity();
   }
   private publishActivity(): void {
-    this.activityListener?.(this.communicationState());
+    this.activityListener?.(this.communicationState(), this.activitySnapshot());
   }
-  observeActivity(listener: (state: SessionActivityState) => void): void {
+  observeActivity(listener: (state: SessionActivityState, snapshot?: SessionActivitySnapshot) => void): void {
     this.activityListener = listener;
     this.publishActivity();
   }
@@ -2218,9 +2221,24 @@ export class Session {
     ).map(([id]) => id);
   }
 
+  private activitySnapshot(): SessionActivitySnapshot {
+    const networkWait = this.networkWaitState.summary;
+    return { state: this.communicationState(), ...(networkWait ? { networkWait } : {}), turnStartedAt: this.turnId ? this.turnStartedAt ?? null : null, lastProviderActivityAt: this.lastProviderActivityAt };
+  }
+
+  private observeNetworkEvent(event: AgentEvent): void {
+    if (this.networkWaitState.observe(event)) this.publishActivity();
+  }
+
+  private clearActivityTelemetry(): void {
+    this.networkWaitState.clear();
+    this.lastProviderActivityAt = null;
+    this.turnStartedAt = undefined;
+  }
+
   /** Shared activity state for status and result projections. */
   private communicationState(): SessionActivityState {
-    return this.shuttingDown ? "closing" : this.broker.isAwaitingApproval ? "waiting_approval" : this.busy ? "running" : "idle";
+    return this.shuttingDown ? "closing" : this.broker.isAwaitingApproval ? "waiting_approval" : this.networkWaitState.summary ? "waiting_network" : this.busy ? "running" : "idle";
   }
 
   communicationResult() {
@@ -2269,7 +2287,7 @@ export class Session {
     return {
       sessionId: this.sessionId,
       engine: this.engine.id,
-      state: this.communicationState(),
+      ...this.activitySnapshot(),
       steering: this.engine.steeringStatus?.() ?? { supported: false, ready: false },
       model: effort.model,
       effort: effort.effort,
@@ -2749,6 +2767,7 @@ export class Session {
 
   closeAdmissions(): void {
     this.shuttingDown = true;
+    this.clearActivityTelemetry();
     this.orchestrationController?.invalidate();
     this.publishActivity();
     this.pendingEngineEffort = undefined;
@@ -4893,6 +4912,7 @@ export class Session {
    * be resolved).
    */
   emitAgentEvent(event: AgentEvent): void {
+    if (this.turnId !== null) this.observeNetworkEvent(event);
     // The live turn id when one is open, else the engine-switch sentinel:
     // journal frames are only ever read as history, never as live-stream
     // deltas, so a stable non-null id is enough (renderer groups by turnId).
@@ -5145,6 +5165,7 @@ export class Session {
         // the branch at the end of this callback instead — F7's "root half"
         // of holding busy across the whole teardown was overreach (STATE.md
         // only ever described the child-side pause) and is reverted here.
+        this.clearActivityTelemetry();
         if (this.child === undefined) {
           this.busy = false;
           // the supervisor idle-watchdog's turn-settled signal,
@@ -5871,7 +5892,12 @@ export class Session {
     // SQLite PK keeps any double flush a storage no-op.
     this.flushPendingUsageAuditRow();
     this.abort = controller;
+    this.networkWaitState.clear();
+    this.lastProviderActivityAt = null;
     this.turnStartedAt = Date.now();
+    // The `busy` publish ran before the turn identity existed: publish once more so
+    // the cached activity carries this turn's start instead of null.
+    this.publishActivity();
     this.presentationJournal.start(turnId, requestId, this.turnStartedAt, text, attachments, origin);
     this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
     // the supervisor idle-watchdog's turn-start signal, fired at
@@ -6007,6 +6033,11 @@ export class Session {
       }
       let noticeConsumeAttempted = false;
       for await (const event of stream) {
+        this.observeNetworkEvent(event);
+        if (this.engine.id === "core" && (event.type === "text_delta" || event.type === "reasoning_delta" || event.type === "tool_input_start" || event.type === "tool_input_delta" || event.type === "tool_input_end" || event.type === "tool_call" || event.type === "finish")) {
+          this.lastProviderActivityAt = Date.now();
+          if (event.type === "finish") this.publishActivity();
+        }
         nativeTurnId ??= this.engine.steeringStatus?.().nativeTurnId ?? null;
         if (this.engine.id === "codex" && nativeTurnId !== null) this.lastNativeTurnId = nativeTurnId;
         if (this.peerTurnObserver) {
@@ -6348,6 +6379,7 @@ export class Session {
       // idle-boundary apply, same contract as the turn teardown
       // (a resumed segment is a turn like any other).
       this.applyPendingModelSelection();
+      this.clearActivityTelemetry();
       this.busy = false;
       this.abort = null;
       this.turnId = null;

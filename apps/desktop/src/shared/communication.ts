@@ -28,7 +28,7 @@ export interface AgentDisplayCard extends AgentDelivery {
  * cannot drift apart.
  */
 export const AGENT_MESSAGE_HEADER_PREFIX = "[AnyCode authenticated agent message ";
-export type SessionActivityState = "idle" | "running" | "waiting_approval" | "closing";
+export type SessionActivityState = "idle" | "running" | "waiting_approval" | "waiting_network" | "closing";
 export type SessionApiState = SessionActivityState | "crash_looped" | "missing_workspace";
 
 /**
@@ -45,7 +45,21 @@ export type SessionApiState = SessionActivityState | "crash_looped" | "missing_w
  * `null` means the effective effort is unknown or absent — a model default is
  * never invented here.
  */
-export interface SessionStatus {
+export interface SessionNetworkWait {
+  startedAt?: number;
+  deadlineAt?: number;
+  failureCode?: string;
+  source: "parent" | "subagent";
+}
+
+export interface SessionActivitySnapshot {
+  state: SessionActivityState;
+  networkWait?: SessionNetworkWait;
+  turnStartedAt?: number | null;
+  lastProviderActivityAt?: number | null;
+}
+
+export interface SessionStatus extends SessionActivitySnapshot {
   sessionId: string;
   engine: string;
   state: SessionActivityState;

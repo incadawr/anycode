@@ -9,7 +9,7 @@ export interface PeerHost extends PeerSessionFacts {
   title?: string; model?: string; effort?: string;
   tabId: string; sessionId: string; proc: object | null; generation: number;
   engine: "core" | "claude" | "codex";
-  activity: "idle" | "running" | "waiting_approval" | "closing";
+  activity: "idle" | "running" | "waiting_approval" | "waiting_network" | "closing";
 }
 /** The process reference is supplied by tabs' listener, never by the wire. */
 export function createSessionPeersHandler(deps: {

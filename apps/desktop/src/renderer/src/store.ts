@@ -5115,6 +5115,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // byte-identical for now.
         case "permission_auto_decided":
         case "reasoning_replay_metadata":
+        case "network_wait_end":
           return;
 
         default: {

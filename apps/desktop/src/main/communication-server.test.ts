@@ -27,7 +27,7 @@ async function fixture(options: { dispatchTimeoutMs?: number; writeLedger?: (pat
   const dir = await mkdtemp(join(tmpdir(), "anycode-communication-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const configFile = join(dir, "config.json"); const discoveryFile = join(dir, "endpoint.json");
   await writeFile(configFile, JSON.stringify({ workspaces: [dir], discoveryFile }));
-  const request = vi.fn(async (_session: string, op: string, payload?: unknown) => {
+  const request = vi.fn(async (_session: string, op: string, payload?: unknown): Promise<unknown> => {
     if (op === "send_message") return { envelope: payload, state: "queued" };
     if (op === "get_session_status") return { engine: "codex", state: "idle" };
     if (op === "get_session_result") return { availability: "available", latestResult: { publicAnswer: "PUBLIC_ANSWER", terminalReason: "completed", turnId: "host-turn" } };
@@ -74,6 +74,73 @@ describe("production communication MCP over real SDK HTTP", () => {
       expect(row.state).toBe(activityState); expect(status.state).toBe(row.state);
       expect(row).not.toHaveProperty("model");
     }
+  });
+  it("projects cached waits, fresh host activity, recovery and terminal precedence", async () => {
+    const f = await fixture();
+    const wait = { startedAt: 100, deadlineAt: 200, failureCode: "network", source: "parent" as const };
+    let activityState: import("../shared/communication.js").SessionActivityState = "waiting_network";
+    let activitySnapshot: import("../shared/communication.js").SessionActivitySnapshot | undefined = { state: activityState, networkWait: wait };
+    let failed = false;
+    f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", activityState, activitySnapshot, pid: 10, ...(failed ? { hostFailure: { code: "per_tab_crash_loop" as const, message: "Stopped" } } : {}) }];
+    f.request.mockResolvedValue({ engine: "core", state: "waiting_network", networkWait: wait });
+    const list = async () => value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions[0];
+    const status = async () => value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+    expect(await list()).toMatchObject({ state: "waiting_network", networkWait: wait });
+    expect(await status()).toMatchObject({ state: "waiting_network", networkWait: wait });
+    f.request.mockResolvedValue({ engine: "core", state: "waiting_approval", networkWait: wait, lastProviderActivityAt: 42 });
+    expect(await status()).toMatchObject({ state: "waiting_approval", networkWait: wait, lastProviderActivityAt: 42 });
+    f.request.mockResolvedValue({ engine: "core", state: "running", turnStartedAt: 99, lastProviderActivityAt: null });
+    expect(await status()).toMatchObject({ state: "running", turnStartedAt: 99, lastProviderActivityAt: null });
+    expect(await status()).not.toHaveProperty("networkWait");
+    activityState = "running"; activitySnapshot = { state: "running" };
+    expect(await list()).toMatchObject({ state: "running" });
+    expect(await list()).not.toHaveProperty("networkWait");
+    activityState = "waiting_network"; activitySnapshot = { state: activityState, networkWait: wait }; failed = true;
+    expect((await list()).state).toBe("crash_looped");
+    expect((await status()).state).toBe("crash_looped");
+  });
+  it("falls back after a host timeout without inventing a wait", async () => {
+    const f = await fixture();
+    f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "running", activityState: "running", pid: 10 }];
+    f.request.mockRejectedValue(new Error("timeout"));
+    const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+    expect(status.state).toBe("running");
+    expect(status).not.toHaveProperty("networkWait");
+    expect(status).not.toHaveProperty("lastProviderActivityAt");
+  });
+  it("falls back to the cached wait and timestamps when the host status request fails", async () => {
+    const f = await fixture();
+    const wait = { startedAt: 100, deadlineAt: 200, failureCode: "network", source: "parent" as const };
+    f.manager.listTabs = () => [{
+      sessionId: "allowed", workspace: f.dir, state: "running", activityState: "waiting_network", pid: 10,
+      activitySnapshot: { state: "waiting_network", networkWait: wait, turnStartedAt: 90, lastProviderActivityAt: 95 },
+    }];
+    f.request.mockRejectedValue(new Error("timeout"));
+    const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
+    expect(status).toMatchObject({ state: "waiting_network", networkWait: wait, turnStartedAt: 90, lastProviderActivityAt: 95 });
+    expect(status).not.toHaveProperty("activitySnapshot");
+    expect(status).not.toHaveProperty("activityState");
+  });
+  it("keeps the internal activity cache out of get_session_result", async () => {
+    const f = await fixture();
+    f.manager.listTabs = () => [{
+      sessionId: "allowed", workspace: f.dir, state: "running", activityState: "waiting_network", pid: 10,
+      activitySnapshot: { state: "waiting_network", networkWait: { startedAt: 100, deadlineAt: 200, failureCode: "network", source: "parent" as const }, turnStartedAt: 90 },
+    }];
+    const result = value(await f.client.callTool({ name: "get_session_result", arguments: { sessionId: "allowed" } }));
+    expect(result).not.toHaveProperty("activitySnapshot");
+    expect(result).not.toHaveProperty("activityState");
+    expect(result).not.toHaveProperty("networkWait");
+    expect(result).toMatchObject({ sessionId: "allowed", availability: "available", latestResult: { publicAnswer: "PUBLIC_ANSWER", turnId: "host-turn" } });
+  });
+  it("does not reveal waits for inaccessible or unshared sessions", async () => {
+    const exposed = new Set(["on"]);
+    const f = await approvalFixture({ approvals: new Set(), exposed });
+    exposed.clear();
+    expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions).toEqual([]);
+    const hidden = await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "on" } });
+    const unknown = await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "unknown" } });
+    expect(hidden.isError).toBe(true); expect(hidden.content).toEqual(unknown.content);
   });
   it("lists a restarting session without waiting for a stalled host", async () => {
     const f = await fixture();
