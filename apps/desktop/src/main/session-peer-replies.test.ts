@@ -199,3 +199,16 @@ it("authorizes live durable acceptance while dispatch is still unknown/pending",
   expect(await f.call("a", { sessionId: "b", payload: "live" })).toMatchObject({ status: "sent" });
   registry.dispose();
 });
+
+it("rejects steering at both boundaries while next-turn sends retain authorization", async () => {
+  const f = await fixture();
+  const authorize = vi.fn(async () => f.tabs[1]!);
+  expect(await f.call("a", { sessionId: "b", payload: "hi", mode: "steer" })).toMatchObject({ status: "unavailable", reason: "steer_unsupported" });
+  expect(() => f.replies.send(f.hosts[0]!, { sessionId: "b", payload: "hi", mode: "steer" }, authorize)).toThrow("Reply mode unavailable");
+  expect(authorize).not.toHaveBeenCalled();
+  f.access.canAccess.mockReturnValue(false);
+  expect(await f.call("a", { sessionId: "b", payload: "hi", mode: "next_turn" })).toEqual({ status: "refused" });
+  f.access.canAccess.mockReturnValue(true);
+  expect(await f.call("a", { sessionId: "b", payload: "hi", mode: "next_turn" })).toMatchObject({ status: "sent" });
+  expect([...f.broker.ledger.messages.values()][0]!.envelope.mode).toBe("next_turn");
+});

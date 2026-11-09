@@ -81,7 +81,7 @@ const responseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("sent"), messageId: id, state: z.enum(["queued", "acknowledged", "rejected", "unknown"]) }),
   z.strictObject({ status: z.literal("ok"), sessions: z.array(peerSummary).max(50) }),
   z.strictObject({ status: z.literal("refused"), reason: z.literal("loop_limited").optional() }),
-  z.strictObject({ status: z.literal("unavailable") }),
+  z.strictObject({ status: z.literal("unavailable"), reason: z.literal("steer_unsupported").optional(), detail: z.string().min(1).max(2000).optional() }),
   z.strictObject({ status: z.literal("unknown"), sessionId: id.optional(), tabId: id.optional() }),
 ]);
 export type SessionPeerResponse = z.infer<typeof responseSchema>;

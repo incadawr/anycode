@@ -70,3 +70,18 @@ it("keeps the created ids when first-message admission refuses and forwards repl
     .toEqual({ status: "opened", sessionId: "new", tabId: "new", label: "peer", delivery: { state: "rejected" } });
   expect(send).toHaveBeenCalledWith(expect.anything(), { sessionId: "new", payload: "hello", reply: "on_turn_end" }, expect.any(Function));
 });
+
+it("refuses peer steering before target discovery without disclosing target details", async () => {
+  const caller: PeerHost = { tabId: "a", sessionId: "a", proc: {}, generation: 1, workspace: "/a", workspaceKey: "/a",
+    live: true, root: true, restricted: false, readOnly: false, engine: "core", activity: "running" };
+  const targets = vi.fn(() => []);
+  const send = vi.fn(async () => { throw new Error("should not send"); });
+  const handler = createSessionPeersHandler({ current: () => caller, targets, send,
+    prepare: async () => {}, access: { canAccess: () => true } });
+  for (const sessionId of ["missing", "private"]) {
+    expect(await handler("a", caller.proc!, { requestId: sessionId, operation: "send", input: { sessionId, payload: "hi", mode: "steer" } }))
+      .toEqual({ status: "unavailable", reason: "steer_unsupported", detail: "Native peer steering is unavailable; use mode next_turn, or parent send_to for your own running Core child." });
+  }
+  expect(targets).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+});
