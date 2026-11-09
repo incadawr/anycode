@@ -196,6 +196,18 @@ const CAPTIONS_TURN_BUDGET_MS = 30_000;
 const CAPTIONS_CONCURRENCY = 2;
 
 /**
+ * Nudge appended when a step was cut off by the provider's output-token
+ * ceiling (finishReason "length"). Such a step did not choose to stop — it
+ * was truncated mid-answer, often mid-way through writing a tool call — so
+ * the loop gives the model a bounded chance to finish instead of ending the
+ * turn as "completed".
+ */
+const LENGTH_CONTINUE_MESSAGE =
+  "Your previous response was cut off by the output token limit before it finished. " +
+  "Continue from where you stopped, but be concise: either make the next tool call or give a short final answer. " +
+  "Do not repeat what you already wrote.";
+
+/**
  * Text appended after every image stub, telling the model the tool's exact
  * name and how to address the image (plan §5's "strongest signal").
  * Deliberately literal: `formatImageStub`'s output plus this line is what a
@@ -1283,6 +1295,7 @@ export class AgentLoop {
     try {
       let turn = 0;
       let foregroundParkRounds = 0;
+      let lengthContinueRounds = 0;
       for (;;) {
         if (signal?.aborted) {
           yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
@@ -1652,6 +1665,16 @@ export class AgentLoop {
         // Sentinel: a step with no proposed tool calls ends the loop.
         if (toolCalls.length === 0) {
           yield { type: "turn_end", turn, finishReason };
+          // A step cut by the output-token ceiling did not choose to stop; give
+          // the model a bounded chance to finish instead of ending the turn.
+          if (finishReason === "length" && lengthContinueRounds < 2) {
+            lengthContinueRounds += 1;
+            this.history.append(
+              { role: "user", content: LENGTH_CONTINUE_MESSAGE },
+              { origin: "system", ...(turnId !== undefined ? { turnId, step: turn } : {}) },
+            );
+            continue;
+          }
           if (foregroundRuns.hasLive) {
             if (foregroundParkRounds >= 3) {
               foregroundRuns.close("foreground wait limit reached");

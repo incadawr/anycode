@@ -6096,3 +6096,40 @@ it("limits fresh Agent calls across steps and resets on the next turn", async ()
   await collect(loop.runTurn("second"));
   expect(run).toHaveBeenCalledTimes(5);
 });
+
+// A step cut off by the provider's output-token ceiling did not choose to
+// stop: the loop must not report the turn as "completed" right away.
+describe("output-token cutoff (finishReason length)", () => {
+  it("continues the turn once instead of ending it", async () => {
+    const modelPort = new MockModelPort([
+      [{ type: "finish", finishReason: "length", usage: {} }],
+      [{ type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const loop = makeLoop({ modelPort });
+    const events = await collect(loop.runTurn("go"));
+    expect(modelPort.requests).toHaveLength(2);
+    expect(JSON.stringify(modelPort.requests[1]!.messages)).toContain("cut off by the output token limit");
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("bounds the continuations and then ends the turn", async () => {
+    const modelPort = new MockModelPort([
+      [{ type: "finish", finishReason: "length", usage: {} }],
+      [{ type: "finish", finishReason: "length", usage: {} }],
+      [{ type: "finish", finishReason: "length", usage: {} }],
+      [{ type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const loop = makeLoop({ modelPort });
+    const events = await collect(loop.runTurn("go"));
+    expect(modelPort.requests).toHaveLength(3);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
+  it("still ends the turn after a single step that stopped on its own", async () => {
+    const modelPort = new MockModelPort([[{ type: "finish", finishReason: "stop", usage: {} }]]);
+    const loop = makeLoop({ modelPort });
+    const events = await collect(loop.runTurn("go"));
+    expect(modelPort.requests).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+});
