@@ -530,12 +530,14 @@ describe("agentTool handler — send_to", () => {
       { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
       makeCtx({ sessionSubagents: port }),
     );
-    expect(result.ok).toBe(true);
-    const text = result.ok ? (result.output?.finalText ?? "") : "";
+    expect(result.ok).toBe(false);
+    const text = result.ok ? "" : result.error;
     expect(text).toContain("Rejected");
     expect(text).toContain("not injected");
     expect(text).toContain("msg-8");
     expect(text).toContain("child is closing");
+    expect(text).not.toContain("delivered");
+    expect(text).not.toMatch(/\bread\b/);
   });
 
   it("an unknown receipt says the transport could not confirm what happened", async () => {
