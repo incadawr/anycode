@@ -84,7 +84,17 @@ try {
     await d.evaluate(`document.querySelector('.session-peers-row[data-granted=true] [role=switch]')?.click()`); await delay();
     const after=await d.invoke('sessionPeers.get',a.tabId); console.log(`${after.view.peers.filter(p=>p.granted).length===count-1?'PASS':'FAIL'} revoke while project off: ${count} -> ${after.view.peers.filter(p=>p.granted).length}`);
     await shot('project-off-dialog',`document.querySelector('.session-peers-dialog')?.innerText.includes('Currently inactive')`);
-    await key('Escape','Escape',27); await menu(); await shot('currently-inactive',`document.querySelector('.environment-menu')?.innerText.includes('Currently inactive')`); await dismiss();
+    await d.evaluate(`document.querySelector('.session-peers-search input')?.focus()`);
+    await key('Escape','Escape',27);
+    await check('project-off dialog closed',`!document.querySelector('.session-peers-dialog')`);
+    // The line is rendered only while this project is off/untrusted and at least one grant remains; the
+    // menu refetches on open, so poll for it and name the authoritative state when it does not appear.
+    const view=await d.invoke('sessionPeers.get',a.tabId);
+    console.log('PROJECT-OFF VIEW',JSON.stringify({projectEnabled:view.view?.project?.enabled,trusted:view.view?.project?.trusted,granted:view.view?.peers?.filter(p=>p.granted).length}));
+    await dismiss(); await menu();
+    const inactiveSeen=await d.evaluate(`new Promise(resolve=>{const end=Date.now()+4000;const probe=()=>{const m=document.querySelector('.environment-menu');const t=m?.querySelector('.native-access-summary')?.innerText||'';if(t.includes('Currently inactive')||Date.now()>end)resolve(t);else setTimeout(probe,100)};probe()})`);
+    console.log('MENU SUMMARY',JSON.stringify(inactiveSeen));
+    await shot('currently-inactive',`!!document.querySelector('.environment-menu .native-access-summary')?.innerText.includes('Currently inactive')`); await dismiss();
   });
   await attempt('untrusted disabled reason',async()=>{
     const trustPath=join(d.root,'.anycode','workspace-trust.json'); const trust=JSON.parse(readFileSync(trustPath,'utf8')); delete trust.folders[a.workspace]; writeFileSync(trustPath,JSON.stringify(trust));

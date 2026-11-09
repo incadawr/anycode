@@ -126,6 +126,15 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     setDiagnosticsRequest(0);
     triggerRef.current?.focus();
   }, []);
+  // The peers dialog is modal: while it is open the rest of the page is inert,
+  // so focus can only go back once the dialog is gone. The element that opened
+  // it (the menu's "Manage…" button) is unmounted with the menu, so the
+  // modal's own restore finds nothing; the trigger is the target.
+  const peersWasOpen = useRef(false);
+  useEffect(() => {
+    if (peersWasOpen.current && !peersOpen) triggerRef.current?.focus();
+    peersWasOpen.current = peersOpen;
+  }, [peersOpen]);
   useEffect(() => {
     if (open && !branchesOpen) {
       if (returning.current) branchRef.current?.focus();
@@ -351,7 +360,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
       )}
       {tabId && native.view?.available !== false && <SessionPeersDialog open={peersOpen} tabId={tabId}
         view={native.view} busy={native.busy} error={native.error}
-        onClose={() => { setPeersOpen(false); triggerRef.current?.focus(); }}
+        onClose={() => setPeersOpen(false)}
         onChange={(peerKey, enabled) => void native.save({ peerKey, enabled })} />}
     </div>
   );

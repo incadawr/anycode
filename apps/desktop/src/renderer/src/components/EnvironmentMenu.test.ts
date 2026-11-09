@@ -944,3 +944,137 @@ it("manages peers outside the menu, refetches on reopen and restores focus on Es
     if (original) Object.defineProperty(window, "anycode", original); else Reflect.deleteProperty(window, "anycode");
   }
 });
+
+/**
+ * jsdom has no modal inertness; a real browser ignores focus() on anything
+ * outside an open modal dialog. Emulate that so a focus call made while the
+ * dialog is still open is lost, as it is in the app.
+ */
+function emulateModalInertness(): () => void {
+  const original = HTMLElement.prototype.focus;
+  HTMLElement.prototype.focus = function (this: HTMLElement, ...args: Parameters<HTMLElement["focus"]>) {
+    const dialog = document.querySelector("dialog[open]");
+    if (dialog && !dialog.contains(this)) return;
+    original.apply(this, args);
+  };
+  return () => { HTMLElement.prototype.focus = original; };
+}
+
+async function mountPeersMenu(view: () => unknown) {
+  const original = Object.getOwnPropertyDescriptor(window, "anycode");
+  const get = vi.fn(async () => ({ ok: true as const, view: view() }));
+  const set = vi.fn(async () => ({ ok: true as const, view: view() }));
+  Object.defineProperty(window, "anycode", { configurable: true, value: {
+    communication: { get: async () => ({ ok: false }) },
+    browserAccess: { get: async () => ({ ok: false }), onChanged: () => () => {} },
+    sessionPeers: { get, set },
+  } });
+  const store = createDesktopStore(); store.setState({ workspace: "/current" });
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(EnvironmentMenu, { placement: "header" }))));
+  return {
+    host, get, set,
+    trigger: () => host.querySelector<HTMLButtonElement>(".environment-trigger")!,
+    close: async () => {
+      await act(async () => root.unmount()); host.remove();
+      if (original) Object.defineProperty(window, "anycode", original); else Reflect.deleteProperty(window, "anycode");
+    },
+  };
+}
+
+describe("peers dialog focus return", () => {
+  const peersView = () => ({
+    available: true,
+    project: { key: "/current", name: "current", enabled: true, trusted: true, granted: false },
+    peers: [{ key: "/other/peer", name: "peer", enabled: true, trusted: true, granted: false }],
+  });
+  const closers: Record<string, (host: HTMLElement) => Promise<void>> = {
+    "Escape from the search field": host => act(async () => {
+      const input = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+      expect(document.activeElement).toBe(input);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }),
+    "the close button": host => act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click()),
+    "a click outside the dialog": host => act(async () => host.querySelector<HTMLElement>("dialog")!.click()),
+  };
+  for (const [name, close] of Object.entries(closers)) {
+    it(`puts the focus on the menu trigger after closing with ${name}`, async () => {
+      const restoreFocus = emulateModalInertness();
+      const originalShowModal = HTMLDialogElement.prototype.showModal;
+      HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+      const t = await mountPeersMenu(peersView);
+      try {
+        await act(async () => t.trigger().click());
+        await clickText(t.host, "Manage…");
+        expect(t.host.querySelector("dialog[open]")).not.toBeNull();
+        await close(t.host);
+        expect(t.host.querySelector("dialog")).toBeNull();
+        expect(document.activeElement).toBe(t.trigger());
+        expect(t.trigger().getAttribute("aria-expanded")).toBe("false");
+      } finally {
+        await t.close(); restoreFocus(); HTMLDialogElement.prototype.showModal = originalShowModal;
+      }
+    });
+  }
+});
+
+describe("menu summary after the current project is switched off", () => {
+  it("shows the inactive note on reopen, whether or not the dialog saved anything", async () => {
+    const originalShowModal = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    let enabled = true;
+    const view = () => ({
+      available: true,
+      project: { key: "/current", name: "current", enabled, trusted: true, granted: false },
+      peers: [{ key: "/other/peer", name: "peer", enabled: true, trusted: true, granted: true }],
+    });
+    const t = await mountPeersMenu(view);
+    const summary = () => t.host.querySelector(".native-access-summary")?.textContent ?? "";
+    try {
+      await act(async () => t.trigger().click());
+      expect(summary()).toContain("Communicates with 1 project");
+      expect(summary()).not.toContain("Currently inactive");
+      await clickText(t.host, "Manage…");
+      // The project is switched off behind the open dialog (main, not this view).
+      enabled = false;
+      const key = (type: string) => act(async () => t.host.querySelector<HTMLInputElement>('input[type="search"]')!
+        .dispatchEvent(new KeyboardEvent(type, { key: "Escape", bubbles: true })));
+      await key("keydown");
+      expect(t.host.querySelector("dialog")).toBeNull();
+      await act(async () => t.trigger().click());
+      // The reopened menu refetches instead of showing the snapshot taken before the switch-off.
+      expect(summary()).toContain("Communicates with 1 project");
+      expect(summary()).toContain("Currently inactive");
+    } finally {
+      await t.close(); HTMLDialogElement.prototype.showModal = originalShowModal;
+    }
+  });
+
+  it("shows the inactive note after the dialog revokes a grant while the project is off", async () => {
+    const originalShowModal = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    let enabled = true;
+    let granted = [true, true];
+    const view = () => ({
+      available: true,
+      project: { key: "/current", name: "current", enabled, trusted: true, granted: false },
+      peers: granted.map((g, i) => ({ key: `/other/peer-${i}`, name: `peer-${i}`, enabled: true, trusted: true, granted: g })),
+    });
+    const t = await mountPeersMenu(view);
+    t.set.mockImplementation(async () => { granted = [false, true]; return { ok: true as const, view: view() }; });
+    try {
+      await act(async () => t.trigger().click());
+      await clickText(t.host, "Manage…");
+      enabled = false;
+      await act(async () => t.host.querySelector<HTMLButtonElement>('.session-peers-row[data-granted="true"] button[role="switch"]')!.click());
+      expect(t.set).toHaveBeenCalledTimes(1);
+      expect(t.host.querySelector(".session-peers-dialog")?.textContent).toContain("Currently inactive");
+      await act(async () => t.host.querySelector<HTMLInputElement>('input[type="search"]')!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+      await act(async () => t.trigger().click());
+      expect(t.host.querySelector(".native-access-summary")?.textContent).toContain("Communicates with 1 project · Currently inactive");
+    } finally {
+      await t.close(); HTMLDialogElement.prototype.showModal = originalShowModal;
+    }
+  });
+});
