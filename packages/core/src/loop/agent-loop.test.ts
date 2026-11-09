@@ -6122,7 +6122,8 @@ describe("output-token cutoff (finishReason length)", () => {
     const loop = makeLoop({ modelPort });
     const events = await collect(loop.runTurn("go"));
     expect(modelPort.requests).toHaveLength(3);
-    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+    expect(events.filter(e => e.type === "turn_end").at(-1)).toMatchObject({ finishReason: "length" });
   });
 
   it("still ends the turn after a single step that stopped on its own", async () => {

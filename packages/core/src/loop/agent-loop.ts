@@ -1665,6 +1665,10 @@ export class AgentLoop {
         // Sentinel: a step with no proposed tool calls ends the loop.
         if (toolCalls.length === 0) {
           yield { type: "turn_end", turn, finishReason };
+          if (signal?.aborted) {
+            yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
+            return;
+          }
           // A step cut by the output-token ceiling did not choose to stop; give
           // the model a bounded chance to finish instead of ending the turn.
           if (finishReason === "length" && lengthContinueRounds < 2) {
@@ -1699,6 +1703,12 @@ export class AgentLoop {
             this.history.append({ role: "user", content: message + JSON.stringify(frames.map(boundForegroundJoin)) },
               { origin: "system", ...(turnId !== undefined ? { turnId, step: turn } : {}) });
             continue;
+          }
+          if (finishReason === "length") {
+            const message = "The response was cut off by the output token limit after the continuation limit was reached.";
+            yield { type: "error", error: new Error(message), safe: { code: "unknown", message } };
+            yield* this.emitLoopEnd(signal?.aborted ? "cancelled" : "error", turn, signal, turnId, turn);
+            return;
           }
           yield* this.emitLoopEnd("completed", turn, signal, turnId, turn);
           return;
