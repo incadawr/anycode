@@ -39,7 +39,7 @@ export function SessionApprovalsField({ approvals, onChange }: { approvals: bool
       icon={null}
       title={sessionApprovalsLabel(approvals)}
       detail={SESSION_APPROVALS_DETAIL}
-      help={<RowHelp text={SESSION_APPROVALS_NOTE} tooltipId={noteId} />}
+      help={<RowHelp text={SESSION_APPROVALS_NOTE} label="About external approvals" tooltipId={noteId} />}
       ariaLabel="External approvals"
       control={
         <Switch
@@ -72,7 +72,7 @@ export function SessionHandleField({
       icon={null}
       title={SESSION_HANDLE_LABEL}
       detail={SESSION_HANDLE_DETAIL}
-      help={<RowHelp text={SESSION_HANDLE_HINT} tooltipId={hintId} />}
+      help={<RowHelp text={SESSION_HANDLE_HINT} label="About the session handle" tooltipId={hintId} />}
       ariaLabel="Session handle"
       error={error}
       control={
