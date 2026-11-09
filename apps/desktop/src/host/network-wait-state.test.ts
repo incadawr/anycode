@@ -26,4 +26,19 @@ describe("network wait episodes", () => {
     state.clear();
     expect(state.summary).toBeUndefined();
   });
+  it("ends a live episode on cancelled or failed and sorts episodes without a start last", () => {
+    const state = new NetworkWaitState();
+    state.observe({ type: "waiting_for_network", waitId: "x" });
+    state.observe({ type: "waiting_for_network", waitId: "y", startedAt: 50, waitSource: "subagent" });
+    expect(state.summary).toEqual({ source: "subagent", startedAt: 50 });
+    expect(state.observe({ type: "network_wait_end", waitId: "y", outcome: "cancelled" })).toBe(true);
+    expect(state.observe({ type: "network_wait_end", waitId: "x", outcome: "failed" })).toBe(true);
+    expect(state.summary).toBeUndefined();
+  });
+  it("tracks only the first start that carries no wait id", () => {
+    const state = new NetworkWaitState();
+    state.observe({ type: "waiting_for_network", waitSource: "parent" });
+    expect(state.observe({ type: "waiting_for_network", waitSource: "subagent" })).toBe(false);
+    expect(state.summary).toEqual({ source: "parent" });
+  });
 });

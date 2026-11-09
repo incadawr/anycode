@@ -69,6 +69,54 @@ describe("session network status", () => {
       expect(h.session.communicationStatus().lastProviderActivityAt).toBe(timestamp);
     } finally { stop(); h.close(); }
   });
+  it("does not advance provider activity on forwarded child output or elapsed time", async () => {
+    const { h, push, stop } = fixture();
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000);
+      h.send({ type: "user_message", requestId: "one", text: "hello" });
+      await h.waitUntil(() => h.session.communicationStatus().turnStartedAt != null);
+      push({ type: "text_delta", id: "t", text: "x" });
+      await h.waitUntil(() => h.session.communicationStatus().lastProviderActivityAt === 1_000);
+      now.mockReturnValue(600_000);
+      push({ type: "subagent_progress", toolCallId: "c", turns: 1, toolCalls: 1 });
+      push({ type: "subagent_activity", toolCallId: "c", toolName: "Read", summary: "reading" });
+      push({ type: "tool_execution_start", toolCallId: "x", toolName: "Bash", input: {} });
+      push({ type: "waiting_for_network", waitId: "p" });
+      await h.waitUntil(() => h.session.communicationStatus().state === "waiting_network");
+      expect(h.session.communicationStatus().lastProviderActivityAt).toBe(1_000);
+      push({ type: "finish", finishReason: "stop", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } } as AgentEvent);
+      await h.waitUntil(() => h.session.communicationStatus().lastProviderActivityAt === 600_000);
+    } finally { now.mockRestore(); stop(); h.close(); }
+  });
+  it.each(["cancelled", "failed"] as const)("clears a live wait when its episode ends as %s", async outcome => {
+    const { h, push, stop } = fixture();
+    try {
+      h.send({ type: "user_message", requestId: "one", text: "hello" });
+      await h.waitUntil(() => h.session.communicationStatus().turnStartedAt != null);
+      push({ type: "waiting_for_network", waitId: "p", startedAt: 5 });
+      await h.waitUntil(() => h.session.communicationStatus().state === "waiting_network");
+      push({ type: "network_wait_end", waitId: "p", outcome });
+      await h.waitUntil(() => h.session.communicationStatus().state === "running");
+      expect(h.session.communicationStatus().networkWait).toBeUndefined();
+    } finally { stop(); h.close(); }
+  });
+  it("publishes an idle snapshot when admissions close during a wait", async () => {
+    const { h, push, stop } = fixture();
+    const listener = vi.fn();
+    h.session.observeActivity(listener);
+    try {
+      h.send({ type: "user_message", requestId: "one", text: "hello" });
+      await h.waitUntil(() => h.session.communicationStatus().turnStartedAt != null);
+      push({ type: "waiting_for_network", waitId: "p", startedAt: 5 });
+      await h.waitUntil(() => h.session.communicationStatus().state === "waiting_network");
+      h.session.closeAdmissions();
+      expect(h.session.communicationStatus().networkWait).toBeUndefined();
+      expect(h.session.communicationStatus().turnStartedAt).toBeNull();
+      expect(listener.mock.lastCall?.[1]).not.toHaveProperty("networkWait");
+      expect(listener.mock.lastCall?.[1]).toMatchObject({ state: "closing" });
+    } finally { stop(); h.close(); }
+  });
   it("keeps native activity unknown", () => {
     const { h } = fixture("codex");
     try { expect(h.session.communicationStatus().lastProviderActivityAt).toBeNull(); } finally { h.close(); }
