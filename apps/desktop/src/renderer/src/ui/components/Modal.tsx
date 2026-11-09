@@ -12,6 +12,8 @@ export interface ModalProps {
   onClose: () => void;
   title: string;
   subtitle?: string;
+  /** Tooltip for the subtitle when the visible text is a shortened form of it. */
+  subtitleTitle?: string;
   children?: ReactNode;
   footer?: ReactNode;
   /** Extra header content (buttons, counters) — header slot. */
@@ -35,7 +37,7 @@ export interface ModalProps {
  * Accessible name — `aria-labelledby` on the title, description — `aria-describedby`.
  * Backdrop uses the `--bg-scrim` token.
  */
-export function Modal({ open, onClose, title, subtitle, children, footer, headerExtra,
+export function Modal({ open, onClose, title, subtitle, subtitleTitle, children, footer, headerExtra,
   closeOnScrimClick = true, wide = false, size, className, initialFocusRef }: ModalProps): React.ReactElement | null {
   const ref = useRef<HTMLDialogElement>(null);
   const closeHandled = useRef(false);
@@ -74,7 +76,7 @@ export function Modal({ open, onClose, title, subtitle, children, footer, header
     <div className="ak-modal__head">
       <div className="ak-modal__heading">
         <h2 className="ak-modal__title" id={headingId}>{title}</h2>
-        {subtitle && <p className="ak-modal__subtitle" id={descriptionId}>{subtitle}</p>}
+        {subtitle && <p className="ak-modal__subtitle" id={descriptionId} title={subtitleTitle}>{subtitle}</p>}
       </div>
       {headerExtra}
       <IconButton label="Close" icon={<IconClose size={14} />} onClick={onClose} />

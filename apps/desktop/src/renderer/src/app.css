@@ -1927,6 +1927,7 @@ body {
 }
 
 .environment-menu-row {
+  position: relative;
   height: auto;
   line-height: 1.4;
   font-weight: var(--w-normal);
@@ -1959,11 +1960,190 @@ button.environment-menu-row:hover,
   gap: 0.1rem;
 }
 
+/* The row's title line: the title plus the optional help button. */
+.environment-menu-row-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* The help button that carries a row's long explanation. Scoped to the
+   help component's own classes so no other tooltip in the app changes. */
+.row-help {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.row-help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.row-help-button:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.row-help-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The tooltip is anchored to the menu row, so it starts at the menu's
+   content edge. Its width is capped by the row (the menu's content width)
+   minus the same inset on both sides, so it never runs past the menu. It
+   floats over the rows below. */
+.row-help-tooltip {
+  position: absolute;
+  z-index: 21;
+  top: 100%;
+  left: var(--sp-2);
+  width: max-content;
+  max-width: min(20rem, calc(100% - 2 * var(--sp-2)));
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-menu);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+/* The tooltip text stays in the DOM either way: aria-describedby must
+   resolve to it, so it is faded out rather than removed. */
+.row-help-tooltip[data-open="true"] {
+  opacity: 1;
+}
+
 .environment-menu-row-detail {
   overflow: hidden;
   color: var(--text-3);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The peer-projects dialog: one line per peer project, the path cut to its
+   tail, and the reason a row cannot be used next to it. */
+.session-peers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.session-peers-summary,
+.session-peers-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.session-peers-error {
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+}
+
+.session-peers-empty {
+  margin: 0;
+  padding: var(--sp-3) 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+
+/* One grid for every row: name and path start at the same x whatever the
+   row carries; the reason is a second line spanning the name and path
+   columns, and the switch keeps a column of its own at the right. */
+.session-peers-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) minmax(0, 1.5fr) auto;
+  column-gap: var(--sp-2);
+  row-gap: 0;
+  align-items: baseline;
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-peers-row:last-child {
+  border-bottom: none;
+}
+
+/* The first row gets room and a divider under the summary lines above it. */
+.session-peers > :not(.session-peers-row) + .session-peers-row {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+
+.session-peers-row-name {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-peers-row-path {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-peers-row-reason {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  min-width: 0;
+  margin-top: 0.1rem;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  overflow-wrap: anywhere;
+}
+
+.session-peers-row-switch {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  justify-content: flex-end;
+}
+
+.session-peers-common-reason {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+/* The header subtitle is one line: the tail of the path with an ellipsis. */
+.session-peers-dialog .ak-modal__subtitle {
+  margin-top: 0.15rem;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2034,6 +2214,16 @@ button.environment-menu-row:hover,
   font-size: var(--fs-2xs);
 }
 
+/* A row with an error line wraps it onto its own line under the whole row. */
+.environment-menu-row.environment-menu-row-with-error {
+  flex-wrap: wrap;
+}
+
+.environment-menu-row-with-error > .environment-menu-row-error {
+  flex: 1 0 100%;
+  line-height: 1.35;
+}
+
 /* The handle row's text field: sits where the Git rows' control sits. */
 .environment-menu-text-input {
   box-sizing: border-box;
@@ -2055,6 +2245,11 @@ button.environment-menu-row:hover,
 .environment-menu-text-input:focus {
   border-color: var(--border-strong);
   outline: none;
+}
+
+.environment-menu-text-input[aria-invalid="true"],
+.environment-menu-text-input[aria-invalid="true"]:focus {
+  border-color: var(--danger);
 }
 
 .environment-branches {
@@ -9187,3 +9382,39 @@ dialog.role-picker-dialog {
 .connection-icon-swatches button.connection-icon-auto { background: linear-gradient(135deg, transparent 44%, var(--text-3) 44%, var(--text-3) 56%, transparent 56%); border: 1px dashed var(--border-strong); }
 .connection-icon-auto-label { color: var(--text-3); font-size: var(--fs-2xs); }
 .connection-icon-reset { align-self: flex-start; height: auto; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+
+/* Aligned with the text column of the rows above (padding + icon + gap).
+   "Currently inactive" is its own line, so no separator can dangle when the
+   summary wraps; "Manage…" borrows the underlined link look of "Export
+   diagnostics…". */
+.native-access-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--sp-2);
+  align-items: baseline;
+  padding: 0 var(--sp-2) var(--sp-1) calc(var(--sp-2) + 16px + var(--sp-2));
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+.native-access-summary-text {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.native-access-summary-state {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: var(--fs-2xs);
+}
+
+.native-access-summary .native-access-manage {
+  grid-column: 2;
+  grid-row: 1;
+  height: auto;
+  padding: 0 var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

@@ -122,6 +122,7 @@ export async function createPeerSmoke({ pngDir, nativeEnabled = true, nativeDefa
   }
   const driver = {
     root, pngDir, nonce, check, native, evaluate, invoke, api, close, catalogues, replyRequests,
+    get cdp() { return cdp; },
     armReply(value) { replyFixture = value; },
     /** Scripted native-double behaviour for this engine; the double re-reads the file every turn. */
     armNative(engine,patch) {
