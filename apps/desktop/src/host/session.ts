@@ -2263,6 +2263,19 @@ export class Session {
 
   private readonly agentInbox: AgentEnvelope[] = [];
   private readonly agentDeliveries = new Map<string, AgentDelivery>();
+  /**
+   * In-flight CORE seam injections, keyed by message id.
+   *
+   * A Core steer is a NONBLOCKING injection: the envelope is queued into the
+   * RUNNING turn's injection queue and the caller's answer returns at once
+   * (`queued`), long before the loop reaches the seam. This registry holds
+   * the fate of that promise until it settles: the frame either landed at
+   * the seam (`acknowledged`/`core_seam`) or the turn ended before it could
+   * (`rejected`). Exactly ONE settlement wins per message — the first
+   * reason to settle ends the injection, so a late promise can neither
+   * resurrect a rejected delivery nor bind a LATER turn's identity.
+   */
+  private readonly pendingCoreInjections = new Map<string, { envelope: AgentEnvelope; hostTurnId: string | null }>();
 
   communicationStatus(): SessionStatus {
     const effort = this.sessionEffortState();
@@ -2569,6 +2582,70 @@ export class Session {
   }
 
   /**
+   * Settles ONE in-flight Core seam injection.
+   *
+   * Returns false when the injection was already settled (Stop, the close or
+   * the child terminal rejected it first): the late promise is then dropped
+   * on purpose — a stale settlement must never reopen a finished delivery.
+   * On the acknowledged path the message is bound to the turn that was
+   * running WHEN THE ENVELOPE ARRIVED (`hostTurnId`), never to a turn that
+   * started later.
+   */
+  private settleCoreInjection(
+    messageId: string,
+    outcome: { state: "acknowledged"; nativeTurnId: string } | { state: "rejected"; detail: string },
+  ): boolean {
+    const pending = this.pendingCoreInjections.get(messageId);
+    if (pending === undefined) return false;
+    this.pendingCoreInjections.delete(messageId);
+    if (outcome.state === "acknowledged") {
+      this.messageTurns.set(messageId, { hostTurnId: pending.hostTurnId, nativeTurnId: outcome.nativeTurnId });
+      this.publishAgentDelivery({
+        envelope: pending.envelope,
+        state: "acknowledged",
+        // The frame is IN the model's input; nothing proves the model read
+        // or obeyed it. The wording says exactly that.
+        detail: "Inserted at Core loop boundary; model application unverified",
+        deliveryKind: "core_seam",
+      });
+      return true;
+    }
+    this.publishAgentDelivery({ envelope: pending.envelope, state: "rejected", detail: outcome.detail });
+    return true;
+  }
+
+  /**
+   * Rejects every in-flight Core injection with ONE honest reason: a
+   * terminal boundary (Stop, the close, the child terminal) took the turn
+   * away before the frame could reach the seam. The envelope is NOT
+   * silently re-run as a next turn — an undelivered steer belongs to the
+   * caller, which may retry it explicitly.
+   */
+  private rejectPendingCoreInjections(detail: string): void {
+    for (const messageId of [...this.pendingCoreInjections.keys()]) {
+      this.settleCoreInjection(messageId, { state: "rejected", detail });
+    }
+  }
+
+  /**
+   * The Core-only gate for a mid-turn injection.
+   *
+   * A seam exists only while a Core turn is RUNNING and the loop itself
+   * reports itself ready for an injection. Every other state is an honest
+   * refusal WITH its reason — never a silent drop and never a fabricated
+   * acceptance.
+   */
+  private coreSeamRefusal(): string | undefined {
+    if (this.shuttingDown || this.relocating) return "Session unavailable";
+    if (this.child !== undefined && this.childTerminalFinalized) return "Session unavailable";
+    if (this.postureBlocked(false)) return "Session posture unavailable";
+    if (!this.busy) return "Core steering requires a running core turn; use next_turn";
+    if (!this.engine.steer) return "Core steering is unavailable; use next_turn";
+    if (!this.engine.steeringStatus?.().ready) return "Core steering is not ready for injection; use next_turn";
+    return undefined;
+  }
+
+  /**
    * rework (Opus defects 1+3): the UI's own steer_message —
    * core-engine only, and NEVER through the agent_message delivery protocol,
    * whose transcript blocks would render Codex-worded "Delivery:
@@ -2652,13 +2729,40 @@ export class Session {
     const delivery: AgentDelivery = { envelope, state: "queued" };
     this.publishAgentDelivery(delivery);
     if (envelope.mode === "steer") {
-      // rework (Opus defect 4): agent-to-agent steers keep the
-      // PRE-BRANCH protocol and timing verbatim. Core gained `engine.steer`
-      // for the UI's own steer_message route (handleUiSteerMessage) only; an
-      // envelope steer into a core session is still rejected immediately
-      // (use next_turn), exactly as before — it must not block until the
-      // loop's next seam, nor be confused with the user's pending bubbles.
-      if (!this.busy || !this.engine.steer || this.engine.id === "core") {
+      if (this.engine.id === "core") {
+        // CORE: the envelope is injected into the RUNNING turn at the
+        // loop's legal seam (right before the next provider request), never
+        // by aborting or restarting a healthy turn. The answer returns at
+        // ONCE (`queued`) so the caller's own request cannot expire while a
+        // long tool is still running; the eventual delivery is published on
+        // the observer/ledger channel when the frame lands or the turn ends.
+        const refusal = this.coreSeamRefusal();
+        if (refusal !== undefined) {
+          delivery.state = "rejected";
+          delivery.detail = refusal;
+          this.publishAgentDelivery(delivery);
+          return this.agentDeliveries.get(envelope.messageId)!;
+        }
+        const receivingTurnId = this.turnId;
+        this.pendingCoreInjections.set(envelope.messageId, { envelope, hostTurnId: receivingTurnId });
+        const engine = this.engine;
+        void engine.steer!(agentMessageText(envelope)).then(
+          (ack) => {
+            this.settleCoreInjection(envelope.messageId, { state: "acknowledged", nativeTurnId: ack.turnId });
+          },
+          (error: unknown) => {
+            // No silent next-turn fallback for an EXPLICIT steer: the
+            // caller asked for a mid-turn injection and the host reports
+            // honestly that the frame did not reach the model.
+            this.settleCoreInjection(envelope.messageId, { state: "rejected", detail: describeError(error) });
+          },
+        );
+        return this.agentDeliveries.get(envelope.messageId)!;
+      }
+      // rework (Opus defect 4): agent-to-agent steers into a NATIVE engine
+      // keep the PRE-BRANCH protocol and timing verbatim — the native
+      // app-server takes the input on its own channel.
+      if (!this.busy || !this.engine.steer) {
         delivery.state = "rejected";
         delivery.detail = "Steering requires an active supported Codex turn; use next_turn";
       } else {
@@ -6520,6 +6624,12 @@ export class Session {
   private onCancel(): void {
     if (this.child === undefined) this.rejectQueuedComposerMessages("cancelled");
     for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Cancelled by Stop before queued delivery" });
+    // Stop is a terminal boundary for an in-flight Core injection too: the
+    // abort lands BEFORE the loop's seam, so a queued frame can no longer
+    // reach the model. The delivery is rejected HERE (the engine's own
+    // rejection arrives later and is dropped as a stale settlement), and the
+    // child is never silently re-run as a next turn.
+    this.rejectPendingCoreInjections("Cancelled by Stop before injection");
     if (this.abort) {
       this.abort.abort();
     }
