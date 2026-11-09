@@ -1,4 +1,4 @@
-/** Credential-free preliminary T1 acceptance driver. */
+/** Credential-free live probe for messages to a running Core child session. */
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -64,20 +64,20 @@ try {
   console.log('PASS child reached Bash tool', child.run.state);
   const access = await driver.evaluate(`window.anycode.communication.setSessionAccess(${JSON.stringify(child.run.childTabId)},true)`);
   console.log('DIAG child session access:', access.ok ? 'enabled' : 'refused');
-  const apiArgs = {sessionId:childId, mode:'steer', payload:process.env.T1_CANCEL === '1' ? 'synthetic api cancel' : 'synthetic api steer', idempotencyKey:'t1-smoke-fixed-key'};
+  const apiArgs = {sessionId:childId, mode:'steer', payload:process.env.STEER_SMOKE_CANCEL === '1' ? 'synthetic api cancel' : 'synthetic api steer', idempotencyKey:'steer-smoke-fixed-key'};
   const apiReceipt = await call('send_message',apiArgs);
   console.log('API receipt:', JSON.stringify({messageId:apiReceipt.envelope.messageId,state:apiReceipt.state,deliveryKind:apiReceipt.deliveryKind,detail:apiReceipt.detail}));
   const apiId = apiReceipt.envelope.messageId;
   const retry = await call('send_message',apiArgs);
   assert.equal(retry.envelope.messageId, apiId);
   console.log('PASS API retry returns same message id');
-  if (process.env.T1_UI === '1' || process.env.T1_LATE === '1') {
+  if (process.env.STEER_SMOKE_PANE === '1' || process.env.STEER_SMOKE_LATE === '1') {
     const identity = JSON.parse(readFileSync(join(driver.root,'identity.json'),'utf8'));
     const ppid = Number(execFileSync('ps',['-o','ppid=','-p',String(identity.pid)],{encoding:'utf8'}).trim());
     const cdp = await connectIsolatedCdp({profile:driver.root,env:{REMOTE_DEBUGGING_PORT:'0',ANYCODE_SMOKE_IDENTITY:identity.nonce,ANYCODE_EXPECTED_DESKTOP_ROOT:identity.desktopRoot},launcher:{pid:ppid},wait});
     try {
       assert((await driver.api(`/tabs/${parent.tabId}/child/open`,{spawnToolCallId:child.view.child.spawnToolCallId})).ok);
-      if (process.env.T1_LATE === '1') { const remaining = 44000 - (Date.now() - barrierStart); if (remaining > 0) await new Promise(r => setTimeout(r,remaining)); }
+      if (process.env.STEER_SMOKE_LATE === '1') { const remaining = 44000 - (Date.now() - barrierStart); if (remaining > 0) await new Promise(r => setTimeout(r,remaining)); }
       const focus = await wait(() => driver.evaluate(`(() => { const el = document.querySelector('textarea'); if (!el) return false; el.focus(); return true; })()`),15000);
       assert(focus);
       await cdp.call('Input.insertText',{text:'synthetic pane instruction'});
@@ -87,7 +87,7 @@ try {
       assert(pending);
       const wrongQueue = await driver.evaluate(`document.body.innerText.includes('Queued — delivered after this turn')`);
       console.log('DIAG after-turn queue label:',wrongQueue);
-      if (process.env.T1_UI === '1') { assert.equal(wrongQueue,false); await driver.screenshot('child-pane-pending-r6.png'); }
+      if (process.env.STEER_SMOKE_PANE === '1') { assert.equal(wrongQueue,false); await driver.screenshot('child-pane-pending.png'); }
 
       const paneRequest = await wait(() => driver.native('core').find(ms => ms.some(m => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(childCommand)) && ms.some(m => m.role === 'user' && m.content === 'synthetic pane instruction')),90000);
       const paneCount = paneRequest.filter(m => m.role === 'user' && m.content === 'synthetic pane instruction').length;
@@ -98,7 +98,7 @@ try {
 
       const count = await driver.evaluate(`Array.from(document.querySelectorAll('.message-list [data-block-id]')).filter(el => el.innerText.includes('synthetic pane instruction')).length`);
       console.log('DIAG child bubble count before reload:',count);
-      assert.equal(count,1); if (process.env.T1_UI === '1') await driver.screenshot('child-pane-injected-r6.png');
+      assert.equal(count,1); if (process.env.STEER_SMOKE_PANE === '1') await driver.screenshot('child-pane-injected.png');
       await cdp.call('Page.reload');
       await wait(() => driver.evaluate(`typeof window.anycode?.createTab === 'function' && !!window.__anycodeAutomation`),30000);
       const reopened = await wait(async () => { try { const result = await driver.api(`/tabs/${parent.tabId}/child/open`,{spawnToolCallId:child.view.child.spawnToolCallId}); return result.ok ? result : null; } catch { return null; } },30000);
@@ -107,12 +107,12 @@ try {
       await wait(() => driver.evaluate(`Array.from(document.querySelectorAll('.message-list [data-block-id]')).some(el => el.innerText.includes('synthetic pane instruction'))`),30000);
       const after = await driver.evaluate(`Array.from(document.querySelectorAll('.message-list [data-block-id]')).filter(el => el.innerText.includes('synthetic pane instruction')).length`);
       console.log('DIAG child bubble count after reload:',after);
-      assert.equal(after,1); await new Promise(r => setTimeout(r,1000)); if (process.env.T1_UI === '1') await driver.screenshot('child-pane-reload-r6.png');
+      assert.equal(after,1); await new Promise(r => setTimeout(r,1000)); if (process.env.STEER_SMOKE_PANE === '1') await driver.screenshot('child-pane-reload.png');
       console.log('PASS child bubble and reload');
     } finally { cdp.ws.close(); }
-    throw new Error('T1_UI_COMPLETE');
+    throw new Error('PANE_SCENARIO_COMPLETE');
   }
-  if (process.env.T1_CANCEL === '1') {
+  if (process.env.STEER_SMOKE_CANCEL === '1') {
     const queued = await driver.tool(parent, 'Agent', {description:'Cancel test',prompt:'synthetic cancel instruction',tier:'session',send_to:childId}, {approve:false});
     console.log('Cancel test receipt:', queued);
     console.log('Open child result:', JSON.stringify(await driver.api(`/tabs/${parent.tabId}/child/open`, {spawnToolCallId:child.view.child.spawnToolCallId})));
@@ -131,7 +131,7 @@ try {
     console.log('Parent cancel status:', JSON.stringify({state:parentStatus.state,deliveryKind:parentStatus.deliveryKind,detail:parentStatus.detail}));
     assert.equal(parentStatus.state,'rejected');
     process.exitCode = 2;
-    throw new Error('T1_CANCEL_COMPLETE');
+    throw new Error('CANCEL_SCENARIO_COMPLETE');
   }
   const receipt = await driver.tool(parent, 'Agent', {description:'Send synthetic instruction',prompt:'synthetic seam instruction',tier:'session',send_to:childId}, {approve:false});
   assert.match(receipt, /Queued for injection/);
@@ -163,7 +163,7 @@ try {
 
 
 } catch (error) {
-  if (['T1_CANCEL_COMPLETE','T1_UI_COMPLETE'].includes(error.message)) { console.log('PASS selected scenario'); process.exitCode = 2; }
+  if (['CANCEL_SCENARIO_COMPLETE','PANE_SCENARIO_COMPLETE'].includes(error.message)) { console.log('PASS selected scenario'); process.exitCode = 2; }
   else { driver.reportFailure(error); console.log(`FAIL scenario: ${error.message}`); process.exitCode = 1; }
 } finally {
   await driver.close();
