@@ -69,11 +69,15 @@ describe("the grant state", () => {
     expect(countGranted(peers)).toBe(3);
   });
 
-  it("explains the count as a configuration, not as live reachability", () => {
+  it("explains the count as a permission in plain words, not as live reachability", () => {
     expect(grantedSummary([peer("/w/alpha", { granted: true }), peer("/w/beta")]))
-      .toBe("Communication is configured with 1 of the 2 peer projects.");
+      .toBe("1 of 2 projects are allowed to communicate with this one.");
+    expect(grantedSummary([peer("/w/alpha"), peer("/w/beta")]))
+      .toBe("None of the 2 projects are allowed to communicate with this one.");
     expect(grantedSummary([peer("/w/alpha")]))
-      .toBe("Communication is not configured with the peer project.");
+      .toBe("The other project is not allowed to communicate with this one.");
+    expect(grantedSummary([peer("/w/alpha", { granted: true })]))
+      .toBe("The other project is allowed to communicate with this one.");
   });
 });
 
@@ -126,7 +130,7 @@ describe("inactiveGrants", () => {
       peer("/w/gamma"),
     ];
     expect(inactiveGrants(project, peers).map(entry => entry.peer.key)).toEqual(["/w/beta"]);
-    expect(inactiveGrantNote(project, peers)).toContain("1 of the configured grants is currently inactive");
+    expect(inactiveGrantNote(project, peers)).toContain("1 allowed project is not active right now");
     expect(inactiveGrantNote(project, peers)).toContain(peersDialogText.reason.peer_off);
   });
 

@@ -1,7 +1,7 @@
 export const nativeAccessText = {
   title: "Native session access",
   short: "Trusted sessions here can reach peer projects",
-  default: "Recommended default: On for trusted root sessions in this exact folder. You can turn this project Off.",
+  default: "Recommended: on for trusted top-level sessions (not subagents) in this exact folder. You can switch it off for this project.",
   off: "Native sessions are unavailable in this build (feature flag Off).",
   invalid: "The folder selection changed. Reopen this menu and try again.",
   unavailable: "Native access is unavailable. Check folder trust and feature availability, then reopen this menu.",

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
 import { RowHelp } from "./RowHelp.js";
@@ -143,5 +145,14 @@ describe("EnvironmentMenuRow with a help slot", () => {
     const alert = container.querySelector('[role="alert"]');
     expect(alert?.textContent).toBe("Another live session already uses this handle.");
     expect(container.querySelector(".environment-menu-row-error")?.textContent).toContain("Another live session already uses this handle.");
+  });
+
+  it("caps the tooltip width by the menu row it sits in, so it never runs past the menu", () => {
+    const css = readFileSync(resolve(import.meta.dirname, "..", "app.css"), "utf8");
+    const rule = css.match(/\.row-help-tooltip \{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toContain("max-width: min(20rem, calc(100% - 2 * var(--sp-2)))");
+    expect(rule).not.toContain("100vw");
+    expect(rule).toContain("opacity: 0");
+    expect(css.match(/\.environment-menu-row \{([^}]*)\}/)?.[1]).toContain("position: relative");
   });
 });

@@ -6,7 +6,9 @@ const pngDir = process.env.ANYCODE_SHOTS_DIR || '/Users/incadawr/projects/tools/
 const d = await createPeerSmoke({pngDir:resolve(pngDir)});
 const delay = () => new Promise(r => setTimeout(r,400));
 const check = async (name, expression) => { try { const value = await d.evaluate(expression); console.log(`${value ? 'PASS' : 'FAIL'} ${name}: ${JSON.stringify(value)}`); return value; } catch(e) { console.log(`FAIL ${name}: ${e.message}`); return false; } };
-const shot = async (name, expression) => { await d.evaluate(`document.querySelectorAll('details.child-worktree-control[open]').forEach(e=>e.open=false)`); await delay(); if (await check(name,expression)) await d.screenshot(name+'.png'); };
+// A state shot is not about the help tooltip: blur the help icon and move the pointer away first, so an open tooltip never covers the row under it.
+const calm = async () => { await d.evaluate(`(()=>{const a=document.activeElement; if(a?.classList?.contains('row-help-button')) a.blur()})()`); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2}); await delay(); };
+const shot = async (name, expression, { tooltip = false } = {}) => { await d.evaluate(`document.querySelectorAll('details.child-worktree-control[open]').forEach(e=>e.open=false)`); if (!tooltip) await calm(); await delay(); if (await check(name,expression)) await d.screenshot(name+'.png'); };
 const key = async (key, code, n, modifiers=0) => { await d.cdp.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,modifiers}); await d.cdp.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n,modifiers}); await delay(); };
 try {
   await d.start();
@@ -71,7 +73,7 @@ try {
     await new Promise(r=>setTimeout(r,1500));
     await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2});
     await d.evaluate(`document.querySelector('.environment-menu .row-help-button').focus()`); await delay();
-    await shot(`help-focus-${theme}-${width}`,`!!document.querySelector('[role=tooltip][data-open=true]')`);
+    await shot(`help-focus-${theme}-${width}`,`!!document.querySelector('[role=tooltip][data-open=true]')`,{tooltip:true});
     await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage…'))?.click()`); await delay();
     await shot(`dialog-${theme}-${width}`,`document.querySelectorAll('.session-peers-row').length === 50`);
     console.log('ROWS', await d.evaluate(`JSON.stringify([...document.querySelectorAll('.session-peers-row')].map(x=>x.dataset.granted))`));
@@ -105,7 +107,7 @@ try {
 
     await d.evaluate(`document.querySelector('.environment-menu') && document.querySelector('.environment-trigger').click()`);
   }
-  await attempt('hover help',async()=>{await menu(); const q=await d.evaluate(`(()=>{const e=document.querySelector('.row-help-button');if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`); if(!q)throw Error('help button missing'); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',...q}); await delay(); await shot('help-hover',`!!document.querySelector('[role=tooltip][data-open=true]')`); await dismiss();});
+  await attempt('hover help',async()=>{await menu(); const q=await d.evaluate(`(()=>{const e=document.querySelector('.row-help-button');if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`); if(!q)throw Error('help button missing'); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',...q}); await delay(); await shot('help-hover',`!!document.querySelector('[role=tooltip][data-open=true]')`,{tooltip:true}); await dismiss();});
   await attempt('menu variants',async()=>{
     for(const [shared,approvals] of [[false,false],[true,false],[true,true]]) {
       await d.invoke('communication.setSessionAccess',a.tabId,shared); if(shared) await d.invoke('communication.setSessionApprovals',a.tabId,approvals); await new Promise(r=>setTimeout(r,500));

@@ -167,18 +167,18 @@ export function shortenPath(path: string, segments = 2): string {
   return `…/${parts.slice(-segments).join("/")}`;
 }
 
-/** The summary line: how many grants are configured, not whether they work. */
+/** The summary line: how many peers are allowed, not whether they work right now. */
 export function grantedSummary(peers: readonly NativeProjectView[]): string {
   const granted = countGranted(peers);
   const total = peers.length;
   if (total === 0) return "No peer projects are known.";
-  if (total === 1) return granted ? "Communication is configured with the peer project." : "Communication is not configured with the peer project.";
+  if (total === 1) return granted ? "The other project is allowed to communicate with this one." : "The other project is not allowed to communicate with this one.";
   return granted === 0
-    ? `Communication is not configured with any of the ${total} peer projects.`
-    : `Communication is configured with ${granted} of the ${total} peer projects.`;
+    ? `None of the ${total} projects are allowed to communicate with this one.`
+    : `${granted} of ${total} projects are allowed to communicate with this one.`;
 }
 
-/** Explains a saved grant that is inactive right now (and why). */
+/** Explains an allowed project that is inactive right now (and why). */
 export function inactiveGrantNote(
   project: NativeProjectView,
   peers: readonly NativeProjectView[],
@@ -187,5 +187,5 @@ export function inactiveGrantNote(
   if (!inactive.length) return undefined;
   const reasons = [...new Set(inactive.map(entry => peersDialogText.reason[entry.reason]))];
   const count = inactive.length;
-  return `${count} of the configured grants ${count === 1 ? "is" : "are"} currently inactive (${reasons.join("; ")}).`;
+  return `${count} allowed ${count === 1 ? "project is" : "projects are"} not active right now (${reasons.join("; ")}).`;
 }

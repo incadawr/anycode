@@ -256,6 +256,7 @@ it("gives every row the same grid and carries the full values in title attribute
     const reason = long.querySelector(".session-peers-row-reason")!;
     expect(reason.textContent).toBe("Native access is off for that folder");
     expect(reason.previousElementSibling?.className).toBe("session-peers-row-path");
+    expect(reason.parentElement).toBe(long);
   } finally { await unmount(); }
 });
 
@@ -311,6 +312,10 @@ it("styles the rows as one grid and the subtitle as one ellipsized line", () => 
     expect(rule(cell)).toContain("white-space: nowrap");
     expect(rule(cell)).toContain("min-width: 0");
   }
+  // The reason spans the name and path columns, so a long reason keeps the row near one height.
+  expect(rule(".session-peers-row-reason")).toContain("grid-column: 1 / 3");
+  // The first row is set off from the summary lines above it.
+  expect(css).toMatch(/\.session-peers > :not\(\.session-peers-row\) \+ \.session-peers-row \{[^}]*border-top: 1px solid var\(--border\)/);
   expect(rule(".session-peers-dialog .ak-modal__subtitle")).toContain("white-space: nowrap");
   expect(rule(".session-peers-dialog .ak-modal__subtitle")).toContain("text-overflow: ellipsis");
 });

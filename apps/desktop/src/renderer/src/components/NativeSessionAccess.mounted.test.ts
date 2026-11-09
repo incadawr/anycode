@@ -118,5 +118,9 @@ it("describes the effect of the switch instead of a state, and styles Manage as 
     expect(row.querySelector(".environment-menu-row-detail")?.textContent).not.toMatch(/^On\b/);
     expect(manage(t.host).classList.contains("native-access-manage")).toBe(true);
     expect(t.host.querySelector('.native-access-summary-state')).toBeNull();
+    // The help tooltip speaks plain language, in the words of the visible labels.
+    const help = row.querySelector('[role="tooltip"]')?.textContent ?? "";
+    expect(help).toBe("Recommended: on for trusted top-level sessions (not subagents) in this exact folder. You can switch it off for this project.");
+    expect(help).not.toMatch(/root sessions|turn this project/i);
   } finally { await t.close(); }
 });
