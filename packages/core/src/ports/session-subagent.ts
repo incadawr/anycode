@@ -179,14 +179,48 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
 }
 
 /**
+ * The delivery states a send receipt can carry. `queued` means the message
+ * was accepted and is waiting for a legal injection boundary; `acknowledged`
+ * means it was injected into the model's input (NOT that the model read or
+ * obeyed it); `rejected` means it was refused; `unknown` means the transport
+ * could not say. The vocabulary is the shared delivery-state enum and is
+ * deliberately NOT extended here.
+ */
+export type SessionSubagentDeliveryState = "queued" | "acknowledged" | "rejected" | "unknown";
+
+/**
+ * Which seam carried the message into the recipient's input — mirrors the
+ * shared `deliveryKind` vocabulary.
+ */
+export type SessionSubagentDeliveryKind = "core_seam" | "next_turn" | "native_input";
+
+/**
  * wire: the result of delivering a follow-up message
  * to the parent's OWN still-running child (`SessionSubagentPort.send`). The
  * `reason` vocabulary is presentation-only — `message` is the load-bearing
  * refusal text minted by main/host (mirroring `ChildRunEvent`'s rejected
  * `message` discipline) — but coarse enough for the Agent handler to shape
  * its error copy without string-matching in core.
+ *
+ * The successful variant carries an OPTIONAL delivery receipt
+ * (`messageId`/`state`/`deliveryKind`/`detail`). Every field is optional so
+ * a legacy fixture or a legacy transport that only knows "the transport
+ * accepted it" still satisfies the type — an absent `state` means UNKNOWN,
+ * never `acknowledged`, and never proof that the model read the message.
  */
-export type SessionSubagentSendResult = { ok: true } | { ok: false; reason: "unavailable" | "not_running" | "not_yours" | "busy" | "host_error"; message: string };
+export type SessionSubagentSendResult =
+  | {
+      ok: true;
+      /** The id of the delivered message, when the transport reports one. */
+      messageId?: string;
+      /** The delivery state, when the transport reports one. */
+      state?: SessionSubagentDeliveryState;
+      /** Which seam carried the message, when the transport reports one. */
+      deliveryKind?: SessionSubagentDeliveryKind;
+      /** Free-text detail from the transport (never model output). */
+      detail?: string;
+    }
+  | { ok: false; reason: "unavailable" | "not_running" | "not_yours" | "busy" | "host_error"; message: string };
 
 export interface SessionSubagentPort {
   statusDiscarded?(): number;
