@@ -662,6 +662,24 @@ describe("createSubagentRunner — parent spawns child", () => {
     expect(loop.history.unansweredToolCallIds()).toEqual([]);
   });
 
+  it("forwards inline network wait lifecycle through the parent tool stream", async () => {
+    const model = new ScriptedModelPort((req) => {
+      if (isChildRequest(req)) return [
+        { type: "waiting_for_network", waitId: "child-wait", startedAt: 10, deadlineAt: 20, failureCode: "network" },
+        { type: "network_wait_end", waitId: "child-wait", outcome: "recovered" },
+        ...textStep("child done"),
+      ];
+      return lastRole(req) === "user"
+        ? toolStep("agent-1", "Agent", { description: "child", prompt: "work", agent_type: "general-purpose" })
+        : textStep("parent done");
+    });
+    const events = await collect(new AgentLoop(withSubagents(makeParent({ modelPort: model }))).runTurn("spawn"));
+    expect(events.filter(e => e.type === "waiting_for_network" || e.type === "network_wait_end")).toEqual([
+      { type: "waiting_for_network", waitId: "child-wait", startedAt: 10, deadlineAt: 20, failureCode: "network", waitSource: "subagent" },
+      { type: "network_wait_end", waitId: "child-wait", outcome: "recovered", waitSource: "subagent" },
+    ]);
+  });
+
   it("forwards inline network wait lifecycle to the parent", async () => {
     const model = new ScriptedModelPort(() => [
       { type: "waiting_for_network", waitId: "w1", startedAt: 10, deadlineAt: 20, failureCode: "timeout" },
