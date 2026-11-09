@@ -67,6 +67,7 @@ export function SessionHandleField({
   onCommit: (next: string) => void;
 }) {
   const hintId = useId();
+  const errorId = useId();
   return (
     <EnvironmentMenuRow
       icon={null}
@@ -75,12 +76,14 @@ export function SessionHandleField({
       help={<RowHelp text={SESSION_HANDLE_HINT} label="About the session handle" tooltipId={hintId} />}
       ariaLabel="Session handle"
       error={error}
+      errorId={errorId}
       control={
         <input
           type="text"
           className="environment-menu-text-input"
           aria-label={SESSION_HANDLE_LABEL}
-          aria-describedby={hintId}
+          aria-describedby={error ? `${hintId} ${errorId}` : hintId}
+          aria-invalid={error ? true : undefined}
           data-environment-action="sessions-api-handle"
           placeholder={SESSION_HANDLE_PLACEHOLDER}
           maxLength={200}

@@ -34,14 +34,17 @@ export interface EnvironmentMenuRowProps {
   ariaLabel: string;
   /** Error line under the detail, announced to assistive tech. */
   error?: string | null;
+  /** DOM id of the error line, so the row's input can reference it. */
+  errorId?: string;
 }
 
-export function EnvironmentMenuRow({ icon, title, detail, detailTitle, detailTone, help, control, ariaLabel, error }: EnvironmentMenuRowProps) {
+export function EnvironmentMenuRow({ icon, title, detail, detailTitle, detailTone, help, control, ariaLabel, error, errorId }: EnvironmentMenuRowProps) {
   const helpSlot = typeof help === "string"
     ? <RowHelp text={help} />
     : help;
+  const hasError = error !== undefined && error !== null && error !== "";
   return (
-    <div className="environment-menu-row" role="group" aria-label={ariaLabel}>
+    <div className={`environment-menu-row${hasError ? " environment-menu-row-with-error" : ""}`} role="group" aria-label={ariaLabel}>
       {icon}
       <span className="environment-menu-row-main">
         <span className="environment-menu-row-heading">
@@ -53,13 +56,14 @@ export function EnvironmentMenuRow({ icon, title, detail, detailTitle, detailTon
             {detail}
           </span>
         )}
-        {error !== undefined && error !== null && error !== "" && (
-          <span className="environment-menu-row-error" role="alert">
-            {error}
-          </span>
-        )}
       </span>
       {control !== undefined && control !== null && <span className="environment-menu-actions">{control}</span>}
+      {/* Under the whole row (title column and control), not squeezed into the narrow text column. */}
+      {hasError && (
+        <span id={errorId} className="environment-menu-row-error" role="alert">
+          {error}
+        </span>
+      )}
     </div>
   );
 }

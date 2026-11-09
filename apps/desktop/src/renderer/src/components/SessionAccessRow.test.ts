@@ -182,5 +182,26 @@ describe("SessionAccessRow layout", () => {
     expect(html).toContain("environment-menu-row-error");
     expect(html).toContain("Another live session already uses this handle.");
   });
+
+  it("marks the handle input invalid and describes it by the error, which sits after the control", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionHandleField, { value: "UPPER", error: "Use lowercase letters, digits and - _ . @, up to 64.", onChange: () => {}, onCommit: () => {} }),
+    );
+    expect(html).toContain('aria-invalid="true"');
+    const errorId = html.match(/<span id="([^"]+)" class="environment-menu-row-error"/)?.[1];
+    expect(errorId).toBeTruthy();
+    expect(html).toMatch(new RegExp(`aria-describedby="[^"]+ ${errorId!.replace(/[:]/g, "\\$&")}"`));
+    expect(html.indexOf('data-environment-action="sessions-api-handle"')).toBeLessThan(html.indexOf("environment-menu-row-error"));
+    expect(html.indexOf("environment-menu-row-main")).toBeLessThan(html.indexOf("environment-menu-actions"));
+    expect(html).toContain("environment-menu-row-with-error");
+  });
+
+  it("leaves the handle input valid without an error", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionHandleField, { value: "", error: null, onChange: () => {}, onCommit: () => {} }),
+    );
+    expect(html).not.toContain("aria-invalid");
+    expect(html).not.toContain("environment-menu-row-with-error");
+  });
 });
 

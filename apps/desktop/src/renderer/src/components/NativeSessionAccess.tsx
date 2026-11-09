@@ -16,7 +16,11 @@ export function NativeSessionAccess({ controller, onManage }: {
       detail={view?.available ? `${text.short}${!view.project.trusted ? ` ${text.trust}` : ""}` : error ? undefined : "Loading…"}
       control={<Switch aria-label={text.title} checked={!!view?.available && view.project.enabled}
         disabled={busy || !view?.available || (!view.project.trusted && !view.project.enabled)} onCheckedChange={enabled => void save({ enabled })} />} />
-    {view?.available && <div className="native-access-summary">Communicates with {count} {count === 1 ? "project" : "projects"}{count > 0 && (!view.project.enabled || !view.project.trusted) ? " · Currently inactive" : ""} · <Button variant="ghost" size="sm" onClick={onManage}>Manage…</Button></div>}
+    {view?.available && <div className="native-access-summary">
+      <span className="native-access-summary-text">Communicates with {count} {count === 1 ? "project" : "projects"}</span>{" "}
+      {count > 0 && (!view.project.enabled || !view.project.trusted) && <><span className="native-access-summary-state">Currently inactive</span>{" "}</>}
+      <Button variant="ghost" size="sm" className="native-access-manage" onClick={onManage}>Manage…</Button>
+    </div>}
     {error && <div role="alert" className="environment-menu-note">{error}</div>}
   </div>;
 }

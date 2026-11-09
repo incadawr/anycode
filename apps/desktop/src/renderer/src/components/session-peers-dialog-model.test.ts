@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { NativeProjectView } from "../../../shared/session-peer-view.js";
 import {
+  commonReasonLine,
+  commonRowReason,
   countGranted,
   filterPeers,
   grantedSummary,
@@ -144,5 +146,27 @@ describe("shortenPath", () => {
   it("leaves a short path as it is", () => {
     expect(shortenPath("/w/app")).toBe("/w/app");
     expect(shortenPath("")).toBe("");
+  });
+});
+
+describe("commonRowReason", () => {
+  const project = { key: "/w/current", name: "current", enabled: true, trusted: true, granted: false };
+
+  it("returns the reason once when every not-yet-granted row shares it", () => {
+    const rows = [peer("/w/a", { enabled: false }), peer("/w/b", { enabled: false }), peer("/w/c", { granted: true, enabled: false })];
+    expect(commonRowReason(project, rows)).toEqual({ reason: "peer_off", count: 2 });
+    expect(commonRowReason({ ...project, enabled: false }, [peer("/w/a"), peer("/w/b")])).toEqual({ reason: "current_off", count: 2 });
+  });
+
+  it("keeps per-row reasons when they differ, when one row has none, or when only one row is open", () => {
+    expect(commonRowReason(project, [peer("/w/a", { enabled: false }), peer("/w/b", { trusted: false })])).toBeUndefined();
+    expect(commonRowReason(project, [peer("/w/a", { enabled: false }), peer("/w/b")])).toBeUndefined();
+    expect(commonRowReason(project, [peer("/w/a", { enabled: false })])).toBeUndefined();
+    expect(commonRowReason(project, [])).toBeUndefined();
+  });
+
+  it("words the line above the list", () => {
+    expect(commonReasonLine("peer_off", 46)).toBe("46 projects cannot be enabled: Native access is off for that folder");
+    expect(commonReasonLine("busy", 3)).toBe("Saving…");
   });
 });

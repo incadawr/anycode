@@ -2066,10 +2066,15 @@ button.environment-menu-row:hover,
   text-align: center;
 }
 
+/* One grid for every row: name and path start at the same x whatever the
+   row carries; the reason is a second line under the path, and the switch
+   keeps a column of its own at the right. */
 .session-peers-row {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) minmax(0, 1.5fr) auto;
+  column-gap: var(--sp-2);
+  row-gap: 0;
+  align-items: baseline;
   padding: var(--sp-1) 0;
   border-bottom: 1px solid var(--border);
 }
@@ -2078,16 +2083,10 @@ button.environment-menu-row:hover,
   border-bottom: none;
 }
 
-.session-peers-row-main {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  align-items: baseline;
-  gap: var(--sp-2);
-}
-
 .session-peers-row-name {
-  flex: 0 1 auto;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
   overflow: hidden;
   color: var(--text-1);
   font-size: var(--fs-sm);
@@ -2096,7 +2095,9 @@ button.environment-menu-row:hover,
 }
 
 .session-peers-row-path {
-  flex: 1 1 auto;
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
   overflow: hidden;
   color: var(--text-3);
   font-family: var(--font-mono);
@@ -2106,12 +2107,36 @@ button.environment-menu-row:hover,
 }
 
 .session-peers-row-reason {
-  flex: 0 0 auto;
-  max-width: 14rem;
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  margin-top: 0.1rem;
   color: var(--text-3);
   font-size: var(--fs-2xs);
-  text-align: right;
   overflow-wrap: anywhere;
+}
+
+.session-peers-row-switch {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  align-self: center;
+  justify-content: flex-end;
+}
+
+.session-peers-common-reason {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+/* The header subtitle is one line: the tail of the path with an ellipsis. */
+.session-peers-dialog .ak-modal__subtitle {
+  margin-top: 0.15rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .environment-menu-open {
@@ -2180,6 +2205,16 @@ button.environment-menu-row:hover,
   font-size: var(--fs-2xs);
 }
 
+/* A row with an error line wraps it onto its own line under the whole row. */
+.environment-menu-row.environment-menu-row-with-error {
+  flex-wrap: wrap;
+}
+
+.environment-menu-row-with-error > .environment-menu-row-error {
+  flex: 1 0 100%;
+  line-height: 1.35;
+}
+
 /* The handle row's text field: sits where the Git rows' control sits. */
 .environment-menu-text-input {
   box-sizing: border-box;
@@ -2201,6 +2236,11 @@ button.environment-menu-row:hover,
 .environment-menu-text-input:focus {
   border-color: var(--border-strong);
   outline: none;
+}
+
+.environment-menu-text-input[aria-invalid="true"],
+.environment-menu-text-input[aria-invalid="true"]:focus {
+  border-color: var(--danger);
 }
 
 .environment-branches {
@@ -9334,8 +9374,38 @@ dialog.role-picker-dialog {
 .connection-icon-auto-label { color: var(--text-3); font-size: var(--fs-2xs); }
 .connection-icon-reset { align-self: flex-start; height: auto; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: var(--r-sm); background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 
+/* Aligned with the text column of the rows above (padding + icon + gap).
+   "Currently inactive" is its own line, so no separator can dangle when the
+   summary wraps; "Manage…" borrows the underlined link look of "Export
+   diagnostics…". */
 .native-access-summary {
-  padding: 0 12px 4px 36px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: var(--sp-2);
+  align-items: baseline;
+  padding: 0 var(--sp-2) var(--sp-1) calc(var(--sp-2) + 16px + var(--sp-2));
   color: var(--text-3);
   font-size: var(--fs-xs);
+}
+
+.native-access-summary-text {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.native-access-summary-state {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: var(--fs-2xs);
+}
+
+.native-access-summary .native-access-manage {
+  grid-column: 2;
+  grid-row: 1;
+  height: auto;
+  padding: 0 var(--sp-1);
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }

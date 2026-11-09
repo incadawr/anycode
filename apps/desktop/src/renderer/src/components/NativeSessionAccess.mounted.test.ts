@@ -98,6 +98,25 @@ it("keeps loading disabled until the view is known", async () => {
 it.each([{ enabled: false }, { trusted: false }])("marks configured grants inactive when the current project is %o", async state => {
   const base = makeView("a", true);
   const t = await mount({ get: async () => ({ ok: true, view: { ...base, project: { ...base.project, ...state } } }), set: vi.fn() });
-  try { expect(t.host.querySelector('.native-access-summary')?.textContent).toContain("Communicates with 1 project · Currently inactive"); }
+  try {
+    const summary = t.host.querySelector('.native-access-summary')!;
+    // Each part is its own element, so no separator can dangle when the summary wraps.
+    expect(summary.querySelector('.native-access-summary-text')?.textContent).toBe("Communicates with 1 project");
+    expect(summary.querySelector('.native-access-summary-state')?.textContent).toBe("Currently inactive");
+    expect(summary.textContent).not.toContain("·");
+  }
   finally { await t.close(); }
+});
+
+it("describes the effect of the switch instead of a state, and styles Manage as a link", async () => {
+  const base = makeView("a");
+  const t = await mount({ get: async () => ({ ok: true, view: { ...base, project: { ...base.project, enabled: false } } }), set: vi.fn() });
+  try {
+    const row = t.host.querySelector('[role="group"][aria-label="Native session access"]')!;
+    expect(row.querySelector('button[aria-label="Native session access"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(row.querySelector(".environment-menu-row-detail")?.textContent).toBe("Trusted sessions here can reach peer projects");
+    expect(row.querySelector(".environment-menu-row-detail")?.textContent).not.toMatch(/^On\b/);
+    expect(manage(t.host).classList.contains("native-access-manage")).toBe(true);
+    expect(t.host.querySelector('.native-access-summary-state')).toBeNull();
+  } finally { await t.close(); }
 });

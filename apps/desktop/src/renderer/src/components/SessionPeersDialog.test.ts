@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -232,4 +234,83 @@ it("keeps a focused switch inert while saving", async () => {
     await act(async () => control.click());
     expect(dialog.onChange).not.toHaveBeenCalled();
   } finally { await dialog.unmount(); }
+});
+
+it("gives every row the same grid and carries the full values in title attributes", async () => {
+  const longName = "same-name-project-with-a-very-long-synthetic-suffix";
+  const peers = [
+    peer("/w/deep/nested/granted", { granted: true }),
+    peer("/w/deep/nested/off-a", { name: longName, enabled: false }),
+    peer("/w/deep/nested/trust", { trusted: false }),
+  ];
+  const { host, unmount } = await mount({ view: view({}, peers) });
+  try {
+    for (const row of rows(host)) {
+      expect([...row.children].slice(0, 2).map(child => child.className)).toEqual(["session-peers-row-name", "session-peers-row-path"]);
+      expect(row.lastElementChild?.className).toBe("session-peers-row-switch");
+    }
+    const long = rows(host).find(row => row.getAttribute("aria-label")?.startsWith(longName))!;
+    expect(long.querySelector(".session-peers-row-name")?.getAttribute("title")).toBe(longName);
+    expect(long.querySelector(".session-peers-row-path")?.getAttribute("title")).toBe("/w/deep/nested/off-a");
+    // The reason is its own element after the path, never inside the name/path cells.
+    const reason = long.querySelector(".session-peers-row-reason")!;
+    expect(reason.textContent).toBe("Native access is off for that folder");
+    expect(reason.previousElementSibling?.className).toBe("session-peers-row-path");
+  } finally { await unmount(); }
+});
+
+it("shows a reason that every open row shares once above the list", async () => {
+  const peers = [peer("/w/a", { enabled: false }), peer("/w/b", { enabled: false }), peer("/w/c", { enabled: false }), peer("/w/d", { granted: true })];
+  const { host, unmount } = await mount({ view: view({}, peers) });
+  try {
+    const common = host.querySelector(".session-peers-common-reason")!;
+    expect(common.textContent).toBe("3 projects cannot be enabled: Native access is off for that folder");
+    expect(host.querySelectorAll(".session-peers-row-reason")).toHaveLength(0);
+    // The list follows the line, and the open rows' switches point at it.
+    expect(common.compareDocumentPosition(rows(host)[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const open = rows(host).filter(row => row.dataset.granted === "false");
+    for (const row of open) expect(row.querySelector("button")?.getAttribute("aria-describedby")).toBe(common.id);
+    expect(rows(host).find(row => row.dataset.granted === "true")?.querySelector("button")?.getAttribute("aria-describedby")).toBeNull();
+  } finally { await unmount(); }
+});
+
+it("keeps the reasons on the rows when they differ, and a granted row keeps its own", async () => {
+  const peers = [
+    peer("/w/a", { enabled: false }),
+    peer("/w/b", { trusted: false }),
+    peer("/w/c", { granted: true, enabled: false }),
+  ];
+  const { host, unmount } = await mount({ view: view({}, peers) });
+  try {
+    expect(host.querySelector(".session-peers-common-reason")).toBeNull();
+    expect([...host.querySelectorAll(".session-peers-row-reason")].map(node => node.textContent)).toEqual([
+      "Currently inactive: Native access is off for that folder",
+      "Native access is off for that folder",
+      "That folder is not trusted",
+    ]);
+  } finally { await unmount(); }
+});
+
+it("keeps the header subtitle to one shortened line with the full path in its title", async () => {
+  const key = "/private/var/folders/xt/lq6g3q817fxbn2yvxvbps79r0000gn/T/anycode-peers-E82hB3/A";
+  const { host, unmount } = await mount({ view: view({ key, name: "A" }, [peer("/w/other")]) });
+  try {
+    const subtitle = host.querySelector(".ak-modal__subtitle")!;
+    expect(subtitle.textContent).toBe("Current project: A — …/anycode-peers-E82hB3/A");
+    expect(subtitle.getAttribute("title")).toBe(key);
+  } finally { await unmount(); }
+});
+
+it("styles the rows as one grid and the subtitle as one ellipsized line", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "app.css"), "utf8");
+  const rule = (selector: string) => css.match(new RegExp(`${selector.replace(/[.\[\]]/g, "\\$&")} \\{([^}]*)\\}`))?.[1] ?? "";
+  expect(rule(".session-peers-row")).toContain("display: grid");
+  expect(rule(".session-peers-row")).toContain("grid-template-columns: minmax(7rem, 1fr) minmax(0, 1.5fr) auto");
+  for (const cell of [".session-peers-row-name", ".session-peers-row-path"]) {
+    expect(rule(cell)).toContain("text-overflow: ellipsis");
+    expect(rule(cell)).toContain("white-space: nowrap");
+    expect(rule(cell)).toContain("min-width: 0");
+  }
+  expect(rule(".session-peers-dialog .ak-modal__subtitle")).toContain("white-space: nowrap");
+  expect(rule(".session-peers-dialog .ak-modal__subtitle")).toContain("text-overflow: ellipsis");
 });

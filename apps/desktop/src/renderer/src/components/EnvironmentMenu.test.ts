@@ -1072,7 +1072,8 @@ describe("menu summary after the current project is switched off", () => {
       await act(async () => t.host.querySelector<HTMLInputElement>('input[type="search"]')!
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
       await act(async () => t.trigger().click());
-      expect(t.host.querySelector(".native-access-summary")?.textContent).toContain("Communicates with 1 project · Currently inactive");
+      expect(t.host.querySelector(".native-access-summary-text")?.textContent).toBe("Communicates with 1 project");
+      expect(t.host.querySelector(".native-access-summary-state")?.textContent).toBe("Currently inactive");
     } finally {
       await t.close(); HTMLDialogElement.prototype.showModal = originalShowModal;
     }

@@ -131,6 +131,31 @@ export function inactiveGrants(
 }
 
 /**
+ * The reason every not-yet-granted row shares, when there are at least two of
+ * them and they all agree. The dialog shows it once above the list instead of
+ * repeating it on each row; rows whose reason differs keep their own.
+ */
+export function commonRowReason(
+  project: NativeProjectView,
+  rows: readonly NativeProjectView[],
+  busy = false,
+): { reason: PeerBlockedReason; count: number } | undefined {
+  const open = rows.filter(peer => !peer.granted);
+  if (open.length < 2) return undefined;
+  const reason = grantBlockedReason(project, open[0]!, busy);
+  if (!reason) return undefined;
+  return open.every(peer => grantBlockedReason(project, peer, busy) === reason)
+    ? { reason, count: open.length }
+    : undefined;
+}
+
+/** The line above the list for a reason that every open row shares. */
+export function commonReasonLine(reason: PeerBlockedReason, count: number): string {
+  const text = peersDialogText.reason[reason];
+  return reason === "busy" ? text : `${count} projects cannot be enabled: ${text}`;
+}
+
+/**
  * The deterministic tail of a path. The home directory is never abbreviated
  * to `~` — the renderer does not know it — so the tail is what stays visible
  * and the full key is always available next to it.

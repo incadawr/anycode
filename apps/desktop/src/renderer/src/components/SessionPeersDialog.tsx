@@ -14,6 +14,8 @@ import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Modal, SearchInput, Switch } from "../ui/index.js";
 import type { NativeProjectView, SessionPeerView } from "../../../shared/session-peer-view.js";
 import {
+  commonReasonLine,
+  commonRowReason,
   filterPeers,
   grantedSummary,
   inactiveGrantNote,
@@ -57,13 +59,18 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
   const project = view?.project;
   const knownPeers = useMemo(() => view?.peers ?? [], [view]);
   const rows = useMemo(() => sortPeers(filterPeers(knownPeers, query)), [knownPeers, query]);
+  const commonId = useId();
 
   if (!open) return null;
-  const subtitle = project ? `Current project: ${project.name} — ${project.key}` : undefined;
+  // One line in the header: the tail of the path, like the rows; the full key
+  // is the tooltip.
+  const subtitle = project ? `Current project: ${project.name} — ${shortenPath(project.key)}` : undefined;
   const note = project ? inactiveGrantNote(project, knownPeers) : undefined;
+  const common = project ? commonRowReason(project, rows, busy) : undefined;
 
   return (
     <Modal open={open} onClose={onClose} title={peersDialogText.title} subtitle={subtitle}
+      subtitleTitle={project?.key}
       initialFocusRef={initialFocus} className="session-peers-dialog">
       <div className="session-peers">
         <div ref={searchHost} className="session-peers-search">
@@ -72,6 +79,7 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
         </div>
         {view && knownPeers.length > 0 && <p className="session-peers-summary">{grantedSummary(knownPeers)}</p>}
         {note && <p className="session-peers-note">{note}</p>}
+        {common && <p id={commonId} className="session-peers-common-reason">{commonReasonLine(common.reason, common.count)}</p>}
         {error && <div role="alert" className="session-peers-error">{error}</div>}
         {!project && !error && <p className="session-peers-empty">{peersDialogText.loading}</p>}
         {project && knownPeers.length === 0 && <p className="session-peers-empty">{peersDialogText.noPeers}</p>}
@@ -79,42 +87,48 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
           <p className="session-peers-empty">{peersDialogText.noMatch}</p>
         )}
         {project && rows.map(peer => (
-          <PeerRow key={peer.key} project={project} peer={peer} busy={busy} onChange={onChange} />
+          <PeerRow key={peer.key} project={project} peer={peer} busy={busy} onChange={onChange}
+            commonId={common && !peer.granted ? commonId : undefined} />
         ))}
       </div>
     </Modal>
   );
 }
 
-function PeerRow({ project, peer, busy, onChange }: {
+function PeerRow({ project, peer, busy, onChange, commonId }: {
   project: NativeProjectView;
   peer: NativeProjectView;
   busy: boolean;
   onChange(peerKey: string, enabled: boolean): void;
+  /** Set when the row's reason is shown once above the list: the row points at that line. */
+  commonId?: string;
 }) {
   const [focused, setFocused] = useState(false);
   const reasonId = useId();
   const blocked = rowBlockedReason(project, peer, busy);
   const reason = rowReason(project, peer, busy);
   const reasonText = reason ? peersDialogText.reason[reason] : undefined;
+  // Every row is the same grid (name, path, switch); the reason is a second
+  // line under the path so it never takes width from the name or the path.
+  const ownReason = reasonText && !commonId;
   return (
     <div className="session-peers-row" role="group" aria-label={`${peer.name} — ${peer.key}`}
       data-granted={peer.granted ? "true" : "false"}
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}>
-      <div className="session-peers-row-main">
-        <span className="session-peers-row-name">{peer.name}</span>
-        {/* The tail of the path keeps the row on one line; the full key is
-            revealed when the row takes the focus. */}
-        <span className="session-peers-row-path" title={peer.key} tabIndex={0}>{focused ? peer.key : shortenPath(peer.key)}</span>
-      </div>
-      {reasonText && (
+      <span className="session-peers-row-name" title={peer.name}>{peer.name}</span>
+      {/* The tail of the path keeps the row on one line; the full key is
+          revealed when the row takes the focus. */}
+      <span className="session-peers-row-path" title={peer.key} tabIndex={0}>{focused ? peer.key : shortenPath(peer.key)}</span>
+      {ownReason && (
         <span id={reasonId} className="session-peers-row-reason">
           {reason === "busy" ? reasonText : peer.granted ? `Currently inactive: ${reasonText}` : reasonText}
         </span>
       )}
-      <Switch checked={peer.granted} disabled={blocked !== undefined && blocked !== "busy"} aria-disabled={busy || undefined} describedBy={reasonText ? reasonId : undefined}
-        aria-label={`Communication with ${peer.name} (${peer.key})`}
-        onCheckedChange={enabled => { if (!busy) onChange(peer.key, enabled); }} />
+      <span className="session-peers-row-switch">
+        <Switch checked={peer.granted} disabled={blocked !== undefined && blocked !== "busy"} aria-disabled={busy || undefined} describedBy={commonId ?? (ownReason ? reasonId : undefined)}
+          aria-label={`Communication with ${peer.name} (${peer.key})`}
+          onCheckedChange={enabled => { if (!busy) onChange(peer.key, enabled); }} />
+      </span>
     </div>
   );
 }
