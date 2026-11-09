@@ -8,7 +8,7 @@ const delay = () => new Promise(r => setTimeout(r,400));
 const check = async (name, expression) => { try { const value = await d.evaluate(expression); console.log(`${value ? 'PASS' : 'FAIL'} ${name}: ${JSON.stringify(value)}`); return value; } catch(e) { console.log(`FAIL ${name}: ${e.message}`); return false; } };
 // A state shot is not about the help tooltip: blur the help icon and move the pointer away first, so an open tooltip never covers the row under it.
 const calm = async () => { await d.evaluate(`(()=>{const a=document.activeElement; if(a?.classList?.contains('row-help-button')) a.blur()})()`); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2}); await delay(); };
-const shot = async (name, expression, { tooltip = false } = {}) => { await d.evaluate(`document.querySelectorAll('details.child-worktree-control[open]').forEach(e=>e.open=false)`); if (!tooltip) await calm(); await delay(); if (await check(name,expression)) await d.screenshot(name+'.png'); };
+const shot = async (name, expression, { tooltip = false } = {}) => { await d.evaluate(`document.querySelectorAll('details.child-worktree-control[open]').forEach(e=>e.open=false)`); if (!tooltip) await calm(); await delay(); if (tooltip) { const geometry=await d.evaluate(`(()=>{const t=document.querySelector('[role=tooltip][data-open=true]'),m=t?.closest('.environment-menu');const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom}};const a=rect(t),b=rect(m);return {tooltip:a,menu:b,inside:!!a&&!!b&&a.left>=b.left&&a.right<=b.right&&a.top>=b.top&&a.bottom<=b.bottom}})()`); console.log('TOOLTIP RECT',name,JSON.stringify(geometry)); } else if (/^(menu-|dialog-|handle-error)/.test(name)) await check(name+' no tooltip',`!document.querySelector('[role=tooltip][data-open=true]')`); if (await check(name,expression)) await d.screenshot(name+'.png'); };
 const key = async (key, code, n, modifiers=0) => { await d.cdp.call('Input.dispatchKeyEvent',{type:'keyDown',key,code,windowsVirtualKeyCode:n,modifiers}); await d.cdp.call('Input.dispatchKeyEvent',{type:'keyUp',key,code,windowsVirtualKeyCode:n,modifiers}); await delay(); };
 try {
   await d.start();
@@ -109,9 +109,10 @@ try {
   }
   await attempt('hover help',async()=>{await menu(); const q=await d.evaluate(`(()=>{const e=document.querySelector('.row-help-button');if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`); if(!q)throw Error('help button missing'); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',...q}); await delay(); await shot('help-hover',`!!document.querySelector('[role=tooltip][data-open=true]')`,{tooltip:true}); await dismiss();});
   await attempt('menu variants',async()=>{
-    for(const [shared,approvals] of [[false,false],[true,false],[true,true]]) {
+    for(const theme of ['light','dark']) for(const [shared,approvals] of [[false,false],[true,false],[true,true]]) {
+      await d.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
       await d.invoke('communication.setSessionAccess',a.tabId,shared); if(shared) await d.invoke('communication.setSessionApprovals',a.tabId,approvals); await new Promise(r=>setTimeout(r,500));
-      await menu(); await new Promise(r=>setTimeout(r,800)); await shot(`menu-shared-${shared}-approvals-${approvals}`,`(()=>{const e=document.querySelector('[aria-label="Share this session with the Sessions API"]');return !!e && e.getAttribute('aria-checked')===${JSON.stringify(String(shared))}})()`); await dismiss();
+      await menu(); await new Promise(r=>setTimeout(r,800)); await shot(`menu-shared-${theme}-${shared}-approvals-${approvals}`,`(()=>{const e=document.querySelector('[aria-label="Share this session with the Sessions API"]');return !!e && e.getAttribute('aria-checked')===${JSON.stringify(String(shared))}})()`); await dismiss();
     }
     await d.invoke('communication.setSessionAccess',a.tabId,true); await menu();
     await d.evaluate(`(()=>{const e=document.querySelector('.environment-menu-text-input'); if(e){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,'UPPERCASE');e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new FocusEvent('focusout',{bubbles:true}))}})()`); await delay();
@@ -123,7 +124,8 @@ try {
     const before=await d.invoke('sessionPeers.get',a.tabId); const count=before.view.peers.filter(p=>p.granted).length;
     await d.evaluate(`document.querySelector('.session-peers-row[data-granted=true] [role=switch]')?.click()`); await delay();
     const after=await d.invoke('sessionPeers.get',a.tabId); console.log(`${after.view.peers.filter(p=>p.granted).length===count-1?'PASS':'FAIL'} revoke while project off: ${count} -> ${after.view.peers.filter(p=>p.granted).length}`);
-    await shot('project-off-dialog',`document.querySelector('.session-peers-dialog')?.innerText.includes('Currently inactive')`);
+    console.log('PROJECT OFF HEIGHTS',JSON.stringify(await d.evaluate(`(()=>{const rows=[...document.querySelectorAll('.session-peers-row')];return {granted:rows.filter(e=>e.dataset.granted==='true').map(e=>e.getBoundingClientRect().height),other:rows.filter(e=>e.dataset.granted!=='true').map(e=>e.getBoundingClientRect().height)}})()`)));
+    await shot('project-off-dialog',`document.querySelector('.session-peers-dialog')?.innerText.includes('not active right now')`);
     await d.evaluate(`document.querySelector('.session-peers-search input')?.focus()`);
     await key('Escape','Escape',27);
     await check('project-off dialog closed',`!document.querySelector('.session-peers-dialog')`);
