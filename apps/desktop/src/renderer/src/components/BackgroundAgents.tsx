@@ -12,6 +12,7 @@ import { childLayoutStore } from "../child-layout.js";
 import { childRelationStore, sameChildPredicate, spawnToolCallIdForChild } from "../child-sessions.js";
 import { useTabContextTabId, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { failureLine } from "./background-failure.js";
 import { formatElapsed } from "./WorkingRow.js";
 
 /** "45s" / "5m 12s" / "1h 02m" — the same clock as the Working row; ticks every second. */
@@ -106,8 +107,12 @@ export function BackgroundAgents() {
               <span className="background-agents-description" title={child.description}>{child.description}</span>
               <span className="background-agents-elapsed">{backgroundElapsed(child.startedAt, now, child.endedAt)}</span>
               {isFailed && (
-                <span className="background-agents-failure" title={child.failureReason || "Failed"}>
-                  {child.failureReason ? `Error: ${child.failureReason}` : "Failed"}
+                <span
+                  className="background-agents-failure"
+                  title={child.failureReason || "Failed"}
+                  aria-description={child.failureReason || undefined}
+                >
+                  {failureLine(child.failureReason)}
                 </span>
               )}
               {progress !== "" && (

@@ -50,7 +50,7 @@ it("keeps a failed child visible with its reason after it leaves the live snapsh
     await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [child] }));
     await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [] }));
     await act(async () => store.getState().applyHostMessage({ type: "child_report", id: "spawn", text: "failed", childTerminal: { status: "error", durationMs: 1, failureReason: "host failed to initialize: timeout" } }));
-    expect(container.textContent).toContain("Error: host failed to initialize: timeout");
+    expect(container.textContent).toContain("Failed: Host failed to initialize: timeout");
     expect(container.textContent).not.toContain("Stop");
   } finally { await act(async () => root.unmount()); }
 });
@@ -83,7 +83,7 @@ it("freezes a failed duration while a running one advances, with a mixed heading
     const elapsed = (row: Element) => row.querySelector(".background-agents-elapsed")?.textContent;
     const failedRow = () => rows().find((row) => row.textContent?.includes("Doomed task"))!;
     expect(elapsed(failedRow())).toBe("1m 30s");
-    expect(failedRow().textContent).toContain("Error: host failed to initialize");
+    expect(failedRow().textContent).toContain("Failed: Host failed to initialize");
     await act(async () => { vi.advanceTimersByTime(120_000); });
     expect(elapsed(failedRow())).toBe("1m 30s");
     expect(elapsed(rows().find((row) => row.textContent?.includes("Keep going"))!)).toBe("2m 00s");
@@ -132,7 +132,10 @@ it("Dismiss is a focusable button; activating it removes only the failed row and
     const failedRow = Array.from(container.querySelectorAll(".background-agents-item")).find((row) => row.textContent?.includes("Investigate"))!;
     // Full text stays available through the title; layout truncates it.
     expect(failedRow.querySelector(".background-agents-description")?.getAttribute("title")).toBe(longDescription);
-    expect(failedRow.querySelector(".background-agents-failure")?.getAttribute("title")).toBe(longReason);
+    const failure = failedRow.querySelector(".background-agents-failure")!;
+    expect(failure.getAttribute("title")).toBe(longReason);
+    expect(failure.getAttribute("aria-description")).toBe(longReason);
+    expect(failure.textContent?.startsWith("Failed: ")).toBe(true);
     // No relation is known to this renderer, so there is no Open button.
     expect(failedRow.textContent).not.toContain("Open");
     const dismiss = failedRow.querySelector("button") as HTMLButtonElement;
@@ -196,4 +199,19 @@ it("a failed row still offers Open next to Dismiss when a relation is registered
     childRelationStore.getState().removeRelationsForParentSession("parent-session");
     useTabsStore.getState().removeTab("tab");
   }
+});
+
+it("shows only the cause of a worktree failure report and keeps the full report in the title", async () => {
+  const store = createDesktopStore();
+  const { container, root } = await mount(store);
+  const child = { childSessionId: "bad", spawnToolCallId: "s-bad", agentType: "codex", description: "Crash", startedAt: Date.now() };
+  const report = "Worktree unknown: /tmp/wt\nBranch: work/x\nkept\n\nAgent: the child session host exited before completing.";
+  try {
+    await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [child] }));
+    await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [] }));
+    await failChild(store, "s-bad", report);
+    const failure = container.querySelector(".background-agents-failure")!;
+    expect(failure.textContent).toBe("Failed: The child session host exited before completing.");
+    expect(failure.getAttribute("title")).toBe(report);
+  } finally { await act(async () => root.unmount()); }
 });
