@@ -1361,7 +1361,24 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           if (event.kind !== "sent" && event.kind !== "rejected") {
             return;
           }
-          finish(event.kind === "sent" ? { ok: true } : { ok: false, reason: mapSendRejectReason(event.message), message: event.message });
+          if (event.kind === "rejected") {
+            finish({ ok: false, reason: mapSendRejectReason(event.message), message: event.message });
+            return;
+          }
+          // A `sent` ack may carry an OPTIONAL delivery receipt (state,
+          // message id, delivery kind, detail). A LEGACY payload-less ack
+          // carries none of them and maps to a bare `{ ok: true }` — the
+          // transport accepted the message and NOTHING more. The port never
+          // invents an `acknowledged` state for such an event: "no receipt"
+          // must stay visibly weaker than "acknowledged", because
+          // acknowledged means injected into the model's input, never read.
+          finish({
+            ok: true,
+            ...(event.state !== undefined ? { state: event.state } : {}),
+            ...(event.messageId !== undefined ? { messageId: event.messageId } : {}),
+            ...(event.deliveryKind !== undefined ? { deliveryKind: event.deliveryKind } : {}),
+            ...(event.detail !== undefined ? { detail: event.detail } : {}),
+          });
         },
       });
       // opts.signal, if present, is guaranteed NOT already aborted here (the
