@@ -16,6 +16,19 @@ export interface AgentDelivery {
   envelope: AgentEnvelope;
   state: "queued" | "acknowledged" | "rejected" | "unknown";
   detail?: string;
+  /**
+   * Additive: WHICH seam actually carried the message into the recipient's
+   * input. `core_seam` means the message was injected into the model input
+   * at a legal tool/model boundary; `next_turn` means it was accepted as the
+   * recipient's next turn input; `native_input` means the engine's own input
+   * channel took it. Absent on deliveries that predate this field — an
+   * absent kind is UNKNOWN, never "native_input" by default.
+   *
+   * It says WHERE the message went, never WHETHER it was read: an
+   * `acknowledged`/`core_seam` delivery means the message was injected into
+   * the model input, not that the model read or obeyed it.
+   */
+  deliveryKind?: "core_seam" | "next_turn" | "native_input";
 }
 /** Ledger projection for display only; never an inbox or model input. */
 export interface AgentDisplayCard extends AgentDelivery {
