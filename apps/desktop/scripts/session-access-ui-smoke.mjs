@@ -12,6 +12,29 @@ try {
   await d.start();
   const [a] = d.tabs;
   await d.api(`/tabs/${a.tabId}/select`,{});
+  if (process.env.ANYCODE_ROWHELP_ONLY === '1') {
+    await d.cdp.call('Emulation.setDeviceMetricsOverride',{width:900,height:900,deviceScaleFactor:1,mobile:false});
+    await d.evaluate(`document.documentElement.dataset.theme='dark'; document.querySelectorAll('details.child-worktree-control[open]').forEach(e=>e.open=false)`);
+    await d.evaluate(`document.querySelector('button.environment-trigger[aria-label^=Environment]').click()`);
+    const observe = `(()=>{const b=document.querySelector('.environment-menu .row-help-button'), m=b?.closest('.environment-menu'), t=b?.parentElement.querySelector('[role=tooltip]'), a=document.activeElement; const rect=e=>{if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x,y:r.y,left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}}; const br=rect(b),mr=rect(m),tr=rect(t),s=b&&getComputedStyle(b);return {active:{tag:a?.tagName,aria:a?.getAttribute('aria-label'),class:a?.className},button:br,menu:mr,tooltip:tr,window:{width:innerWidth,height:innerHeight},insideMenu:!!br&&!!mr&&br.left>=mr.left&&br.right<=mr.right&&br.top>=mr.top&&br.bottom<=mr.bottom,outline:s?.outline,boxShadow:s?.boxShadow,open:t?.dataset.open,tooltipInsideWindow:!!tr&&tr.left>=0&&tr.top>=0&&tr.right<=innerWidth&&tr.bottom<=innerHeight,tooltipInsideMenu:!!tr&&!!mr&&tr.left>=mr.left&&tr.right<=mr.right&&tr.top>=mr.top&&tr.bottom<=mr.bottom}})()`;
+    // Wait for the asynchronous menu contents, not merely the menu shell.
+    await d.evaluate(`new Promise((resolve,reject)=>{const end=Date.now()+10000;const poll=()=>document.querySelector('.environment-menu .row-help-button')?resolve(true):Date.now()>end?reject(Error('help button missing')):setTimeout(poll,100);poll()})`);
+    await new Promise(r=>setTimeout(r,1500));
+    await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2});
+    for (let i=1;i<=2;i++) {
+      await d.evaluate(`document.querySelector('.environment-menu .row-help-button').blur()`); await delay();
+      await d.evaluate(`document.querySelector('.environment-menu .row-help-button').focus()`);
+      await delay();
+      const result=await d.evaluate(observe);
+      console.log('FOCUS',i,'expected active=help button, tooltip open=true; actual',JSON.stringify(result));
+      if (result.open==='true' && result.active.class==='row-help-button') await d.screenshot('help-focus-dark-900.png');
+    }
+    const q=await d.evaluate(`(()=>{const r=document.querySelector('.environment-menu .row-help-button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await d.evaluate(`document.querySelector('.environment-menu .row-help-button').blur()`);
+    await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',...q}); await delay();
+    console.log('HOVER expected open=true and tooltip inside window/menu; actual',JSON.stringify(await d.evaluate(observe)));
+    await d.screenshot('help-hover.png');
+  } else {
   const attempt = async (name, fn) => { try { await fn(); } catch (e) { console.log(`NOT CHECKED ${name}: ${e.message}`); } };
   const menu = async () => { await d.evaluate(`if (document.querySelector('button.environment-trigger[aria-label^=Environment]')?.getAttribute('aria-expanded') !== 'true') document.querySelector('button.environment-trigger[aria-label^=Environment]').click()`); await delay(); };
   const dismiss = async () => { await d.evaluate(`document.querySelector('button.environment-trigger[aria-label^=Environment][aria-expanded=true]')?.click()`); await new Promise(r=>setTimeout(r,800)); };
@@ -44,7 +67,10 @@ try {
     await d.evaluate(`document.querySelector('button.environment-trigger[aria-label^=Environment]').click()`); await delay();
     await shot(`menu-${theme}-${width}`,`!!document.querySelector('.environment-menu')`);
     await check(`menu overflow ${theme} ${width}`,`(()=>{const e=document.querySelector('.environment-menu'); return !!e && e.scrollWidth<=e.clientWidth})()`);
-    await d.evaluate(`document.querySelector('.row-help-button')?.focus()`); await delay();
+    await d.evaluate(`new Promise((resolve,reject)=>{const end=Date.now()+10000;const poll=()=>document.querySelector('.environment-menu .row-help-button')?resolve(true):Date.now()>end?reject(Error('help button missing')):setTimeout(poll,100);poll()})`);
+    await new Promise(r=>setTimeout(r,1500));
+    await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2});
+    await d.evaluate(`document.querySelector('.environment-menu .row-help-button').focus()`); await delay();
     await shot(`help-focus-${theme}-${width}`,`!!document.querySelector('[role=tooltip][data-open=true]')`);
     await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage…'))?.click()`); await delay();
     await shot(`dialog-${theme}-${width}`,`document.querySelectorAll('.session-peers-row').length === 50`);
@@ -114,5 +140,6 @@ try {
   });
   await attempt('reload persistence',async()=>{const before=await d.invoke('sessionPeers.get',a.tabId);const communication=await d.invoke('communication.get');await d.cdp.call('Page.reload');await new Promise(r=>setTimeout(r,3000));const after=await d.invoke('sessionPeers.get',a.tabId);const afterComm=await d.invoke('communication.get');console.log(`${JSON.stringify(before)===JSON.stringify(after)&&JSON.stringify(communication)===JSON.stringify(afterComm)?'PASS':'FAIL'} reload grants and approvals unchanged`);});
   console.log('STUB WRITABLE',JSON.stringify(await d.evaluate(`({window:Object.getOwnPropertyDescriptor(window,'anycode')?.writable, peers:Object.getOwnPropertyDescriptor(window.anycode,'sessionPeers')?.writable, frozen:Object.isFrozen(window.anycode.sessionPeers)})`)));
+  }
 } catch (error) { console.error('FAIL run:', error.message); d.reportFailure(error); process.exitCode=1; }
 finally { await d.close(); }
