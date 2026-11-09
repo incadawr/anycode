@@ -141,6 +141,9 @@ export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: bool
 
 /** per-session External approvals switch (shown only while the session is shared). */
 export const SESSION_APPROVALS_ARIA_LABEL = "Allow approving this session's tool requests from outside";
+/** The row's visible secondary line; the full sentence is the row's help tooltip. */
+export const SESSION_APPROVALS_DETAIL = "Token holder can answer tool requests";
+/** The full explanation behind the row's help button. */
 export const SESSION_APPROVALS_NOTE = "Whoever holds the Sessions API token can allow or deny this session's tool requests.";
 
 export function sessionApprovalsLabel(enabled: boolean): string {
@@ -149,9 +152,9 @@ export function sessionApprovalsLabel(enabled: boolean): string {
 
 export const SESSION_HANDLE_LABEL = "Handle (optional)";
 export const SESSION_HANDLE_PLACEHOLDER = "Agent name";
-/** The row's secondary line; the full explanation stays on the field's tooltip. */
-export const SESSION_HANDLE_DETAIL = "Name external agents see in list_sessions";
-/** Tooltip on the handle field: what the name is for. */
+/** The row's visible secondary line; the full explanation is the row's help tooltip. */
+export const SESSION_HANDLE_DETAIL = "Shown in list_sessions";
+/** The full explanation behind the row's help button: what the name is for. */
 export const SESSION_HANDLE_HINT = "A short name external agents see in list_sessions to find this session, e.g. build-bot. Leave empty to show only the session id.";
 
 /** The inline error under the handle field (plain text). `null` = nothing to show. */

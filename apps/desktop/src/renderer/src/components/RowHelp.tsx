@@ -6,12 +6,12 @@
  * `aria-describedby`, so assistive tech reads it as the button's description.
  * The tooltip is visible on pointer hover OR keyboard focus, and Escape
  * dismisses only the tooltip — it does not close the menu that owns the row
- * (the keydown stops there, so the menu's own Escape handling never runs).
+ * (the keydown is stopped before the menu's own Escape handling sees it).
  *
  * The tooltip holds no focusable content, so it cannot trap the tab order: the
  * only stop is the button itself.
  */
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Info } from "./icons.js";
 
 export interface RowHelpProps {
@@ -36,6 +36,19 @@ export function RowHelp({ text, label = "More information" }: RowHelpProps) {
     setOpen(false);
   }
 
+  // Escape closes the tooltip only. It is caught on the capture phase, before
+  // the menu's own Escape handling (which closes the menu) can see it.
+  useEffect(() => {
+    if (!open) return;
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      hide();
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [open]);
+
   return (
     <span className="row-help" onMouseEnter={show} onMouseLeave={hide}>
       <button
@@ -45,14 +58,6 @@ export function RowHelp({ text, label = "More information" }: RowHelpProps) {
         aria-describedby={tooltipId}
         onFocus={show}
         onBlur={hide}
-        onKeyDown={(event) => {
-          if (event.key !== "Escape") return;
-          // The tooltip is already closed: let the Escape reach the menu.
-          if (!openRef.current) return;
-          event.preventDefault();
-          event.stopPropagation();
-          hide();
-        }}
       >
         <Info />
       </button>

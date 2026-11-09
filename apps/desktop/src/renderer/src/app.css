@@ -1959,6 +1959,74 @@ button.environment-menu-row:hover,
   gap: 0.1rem;
 }
 
+/* The row's title line: the title plus the optional help button. */
+.environment-menu-row-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* The help button that carries a row's long explanation. Scoped to the
+   environment menu so no other tooltip in the app changes. */
+.environment-menu-row .row-help {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.environment-menu-row .row-help-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+
+.environment-menu-row .row-help-button:hover {
+  color: var(--text-1);
+  background: var(--bg-hover);
+}
+
+.environment-menu-row .row-help-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.environment-menu-row .row-help-tooltip {
+  position: absolute;
+  z-index: 21;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - 2 * var(--sp-4)));
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-menu);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.environment-menu-row .row-help-tooltip[data-open="true"] {
+  opacity: 1;
+  visibility: visible;
+}
+
 .environment-menu-row-detail {
   overflow: hidden;
   color: var(--text-3);

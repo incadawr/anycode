@@ -11,7 +11,7 @@
  */
 import { useContext, useEffect, useState } from "react";
 import { TabContext } from "../tab-context.js";
-import { handleErrorText, sessionApprovalsLabel, sessionSwitchDetail, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
+import { handleErrorText, sessionApprovalsLabel, sessionSwitchDetail, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_DETAIL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
 import { Switch } from "../ui/index.js";
@@ -28,14 +28,16 @@ export interface SessionAccessBridge {
 /**
  * The External approvals row. Presentational: the caller decides
  * when it is shown (only while the session is shared and the row is not
- * disabled). The long caption is the row's secondary line and wraps in full.
+ * disabled). The row's secondary line stays short; the full sentence is the
+ * row's help tooltip, reachable by hover and by keyboard.
  */
 export function SessionApprovalsField({ approvals, onChange }: { approvals: boolean; onChange: (next: boolean) => void }) {
   return (
     <EnvironmentMenuRow
       icon={null}
       title={sessionApprovalsLabel(approvals)}
-      detail={SESSION_APPROVALS_NOTE}
+      detail={SESSION_APPROVALS_DETAIL}
+      help={SESSION_APPROVALS_NOTE}
       ariaLabel="External approvals"
       control={
         <Switch
@@ -49,7 +51,7 @@ export function SessionApprovalsField({ approvals, onChange }: { approvals: bool
   );
 }
 
-/** The handle row: labelled field on the right, its explanation on the tooltip and the secondary line. */
+/** The handle row: labelled field on the right; the full explanation is the row's help tooltip. */
 export function SessionHandleField({
   value,
   error,
@@ -66,7 +68,7 @@ export function SessionHandleField({
       icon={null}
       title={SESSION_HANDLE_LABEL}
       detail={SESSION_HANDLE_DETAIL}
-      detailTitle={SESSION_HANDLE_HINT}
+      help={SESSION_HANDLE_HINT}
       ariaLabel="Session handle"
       error={error}
       control={
