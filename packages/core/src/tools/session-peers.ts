@@ -54,7 +54,7 @@ export function parseSessionPeerRequest(value: unknown): SessionPeerRequest | nu
 const peerSummary = z.strictObject({
   sessionId: id, tabId: id, workspace: z.string().max(4096),
   engine: z.enum(["core", "claude", "codex"]),
-  activity: z.enum(["idle", "running", "waiting_approval", "closing"]),
+  activity: z.enum(["idle", "running", "waiting_approval", "waiting_network", "closing"]),
   addressable: z.boolean(), title: z.string().max(200).optional(),
   recentPaths: z.array(z.string().min(1).max(4096)).max(5).optional(),
   model: z.string().max(200).optional(), effort: z.string().max(200).optional(),

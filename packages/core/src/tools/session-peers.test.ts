@@ -77,6 +77,11 @@ it("preserves file evidence and bounded recent paths but rejects invented confid
     activity: "idle", addressable: true, recentPaths: ["file"] };
   expect(parseSessionPeerResponse({ status: "ok", sessions: [session] }))
     .toEqual({ status: "ok", sessions: [session] });
+  const waiting = { ...session, sessionId: "b", tabId: "b", activity: "waiting_network" };
+  expect(parseSessionPeerResponse({ status: "ok", sessions: [session, waiting] }))
+    .toEqual({ status: "ok", sessions: [session, waiting] });
+  expect(parseSessionPeerResponse({ status: "ok", sessions: [{ ...session, activity: "sleeping" }] }))
+    .toEqual({ status: "unknown" });
   expect(parseSessionPeerResponse({ status: "ok", sessions: [{ ...session, recentPaths: Array(6).fill("file") }] }))
     .toEqual({ status: "unknown" });
 });

@@ -16,6 +16,7 @@ export {
 export { normalizeExplicitBaseUrl, applyAutomaticModelRoute } from "./endpoint.js";
 export { resolveOpenCodeGoEndpointPolicy, openCodeGoCatalogEntry, openCodeGoModelIds, OPENCODE_GO_DEFAULT_MODEL } from "./opencode-go-policy.js";
 export type { OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
+export type { ProviderFailureCode } from "./failure.js";
 export type { ModelRouteSnapshot } from "./model-route.js";
 export type { AnthropicEndpointConfig, EndpointConfig } from "./endpoint.js";
 export { createLanguageModel } from "./language-model.js";
