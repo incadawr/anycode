@@ -344,6 +344,41 @@ describe("managed child startup", () => {
       expect(r.manager.listChildRuns()).toHaveLength(0);
     });
 
+    it("does not fork a replacement while the old host's exit is withheld past the deadline, and retains the checkout", async () => {
+      const r = rig({ limits: { exitDeadlineMs: 10 } }, { respondToShutdown: false });
+      const spawned = await spawnManaged(r);
+      spawned.host.emit("message", transition(spawned.tab.sessionId, elsewhere(), spawned.receipt.path));
+      await waitCi(() => expect(terminals(r)).toHaveLength(1));
+      await flush();
+      expect(spawned.host.kill).toHaveBeenCalled();
+      expect(childForks(r)).toHaveLength(1);
+      expect(terminals(r)[0]).toMatchObject({ status: "error", finalText: expect.stringContaining("did not confirm") });
+      expect(r.manager.listChildRuns()).toHaveLength(0);
+      expect(["retained", "unknown"]).toContain(spawned.receipt.phase);
+      expect(git(repo, "rev-parse", "--verify", spawned.receipt.branch)).toHaveLength(40);
+      // The late exit is absorbed: still one fork, no second terminal.
+      spawned.host.emit("exit", 137);
+      await flush();
+      expect(childForks(r)).toHaveLength(1);
+      expect(terminals(r)).toHaveLength(1);
+      expect(spawned.host.listenerCount("exit")).toBe(0);
+    });
+
+    it("forks exactly one replacement once a late exit lands within the bounded wait", async () => {
+      const r = rig({ limits: { exitDeadlineMs: 200 } }, { respondToShutdown: false });
+      const spawned = await spawnManaged(r);
+      spawned.host.emit("message", transition(spawned.tab.sessionId, elsewhere(), spawned.receipt.path));
+      await waitCi(() => expect(spawned.host.kill).toHaveBeenCalled());
+      expect(childForks(r)).toHaveLength(1);
+      spawned.host.emit("exit", 137);
+      await waitCi(() => expect(childForks(r)).toHaveLength(2));
+      expect(childForks(r)[1]!.cwd).toBe(spawned.receipt.path);
+      await flush();
+      expect(childForks(r)).toHaveLength(2);
+      expect(terminals(r)).toHaveLength(0);
+      expect(runState(r, spawned.req)).toBe("starting");
+    });
+
     it("cancels safely when the parent closes while the old host is shutting down", async () => {
       const r = rig({}, { respondToShutdown: false });
       expect(r.manager.createTab({ workspace: repo, projectRoot: repo, sessionId: "second-root", resume: false }).ok).toBe(true);

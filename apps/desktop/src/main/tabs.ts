@@ -4130,10 +4130,21 @@ export class TabHostManager {
     entry.startupRecovery = "recovering";
     this.recoveringHosts.add(oldHost);
     await this.shutdownTabHost(tab);
+    // A shutdown that hit its deadline force-killed the host without seeing it exit;
+    // give the kill one more bounded window before deciding about a second writer.
+    const oldHostExited = this.observedExits.has(oldHost) || await this.waitForObservedExit(oldHost, this.limits.exitDeadlineMs);
     if (this.childRuns.get(requestId) !== entry || this.settlingChildRuns.has(requestId) || this.tabs.get(tab.tabId) !== tab || this.quitting) return;
     const live = this.tabs.get(entry.parentTabId);
     if (entry.state !== "starting" || live === undefined || live.state !== "running" || this.drainingParents.has(live.tabId)) {
       this.finalizeChildRun(requestId, { status: "cancelled", finalText: CHILD_CANCELLED_MESSAGE, truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
+      return;
+    }
+    if (!oldHostExited) {
+      // Single writer: no replacement while the old host's exit is unconfirmed.
+      this.logger.error(`[main] child ${tab.tabId} startup recovery: old host exit not confirmed; not forking a replacement`);
+      this.crashedWorktrees.set(tab, "Startup recovery failed; checkout and branch require inspection");
+      this.finalizeChildRun(requestId, { status: "error", finalText: childStartupRecoveryFailedMessage(receipt.path, "the previous host did not confirm that it stopped"),
+        truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
       return;
     }
     entry.startupRecovery = "used";
@@ -4149,6 +4160,15 @@ export class TabHostManager {
       return;
     }
     this.deliverTabPort(tab);
+  }
+
+  /** Resolves true once `host` emits its exit, false after `ms`; the listener and timer never outlive the wait. */
+  private waitForObservedExit(host: UtilityProcess, ms: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const onExit = (): void => { clearTimeout(timer); resolve(true); };
+      const timer = setTimeout(() => { host.removeListener("exit", onExit); resolve(false); }, ms);
+      host.once("exit", onExit);
+    });
   }
 
   /** Gracefully replaces one host with a resume host rooted at the transition target. */
