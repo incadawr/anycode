@@ -167,7 +167,7 @@ describe("child UI steer settlement", () => {
 
   it("runs a steer that reaches an idle child as its own turn once, never as a renderer-owned requeue", async () => {
     // The pane sends steer_message whenever its turn looks running; a stale
-    // host_ready verdict or a turn that just ended can leave the host idle.
+    // host_ready verdict can leave the child idle before its first turn.
     const f = await childFixture([textStep("STEER_ANSWER")]);
     try {
       f.send(steer("s-idle", "IDLE_STEER"));
@@ -179,6 +179,35 @@ describe("child UI steer settlement", () => {
       expect(f.received.filter((m) => m.type === "turn_started" && m.requestId === "s-idle")).toHaveLength(1);
       expect(f.port.requests).toHaveLength(1);
       expect(occurrences(requestText(f.port, 0), "IDLE_STEER")).toBe(1);
+    } finally {
+      f.close();
+    }
+  });
+
+  it("refuses a steer that reaches a terminal-finalized child without a turn, a requeue or queued work", async () => {
+    // A renderer replaying a steer after the terminal was latched.
+    const f = await childFixture([textStep("FIRST_ANSWER"), textStep("LATE_ANSWER")]);
+    try {
+      expect(f.session.startProgrammaticTurn("INITIAL_PROMPT")).toEqual({ ok: true });
+      await f.waitUntil(() => f.port.requests.length === 1);
+      f.port.release();
+      await f.waitUntil(() => f.terminal.mock.calls.length > 0);
+      await settle();
+      const internals = f.session as unknown as { steerQueue: unknown[]; pendingUiSteers: unknown[] };
+      const turnsBefore = f.received.filter(isTurnStarted).length;
+
+      f.send(steer("s-late", "LATE_STEER"));
+      await f.waitUntil(() => f.received.some((m) => isRejected(m) && m.requestId === "s-late"));
+      await settle();
+      expect(f.received.filter(isRejected).filter((m) => m.requestId === "s-late")).toEqual([
+        expect.objectContaining({ reason: "not_ready" }),
+      ]);
+      expect(f.received.filter(isRequeued)).toHaveLength(0);
+      expect(f.received.filter(isTurnStarted)).toHaveLength(turnsBefore);
+      expect(f.port.requests).toHaveLength(1);
+      expect(internals.steerQueue).toHaveLength(0);
+      expect(internals.pendingUiSteers).toHaveLength(0);
+      expect(f.terminal).toHaveBeenCalledTimes(1);
     } finally {
       f.close();
     }

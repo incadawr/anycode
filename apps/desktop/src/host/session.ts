@@ -2700,10 +2700,12 @@ export class Session {
     }
     if (this.child !== undefined && !this.shuttingDown && (!this.busy || this.relocating)) {
       // A child surface has no renderer prompt queue to drain a `steer_requeued`
-      // text, and its composer sends a steer whenever its turn looks running (the
-      // verdict is a stale host_ready snapshot), so a steer that reaches an idle
-      // child is the ordinary user message it would have been: the host starts
-      // the turn (or refuses it) under the same request id, exactly once.
+      // text, and its composer can send a steer from a stale host_ready verdict,
+      // e.g. before the child's first turn has started. A steer that reaches a
+      // child with no running turn is the ordinary user message it would have
+      // been: the host starts the turn (or refuses it) under the same request
+      // id, exactly once. After a turn the child stays busy through teardown or
+      // is terminal-latched, where onUserMessage answers `turn_rejected`.
       this.onUserMessage(requestId, text);
       return;
     }
