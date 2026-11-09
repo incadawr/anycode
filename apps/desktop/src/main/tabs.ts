@@ -2417,6 +2417,7 @@ export class TabHostManager {
       return;
     }
     if (data.type === CHILD_TERMINAL_TYPE) {
+      if (this.recoveringHosts.has(child)) return;
       const terminal = parseChildTerminal(message);
       if (terminal !== null) {
         this.handleChildTerminal(tab, child, terminal);
@@ -4085,6 +4086,7 @@ export class TabHostManager {
     if (!verdict.ok) {
       this.logger.warn(`[main] child ${tab.tabId} startup transition not recovered: ${verdict.reason}`);
       if (entry.state === "starting") {
+        this.crashedWorktrees.set(tab, "Startup recovery failed; checkout and branch require inspection");
         this.finalizeChildRun(requestId, { status: "error", finalText: childStartupRecoveryFailedMessage(receipt.path, verdict.reason),
           truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
       }
@@ -4094,7 +4096,7 @@ export class TabHostManager {
     entry.startupRecovery = "recovering";
     this.recoveringHosts.add(oldHost);
     await this.shutdownTabHost(tab);
-    if (this.childRuns.get(requestId) !== entry || this.tabs.get(tab.tabId) !== tab || this.quitting) return;
+    if (this.childRuns.get(requestId) !== entry || this.settlingChildRuns.has(requestId) || this.tabs.get(tab.tabId) !== tab || this.quitting) return;
     const live = this.tabs.get(entry.parentTabId);
     if (entry.state !== "starting" || live === undefined || live.state !== "running" || this.drainingParents.has(live.tabId)) {
       this.finalizeChildRun(requestId, { status: "cancelled", finalText: CHILD_CANCELLED_MESSAGE, truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
@@ -4107,6 +4109,7 @@ export class TabHostManager {
     try { forked = this.spawnTabHost(tab, { firstSpawn: false }) !== false && tab.proc !== null; }
     catch (error) { this.logger.error(`[main] child ${tab.tabId} startup recovery fork threw`, error); }
     if (!forked) {
+      this.crashedWorktrees.set(tab, "Startup recovery failed; checkout and branch require inspection");
       this.finalizeChildRun(requestId, { status: "error", finalText: childStartupRecoveryFailedMessage(receipt.path, "the replacement host did not start"),
         truncated: false, turns: 0, toolCalls: 0, durationMs: elapsed() });
       return;

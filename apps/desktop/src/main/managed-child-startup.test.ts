@@ -209,6 +209,8 @@ describe("managed child startup", () => {
     /** The host posts the transition and then dies, as the real boot does when the stored workspace disagrees. */
     async function mismatch(r: ReturnType<typeof rig>, spawned: Awaited<ReturnType<typeof spawnManaged>>, to = spawned.receipt.path, from = elsewhere()) {
       spawned.host.emit("message", transition(spawned.tab.sessionId, from, to));
+      spawned.host.emit("message", { type: CHILD_TERMINAL_TYPE, status: "error", finalText: "boot failure", truncated: false, turns: 0, toolCalls: 0, durationMs: 0 });
+      spawned.host.emit("message", { type: CHILD_TERMINAL_TYPE });
       spawned.host.emit("exit", 1);
       await flush();
     }
@@ -255,7 +257,7 @@ describe("managed child startup", () => {
       await waitCi(() => expect(childForks(r)).toHaveLength(2));
       const replacement = childForks(r)[1]!;
       replacement.host.emit("message", transition(spawned.tab.sessionId, elsewhere(), spawned.receipt.path));
-      replacement.host.emit("exit", 1);
+      replacement.host.emit("exit", 0);
       await waitCi(() => expect(terminals(r)).toHaveLength(1));
       const terminal = terminals(r)[0]!;
       expect(terminal).toMatchObject({ status: "error", finalText: expect.stringContaining(spawned.receipt.path) });
@@ -327,6 +329,17 @@ describe("managed child startup", () => {
       await waitCi(() => expect(terminals(r)).toHaveLength(1));
       await flush();
       expect(terminals(r)[0]).toMatchObject({ status: "cancelled" });
+      expect(childForks(r)).toHaveLength(1);
+      expect(r.manager.listChildRuns()).toHaveLength(0);
+    });
+
+    it("does not fork when the start deadline fires during shutdown", async () => {
+      const r = rig({}, { respondToShutdown: false });
+      const spawned = await spawnManaged(r);
+      spawned.host.emit("message", transition(spawned.tab.sessionId, elsewhere(), spawned.receipt.path));
+      (r.manager as unknown as { handleChildStartTimeout(id: string): void }).handleChildStartTimeout(spawned.req.requestId);
+      spawned.host.emit("exit", 0);
+      await waitCi(() => expect(terminals(r)).toHaveLength(1));
       expect(childForks(r)).toHaveLength(1);
       expect(r.manager.listChildRuns()).toHaveLength(0);
     });
