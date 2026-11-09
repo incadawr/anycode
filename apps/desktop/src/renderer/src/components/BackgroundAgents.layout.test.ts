@@ -9,7 +9,7 @@ it("keeps background agent actions visible when labels are long", () => {
     return match![1];
   };
   expect(rule("background-agents-item")).toMatch(/min-width:\s*0/);
-  for (const label of ["background-agents-progress", "background-agents-waiting"]) {
+  for (const label of ["background-agents-progress", "background-agents-waiting", "background-agents-failure"]) {
     const styles = rule(label);
     expect(styles).toMatch(/flex:\s*0 1 auto/);
     expect(styles).toMatch(/min-width:\s*0/);

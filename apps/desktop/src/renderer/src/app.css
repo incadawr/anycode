@@ -5531,6 +5531,22 @@ button.environment-menu-row:hover,
   font-weight: var(--w-medium);
 }
 
+.background-agents-item-failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.background-agents-failure {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+}
+
 .background-agents-action {
   flex-shrink: 0;
   padding: 0.15rem 0.4rem;
