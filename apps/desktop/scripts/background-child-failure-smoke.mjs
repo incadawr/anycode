@@ -1,8 +1,9 @@
 /** Isolated, credential-free live background child acceptance probe. */
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
+import { connectIsolatedCdp } from './isolated-cdp.mjs';
 import { createPeerSmoke, wait } from './session-peers-smoke.mjs';
 
 const driver = await createPeerSmoke({targetEngine:'core',pngDir:'/Users/incadawr/projects/tools/anycode/working-docs/design-review/t2-bg-child-startup/shots'});
@@ -40,7 +41,35 @@ try {
   execFileSync('git',['init',parent.workspace],{stdio:'ignore'});
   execFileSync('git',['-C',parent.workspace,'-c','user.name=Smoke','-c','user.email=smoke@example.invalid','commit','--allow-empty','-m','fixture'],{stdio:'ignore'});
   await driver.orchestrate(parent,true); await driver.api(`/tabs/${parent.tabId}/select`,{});
-  if (process.env.T2_MANAGED_ONLY) {
+  if (process.env.T2_ROUND5) {
+    for(const name of ['Synthetic running one','Synthetic running two']) { const id=await spawn(parent,name); await approve(parent,id); }
+    await wait(async()=>!(await rows()).includes('Waiting for permission'),60000);
+    await driver.evaluate(`(() => {const d=document.querySelector('.child-worktree-control');d.open=true;const e=d.querySelector('input');if(!e.checked)e.click()})()`); await pause(1000); await closePopover();
+    const description='Review managed child failure'; await startKill(parent,description);
+    async function evidence(name) {
+      await closePopover();
+      const info=await driver.evaluate(`(() => {
+        const strip=document.querySelector('.background-agents');
+        const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,right:r.right,bottom:r.bottom,scroll:e.scrollWidth,client:e.clientWidth}};
+        return {width:innerWidth,heading:strip?.querySelector('.background-agents-heading')?.textContent,rows:[...strip.querySelectorAll('.background-agents-item')].map(row=>({row:rect(row),children:[...row.children].map(e=>({cls:e.className,text:e.textContent,title:e.getAttribute('title'),aria:e.getAttribute('aria-description'),box:rect(e),focused:e===document.activeElement,focusVisible:e.matches(':focus-visible'),outline:getComputedStyle(e).outline,shadow:getComputedStyle(e).boxShadow}))}))};
+      })()`);
+      console.log('EVIDENCE',name,JSON.stringify(info)); await shot(name);
+    }
+    await evidence('mixed-r5.png');
+    await driver.evaluate('window.resizeTo(900,900)'); await pause(1000); await evidence('mixed-900-r5.png');
+    const identity=JSON.parse(readFileSync(join(driver.root,'identity.json'),'utf8'));
+    const parentPid=Number(execFileSync('/bin/ps',['-o','ppid=','-p',String(identity.pid)],{encoding:'utf8'}).trim());
+    const cdp=await connectIsolatedCdp({profile:driver.root,env:{REMOTE_DEBUGGING_PORT:'0',ANYCODE_SMOKE_IDENTITY:identity.nonce,ANYCODE_EXPECTED_DESKTOP_ROOT:realpathSync(resolve('apps/desktop'))},launcher:{pid:parentPid},wait});
+    await driver.evaluate(`document.querySelector('.background-agents-item-failed button:not([aria-label])').focus()`);
+    await cdp.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+    await cdp.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Tab',code:'Tab',windowsVirtualKeyCode:9});
+    cdp.ws.close();
+    await evidence('focus-dismiss-r5.png');
+    await click('Dismiss failed'); await pause(1000); await evidence('after-dismiss-r5.png');
+    await startKill(parent,'Review failed-only child');
+    for(const name of ['Synthetic running one','Synthetic running two']) await click(`Stop background agent ${name}`);
+    await wait(async()=>/1 background agent failed/.test(await rows()),60000); await evidence('failed-only-r5.png');
+  } else if (process.env.T2_MANAGED_ONLY) {
     await driver.evaluate(`(() => {const d=document.querySelector('.child-worktree-control');d.open=true;const e=d.querySelector('input');if(!e.checked)e.click()})()`); await pause(1000); await closePopover();
     const id=await spawn(parent,'Synthetic successful managed pwd','pwd');
     const requests=await wait(()=>driver.native('core').find(messages=>messages.some(m=>m.role==='tool' && typeof m.content==='string' && m.content.includes('/.anycode/worktrees/child-'))),120000);
