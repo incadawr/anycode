@@ -1504,7 +1504,7 @@ describe("Session — core steer_message injection", () => {
     }
   });
 
-  it("an agent-to-agent mode:'steer' envelope into a busy CORE session keeps its pre-branch immediate rejection (4110 rework, defect 4)", async () => {
+  it("an agent-to-agent mode:'steer' envelope into a busy CORE session is injected at the loop's seam", async () => {
     const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
     try {
       h.send({ type: "ui_ready" });
@@ -1512,15 +1512,19 @@ describe("Session — core steer_message injection", () => {
       h.send({ type: "user_message", requestId: "r1", text: "write it" });
       const req = await h.waitFor(isPermissionRequest);
 
-      // Settles immediately (no waiting for the loop's next seam) and never
-      // reaches the model.
+      // Answers at once (no waiting for the loop's next seam) and never
+      // starts a turn of its own.
       const delivery = await h.session.receiveAgentMessage({ messageId: "a2a", sender: "test-supervisor", recipientSessionId: h.session.communicationStatus().sessionId, payload: "AGENT-STEER", mode: "steer", kind: "agent_message", createdAt: new Date().toISOString() });
-      expect(delivery.state).toBe("rejected");
-      expect(delivery.detail).toContain("use next_turn");
+      expect(delivery.state).toBe("queued");
+      expect((h.config.modelPort as ScriptedModelPort).requests).toHaveLength(1);
 
       h.send({ type: "permission_response", requestId: req.requestId, behavior: "deny" });
+      await vi.waitFor(() => expect(h.session.agentMessageStatus("a2a")?.state).toBe("acknowledged"));
+      // The frame landed in the RUNNING turn's input — never in a turn of
+      // its own, and never as a rejection.
+      expect(h.session.agentMessageStatus("a2a")).toMatchObject({ state: "acknowledged", deliveryKind: "core_seam" });
       await h.waitFor(agentEventOf("loop_end"));
-      expect(h.received.some(agentEventOf("user_injected"))).toBe(false);
+      expect(h.received.some(agentEventOf("user_injected"))).toBe(true);
     } finally {
       h.close();
     }
