@@ -17,6 +17,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TOOL_TIMEOUT_MS, SIGKILL_GRACE_MS } from "../../types/config.js";
 import { buildChildEnv } from "./child-env.js";
 import { ensureProxyRelay, proxyRelayLookup } from "./proxy-relay.js";
@@ -29,6 +30,22 @@ import type {
   PersistentChildHandle,
   PersistentChildRequest,
 } from "../../ports/execution.js";
+
+/**
+ * Shell used for shell-string spawns. Node's `shell: true` means `/bin/sh`
+ * (dash in many containers), where bash syntax such as `[[ ]]`,
+ * `set -o pipefail` or `source` fails. When `/bin/bash` exists we use it
+ * explicitly; otherwise we keep `shell: true` (Windows always keeps it).
+ * Resolved once and cached: the filesystem does not change under us.
+ */
+let cachedPosixShell: string | true | undefined;
+function posixShell(): string | true {
+  if (cachedPosixShell === undefined) {
+    cachedPosixShell =
+      process.platform !== "win32" && existsSync("/bin/bash") ? "/bin/bash" : true;
+  }
+  return cachedPosixShell;
+}
 
 /**
  * Sends `signal` to the whole process tree rooted at `child`. The child is
@@ -104,7 +121,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
         spawn(request.command, {
           cwd: request.cwd,
           env: buildChildEnv(process.env, request.env, proxyRelayLookup()),
-          shell: true,
+          shell: posixShell(),
           detached: process.platform !== "win32",
           stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         }),

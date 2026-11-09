@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -131,6 +132,22 @@ describe("NodeExecutionAdapter", () => {
     });
     expect(result.status).toBe("spawn_error");
   });
+
+  // The shell-string spawn runs under /bin/bash when it exists, so bash-only
+  // syntax (here: `set -o pipefail`) works; under dash it would fail.
+  it.skipIf(process.platform === "win32" || !existsSync("/bin/bash"))(
+    "runs shell strings under bash, so `set -o pipefail` takes effect",
+    async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
+      const result = await adapter.run({
+        command: "set -o pipefail; false | true; echo $?",
+        cwd: tmpDir,
+        timeoutMs: 5000,
+      });
+      expect(result.status).toBe("completed");
+      expect(result.stdout).toBe("1\n");
+    },
+  );
 
   it("writes stdin to the child and closes it (EOF)", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));

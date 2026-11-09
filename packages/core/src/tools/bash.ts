@@ -17,7 +17,14 @@ import { bashInputSchema, type BashInput, type BashOutput } from "./schemas.js";
 
 const metadata: ToolMetadata = {
   name: "Bash",
-  description: "Execute a shell command in the workspace and return its stdout, stderr and exit code.",
+  description:
+    "Execute a shell command and return its stdout, stderr and exit code.\n" +
+    "- Each call runs in a fresh shell process (bash when available) that starts in the workspace directory. " +
+    "`cd`, exported variables and shell state do NOT persist between calls: use `cd DIR && command` in the same call, or absolute paths.\n" +
+    "- The exit code of a pipeline is the exit code of its LAST command, so `make | tail` reports 0 even when make fails. " +
+    "When the result matters, put `set -o pipefail;` before the pipeline, or redirect to a log file and check the producer's exit code before reading the log.\n" +
+    "- exitCode 0 means the command succeeded; any other exitCode means it failed, even though the tool call itself returned normally.\n" +
+    "- timeout is in milliseconds (default 120000, max 600000).",
   readOnly: false,
   destructive: true,
   concurrentSafe: false,

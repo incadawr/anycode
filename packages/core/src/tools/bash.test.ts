@@ -25,6 +25,15 @@ function ctxFor(cwd: string, overrides?: Partial<ToolContext>): ToolContext {
 describe("bashTool", () => {
   let tmpDir: string;
 
+  it("states the shell semantics a caller cannot guess", () => {
+    const description = bashTool.metadata.description;
+    // `cd` does not persist between calls.
+    expect(description).toMatch(/cd/);
+    expect(description).toMatch(/do NOT persist/);
+    // A pipeline reports the last command's exit code unless pipefail is set.
+    expect(description).toMatch(/pipefail/);
+  });
+
   afterEach(async () => {
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
   });
