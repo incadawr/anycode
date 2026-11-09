@@ -9929,3 +9929,12 @@ describe("Agent managed worktree admission", () => {
     expect(childRunEvents(r.host)).toContainEqual(expect.objectContaining({ requestId: queued.requestId, kind: "accepted" }));
   });
 });
+
+describe("network activity", () => {
+  it("validates activity telemetry independently", async () => {
+    const { validateActivitySnapshot } = await import("./activity-snapshot.js");
+    expect(validateActivitySnapshot({ state: "waiting_network", networkWait: { source: "parent", startedAt: 10, failureCode: "timeout" } })).toEqual({ state: "waiting_network", networkWait: { source: "parent", startedAt: 10, failureCode: "timeout" } });
+    expect(validateActivitySnapshot({ state: "running", networkWait: { source: "other", deadlineAt: Infinity } })).toEqual({ state: "running" });
+    expect(validateActivitySnapshot({ state: "running" }, "idle")).toBeUndefined();
+  });
+});

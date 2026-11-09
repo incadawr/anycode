@@ -1,3 +1,4 @@
+import { validateActivitySnapshot } from "./activity-snapshot.js";
 import { sep } from "node:path";
 import { settleChildWorktree } from "./child-worktree-cleanup.js";
 import type { ChildWorktreeResources, ChildWorktreeReceipt } from "./child-worktree-resource.js";
@@ -13,7 +14,7 @@ import type { EngineSwitchTarget } from "../shared/protocol.js";
 import { hostFailure } from "./host-failure.js";
 import { noteWireMessage, type DiagnosticsRing } from "../shared/diagnostics-ring.js";
 import type { HostFailure } from "../shared/host-failure.js";
-import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
+import type { AgentDelivery, SessionActivityState, SessionActivitySnapshot } from "../shared/communication.js";
 /**
  * TabHostManager (design/phase-2.md §2.2): the multi-host generalization of the
  * MVP single-host lifecycle. One window / one renderer / N host utilityProcesses
@@ -436,6 +437,7 @@ export interface TabHost {
   /* */
   sessionId: string;
   activityState?: SessionActivityState;
+  activitySnapshot?: SessionActivitySnapshot;
   lastCommunicationStatus?: Record<string, unknown>;
   /**
    * The provider connection pinned to this session (W10, core engine
@@ -1063,6 +1065,7 @@ export interface TabSummary {
   sessionId: string;
   state: TabHost["state"];
   activityState?: SessionActivityState;
+  activitySnapshot?: SessionActivitySnapshot;
   hostFailure?: HostFailure;
   missingWorkspace?: boolean;
   engine?: EngineId;
@@ -1398,6 +1401,7 @@ export class TabHostManager {
       sessionId: tab.sessionId,
       state: tab.state,
       activityState: tab.activityState ?? "idle",
+      ...(tab.activitySnapshot ? { activitySnapshot: tab.activitySnapshot } : {}),
       pid: tab.proc?.pid ?? null,
       ...(tab.hostFailure ? { hostFailure: tab.hostFailure, engine: tab.engine } : {}),
       ...(tab.missingWorkspace ? { missingWorkspace: true, engine: tab.engine } : {}),
@@ -2246,7 +2250,10 @@ export class TabHostManager {
     }
     if (data.type === "session_activity") {
       const state = (message as { state?: unknown }).state;
-      if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;
+      if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "waiting_network" || state === "closing")) {
+        tab.activityState = state;
+        tab.activitySnapshot = validateActivitySnapshot((message as { snapshot?: unknown }).snapshot, state);
+      }
       return;
     }
     if (data.type === WORKSPACE_TRUST_PENDING_MESSAGE_TYPE) {
@@ -4152,6 +4159,7 @@ export class TabHostManager {
     tab.proc = null;
     this.deps.onFileActivityLifecycle?.(tab.tabId);
     tab.activityState = "idle";
+    tab.activitySnapshot = undefined;
 
     if (this.unpublishedTabs.has(tab.tabId)) {
       // A prepared host died before anyone could use it. There is nothing to
@@ -4540,7 +4548,7 @@ export class TabHostManager {
         this.deps.onFileActivityLifecycle?.(tab.tabId);
       }
     }
-    if (tab.proc === null) tab.activityState = "idle";
+    if (tab.proc === null) { tab.activityState = "idle"; tab.activitySnapshot = undefined; }
   }
 
   /**

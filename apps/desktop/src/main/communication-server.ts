@@ -1,3 +1,4 @@
+import { validateActivitySnapshot } from "./activity-snapshot.js";
 import { creationAdmissionFor, CREATE_SESSION_RATE_LIMIT, CREATE_SESSION_RATE_WINDOW_MS, MAX_AGENT_OPENED_TABS } from "./communication-creation-admission.js";
 export { CREATE_SESSION_RATE_LIMIT, CREATE_SESSION_RATE_WINDOW_MS, MAX_AGENT_OPENED_TABS } from "./communication-creation-admission.js";
 /** Production, opt-in, local-only MCP. Independent of automation and CDP. */
@@ -13,7 +14,7 @@ export { writePrivateFile } from "./communication-ledger.js";
 import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 
 export interface CommunicationManager {
-  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; activitySnapshot?: import("../shared/communication.js").SessionActivitySnapshot; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onSessionPeerTerminal?(listener: (sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void): () => void;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationStatusDetails?(sessionId: string): Record<string, unknown>;
@@ -320,8 +321,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const terminalState = (tab: { missingWorkspace?: boolean; hostFailure?: unknown }) =>
     tab.missingWorkspace ? "missing_workspace" : tab.hostFailure ? "crash_looped" : undefined;
   const publicTab = (tab: Awaited<ReturnType<typeof requireSession>>) => {
-    const { activityState, ...rest } = tab;
-    return { ...rest, state: terminalState(tab) ?? activityState ?? "idle" };
+    const { activityState, activitySnapshot, ...rest } = tab;
+    return { ...rest, ...activitySnapshot, state: terminalState(tab) ?? activityState ?? "idle" };
   };
   const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
     if (terminalState(tab)) return { ...options.manager.communicationStatusDetails?.(tab.sessionId), ...publicTab(tab) };
@@ -333,8 +334,13 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     }
     const current = await requireSession(tab.sessionId);
     if (terminalState(current)) return { ...options.manager.communicationStatusDetails?.(current.sessionId), ...publicTab(current) };
-    return { ...(status && typeof status === "object" ? status : {}),
-      ...options.manager.communicationStatusDetails?.(current.sessionId), ...publicTab(current) };
+    const snapshot = validateActivitySnapshot(status);
+    const { state: _state, networkWait: _wait, turnStartedAt: _start, lastProviderActivityAt: _activity, ...metadata } = status && typeof status === "object" ? status as Record<string, unknown> : {};
+    const base = publicTab(current);
+    if (snapshot) {
+      delete base.networkWait; delete base.turnStartedAt; delete base.lastProviderActivityAt;
+    }
+    return { ...metadata, ...options.manager.communicationStatusDetails?.(current.sessionId), ...base, ...snapshot };
   };
   const approvalOn = (sessionId: string): boolean => options.isExternalApprovalEnabled?.(sessionId) === true;
   /** Access first (an unshared session never reveals anything), then the approval switch. */
