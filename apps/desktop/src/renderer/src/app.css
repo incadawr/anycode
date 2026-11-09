@@ -2038,6 +2038,79 @@ button.environment-menu-row:hover,
   white-space: nowrap;
 }
 
+/* The peer-projects dialog: one line per peer project, the path cut to its
+   tail, and the reason a row cannot be used next to it. */
+.session-peers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.session-peers-summary,
+.session-peers-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.session-peers-error {
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+}
+
+.session-peers-empty {
+  margin: 0;
+  padding: var(--sp-3) 0;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+
+.session-peers-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-peers-row:last-child {
+  border-bottom: none;
+}
+
+.session-peers-row-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-peers-row-name {
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-peers-row-path {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-peers-row-reason {
+  flex: 0 0 auto;
+  max-width: 14rem;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  text-align: right;
+}
+
 .environment-menu-open {
   flex-shrink: 0;
   color: var(--text-3);

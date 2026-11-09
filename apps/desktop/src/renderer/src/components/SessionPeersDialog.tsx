@@ -1,0 +1,117 @@
+/**
+ * The peer-projects dialog: which other projects this session may talk to.
+ *
+ * The dialog is a plain Modal — it is owned by the caller, so closing the
+ * menu that opened it cannot unmount the dialog under the user.
+ *
+ * It renders the peers only (the current project is named once, in the
+ * header) and holds no policy of its own: the caller owns the authoritative
+ * view, performs the write and hands the refreshed view back. Every rule
+ * that decides what is shown lives in `session-peers-dialog-model.ts`.
+ */
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Modal, SearchInput, Switch } from "../ui/index.js";
+import type { NativeProjectView, SessionPeerView } from "../../../shared/session-peer-view.js";
+import {
+  filterPeers,
+  grantedSummary,
+  inactiveGrantNote,
+  peersDialogText,
+  rowBlockedReason,
+  rowReason,
+  shortenPath,
+  sortPeers,
+} from "./session-peers-dialog-model.js";
+
+export interface SessionPeersDialogProps {
+  /** The dialog is rendered only while open. */
+  open: boolean;
+  onClose(): void;
+  /** The tab whose peers are shown — a new tab starts with a clean search. */
+  tabId: string;
+  /** The authoritative peer view of the caller. */
+  view?: SessionPeerView;
+  /** A save is running — the controls are locked while it does. */
+  busy: boolean;
+  /** The last save error, shown verbatim. */
+  error?: string;
+  /** Ask the caller to write one peer grant. */
+  onChange(peerKey: string, enabled: boolean): void;
+}
+
+export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, onChange }: SessionPeersDialogProps) {
+  const [query, setQuery] = useState("");
+  const searchHost = useRef<HTMLDivElement>(null);
+  // The search field takes the initial focus. SearchInput does not forward a
+  // ref, so the input is looked up inside the host it renders in.
+  const initialFocus = useMemo<RefObject<HTMLElement | null>>(() => ({
+    get current() { return searchHost.current?.querySelector<HTMLInputElement>("input") ?? null; },
+  }), []);
+
+  // The query belongs to one opening of one tab: another tab starts clean, a
+  // save inside the same opening keeps what the user typed.
+  useEffect(() => { setQuery(""); }, [open, tabId]);
+
+  const project = view?.project;
+  const knownPeers = useMemo(() => view?.peers ?? [], [view]);
+  const rows = useMemo(() => sortPeers(filterPeers(knownPeers, query)), [knownPeers, query]);
+
+  if (!open) return null;
+  const subtitle = project ? `Current project: ${project.name} — ${project.key}` : undefined;
+  const note = project ? inactiveGrantNote(project, knownPeers) : undefined;
+
+  return (
+    <Modal open={open} onClose={onClose} title={peersDialogText.title} subtitle={subtitle}
+      initialFocusRef={initialFocus} className="session-peers-dialog">
+      <div className="session-peers">
+        <div ref={searchHost} className="session-peers-search">
+          <SearchInput value={query} onValueChange={setQuery} label={peersDialogText.searchLabel}
+            placeholder={peersDialogText.searchPlaceholder} />
+        </div>
+        <p className="session-peers-summary">{grantedSummary(knownPeers)}</p>
+        {note && <p className="session-peers-note">{note}</p>}
+        {error && <div role="alert" className="session-peers-error">{error}</div>}
+        {!project && <p className="session-peers-empty">{peersDialogText.loading}</p>}
+        {project && knownPeers.length === 0 && <p className="session-peers-empty">{peersDialogText.noPeers}</p>}
+        {project && knownPeers.length > 0 && rows.length === 0 && (
+          <p className="session-peers-empty">{peersDialogText.noMatch}</p>
+        )}
+        {project && rows.map(peer => (
+          <PeerRow key={peer.key} project={project} peer={peer} busy={busy} onChange={onChange} />
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function PeerRow({ project, peer, busy, onChange }: {
+  project: NativeProjectView;
+  peer: NativeProjectView;
+  busy: boolean;
+  onChange(peerKey: string, enabled: boolean): void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const blocked = rowBlockedReason(project, peer, busy);
+  const reason = rowReason(project, peer, busy);
+  const reasonText = reason ? peersDialogText.reason[reason] : undefined;
+  return (
+    <div className="session-peers-row" role="group" aria-label={`${peer.name} — ${peer.key}`}
+      data-granted={peer.granted ? "true" : "false"}
+      onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}>
+      <div className="session-peers-row-main">
+        <span className="session-peers-row-name">{peer.name}</span>
+        {/* The tail of the path keeps the row on one line; the full key is
+            revealed when the row takes the focus. */}
+        <span className="session-peers-row-path" title={peer.key}>{focused ? peer.key : shortenPath(peer.key)}</span>
+      </div>
+      {reasonText && (
+        <span className="session-peers-row-reason">
+          {reason === "busy" ? reasonText : peer.granted ? `Currently inactive: ${reasonText}` : reasonText}
+        </span>
+      )}
+      <Switch checked={peer.granted} disabled={blocked !== undefined}
+        aria-label={`Communication with ${peer.name} (${peer.key})`}
+        onCheckedChange={enabled => onChange(peer.key, enabled)} />
+    </div>
+  );
+}
