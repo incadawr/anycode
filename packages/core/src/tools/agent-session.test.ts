@@ -471,7 +471,7 @@ describe("agentTool handler — send_to", () => {
     };
   }
 
-  it("tier session + send_to => port.send receives the id and prompt; result ok with a delivered finalText and zero turns", async () => {
+  it("tier session + send_to => port.send receives the id and prompt; result ok with a receipt finalText and zero turns", async () => {
     const { port, sent, runReached } = sendPort({ ok: true });
     const result = await full.handler(
       { description: "d", prompt: "re-review with these edits", tier: "session", send_to: "child-77" },
@@ -483,11 +483,71 @@ describe("agentTool handler — send_to", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.output?.status).toBe("completed");
-      expect(result.output?.finalText).toContain("delivered");
+      // A LEGACY receipt (no state at all) means "the transport accepted
+      // the message" and nothing more — never "delivered".
       expect(result.output?.finalText).toContain("child-77");
+      expect(result.output?.finalText).toContain("delivery is unconfirmed");
+      expect(result.output?.finalText).not.toContain("delivered");
       expect(result.output?.turns).toBe(0);
       expect(result.output?.toolCalls).toBe(0);
     }
+  });
+
+  it("a queued receipt says queued, names the message id and warns that Stop may reject it", async () => {
+    const { port } = sendPort({ ok: true, state: "queued", messageId: "msg-42", deliveryKind: "core_seam" });
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    const text = result.ok ? (result.output?.finalText ?? "") : "";
+    expect(text).toContain("Queued");
+    expect(text).toContain("msg-42");
+    expect(text).toContain("Stop may reject it");
+    expect(text).toContain("core_seam");
+    // A queued message is NOT delivered and NOT read by anyone yet.
+    expect(text).not.toContain("delivered");
+    expect(text).not.toMatch(/\bread\b/);
+  });
+
+  it("an acknowledged receipt says the message was injected into the model's input, not that the model acted on it", async () => {
+    const { port } = sendPort({ ok: true, state: "acknowledged", messageId: "msg-7", deliveryKind: "core_seam" });
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    const text = result.ok ? (result.output?.finalText ?? "") : "";
+    expect(text).toContain("Acknowledged");
+    expect(text).toContain("msg-7");
+    expect(text).toContain("not proof the model saw or acted on it");
+    expect(text).not.toContain("delivered");
+  });
+
+  it("a rejected receipt says the message was not injected", async () => {
+    const { port } = sendPort({ ok: true, state: "rejected", messageId: "msg-8", detail: "child is closing" });
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    const text = result.ok ? (result.output?.finalText ?? "") : "";
+    expect(text).toContain("Rejected");
+    expect(text).toContain("not injected");
+    expect(text).toContain("msg-8");
+    expect(text).toContain("child is closing");
+  });
+
+  it("an unknown receipt says the transport could not confirm what happened", async () => {
+    const { port } = sendPort({ ok: true, state: "unknown" });
+    const result = await full.handler(
+      { description: "d", prompt: "p", tier: "session", send_to: "child-77" },
+      makeCtx({ sessionSubagents: port }),
+    );
+    expect(result.ok).toBe(true);
+    const text = result.ok ? (result.output?.finalText ?? "") : "";
+    expect(text).toContain("delivery state unknown");
+    expect(text).not.toContain("delivered");
   });
 
   it("port.send returning ok:false => the call fails with the port's message", async () => {
