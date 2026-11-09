@@ -2202,6 +2202,16 @@ export class Session {
    */
   private pendingUiSteers: { requestId: string; text: string }[] = [];
 
+  /**
+   * A child's UI steers are host-owned work that gates its terminal: a
+   * steer promise may still reject (and fall back into the child steer
+   * queue) after the loop ended. A settlement check that finds one pending
+   * parks here and is re-run by `resumeChildUiSettlement` once the LAST
+   * steer settled; the parked caller keeps awaiting, so teardown (and a
+   * shutdown waiting on it) covers the re-run too.
+   */
+  private childUiSettlementWaiters: Array<(result: "terminal" | "drained" | "blocked") => void> = [];
+
   /** Terminal result per live turn, keyed by host turn id. Bounded (LRU-ish, oldest evicted) so a long-running session cannot grow it. */
   private readonly turnResults = new Map<string, SessionPublicResult>();
 
@@ -2635,13 +2645,14 @@ export class Session {
    * refusal WITH its reason — never a silent drop and never a fabricated
    * acceptance.
    */
-  private coreSeamRefusal(): string | undefined {
-    if (this.shuttingDown || this.relocating) return "Session unavailable";
-    if (this.child !== undefined && this.childTerminalFinalized) return "Session unavailable";
-    if (this.postureBlocked(false)) return "Session posture unavailable";
-    if (!this.busy) return "Core steering requires a running core turn; use next_turn";
-    if (!this.engine.steer) return "Core steering is unavailable; use next_turn";
-    if (!this.engine.steeringStatus?.().ready) return "Core steering is not ready for injection; use next_turn";
+  private coreSeamRefusal(): { detail: string; reasonCode?: "core_seam_inactive" } | undefined {
+    if (this.shuttingDown || this.relocating) return { detail: "Session unavailable" };
+    if (this.child !== undefined && this.childTerminalFinalized) return { detail: "Session unavailable" };
+    if (this.postureBlocked(false)) return { detail: "Session posture unavailable" };
+    // The three seam-inactive refusals: a next_turn send would be accepted.
+    if (!this.busy) return { detail: "Core steering requires a running core turn; use next_turn", reasonCode: "core_seam_inactive" };
+    if (!this.engine.steer) return { detail: "Core steering is unavailable; use next_turn", reasonCode: "core_seam_inactive" };
+    if (!this.engine.steeringStatus?.().ready) return { detail: "Core steering is not ready for injection; use next_turn", reasonCode: "core_seam_inactive" };
     return undefined;
   }
 
@@ -2703,14 +2714,55 @@ export class Session {
         this.pendingUiSteers = this.pendingUiSteers.filter((entry) => entry.requestId !== requestId);
         this.outbound.settleRequest(requestId);
         this.messageTurns.set(requestId, { hostTurnId: receivingTurnId, nativeTurnId: ack.turnId });
+        this.resumeChildUiSettlement();
       })
       .catch(() => {
         // Honest loss report — CoreEngine rejects only when the frame cannot
         // land in THIS turn (Stop, ceiling/deadline, pre-loop failure,
         // superseded, turn raced to idle). The renderer re-queues the text.
+        if (this.child !== undefined && !this.shuttingDown && !this.childTerminalFinalized) {
+          if (!this.steerQueue.some(entry => entry.requestId === requestId)) this.enqueueSteerMessage(requestId, text);
+          if (this.steerQueue.some(entry => entry.requestId === requestId)) {
+            this.outbound.emit({ type: "steer_requeued", requestId, reason: "core turn ended before injection", text, hostQueued: true });
+          }
+        } else if (this.child !== undefined) {
+          this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
+        } else {
+          this.outbound.emit({ type: "steer_requeued", requestId, reason: "core turn ended before injection", text });
+        }
         this.pendingUiSteers = this.pendingUiSteers.filter((entry) => entry.requestId !== requestId);
-        this.outbound.emit({ type: "steer_requeued", requestId, reason: "core turn ended before injection", text });
+        this.resumeChildUiSettlement();
       });
+  }
+
+  private deferChildUiSettlement(): Promise<"terminal" | "drained" | "blocked"> {
+    return new Promise((resolve) => {
+      this.childUiSettlementWaiters.push(resolve);
+    });
+  }
+
+  /**
+   * Re-runs the parked terminal/queue-settlement check once the last
+   * in-flight UI steer settled (delivered, or moved into the child steer
+   * queue). Never awaited from the turn whose end rejects the steer.
+   */
+  private resumeChildUiSettlement(): void {
+    if (this.pendingUiSteers.length > 0 || this.childUiSettlementWaiters.length === 0) return;
+    const waiters = this.childUiSettlementWaiters.splice(0);
+    const release = (result: "terminal" | "drained" | "blocked"): void => {
+      for (const waiter of waiters) waiter(result);
+    };
+    let rerun: Promise<"terminal" | "drained" | "blocked"> | undefined;
+    try {
+      rerun = this.onChildTurnSettled();
+    } catch (error) {
+      console.error(`[host] child settlement re-run threw: ${describeError(error)}`);
+      release("blocked");
+      return;
+    }
+    // undefined = a queued steer started its own turn, which owns `busy`.
+    if (rerun === undefined) release("drained");
+    else void rerun.then(release, () => release("blocked"));
   }
 
   async receiveAgentMessage(envelope: AgentEnvelope, mainRegistered = false): Promise<AgentDelivery> {
@@ -2739,7 +2791,8 @@ export class Session {
         const refusal = this.coreSeamRefusal();
         if (refusal !== undefined) {
           delivery.state = "rejected";
-          delivery.detail = refusal;
+          delivery.detail = refusal.detail;
+          if (refusal.reasonCode !== undefined) delivery.reasonCode = refusal.reasonCode;
           this.publishAgentDelivery(delivery);
           return this.agentDeliveries.get(envelope.messageId)!;
         }
@@ -5484,8 +5537,15 @@ export class Session {
    * (`busy` held, no terminal ever published) the moment a queued message's
    * OWN admission was refused (e.g. images support revoked between enqueue
    * and drain) — the shared helper is what closes that hole on both sites.
+   *
+   * An in-flight UI steer gates the terminal too: its promise can still
+   * reject (and fall back into `steerQueue`) after the loop ended. While one
+   * is pending the check parks (`deferChildUiSettlement`) and the caller
+   * keeps awaiting; `resumeChildUiSettlement` re-runs it from the top once
+   * the last steer settled.
    */
   private onChildTurnSettled(): Promise<"terminal" | "drained" | "blocked"> | undefined {
+    if (this.pendingUiSteers.length > 0) return this.deferChildUiSettlement();
     if (!this.shuttingDown) {
       const result = this.startNextQueuedSteerTurn();
       if (result === "started") return undefined;
@@ -5554,6 +5614,7 @@ export class Session {
    * host.
    */
   private async finalizeChildTerminal(): Promise<"terminal" | "drained" | "blocked"> {
+    if (this.pendingUiSteers.length > 0) return this.deferChildUiSettlement();
     if (this.child === undefined || this.childTerminalFinalized) {
       return "terminal";
     }
@@ -5603,6 +5664,7 @@ export class Session {
       }
       return "terminal";
     }
+    if (this.pendingUiSteers.length > 0) return this.deferChildUiSettlement();
     if (this.postureBlocked()) { if (this.shuttingDown) this.diagnoseBlockedSteerFrames(); return "blocked"; }
     if (this.shuttingDown) {
       // §10.12.1: shutdown = the second legal drain path (see docstring
@@ -5641,6 +5703,7 @@ export class Session {
         finalText = cappedRescue.text;
         truncated = cappedRescue.truncated;
       }
+      if (this.pendingUiSteers.length > 0) return this.deferChildUiSettlement();
       // Post-rescue re-check: mirror of the pre-rescue handling
       // — never latch the terminal while the queue holds an undrained steer
       // or shutdown has begun mid-rescue.

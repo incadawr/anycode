@@ -688,7 +688,7 @@ export type HostToUiMessage =
    * absent on legacy hosts, and the renderer's unknown-requestId no-op
    * behavior is unchanged for a textless copy.
    */
-  | { type: "steer_requeued"; requestId: string; reason: string; text?: string }
+  | { type: "steer_requeued"; requestId: string; reason: string; text?: string; hostQueued?: boolean }
   | {
       type: "session_history";
       sessionId: string;
