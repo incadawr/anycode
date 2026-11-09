@@ -28,6 +28,13 @@ try {
   }, 60000);
   const barrierStart = Date.now();
   console.log('PASS child reached Bash tool', child.run.state);
+  if (process.env.T1_CANCEL === '1') {
+    const queued = await driver.tool(parent, 'Agent', {description:'Cancel test',prompt:'synthetic cancel instruction',tier:'session',send_to:childId}, {approve:false});
+    console.log('Cancel test receipt:', queued);
+    console.log('Open child result:', JSON.stringify(await driver.api(`/tabs/${parent.tabId}/child/open`, {spawnToolCallId:child.view.child.spawnToolCallId})));
+    console.log('Stop child result:', JSON.stringify(await driver.api(`/tabs/${child.run.childTabId}/stop`, {})));
+    throw new Error('Cancellation status observation requires Sessions API status driver');
+  }
   const receipt = await driver.tool(parent, 'Agent', {description:'Send synthetic instruction',prompt:'synthetic seam instruction',tier:'session',send_to:childId}, {approve:false});
   assert.match(receipt, /Queued for injection/);
   assert.match(receipt, /Stop may reject/);
@@ -37,8 +44,8 @@ try {
   else console.log('NOT CHECKED parent receipt screenshot: receipt is not visible in DOM');
   const second = await driver.tool(parent, 'Agent', {description:'Send another instruction',prompt:'synthetic seam instruction',tier:'session',send_to:childId}, {approve:false});
   assert.match(second, /Queued for injection/);
-  const requests = await wait(() => driver.native('core').find(messages => messages.filter(m => m.role === 'user' && JSON.stringify(m.content).includes('synthetic seam instruction')).length >= 2), 90000);
-  const count = requests.filter(m => m.role === 'user' && JSON.stringify(m.content).includes('synthetic seam instruction')).length;
+  const requests = await wait(() => driver.native('core').find(messages => messages.some(m => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith(childCommand)) && messages.filter(m => m.role === 'user' && typeof m.content === 'string' && !m.content.includes('peer-command:') && m.content.endsWith('\nsynthetic seam instruction')).length === 2), 90000);
+  const count = requests.filter(m => m.role === 'user' && typeof m.content === 'string' && !m.content.includes('peer-command:') && m.content.endsWith('\nsynthetic seam instruction')).length;
   assert.equal(count, 2);
   const barrierMs = Date.now() - barrierStart;
   console.log(`Observed tool-to-next-input duration: ${barrierMs}ms`);
