@@ -1076,8 +1076,9 @@ export class AiSdkModelPort implements ModelPort {
     const episodeStart = waiter.monotonicNow();
     const waitId = crypto.randomUUID();
     const startedAt = Date.now();
-    const waitSource = this.config.networkWaiter !== undefined ? this.config.networkWaitSource : undefined;
-    let outcome: "recovered" | "failed" | "cancelled" = "failed";
+    const waitSource = this.config.networkWaitSource;
+    const source = waitSource === undefined ? {} : { waitSource };
+    let failure: { error: unknown; outcome: "failed" | "cancelled" } | undefined;
     const elapsedMs = (): number => waiter.monotonicNow() - episodeStart;
     const box: HintBox = { hinted: false };
     const unsubscribe = waiter.onHint?.(() => {
@@ -1089,7 +1090,7 @@ export class AiSdkModelPort implements ModelPort {
       // banner can count per-source episodes instead of flickering when a
       // parent and an inline-subagent child park on the same outage. Absent
       // config ⇒ no label (consumers treat it as the parent).
-      yield { type: "waiting_for_network", waitSource, waitId, startedAt,
+      yield { type: "waiting_for_network", ...source, waitId, startedAt,
         deadlineAt: startedAt + Math.max(0, maxWaitMs - spentBeforeMs),
         failureCode: classifyProviderFailure(error).code };
       let tickMs = NETWORK_WAIT_FIRST_TICK_MS;
@@ -1108,20 +1109,21 @@ export class AiSdkModelPort implements ModelPort {
         }
         box.hinted = false;
         if (await probeNetwork(waiter, this.config.baseUrl, signal)) {
-          outcome = "recovered";
-          return elapsedMs();
+          break;
         }
         // Only a timer-driven miss backs the tick off; a hint-driven probe keeps the schedule.
         if (!fromHint) tickMs = Math.min(tickMs * 2, NETWORK_WAIT_MAX_TICK_MS);
         fromHint = false;
       }
     } catch (caught) {
-      if (signal?.aborted) outcome = "cancelled";
-      throw caught;
+      failure = { error: caught, outcome: signal?.aborted ? "cancelled" : "failed" };
     } finally {
       unsubscribe?.();
-      yield { type: "network_wait_end", waitId, waitSource, outcome };
     }
+    const elapsed = elapsedMs();
+    yield { type: "network_wait_end", waitId, ...source, outcome: failure?.outcome ?? "recovered" };
+    if (failure) throw failure.error;
+    return elapsed;
   }
 
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {

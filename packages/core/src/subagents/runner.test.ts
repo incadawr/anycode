@@ -699,13 +699,12 @@ describe("createSubagentRunner — parent spawns child", () => {
   // override), the runner wraps it so the child's network-wait events are
   // labelled `waitSource: "subagent"` — a tab-level banner counting episodes
   // per source must not clear when only the child of a simultaneously parked
-  // pair recovers. Everything else passes through unchanged. (Tested at the
-  // port boundary: the runner's event pump intentionally swallows the
-  // child's status events, so the label is observable only here.)
+  // pair recovers. Everything else passes through unchanged.
   it("an inherited child port labels waiting_for_network and recovery retries as subagent (4772 review F2)", async () => {
     const scripted = new ScriptedModelPort(() => [
       { type: "start" },
       { type: "waiting_for_network" },
+      { type: "network_wait_end", waitId: "wait", waitSource: "parent", outcome: "recovered" },
       { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, waitedMs: 4_000, reason: "connect timeout" },
       // An ORDINARY retry (no waitedMs) is not a recovery: no label to add.
       { type: "stream_retry", attempt: 2, maxAttempts: 8, delayMs: 500, reason: "server error" },
@@ -726,8 +725,9 @@ describe("createSubagentRunner — parent spawns child", () => {
     }
 
     expect(events[1]).toMatchObject({ type: "waiting_for_network", waitSource: "subagent" });
-    expect(events[2]).toMatchObject({ type: "stream_retry", waitedMs: 4_000, waitSource: "subagent" });
-    expect(events[3]).not.toHaveProperty("waitSource");
+    expect(events[2]).toMatchObject({ type: "network_wait_end", waitId: "wait", waitSource: "subagent" });
+    expect(events[3]).toMatchObject({ type: "stream_retry", waitedMs: 4_000, waitSource: "subagent" });
+    expect(events[4]).not.toHaveProperty("waitSource");
     expect(events.filter((e) => e.type === "text_delta")).toHaveLength(1);
   });
 });

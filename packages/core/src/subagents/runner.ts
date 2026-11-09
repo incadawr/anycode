@@ -2030,10 +2030,10 @@ export function subagentScopedModelPort(port: ModelPort): ModelPort {
   };
 }
 
-/** Relabels waiting_for_network / recovery stream_retry; passes everything else through. */
+/** Relabels network wait lifecycle and recovery retries; passes everything else through. */
 async function* subagentScopedStream(port: ModelPort, request: ModelRequest): AsyncGenerator<ModelStreamEvent, void, void> {
   for await (const event of port.streamText(request)) {
-    if (event.type === "waiting_for_network") {
+    if (event.type === "waiting_for_network" || event.type === "network_wait_end") {
       yield { ...event, waitSource: "subagent" };
     } else if (event.type === "stream_retry" && event.waitedMs !== undefined) {
       yield { ...event, waitSource: "subagent" };

@@ -10,7 +10,7 @@ describe("network wait episodes", () => {
     state.observe({ type: "waiting_for_network", waitId: "b", startedAt: 30, waitSource: "subagent" });
     expect(state.summary).toEqual({ source: "subagent", startedAt: 10 });
     expect(state.observe({ type: "waiting_for_network", waitId: "a" })).toBe(false);
-    state.observe({ type: "network_wait_end", waitId: "a", outcome: "recovered" });
+    state.observe({ type: "network_wait_end", waitId: "a", waitSource: "parent", outcome: "recovered" });
     expect(state.summary).toEqual({ source: "parent", startedAt: 20, deadlineAt: 40, failureCode: "network" });
     expect(state.observe({ type: "network_wait_end", waitId: "a", outcome: "cancelled" })).toBe(false);
     expect(state.observe({ type: "waiting_for_network", waitId: "a" })).toBe(false);

@@ -162,9 +162,12 @@ export type ModelStreamEvent =
    * the adapter parked a pre-content transient network failure and
    * is probing until the endpoint is reachable again (or the wait bound is hit,
    * which ends the turn with the original error). Emitted once per waiting
-   * episode, before the probing begins; a recovery is announced by the usual
-   * `stream_retry` (which carries the same `waitSource`). Status only: it is
-   * not model output.
+   * episode, before the probing begins. Recovery emits `network_wait_end` and
+   * the usual `stream_retry`. Status only: it is not model output.
+   *
+   * `startedAt` and `deadlineAt` are epoch milliseconds. The deadline is a
+   * wall-clock projection of the remaining cumulative monotonic wait allowance.
+   * `failureCode` is the safe `classifyProviderFailure` code.
    *
    * Review F2: `waitSource` identifies WHO is waiting — the parent's own model
    * port or an inline-subagent child sharing that port. A tab-level banner
@@ -174,6 +177,8 @@ export type ModelStreamEvent =
    * replays from before the field existed; treat absence as the parent.
    */
   | { type: "waiting_for_network"; waitSource?: "parent" | "subagent"; waitId?: string; startedAt?: number; deadlineAt?: number; failureCode?: string }
+  /** Status-only end of an episode; it may be absent if the stream is disposed.
+   * `failed` means the bounded cumulative wait allowance was exhausted. */
   | { type: "network_wait_end"; waitId: string; waitSource?: "parent" | "subagent"; outcome: "recovered" | "failed" | "cancelled" }
   /**
    * Provider-reported quota from response headers.

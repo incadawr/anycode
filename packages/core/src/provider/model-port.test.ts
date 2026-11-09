@@ -2010,6 +2010,23 @@ describe("AiSdkModelPort — networkWaitMaxMs (wait for the network)", () => {
     await run.pump;
   });
 
+  it("network wait telemetry completes disposal without emitting an end event", async () => {
+    mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(connectTimeout())]));
+    const waiter = makeWaiter(false);
+    const port = new AiSdkModelPort({ ...baseConfig({ ...slow, maxRetries: 1, networkRetryBudgetMs: 0, networkWaitMaxMs: 60_000 }), networkWaiter: waiter });
+    const iterator = port.streamText(baseRequest)[Symbol.asyncIterator]();
+    let next = await iterator.next();
+    while (!next.done && next.value.type !== "waiting_for_network") next = await iterator.next();
+    expect(next.done).toBe(false);
+    expect(next.value).not.toHaveProperty("waitSource");
+    expect(waiter.listenerCount()).toBe(1);
+    const disposed = await iterator.return!();
+    expect(disposed.done).toBe(true);
+    expect(disposed.value).toBeUndefined();
+    expect(waiter.listenerCount()).toBe(0);
+    expect((await iterator.next()).done).toBe(true);
+  });
+
   it("network wait telemetry identifies concurrent episodes independently", async () => {
     mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(connectTimeout())]));
     const waiter = makeWaiter(false);
