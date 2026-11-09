@@ -7,7 +7,7 @@ import { connectIsolatedCdp } from './isolated-cdp.mjs';
 import { createPeerSmoke, wait } from './session-peers-smoke.mjs';
 
 const scenarios = [['Early send before first turn', 'Requires control of child startup.']];
-const driver = await createPeerSmoke({ targetEngine: 'core', pngDir: '/Users/incadawr/projects/tools/anycode/working-docs/design-review/t1-core-child-msg/shots' });
+const driver = await createPeerSmoke({ targetEngine: 'core', pngDir: process.env.ANYCODE_SHOTS_DIR });
 try {
   await driver.start();
   console.log('PASS isolated local provider and desktop launch');

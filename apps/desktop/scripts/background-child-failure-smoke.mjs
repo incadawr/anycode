@@ -6,7 +6,7 @@ import { join, relative, resolve } from 'node:path';
 import { connectIsolatedCdp } from './isolated-cdp.mjs';
 import { createPeerSmoke, wait } from './session-peers-smoke.mjs';
 
-const driver = await createPeerSmoke({targetEngine:'core',pngDir:'/Users/incadawr/projects/tools/anycode/working-docs/design-review/t2-bg-child-startup/shots'});
+const driver = await createPeerSmoke({targetEngine:'core',pngDir:process.env.ANYCODE_SHOTS_DIR});
 const pause = ms => new Promise(r => setTimeout(r,ms));
 const cmd = command => `peer-command:${JSON.stringify({tool:'Bash',input:{command}})}`;
 const input = (description,command='sleep 300') => ({description,prompt:cmd(command),agent_type:'general-purpose',tier:'session',detach:true});

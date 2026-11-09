@@ -2,8 +2,8 @@
 import { createPeerSmoke } from './session-peers-smoke.mjs';
 import { resolve, join } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-const pngDir = process.env.ANYCODE_SHOTS_DIR || '/Users/incadawr/projects/tools/anycode/working-docs/design-review/t3-session-access/shots';
-const d = await createPeerSmoke({pngDir:resolve(pngDir)});
+const pngDir = process.env.ANYCODE_SHOTS_DIR;
+const d = await createPeerSmoke({pngDir:pngDir ? resolve(pngDir) : undefined});
 const delay = () => new Promise(r => setTimeout(r,400));
 const check = async (name, expression) => { try { const value = await d.evaluate(expression); console.log(`${value ? 'PASS' : 'FAIL'} ${name}: ${JSON.stringify(value)}`); return value; } catch(e) { console.log(`FAIL ${name}: ${e.message}`); return false; } };
 // A state shot is not about the help tooltip: blur the help icon and move the pointer away first, so an open tooltip never covers the row under it.
