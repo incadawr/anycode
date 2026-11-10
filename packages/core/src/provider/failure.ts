@@ -203,6 +203,14 @@ function isNetworkFailure(error: unknown, message: string): boolean {
   );
 }
 
+/** Locally generated watchdog failure; safe to show without provider text. */
+export class StreamStallError extends Error {
+  constructor(timeoutMs: number) {
+    super(`stream stalled: no events for ${timeoutMs}ms`);
+    this.name = "StreamStallError";
+  }
+}
+
 /**
  * Classifies a provider failure into a stable `code` + `retryable` + redacted
  * `safe` descriptor. LAYERS OVER `isRetryableStreamError` (retry.ts) without
@@ -223,14 +231,6 @@ function isNetworkFailure(error: unknown, message: string): boolean {
  *       the same message ⇒ `false`.
  * These divergences are pinned in failure.test.ts (double-assert pins).
  */
-/** Locally generated watchdog failure; safe to show without provider text. */
-export class StreamStallError extends Error {
-  constructor(timeoutMs: number) {
-    super(`stream stalled: no events for ${timeoutMs}ms`);
-    this.name = "StreamStallError";
-  }
-}
-
 export function classifyProviderFailure(error: unknown): ProviderFailureClassification {
   if (error instanceof StreamStallError) return { code: "unknown", retryable: false, safe: { code: "unknown", message: "The provider stream stalled. Please try again; large files may need to be written in parts." } };
   if (error instanceof GoInputLimitError) return { code: "input_limit", retryable: false, safe: { code: "input_limit", message: SAFE_MESSAGES.input_limit } };

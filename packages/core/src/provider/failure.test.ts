@@ -9,7 +9,7 @@
 import { APICallError } from "ai";
 import { describe, expect, it } from "vitest";
 import type { ModelStreamEvent } from "../types/events.js";
-import { captureProviderMessage, classifyProviderFailure, extractStatusCode, MiniMaxBalanceFailure, isModelOutputEvent } from "./failure.js";
+import { captureProviderMessage, classifyProviderFailure, extractStatusCode, MiniMaxBalanceFailure, isModelOutputEvent, StreamStallError } from "./failure.js";
 import { isQuotaExhaustion, isRetryableStreamError } from "./retry.js";
 
 const MODEL_OUTPUT: ModelStreamEvent[] = [
@@ -69,6 +69,12 @@ function apiCallError(opts: {
 }
 
 describe("classifyProviderFailure", () => {
+  it("names a watchdog stall with a local message", () => {
+    const result = classifyProviderFailure(new StreamStallError(90_000));
+    expect(result.retryable).toBe(false);
+    expect(result.safe.message).toContain("large files may need to be written in parts");
+  });
+
   it("classifies a real connect-timeout APICallError (owner dogfood) as connect_timeout/retryable", () => {
     const error = apiCallError({
       message: "Cannot connect to API: Connect Timeout Error",

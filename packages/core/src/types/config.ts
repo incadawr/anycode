@@ -282,7 +282,7 @@ export const WEBFETCH_CACHE_TTL_MS = 900_000;
 // ---------------------------------------------------------------------------
 
 
-/** Per-attempt stream stall watchdog: no fullStream part for this long => retryable stall (on openai-responses, response bytes also count as activity, GitHub #27). 0 disables it. */
+/** Per-attempt stream stall watchdog: no fullStream part for this long => stall (on openai-responses, response bytes also count as activity, GitHub #27). 0 disables it. */
 export const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90_000;
 /** Silence after model output allows time for large tool calls. */
 export const DEFAULT_STREAM_OUTPUT_STALL_TIMEOUT_MS = 600_000;
