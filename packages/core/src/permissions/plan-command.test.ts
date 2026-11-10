@@ -14,7 +14,8 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...fs,
     lstatSync: (path: Parameters<typeof fs.lstatSync>[0]) => {
-      if (fixture.rejectBash && String(path) === "/bin/bash") throw new Error("untrusted bash");
+      // /bin may be a symlink to usr/bin (merged-usr Linux), so match the resolved name too.
+      if (fixture.rejectBash && /^\/(?:usr\/)?bin\/bash$/.test(String(path))) throw new Error("untrusted bash");
       const stat = fs.lstatSync(path);
       if (fixture.paths.has(String(path))) return Object.assign(stat, { uid: 0, mode: (stat.mode & ~0o022) });
       return stat;
