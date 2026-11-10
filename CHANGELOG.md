@@ -8,6 +8,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - Allow longer pauses during model output and after a stalled request to avoid interrupting large tool calls.
+- Retry interrupted text-only responses in structured headless runs without retaining partial output.
+- Continue responses cut off by the output token limit, with a bounded retry count.
+- Clarify Bash shell behavior and timeout guidance for commands.
 
 ## [0.0.97] - 2026-11-10
 

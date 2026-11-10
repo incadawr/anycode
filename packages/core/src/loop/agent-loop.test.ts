@@ -6100,6 +6100,21 @@ it("limits fresh Agent calls across steps and resets on the next turn", async ()
 // A step cut off by the provider's output-token ceiling did not choose to
 // stop: the loop must not report the turn as "completed" right away.
 describe("output-token cutoff (finishReason length)", () => {
+  it("continues after a replayed step reaches the output limit without retaining discarded text", async () => {
+    const modelPort = new MockModelPort([
+      [{ type: "text_delta", id: "t", text: "discard me" },
+       { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, discardedOutput: true, reason: "Stream interrupted" },
+       { type: "text_delta", id: "t", text: "keep me" },
+       { type: "finish", finishReason: "length", usage: {} }],
+      [{ type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const events = await collect(makeLoop({ modelPort, discardPartialOutputOnRetry: true }).runTurn("go"));
+    expect(modelPort.requests).toHaveLength(2);
+    const history = JSON.stringify(modelPort.requests[1]!.messages);
+    expect(history).toContain("keep me");
+    expect(history).not.toContain("discard me");
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
   it("continues the turn once instead of ending it", async () => {
     const modelPort = new MockModelPort([
       [{ type: "finish", finishReason: "length", usage: {} }],
