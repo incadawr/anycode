@@ -1,4 +1,4 @@
-import { accessSync, closeSync, constants, openSync, readSync, readlinkSync, realpathSync, lstatSync, statSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, openSync, readSync, readlinkSync, realpathSync, lstatSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { classifyBashCommandLine } from "./safe-command.js";
 import { splitBashSegments } from "./rules.js";
@@ -72,7 +72,9 @@ function trustedExecutable(name: string, cwd: string | undefined): string | unde
 
 /** Return a shell command bound to the executables checked for plan mode. */
 export function resolveTrustedPlanCommand(command: string, cwd?: string): string | undefined {
-  if (process.platform === "win32" || !trustedPath("/bin/sh", false) || !trustedPath("/bin/bash", false)) return undefined;
+  // Commands run under /bin/bash when it exists (node-execution.ts), else /bin/sh.
+  if (process.platform === "win32" || !trustedPath("/bin/sh", false)) return undefined;
+  if (existsSync("/bin/bash") && !trustedPath("/bin/bash", false)) return undefined;
   if (Object.keys(process.env).some(key => /^(?:LD_|DYLD_|BASH_FUNC_|BASH_ENV$|ENV$)/.test(key) && process.env[key])) return undefined;
   if (classifyBashCommandLine(command).class !== "read-only") return undefined;
   const split = splitBashSegments(command);
