@@ -97,7 +97,7 @@ export interface CoreEnvConfig {
   dbPath?: string;
   /** Parallel cap override for read-only tool batches (ANYCODE_TOOL_CONCURRENCY). */
   toolConcurrency?: number;
-  /** Per-attempt stream stall watchdog override in ms; 0 disables it (ANYCODE_STALL_TIMEOUT_MS). */
+  /** Both per-attempt stream stall windows in ms; 0 disables the watchdog (ANYCODE_STALL_TIMEOUT_MS). */
   stallTimeoutMs?: number;
   /**
    * Explicit image-input override (ANYCODE_IMAGE_INPUT=on|off); undefined when
@@ -284,6 +284,8 @@ export const WEBFETCH_CACHE_TTL_MS = 900_000;
 
 /** Per-attempt stream stall watchdog: no fullStream part for this long => retryable stall (on openai-responses, response bytes also count as activity, GitHub #27). 0 disables it. */
 export const DEFAULT_STREAM_STALL_TIMEOUT_MS = 90_000;
+/** Silence after model output allows time for large tool calls. */
+export const DEFAULT_STREAM_OUTPUT_STALL_TIMEOUT_MS = 600_000;
 
 /** Cap applied to a provider-supplied retry-after delay before it is honored. */
 export const DEFAULT_RETRY_AFTER_CAP_MS = 60_000;

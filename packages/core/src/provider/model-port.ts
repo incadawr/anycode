@@ -44,8 +44,9 @@ import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import type { OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
+import { DEFAULT_STREAM_OUTPUT_STALL_TIMEOUT_MS } from "../types/config.js";
 import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
-import { blocksAutomaticReplay, captureProviderMessage, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
+import { StreamStallError, blocksAutomaticReplay, captureProviderMessage, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { isMiMoModel } from "./mimo.js";
 import { contextualizeMiniMaxBalance, isMiniMaxEffortModel, isMiniMaxModel } from "./minimax.js";
@@ -752,22 +753,6 @@ function isStalledOutcome<T>(outcome: IteratorResult<T> | StalledOutcome): outco
 }
 
 /**
- * The port's own stall-timeout error (never a provider error): distinguished
- * by type so `describeRetryReason` can give it a fixed whitelist reason
- * instead of routing it through `classifyProviderFailure`'s generic
- * "unknown" bucket, which discards the actionable stall diagnostic (
- * W7b-FIX #3). The raw, interpolated message stays on `.message` for the
- * host log (thrown verbatim on retry-exhaustion); only the class identity is
- * used for the wire-crossing reason, never the message text itself.
- */
-class StreamStallError extends Error {
-  constructor(timeoutMs: number) {
-    super(`stream stalled: no events for ${timeoutMs}ms`);
-    this.name = "StreamStallError";
-  }
-}
-
-/**
  * `stream_retry.reason` rides the wire and is rendered verbatim by the CLI and
  * renderer, so it must be a sanitized safe message — NEVER raw
  * provider `error.message` text, which can embed a response body or auth
@@ -1130,6 +1115,7 @@ export class AiSdkModelPort implements ModelPort {
     request = applyGoRequestLimits(request, this);
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
+    let discardedOutputStall = false;
     // Time of this step's first retryable failure; anchors networkRetryBudgetMs.
     let firstFailureAt: number | undefined;
     // monotonic time this step has already spent waiting for the network (all episodes).
@@ -1279,10 +1265,13 @@ export class AiSdkModelPort implements ModelPort {
 
         const iterator = result.fullStream[Symbol.asyncIterator]();
         for (;;) {
-          const outcome = await nextWithStallTimeout(iterator, policy.stallTimeoutMs, attemptController.signal, lastActivityAt);
+          // An explicit override applies to both windows, preserving its existing semantics.
+          const timeoutMs = hadModelOutput && this.config.retry?.stallTimeoutMs === undefined
+            ? DEFAULT_STREAM_OUTPUT_STALL_TIMEOUT_MS : policy.stallTimeoutMs;
+          const outcome = await nextWithStallTimeout(iterator, timeoutMs, attemptController.signal, lastActivityAt);
 
           if (isStalledOutcome(outcome)) {
-            const stallError = new StreamStallError(policy.stallTimeoutMs);
+            const stallError = new StreamStallError(timeoutMs);
             // Actually cancel the underlying SDK call; it will never be read again.
             attemptController.abort(stallError);
             // A stall after a completed step has nothing left to deliver: end
@@ -1290,8 +1279,9 @@ export class AiSdkModelPort implements ModelPort {
             if (completedFinish) break;
             // A stall may replay only before committed output.
             const stallRetryAllowed =
-              !replayBlocked && (hadModelOutput ? mayRetryProvisional(stallError, true) : mayRetry(stallError)) && !request.abortSignal?.aborted;
+              !replayBlocked && !discardedOutputStall && (hadModelOutput ? mayRetryProvisional(stallError, true) : mayRetry(stallError)) && !request.abortSignal?.aborted;
             if (stallRetryAllowed) {
+              if (hadModelOutput) discardedOutputStall = true;
               pendingRetryError = stallError;
               break;
             }

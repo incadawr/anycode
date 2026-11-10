@@ -1023,6 +1023,34 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     };
   }
 
+  it("uses short and long default windows before and after output", async () => {
+    mockStreamText.mockImplementationOnce(hangAfterStart).mockImplementationOnce(hangAfterTwoDeltas);
+    const first = new AiSdkModelPort(baseConfig({ maxRetries: 0 })).streamText(baseRequest)[Symbol.asyncIterator]();
+    await first.next();
+    const before = expect(first.next()).rejects.toThrow(/90000ms/);
+    await vi.advanceTimersByTimeAsync(90_000); await before;
+    const second = new AiSdkModelPort(baseConfig({ maxRetries: 0 })).streamText(baseRequest)[Symbol.asyncIterator]();
+    await second.next(); await second.next();
+    let settled = false;
+    const after = second.next().finally(() => { settled = true; });
+    const failure = expect(after).rejects.toThrow(/600000ms/);
+    await vi.advanceTimersByTimeAsync(90_000); expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(510_000); await failure;
+  });
+
+  it("replays discarded output only once on consecutive stalls", async () => {
+    mockStreamText.mockImplementation(hangAfterTwoDeltas);
+    const iterator = new AiSdkModelPort(baseConfig({ maxRetries: 8, stallTimeoutMs: 20 })).streamText(baseRequest)[Symbol.asyncIterator]();
+    await iterator.next(); await iterator.next();
+    const retry = iterator.next(); await vi.advanceTimersByTimeAsync(20);
+    expect((await retry).value).toMatchObject({ type: "stream_retry", reason: "stream_stalled" });
+    const next = iterator.next(); await vi.advanceTimersByTimeAsync(10);
+    await next; await iterator.next();
+    const failure = expect(iterator.next()).rejects.toThrow(/stream stalled/);
+    await vi.advanceTimersByTimeAsync(20); await failure;
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
   it("retries the whole step with a stall reason when the stream stops emitting events", async () => {
     mockStreamText
       .mockImplementationOnce(hangAfterTwoDeltas)
