@@ -1571,7 +1571,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
         toolConcurrency: envConfig.toolConcurrency,
         maxTurns: envConfig.maxTurns,
         subagentMaxTurns: envConfig.subagentMaxTurns,
-      subagentContextWindowTokens: envConfig.subagentContextWindowTokens,
+        subagentContextWindowTokens: envConfig.subagentContextWindowTokens,
         // slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS.
         subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
         ...((envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === envConfig.model)?.todoReminderEvery) !== undefined

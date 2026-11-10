@@ -9,8 +9,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Changed: child agents use their model’s full context window by default. Set `tools.subagentContextWindowTokens` or `ANYCODE_SUBAGENT_CONTEXT_WINDOW` to cap it.
 
-## [Unreleased]
-
 ## [0.0.96] - 2026-11-10
 
 ### Added

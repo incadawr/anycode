@@ -67,8 +67,9 @@ export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
  * `provider/env.ts` ENV_NETWORK_WAIT_MAX_MS.
  */
 export const ENV_NETWORK_WAIT_MAX_MS = "ANYCODE_NETWORK_WAIT_MAX_MS";
-/** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
+/** Subagent context window cap; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_CONTEXT_WINDOW. */
 export const ENV_SUBAGENT_CONTEXT_WINDOW = "ANYCODE_SUBAGENT_CONTEXT_WINDOW";
+/** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
  * adaptive turn budget (boolean); literal mirror of core's
