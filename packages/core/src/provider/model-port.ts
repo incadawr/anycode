@@ -1115,7 +1115,7 @@ export class AiSdkModelPort implements ModelPort {
     request = applyGoRequestLimits(request, this);
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
-    let discardedOutputStall = false;
+    let stallReplayed = false;
     // Time of this step's first retryable failure; anchors networkRetryBudgetMs.
     let firstFailureAt: number | undefined;
     // monotonic time this step has already spent waiting for the network (all episodes).
@@ -1266,7 +1266,7 @@ export class AiSdkModelPort implements ModelPort {
         const iterator = result.fullStream[Symbol.asyncIterator]();
         for (;;) {
           // An explicit override applies to both windows, preserving its existing semantics.
-          const timeoutMs = hadModelOutput && this.config.retry?.stallTimeoutMs === undefined
+          const timeoutMs = (hadModelOutput || stallReplayed) && this.config.retry?.stallTimeoutMs === undefined
             ? DEFAULT_STREAM_OUTPUT_STALL_TIMEOUT_MS : policy.stallTimeoutMs;
           const outcome = await nextWithStallTimeout(iterator, timeoutMs, attemptController.signal, lastActivityAt);
 
@@ -1279,9 +1279,9 @@ export class AiSdkModelPort implements ModelPort {
             if (completedFinish) break;
             // A stall may replay only before committed output.
             const stallRetryAllowed =
-              !replayBlocked && !discardedOutputStall && (hadModelOutput ? mayRetryProvisional(stallError, true) : mayRetry(stallError)) && !request.abortSignal?.aborted;
+              !replayBlocked && !stallReplayed && (hadModelOutput ? mayRetryProvisional(stallError, true) : mayRetry(stallError)) && !request.abortSignal?.aborted;
             if (stallRetryAllowed) {
-              if (hadModelOutput) discardedOutputStall = true;
+              stallReplayed = true;
               pendingRetryError = stallError;
               break;
             }

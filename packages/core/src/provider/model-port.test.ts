@@ -1028,26 +1028,55 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     const first = new AiSdkModelPort(baseConfig({ maxRetries: 0 })).streamText(baseRequest)[Symbol.asyncIterator]();
     await first.next();
     const before = expect(first.next()).rejects.toThrow(/90000ms/);
-    await vi.advanceTimersByTimeAsync(90_000); await before;
+    await vi.advanceTimersByTimeAsync(90_000);
+    await before;
     const second = new AiSdkModelPort(baseConfig({ maxRetries: 0 })).streamText(baseRequest)[Symbol.asyncIterator]();
-    await second.next(); await second.next();
+    await second.next();
+    await second.next();
     let settled = false;
     const after = second.next().finally(() => { settled = true; });
     const failure = expect(after).rejects.toThrow(/600000ms/);
-    await vi.advanceTimersByTimeAsync(90_000); expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(510_000); await failure;
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(510_000);
+    await failure;
   });
 
   it("replays discarded output only once on consecutive stalls", async () => {
     mockStreamText.mockImplementation(hangAfterTwoDeltas);
     const iterator = new AiSdkModelPort(baseConfig({ maxRetries: 8, stallTimeoutMs: 20 })).streamText(baseRequest)[Symbol.asyncIterator]();
-    await iterator.next(); await iterator.next();
-    const retry = iterator.next(); await vi.advanceTimersByTimeAsync(20);
+    await iterator.next();
+    await iterator.next();
+    const retry = iterator.next();
+    await vi.advanceTimersByTimeAsync(20);
     expect((await retry).value).toMatchObject({ type: "stream_retry", reason: "stream_stalled" });
-    const next = iterator.next(); await vi.advanceTimersByTimeAsync(10);
-    await next; await iterator.next();
+    const next = iterator.next();
+    await vi.advanceTimersByTimeAsync(10);
+    await next;
+    await iterator.next();
     const failure = expect(iterator.next()).rejects.toThrow(/stream stalled/);
-    await vi.advanceTimersByTimeAsync(20); await failure;
+    await vi.advanceTimersByTimeAsync(20);
+    await failure;
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the long window on a replay after a stall without output and stops after the second stall", async () => {
+    mockStreamText.mockImplementation(hangAfterStart);
+    const iterator = new AiSdkModelPort(baseConfig({ maxRetries: 8 })).streamText(baseRequest)[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toEqual({ type: "start" });
+    const retry = iterator.next();
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect((await retry).value).toMatchObject({ type: "stream_retry", reason: "stream_stalled" });
+    const replay = iterator.next();
+    await vi.advanceTimersByTimeAsync(10);
+    expect((await replay).value).toEqual({ type: "start" });
+    let settled = false;
+    const pending = iterator.next().finally(() => { settled = true; });
+    const failure = expect(pending).rejects.toThrow(/600000ms/);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(510_000);
+    await failure;
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
 

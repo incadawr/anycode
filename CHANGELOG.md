@@ -7,7 +7,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- Allow longer pauses after model output to avoid interrupting large tool calls.
+- Allow longer pauses during model output and after a stalled request to avoid interrupting large tool calls.
 
 ## [0.0.97] - 2026-11-10
 
