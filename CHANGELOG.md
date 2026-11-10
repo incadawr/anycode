@@ -7,7 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- Changed: child agents use their model’s full context window by default. Set `tools.subagentContextWindowTokens` or `ANYCODE_SUBAGENT_CONTEXT_WINDOW` to cap it.
+## [0.0.97] - 2026-11-10
+
+### Changed
+
+- Child agents use their model’s full context window again instead of a fixed 128,000-token cap. To set a limit, use Settings → Tools → Context window (subagents), `tools.subagentContextWindowTokens`, or `ANYCODE_SUBAGENT_CONTEXT_WINDOW`.
 
 ## [0.0.96] - 2026-11-10
 
