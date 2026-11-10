@@ -7,10 +7,17 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- Allow longer pauses during model output and after a stalled request to avoid interrupting large tool calls.
-- Retry interrupted text-only responses in structured headless runs without retaining partial output.
-- Continue responses cut off by the output token limit, and report an error if the continuation limit is reached.
-- Clarify Bash shell behavior and timeout guidance for commands.
+## [0.0.98] - 2026-11-10
+
+### Changed
+
+- Bash commands run under `bash` when it is available (otherwise `sh`, as before), and the Bash tool describes its shell behaviour and timeout handling more clearly. `BASH_ENV` is not passed to commands.
+
+### Fixed
+
+- A model stream that goes quiet after it has started writing output, for example while writing a large file in one tool call, gets a longer pause before it counts as stalled, and a stall is replayed at most once. A stall error now suggests writing large files in parts.
+- In headless runs with JSON or stream-JSON output, a response that breaks after some text but before any tool call is retried instead of ending the run; the partial text is not kept.
+- A response cut off by the output token limit is continued up to two times in a row instead of ending the turn as complete. If the limit is still hit, the run ends with an error that names the cutoff, and a subagent keeps all of its text across continuations.
 
 ## [0.0.97] - 2026-11-10
 
