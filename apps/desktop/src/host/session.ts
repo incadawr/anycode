@@ -86,7 +86,6 @@ import {
   deriveSessionTitle,
   finalizeFinalText,
   fixateFinalText,
-  resetFinalText,
   summarizeChildToolCall,
   sanitizeAndCap,
   sanitizeStatusText,
@@ -1848,6 +1847,9 @@ export class Session {
   private readonly steerQueue: Array<{ requestId: string; text: string; images?: ImageAttachment[]; origin?: "system"; fromQueue?: true }> = [];
   /** Final-text accumulator over the WHOLE child session's turn chain (packages/core/src/subagents/final-text.ts — the same reset/append/fixate semantics runner.ts applies to an inline subagent). */
   private childFinalText: FinalTextAccumulator = createFinalTextAccumulator();
+  private childContinueText = false;
+  private childStepHadTools = false;
+  private childStepPrefix = "";
   private childStatusTextAt: number | undefined;
   private childStatusTextSnapshot = "";
   /** Cumulative turn count across every runTurn() call this child session has made (summed from each call's own loop_end.turns). */
@@ -5885,7 +5887,9 @@ export class Session {
     switch (event.type) {
       case "turn_start":
         this.childStatusTextSnapshot = "";
-        this.childFinalText = resetFinalText(this.childFinalText);
+        this.childStepPrefix = this.childContinueText ? this.childFinalText.final : "";
+        this.childFinalText = { ...this.childFinalText, current: this.childStepPrefix };
+        this.childStepHadTools = false;
         this.childSafeError = undefined;
         break;
       case "error": {
@@ -5910,7 +5914,7 @@ export class Session {
       case "stream_retry":
         this.childStatusTextSnapshot = "";
         this.child?.onProgress({ kind: "status", itemKind: "reset", text: "" });
-        this.childFinalText = resetFinalText(this.childFinalText);
+        this.childFinalText = { ...this.childFinalText, current: this.childStepPrefix };
         break;
       // same rationale as text_delta — a model emitting
       // reasoning frames is mid-turn, not hung.
@@ -5918,6 +5922,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "tool_execution_start":
+        this.childStepHadTools = true;
         this.child?.onProgress({ kind: "status", itemKind: "tool", text: sanitizeAndCap(event.toolName, 160), toolName: sanitizeAndCap(event.toolName, 40) || "tool" });
         this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
         // dispatch itself is a sign of life — a child inside
@@ -5931,6 +5936,7 @@ export class Session {
         this.armChildToolLiveness();
         break;
       case "tool_result":
+        this.childStepHadTools = true;
         this.child?.onProgress({ kind: "status", itemKind: "result", text: sanitizeAndCap(`${event.outcome.toolName}: ${event.outcome.status}`, 160), toolName: sanitizeAndCap(event.outcome.toolName, 40) || "tool" });
         this.childToolCalls += 1;
         this.childLastTool = event.outcome.toolName;
@@ -5955,6 +5961,7 @@ export class Session {
       case "turn_end":
         if (this.childFinalText.current !== this.childStatusTextSnapshot) this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeStatusText(this.childFinalText.current, 160, true) });
         this.childFinalText = fixateFinalText(this.childFinalText);
+        this.childContinueText = event.finishReason === "length" && !this.childStepHadTools;
         // review F2: for a claude child counting model rounds,
         // turn_end (once per runTurn) is already covered by the rounds that
         // preceded it — incrementing here too would double-count the final
@@ -5969,6 +5976,7 @@ export class Session {
         this.emitChildProgressBoundary();
         break;
       case "loop_end":
+        this.childContinueText = false;
         // A child config never receives a WorktreeControlPort (buildChildConfig
         // never sets `ports.worktrees`), so `workspace_transition` cannot
         // actually happen here; treated defensively as an error rather than

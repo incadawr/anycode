@@ -43,6 +43,18 @@ describe("NodeExecutionAdapter", () => {
     expect(result.stdout).toContain("hello-world");
   });
 
+  it("does not source BASH_ENV supplied by the parent or request", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-bash-env-"));
+    const script = join(tmpDir, "startup");
+    await writeFile(script, "echo injected");
+    const previous = process.env.BASH_ENV;
+    process.env.BASH_ENV = script;
+    try {
+      const result = await adapter.run({ command: "echo clean", cwd: tmpDir, timeoutMs: 5000, env: { BASH_ENV: script } });
+      expect(result.stdout.trim()).toBe("clean");
+    } finally { if (previous === undefined) delete process.env.BASH_ENV; else process.env.BASH_ENV = previous; }
+  });
+
   it("reports a non-zero exit code as failed", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));
     const result = await adapter.run({ command: "exit 3", cwd: tmpDir, timeoutMs: 5000 });

@@ -1456,6 +1456,9 @@ export function createSubagentRunner(
         const loop = new AgentLoop(childConfig);
 
         let currentTurnText = "";
+        let stepPrefix = "";
+        let continueText = false;
+        let stepHadTools = false;
         let statusTextAt: number | undefined;
         let statusTextSnapshot = "";
         let finalText = "";
@@ -1532,7 +1535,9 @@ export function createSubagentRunner(
                 runOpts.onNetworkWait?.({ ...event, waitSource: "subagent" });
                 break;
               case "turn_start":
-                currentTurnText = "";
+                stepPrefix = continueText ? finalText : "";
+                currentTurnText = stepPrefix;
+                stepHadTools = false;
                 statusTextSnapshot = "";
                 break;
               case "text_delta":
@@ -1557,7 +1562,7 @@ export function createSubagentRunner(
                 break;
               case "stream_retry":
                 // The step is replayed from scratch; discard the aborted attempt's text.
-                currentTurnText = "";
+                currentTurnText = stepPrefix;
                 statusTextSnapshot = "";
                 runOpts.onStatusReset?.();
                 // ...and its spend: the attempt is not billed to the run (see
@@ -1566,6 +1571,7 @@ export function createSubagentRunner(
                 pendingEndpoint = undefined;
                 break;
               case "tool_execution_start":
+                stepHadTools = true;
                 // Dispatch-time start (name + raw input), keyed by toolCallId until
                 // the paired tool_result arrives below (W1-FIX). This event only
                 // fires for calls that survived to dispatch — a stream_retry replays
@@ -1579,6 +1585,7 @@ export function createSubagentRunner(
                 });
                 break;
               case "tool_result": {
+                stepHadTools = true;
                 toolCalls += 1;
                 lastTool = event.outcome.toolName;
                 // Sign of life (slice 1): a completed tool call resets
@@ -1627,6 +1634,7 @@ export function createSubagentRunner(
                 // (max_turns) or an error before turn_end cannot overwrite it.
                 if (currentTurnText !== statusTextSnapshot) runOpts.onStatusItem?.({ kind: "assistant", text: currentTurnText });
                 finalText = currentTurnText;
+                continueText = event.finishReason === "length" && !stepHadTools;
                 // same turn, same event — always updated together with
                 // finalText above so a cutoff turn that never reaches turn_end
                 // leaves BOTH pinned to the prior turn's pair, never just one.

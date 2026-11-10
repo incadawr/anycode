@@ -72,7 +72,7 @@ function trustedExecutable(name: string, cwd: string | undefined): string | unde
 
 /** Return a shell command bound to the executables checked for plan mode. */
 export function resolveTrustedPlanCommand(command: string, cwd?: string): string | undefined {
-  if (process.platform === "win32" || !trustedPath("/bin/sh", false)) return undefined;
+  if (process.platform === "win32" || !trustedPath("/bin/sh", false) || !trustedPath("/bin/bash", false)) return undefined;
   if (Object.keys(process.env).some(key => /^(?:LD_|DYLD_|BASH_FUNC_|BASH_ENV$|ENV$)/.test(key) && process.env[key])) return undefined;
   if (classifyBashCommandLine(command).class !== "read-only") return undefined;
   const split = splitBashSegments(command);

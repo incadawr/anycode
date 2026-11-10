@@ -780,6 +780,9 @@ describe("runPrintMode — stream-json output format (design §2.2)", () => {
 
   it("drops the discarded attempt's text from the result envelope on stream_retry", async () => {
     async function* turn(): AsyncGenerator<AgentEvent, void, unknown> {
+      yield { type: "turn_start", turn: 1 };
+      yield { type: "text_delta", id: "t", text: "first" };
+      yield { type: "turn_start", turn: 2 };
       yield { type: "text_delta", id: "t", text: "partial" };
       yield { type: "stream_retry", attempt: 1, maxAttempts: 8, delayMs: 0, discardedOutput: true, reason: "x" };
       yield { type: "text_delta", id: "t", text: "full" };
@@ -794,7 +797,7 @@ describe("runPrintMode — stream-json output format (design §2.2)", () => {
     );
     expect(code).toBe(0);
     const env = parseLines(getOut()).at(-1)!;
-    expect(env.result).toBe("full");
+    expect(env.result).toBe("firstfull");
   });
 
   it("skips an unserializable event (fail-soft) + warns on stderr; the NDJSON stream stays valid", async () => {

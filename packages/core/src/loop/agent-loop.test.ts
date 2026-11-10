@@ -6127,6 +6127,18 @@ describe("output-token cutoff (finishReason length)", () => {
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
   });
 
+  it("resets the continuation limit after tool calls", async () => {
+    const cut: ModelStreamEvent[] = [{ type: "finish", finishReason: "length", usage: {} }];
+    const tool = (id: string): ModelStreamEvent[] => [
+      { type: "tool_call", toolCall: { id, name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ];
+    const modelPort = new MockModelPort([cut, tool("a"), cut, tool("b"), cut, [{ type: "finish", finishReason: "stop", usage: {} }]]);
+    const events = await collect(makeLoop({ modelPort }).runTurn("go"));
+    expect(modelPort.requests).toHaveLength(6);
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+  });
+
   it("bounds the continuations and then ends the turn", async () => {
     const modelPort = new MockModelPort([
       [{ type: "finish", finishReason: "length", usage: {} }],

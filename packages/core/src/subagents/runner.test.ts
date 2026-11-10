@@ -841,6 +841,18 @@ describe("output cap + status mapping", () => {
     expect(outcome.finalText.length).toBe(100_000);
   });
 
+  it("joins a cut response and its successful continuation", async () => {
+    let call = 0;
+    const model = new ScriptedModelPort(() => [
+      { type: "start" },
+      { type: "text_delta", id: "t", text: call++ === 0 ? "A" : "B" },
+      { type: "finish", finishReason: call === 1 ? "length" : "stop", usage: {} },
+    ]);
+    const outcome = await createSubagentRunner(makeParent({ modelPort: model })).run({ ...REQ, agentType: "explore" }, {});
+    expect(outcome.status).toBe("completed");
+    expect(outcome.finalText).toBe("AB");
+  });
+
   it("outcome carries the final turn's finishReason (provider-side length cutoff)", async () => {
     const model = new ScriptedModelPort(() => [
       { type: "start" },

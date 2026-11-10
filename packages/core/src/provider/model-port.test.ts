@@ -1035,10 +1035,10 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     await second.next();
     let settled = false;
     const after = second.next().finally(() => { settled = true; });
-    const failure = expect(after).rejects.toThrow(/600000ms/);
+    const failure = expect(after).rejects.toThrow(/540000ms/);
     await vi.advanceTimersByTimeAsync(90_000);
     expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(510_000);
+    await vi.advanceTimersByTimeAsync(450_000);
     await failure;
   });
 
@@ -1072,10 +1072,10 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     expect((await replay).value).toEqual({ type: "start" });
     let settled = false;
     const pending = iterator.next().finally(() => { settled = true; });
-    const failure = expect(pending).rejects.toThrow(/600000ms/);
+    const failure = expect(pending).rejects.toThrow(/540000ms/);
     await vi.advanceTimersByTimeAsync(90_000);
     expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(510_000);
+    await vi.advanceTimersByTimeAsync(450_000);
     await failure;
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });

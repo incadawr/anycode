@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveTrustedPlanCommand } from "./plan-command.js";
 
-const fixture = vi.hoisted(() => ({ paths: new Set<string>(), target: "", fd: -1 }));
+const fixture = vi.hoisted(() => ({ paths: new Set<string>(), target: "", fd: -1, rejectBash: false }));
 
 // Model a trusted system installation and a native executable while letting the
 // actual shell execute the fixture script to observe its invocation name.
@@ -14,6 +14,7 @@ vi.mock("node:fs", async (importOriginal) => {
   return {
     ...fs,
     lstatSync: (path: Parameters<typeof fs.lstatSync>[0]) => {
+      if (fixture.rejectBash && String(path) === "/bin/bash") throw new Error("untrusted bash");
       const stat = fs.lstatSync(path);
       if (fixture.paths.has(String(path))) return Object.assign(stat, { uid: 0, mode: (stat.mode & ~0o022) });
       return stat;
@@ -106,4 +107,10 @@ it("rejects a symlink chain that passes through a writable directory", () => {
     fixture.target = "";
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("refuses plan commands when the Bash executable is untrusted", () => {
+  fixture.rejectBash = true;
+  try { expect(resolveTrustedPlanCommand("ls")).toBeUndefined(); }
+  finally { fixture.rejectBash = false; }
 });

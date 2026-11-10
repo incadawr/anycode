@@ -120,7 +120,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
       () =>
         spawn(request.command, {
           cwd: request.cwd,
-          env: buildChildEnv(process.env, request.env, proxyRelayLookup()),
+          env: { ...buildChildEnv(process.env, request.env, proxyRelayLookup()), BASH_ENV: undefined },
           shell: posixShell(),
           detached: process.platform !== "win32",
           stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],

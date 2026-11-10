@@ -7,7 +7,7 @@
  *
  * WHY IT EXISTS: the ExecutionPort runs commands through
  * `spawn(command, { shell: true })` (adapters/node/node-execution.ts:90), so the
- * raw string is handed to /bin/sh, which interprets `;` `&&` `|` `$()` backticks
+ * raw string is handed to a shell, which interprets `;` `&&` `|` `$()` backticks
  * redirects globs etc. A single string like `ls; rm -rf ~` is one valid Bash
  * tool input that the shell would execute in full. This classifier is the only
  * lexical barrier before that shell, so its design is deliberately asymmetric

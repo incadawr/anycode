@@ -5242,6 +5242,20 @@ describe("Session — child mode: finalizeChildTerminal once-latch (F7, revised 
     }
   });
 
+  it("joins a cut child response and its continuation", async () => {
+    const h = createChildHarness({ steps: [
+      [{ type: "start" }, { type: "text_delta", id: "t", text: "A" }, { type: "finish", finishReason: "length", usage: {} }],
+      textStep("B"),
+    ] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.session.startProgrammaticTurn("go");
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      expect(h.onTerminal.mock.calls[0]?.[0]?.finalText).toBe("AB");
+    } finally { h.close(); }
+  });
+
   it("a final turn_end with finishReason \"length\" carries finalTurnFinishReason on the terminal report (an error once continuations run out); \"stop\" omits it", async () => {
     const lengthStep: ModelStreamEvent[] = [
       { type: "start" },

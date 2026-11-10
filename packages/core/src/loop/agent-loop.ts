@@ -1714,6 +1714,8 @@ export class AgentLoop {
           return;
         }
 
+        lengthContinueRounds = 0;
+
         // Dispatch. Invalid calls (§2.9) never reach the scheduler: they get a
         // synthesized invalid_input outcome. Valid calls flow through
         // runToolBatches, which returns exactly one outcome per call (cancelled

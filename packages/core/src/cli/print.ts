@@ -176,6 +176,7 @@ export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
   // format is requested — the text path never touches them, keeping its bytes
   // identical. `usage` fields materialize only if some finish carried them.
   let resultText = "";
+  let stepStart = 0;
   let turns = 0;
   let usageInput: number | undefined;
   let usageOutput: number | undefined;
@@ -207,9 +208,10 @@ export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
         // Every AgentEvent verbatim, in yield order (design §2.2).
         emitStreamLine(event);
       }
+      if (event.type === "turn_start") stepStart = resultText.length;
       if (event.type === "stream_retry" && event.discardedOutput && structured) {
         // The abandoned attempt's text was dropped upstream; the replay re-sends it.
-        resultText = "";
+        resultText = resultText.slice(0, stepStart);
       }
       if (event.type === "text_delta") {
         if (structured) {

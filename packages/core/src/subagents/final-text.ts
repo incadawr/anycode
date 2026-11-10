@@ -6,9 +6,10 @@
  * applies to its own local `currentTurnText`/`finalText` variables
  * (subagents/runner.ts's `for await` loop over `loop.runTurn()`):
  *
- *  - `turn_start` RESETS the in-progress text (a fresh model step begins).
+ *  - `turn_start` resets in-progress text, except a continuation preserves
+ *    the preceding length-cut step as its prefix.
  *  - `text_delta` APPENDS to the in-progress text.
- *  - `stream_retry` RESETS the in-progress text — the step is replayed from
+ *  - `stream_retry` discards the current step back to its prefix — it is replayed from
  *    scratch, so a partial attempt's text must never leak into the result
  *    (runner.ts: "The step is replayed from scratch; discard the aborted
  *    attempt's text").
@@ -18,7 +19,7 @@
  *    can never overwrite an already-fixated result, because `final` is only
  *    ever written by `fixate`, never by `reset`/`append`.
  *
- * The four rules above stay verbatim, but the two tiers DIVERGE on one class
+ * The two tiers DIVERGE on one class
  * since slice S5: runner.ts now prefixes an `error` outcome's
  * `finalText` with the provider failure's `safe` descriptor, so a child that
  * dies on the provider carries a reason instead of the previous turn's text.
