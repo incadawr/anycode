@@ -1,5 +1,5 @@
 import { normalizeUpdatePercent, validUpdateSizes } from "../../../shared/updates.js";
-import { Badge, Button, Select, Switch } from "../ui/index.js";
+import { Badge, Button, Input, Select, Switch } from "../ui/index.js";
 /**
  * Settings UI (slice 2.2, design/slice-2.2-cut.md §2/§3, ruling
  * reviews/slice-2.2-forks-ruling.md §1/§2; provider-section v2 + OAuth-UX,
@@ -382,12 +382,14 @@ export function buildToolsPatch(
   networkRetryBudgetText = "",
   adaptiveTurnBudget?: boolean,
   networkWaitText = "",
+  subagentContextWindowText = "",
 ): SettingsPatch {
   const tools: {
     concurrency?: number;
     stallTimeoutMs?: number;
     maxTurns?: number;
     subagentMaxTurns?: number;
+    subagentContextWindowTokens?: number;
     maxRetries?: number;
     networkRetryBudgetMs?: number;
     networkWaitMaxMs?: number;
@@ -409,6 +411,7 @@ export function buildToolsPatch(
   }
   if (maxTurns !== undefined) tools.maxTurns = maxTurns;
   if (subagentMaxTurns !== undefined) tools.subagentMaxTurns = subagentMaxTurns;
+  if (subagentContextWindowText.trim() !== "") tools.subagentContextWindowTokens = Number(subagentContextWindowText);
   if (maxRetries !== undefined) tools.maxRetries = maxRetries;
   if (networkRetryBudgetMs !== undefined) tools.networkRetryBudgetMs = networkRetryBudgetMs;
   // ANYCODE_NETWORK_WAIT_MAX_MS mirror (blank = default).
@@ -1484,6 +1487,7 @@ export function SettingsScreen({
   const [stallTimeoutMs, setStallTimeoutMs] = useState("");
   const [maxTurns, setMaxTurns] = useState("");
   const [subagentMaxTurns, setSubagentMaxTurns] = useState("");
+  const [subagentContextWindow, setSubagentContextWindow] = useState("");
   // undefined = absent in settings (default OFF); a toggle sets it.
   const [adaptiveTurnBudget, setAdaptiveTurnBudget] = useState<boolean | undefined>(undefined);
   // provider retry knobs (ANYCODE_MAX_RETRIES /
@@ -1724,6 +1728,7 @@ export function SettingsScreen({
       setStallTimeoutMs(snapshot.settings.tools.stallTimeoutMs?.toString() ?? "");
       setMaxTurns(snapshot.settings.tools.maxTurns?.toString() ?? "");
       setSubagentMaxTurns(snapshot.settings.tools.subagentMaxTurns?.toString() ?? "");
+      setSubagentContextWindow(snapshot.settings.tools.subagentContextWindowTokens?.toString() ?? "");
       setAdaptiveTurnBudget(snapshot.settings.tools.adaptiveTurnBudget);
       setMaxRetries(snapshot.settings.tools.maxRetries?.toString() ?? "");
       setNetworkRetryBudget(snapshot.settings.tools.networkRetryBudgetMs?.toString() ?? "");
@@ -1766,9 +1771,10 @@ export function SettingsScreen({
   const validTurns = (value: string) => value.trim() === "" || (Number.isSafeInteger(Number(value)) && Number(value) >= 1);
   const maxTurnsValid = validTurns(maxTurns);
   const subagentMaxTurnsValid = validTurns(subagentMaxTurns);
+  const windowValid = subagentContextWindow.trim() === "" || (Number.isInteger(Number(subagentContextWindow)) && Number(subagentContextWindow) >= 1024 && Number(subagentContextWindow) <= 1000000);
 
   async function saveTools(): Promise<void> {
-    if (!maxTurnsValid || !subagentMaxTurnsValid) return;
+    if (!maxTurnsValid || !subagentMaxTurnsValid || !windowValid) return;
     // validate the sessionLimits fields FIRST — a bad
     // value refuses the whole save (nothing written) with a field-naming error.
     const limits = buildSessionLimitsPatch(sessionMaxTabs, sessionPerParent, sessionGlobal);
@@ -1777,9 +1783,12 @@ export function SettingsScreen({
       return;
     }
     setSessionLimitsError(null);
-    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget, adaptiveTurnBudget, networkWait);
+    const toolsPatch = buildToolsPatch(concurrency, stallTimeoutMs, maxTurns, subagentMaxTurns, maxRetries, networkRetryBudget, adaptiveTurnBudget, networkWait, subagentContextWindow);
     if (maxTurns.trim() === "" && snapshot?.settings.tools.maxTurns !== undefined) {
       toolsPatch.tools = { ...toolsPatch.tools, maxTurns: "" };
+    }
+    if (subagentContextWindow.trim() === "" && snapshot?.settings.tools.subagentContextWindowTokens !== undefined) {
+      toolsPatch.tools = { ...toolsPatch.tools, subagentContextWindowTokens: "" };
     }
     const hasLimits = limits.patch.sessionLimits !== undefined
       && Object.keys(limits.patch.sessionLimits).length > 0;
@@ -2094,6 +2103,7 @@ export function SettingsScreen({
                   {!subagentMaxTurnsValid && <span className="settings-field-error" role="alert">Enter a positive whole number or leave blank.</span>}
                   <span className="settings-field-hint">Enter a positive whole number.</span>
                 </label>
+                <Input label="Subagent context window" className="settings-field-input" type="text" inputMode="numeric" value={subagentContextWindow} disabled={readOnly} placeholder="Same as the model" hint="Tokens; leave blank to use the model window. Range: 1,024–1,000,000." error={windowValid ? undefined : "Enter a whole number from 1,024 to 1,000,000."} onChange={(e) => setSubagentContextWindow(e.target.value)} />
                 <div className="settings-field">
                   <label className="settings-field-checkbox">
                     <input type="checkbox" checked={adaptiveTurnBudget === true} disabled={readOnly}

@@ -1529,3 +1529,7 @@ describe("describeSecretStatus — amber says what is amber", () => {
     expect(status.tone).toBe("warn");
   });
 });
+
+it("builds a subagent context window patch", () => {
+  expect(buildToolsPatch("", "", "", "", "", "", undefined, "", "50000").tools?.subagentContextWindowTokens).toBe(50000);
+});

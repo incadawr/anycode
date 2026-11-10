@@ -17,6 +17,7 @@ export const ENV_MODEL = "ANYCODE_MODEL";
  */
 export const ENV_EXPLORE_MODEL = "ANYCODE_EXPLORE_MODEL";
 export const ENV_MAX_TURNS = "ANYCODE_MAX_TURNS";
+export const ENV_SUBAGENT_CONTEXT_WINDOW = "ANYCODE_SUBAGENT_CONTEXT_WINDOW";
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
  * Subagent stall-detector silence threshold (slice 1). Deliberately a
@@ -181,6 +182,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
 
   const maxTurns = readOptionalInteger(env, ENV_MAX_TURNS);
   const subagentMaxTurns = readPositiveInteger(env, ENV_SUBAGENT_MAX_TURNS);
+  const subagentContextWindowTokens = readPositiveInteger(env, ENV_SUBAGENT_CONTEXT_WINDOW);
+  if (subagentContextWindowTokens !== undefined && (subagentContextWindowTokens < 1024 || subagentContextWindowTokens > 1000000)) throw new Error(`Invalid ${ENV_SUBAGENT_CONTEXT_WINDOW}: expected 1024–1000000`);
   const subagentStallTimeoutMs = readOptionalInteger(env, ENV_SUBAGENT_STALL_MS);
   const supervisorIdleMs = readPositiveInteger(env, ENV_SUPERVISOR_IDLE_MS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
@@ -213,6 +216,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     ...(providerId !== undefined ? { providerId, automaticModelRouting } : {}),
     maxTurns,
     subagentMaxTurns,
+    subagentContextWindowTokens,
     adaptiveTurnBudget,
     subagentStallTimeoutMs,
     supervisorIdleMs,

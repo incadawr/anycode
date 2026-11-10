@@ -3667,7 +3667,7 @@ async function boot(): Promise<void> {
       : new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
-    const bootContextWindow: number | undefined = sessionContextWindow(isChildSessionBoot(args, sessionMeta), bootContextInfo.tokens);
+    const bootContextWindow: number | undefined = sessionContextWindow(isChildSessionBoot(args, sessionMeta), bootContextInfo.tokens, envConfig.subagentContextWindowTokens);
     // a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
     const clampChildOutput = (resolved: number | undefined): number | undefined =>
@@ -4234,6 +4234,7 @@ async function boot(): Promise<void> {
       cwd: workspace,
       maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns, envConfig.subagentMaxTurns, isChildSessionBoot(args, sessionMeta)),
       subagentMaxTurns: envConfig.subagentMaxTurns,
+      subagentContextWindowTokens: envConfig.subagentContextWindowTokens,
       // learned base-budget port (adaptive only; see above).
       ...(subagentBudget !== undefined ? { subagentBudget } : {}),
       // slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS
@@ -4588,7 +4589,7 @@ async function boot(): Promise<void> {
         // model A never leaks its window onto B, and an unknown id re-resolves
         // the assumed fallback rather than a stale previous model's window.
         const contextInfo = connectionModelSettings.contextFor(id);
-        const contextWindow = sessionContextWindow(isChildSessionBoot(args, sessionMeta), contextInfo.tokens);
+        const contextWindow = sessionContextWindow(isChildSessionBoot(args, sessionMeta), contextInfo.tokens, envConfig.subagentContextWindowTokens);
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,

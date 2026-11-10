@@ -265,6 +265,7 @@ export interface AgentLoopConfig {
    * is never inherited by children.
    */
   subagentMaxTurns?: number;
+  subagentContextWindowTokens?: number;
   /**
    * Silence threshold handed to an inline child's SubagentStallClock
    * (ANYCODE_SUBAGENT_STALL_MS / `tools.subagentStallTimeoutMs`,

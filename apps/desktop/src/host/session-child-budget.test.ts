@@ -4,8 +4,8 @@ import { applySessionChildToolBudget, sessionChildCeiling, sessionContextWindow 
 
 describe("session child budgets", () => {
   it("caps the context at boot and after a model change while preserving smaller windows and root settings", () => {
-    expect(sessionContextWindow(true, 1_000_000)).toBe(128_000);
-    expect(sessionContextWindow(true, 200_000)).toBe(128_000);
+    expect(sessionContextWindow(true, 1_000_000)).toBe(1_000_000);
+    expect(sessionContextWindow(true, 200_000, 128_000)).toBe(128_000);
     expect(sessionContextWindow(true, 64_000)).toBe(64_000);
     expect(sessionContextWindow(false, 1_000_000)).toBe(1_000_000);
   });

@@ -2548,3 +2548,12 @@ it("accepts a subagent budget above 200 and rejects invalid budgets", () => {
   expect(valid.success && valid.data.tools.subagentMaxTurns).toBe(750);
   for (const value of [0, -1, 2.5, Number.MAX_SAFE_INTEGER + 1]) expect(parse(value).success).toBe(false);
 });
+
+ it("validates and repairs the subagent context window", () => {
+  const base = cloneDefaults();
+  expect(settingsSchema.safeParse({ ...base, tools: { ...base.tools, subagentContextWindowTokens: 50000 } }).success).toBe(true);
+  expect(settingsSchema.safeParse({ ...base, tools: { ...base.tools, subagentContextWindowTokens: 1 } }).success).toBe(false);
+  const result = parseSettings({ ...base, tools: { ...base.tools, subagentContextWindowTokens: 1 } });
+  expect(result.settings.tools.subagentContextWindowTokens).toBeUndefined();
+  expect(mergeSettings({ ...base, tools: { ...base.tools, subagentContextWindowTokens: 50000 } }, { tools: { subagentContextWindowTokens: "" } }).tools.subagentContextWindowTokens).toBeUndefined();
+});

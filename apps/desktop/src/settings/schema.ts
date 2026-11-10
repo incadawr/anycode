@@ -825,6 +825,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       // mirror of ANYCODE_NETWORK_WAIT_MAX_MS (env > settings).
       networkWaitMaxMs: z.number().optional(),
       subagentMaxTurns: z.number().int().safe().min(1).optional(),
+      subagentContextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional(),
       // slice 1: subagent stall-detector silence threshold override
       // (ANYCODE_SUBAGENT_STALL_MS). Distinct from `stallTimeoutMs` above.
       subagentStallTimeoutMs: z.number().optional(),
@@ -1155,6 +1156,8 @@ function sanitizeLoadedTurnLimits(raw: Record<string, unknown>, onInvalid?: (fie
       onInvalid?.(field);
     }
   }
+  const window = tools.subagentContextWindowTokens;
+  if (window !== undefined && (typeof window !== "number" || !Number.isInteger(window) || window < 1024 || window > 1000000)) delete tools.subagentContextWindowTokens;
   return { ...raw, tools };
 }
 
@@ -1167,6 +1170,7 @@ function sanitizeLoadedTurnLimits(raw: Record<string, unknown>, onInvalid?: (fie
 export function mergeSettings(base: AnycodeSettings, patch: SettingsPatch): AnycodeSettings {
   const merged = deepMerge(base, patch) as AnycodeSettings;
   if (patch.tools?.maxTurns === "") delete merged.tools.maxTurns;
+  if (patch.tools?.subagentContextWindowTokens === "") delete merged.tools.subagentContextWindowTokens;
   return merged;
 }
 

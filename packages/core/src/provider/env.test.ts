@@ -36,6 +36,11 @@ function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessE
 }
 
 describe("loadEnvConfig", () => {
+  it("parses and validates the subagent context window", () => {
+    const base = { [ENV_API_KEY]: "key-123", [ENV_MODEL]: "claude-x" };
+    expect(loadEnvConfig(envWith({ ...base, ANYCODE_SUBAGENT_CONTEXT_WINDOW: "50000" })).subagentContextWindowTokens).toBe(50000);
+    for (const value of ["no", "0", "1023", "1000001"]) expect(() => loadEnvConfig(envWith({ ...base, ANYCODE_SUBAGENT_CONTEXT_WINDOW: value }))).toThrow();
+  });
   it("loads all values when fully specified", () => {
     const config = loadEnvConfig(
       envWith({

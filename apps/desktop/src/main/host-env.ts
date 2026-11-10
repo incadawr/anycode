@@ -68,6 +68,7 @@ export const ENV_NETWORK_RETRY_BUDGET_MS = "ANYCODE_NETWORK_RETRY_BUDGET_MS";
  */
 export const ENV_NETWORK_WAIT_MAX_MS = "ANYCODE_NETWORK_WAIT_MAX_MS";
 /** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
+export const ENV_SUBAGENT_CONTEXT_WINDOW = "ANYCODE_SUBAGENT_CONTEXT_WINDOW";
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
  * adaptive turn budget (boolean); literal mirror of core's
@@ -485,6 +486,7 @@ const PROVIDER_ENV_KEYS: readonly string[] = [
   ENV_NETWORK_RETRY_BUDGET_MS,
   ENV_NETWORK_WAIT_MAX_MS,
   ENV_SUBAGENT_MAX_TURNS,
+  ENV_SUBAGENT_CONTEXT_WINDOW,
   ENV_ADAPTIVE_TURN_BUDGET,
   ENV_SUBAGENT_STALL_MS,
   ENV_REASONING_EFFORT,
@@ -1276,6 +1278,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_NETWORK_RETRY_BUDGET_MS, numToStr(settings.tools.networkRetryBudgetMs));
   fillFromSettings(env, ENV_NETWORK_WAIT_MAX_MS, numToStr(settings.tools.networkWaitMaxMs));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
+  fillFromSettings(env, ENV_SUBAGENT_CONTEXT_WINDOW, numToStr(settings.tools.subagentContextWindowTokens));
   // adaptive turn budget, boolean mirror (absent stays absent => OFF).
   fillFromSettings(
     env,

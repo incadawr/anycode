@@ -39,6 +39,7 @@ export interface CoreEnvConfig {
   maxTurns?: number;
   /** Turn budget override for subagent child loops (ANYCODE_SUBAGENT_MAX_TURNS). */
   subagentMaxTurns?: number;
+  subagentContextWindowTokens?: number;
   /**
    * adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
    * `tools.adaptiveTurnBudget`). true => progress-scaled grants and a base
@@ -237,11 +238,9 @@ export const DEFAULT_TOOL_CONCURRENCY = 4;
 /** Context window assumed when the provider does not say otherwise (env ANYCODE_CONTEXT_WINDOW). */
 export const DEFAULT_CONTEXT_WINDOW_TOKENS = 200_000;
 
-/** Child agents should compact well before a large parent context window fills. */
-export const SUBAGENT_CONTEXT_WINDOW_TOKENS = 128_000;
 export const SUBAGENT_BASH_RESULT_MAX_BYTES = 10_000;
-export function subagentContextWindow(tokens: number | undefined): number {
-  return Math.min(tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS, SUBAGENT_CONTEXT_WINDOW_TOKENS);
+export function subagentContextWindow(tokens: number | undefined, configured?: number): number {
+  return Math.min(tokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS, configured ?? Infinity);
 }
 
 /** Tokens reserved for model output when computing the effective window. */

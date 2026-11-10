@@ -49,6 +49,7 @@ below; the snippet shows only the sections discussed here.
   - `tools.concurrency`: parallel read-only tool calls (default 4).
   - `tools.stallTimeoutMs`: per-attempt provider stream watchdog (default 90000 ms).
   - `tools.maxTurns`: optional turn limit for an interactive top-level Native session; without it there is no turn limit.
+  - `tools.subagentContextWindowTokens`: optional child context window cap in tokens (1,024–1,000,000); by default children use their model window.
   - `tools.subagentMaxTurns`: turn limit for subagents (default 150, subject to role budgets). Accepts a positive integer.
   - `tools.maxRetries`: provider retry attempts (the pane's "Retry attempts"; default 8).
   - `tools.networkRetryBudgetMs`: wall-clock budget for riding out a network outage (the pane's "Network retry budget (ms)"; default 300000 ms, 5 minutes).
@@ -101,6 +102,7 @@ Variables already present in the app's launch environment win over settings:
 | `tools.concurrency` | `ANYCODE_TOOL_CONCURRENCY` |
 | `tools.stallTimeoutMs` | `ANYCODE_STALL_TIMEOUT_MS` |
 | `tools.maxTurns` | `ANYCODE_MAX_TURNS` |
+| `tools.subagentContextWindowTokens` | `ANYCODE_SUBAGENT_CONTEXT_WINDOW` |
 | `tools.subagentMaxTurns` | `ANYCODE_SUBAGENT_MAX_TURNS` |
 | `tools.subagentStallTimeoutMs` | `ANYCODE_SUBAGENT_STALL_MS` |
 | `tools.maxRetries` | `ANYCODE_MAX_RETRIES` |

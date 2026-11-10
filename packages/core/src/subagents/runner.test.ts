@@ -3725,10 +3725,16 @@ describe("buildChildConfig — child-model settings (defect F6)", () => {
     // Only the window moved; every other budget knob the resolver knows
     // nothing about survives the overlay, and the parent's object is not
     // mutated.
-    expect(child.context).toEqual({ contextWindowTokens: 128_000, keepRecentMessages: 7 });
+    expect(child.context).toEqual({ contextWindowTokens: 1_000_000, keepRecentMessages: 7 });
     expect(child.context).not.toBe(parent.context);
     expect(parent.context).toEqual(PARENT_CONTEXT);
     expect(parent.maxOutputTokens).toBe(8_192);
+  });
+
+  it("caps the resolved child model window when configured", () => {
+    const parent = makeParent({ context: PARENT_CONTEXT, subagentContextWindowTokens: 100_000 });
+    expect(buildChildConfig(parent, getPersona("explore"), REQ).context?.contextWindowTokens).toBe(100_000);
+    expect(buildChildConfig(parent, getPersona("explore"), REQ, { modelSettings: { contextWindowTokens: 64_000 } }).context?.contextWindowTokens).toBe(64_000);
   });
 
   it("an explicit child ceiling BELOW the cap survives the clamp unchanged", () => {
@@ -3776,7 +3782,7 @@ describe("buildChildConfig — child-model settings (defect F6)", () => {
 
     expect(child.maxOutputTokens).toBe(8_192);
     expect(child.reasoningEffort).toBe("medium");
-    expect(child.context).toEqual({ contextWindowTokens: 128_000, keepRecentMessages: 7 });
+    expect(child.context).toEqual({ contextWindowTokens: 200_000, keepRecentMessages: 7 });
   });
 });
 

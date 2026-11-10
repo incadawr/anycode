@@ -572,6 +572,7 @@ export interface AnycodeSettings {
     stallTimeoutMs?: number;
     maxTurns?: number;
     subagentMaxTurns?: number;
+    subagentContextWindowTokens?: number;
     subagentStallTimeoutMs?: number;
     /**
      * adaptive turn budget — progress-scaled ceiling grants and a
@@ -1335,7 +1336,7 @@ export type OAuthStartResult =
  */
 export type SettingsPatch = Omit<DeepPartial<AnycodeSettings>, "provider" | "tools"> & {
   /** Empty maxTurns clears the optional root turn limit. */
-  tools?: Omit<DeepPartial<AnycodeSettings["tools"]>, "maxTurns"> & { maxTurns?: number | "" };
+  tools?: Omit<DeepPartial<AnycodeSettings["tools"]>, "maxTurns" | "subagentContextWindowTokens"> & { maxTurns?: number | ""; subagentContextWindowTokens?: number | "" };
 };
 
 // ── connection CRUD request payloads (companions to the connection-* channels) ──

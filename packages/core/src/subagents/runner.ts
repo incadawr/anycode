@@ -468,7 +468,7 @@ export function buildChildConfig(
     // the parent's context object carries (budget knobs the resolver knows
     // nothing about) is preserved by the overlay.
     context: { ...parent.context, contextWindowTokens: subagentContextWindow(
-      extras?.modelSettings?.contextWindowTokens ?? parent.context?.contextWindowTokens,
+      extras?.modelSettings?.contextWindowTokens ?? parent.context?.contextWindowTokens, parent.subagentContextWindowTokens,
     ) },
     // Artifact store INHERITED — one of the few parent facilities a
     // child gets, because it is not a capability the child can act with: it

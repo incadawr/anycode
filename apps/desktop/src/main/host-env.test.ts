@@ -100,6 +100,12 @@ function settings(over: SettingsOver = {}): AnycodeSettings {
 const noSecret = async (_key: SecretKey): Promise<string | undefined> => undefined;
 const vaultSecret = (value: string) => async (_key: SecretKey): Promise<string | undefined> => value;
 
+it("mirrors the subagent context window with environment precedence", async () => {
+  const configured = settings({ tools: { subagentContextWindowTokens: 50000 } });
+  expect((await buildHostEnv({ bootEnv: {}, settings: configured, getSecret: noSecret })).ANYCODE_SUBAGENT_CONTEXT_WINDOW).toBe("50000");
+  expect((await buildHostEnv({ bootEnv: { ANYCODE_SUBAGENT_CONTEXT_WINDOW: "60000" }, settings: configured, getSecret: noSecret })).ANYCODE_SUBAGENT_CONTEXT_WINDOW).toBe("60000");
+});
+
 it("passes the active connection pricing snapshot and clears inherited stale values", async () => {
   const configured = settings({ provider: { id: "deepseek" } });
   configured.provider.connections[0]!.pricing = { mode: "subscription" };
