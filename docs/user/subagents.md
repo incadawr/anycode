@@ -50,8 +50,10 @@ Built-in read-only personas have no Bash, Write or Edit tools. Core session
 children additionally enforce a plan-mode gate for read-only profiles.
 
 In Native sessions, at most four new children can start per turn. Core children
-use a context window capped at 128,000 tokens and Bash output to the model is
-capped at 10,000 bytes.
+use their model's full context window by default; set
+`tools.subagentContextWindowTokens` (Settings → Tools → Context window
+(subagents)) or `ANYCODE_SUBAGENT_CONTEXT_WINDOW` to cap it. Bash output to the
+model is capped at 10,000 bytes.
 
 ## Profile files
 

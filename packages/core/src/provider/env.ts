@@ -182,8 +182,11 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
 
   const maxTurns = readOptionalInteger(env, ENV_MAX_TURNS);
   const subagentMaxTurns = readPositiveInteger(env, ENV_SUBAGENT_MAX_TURNS);
-  const subagentContextWindowTokens = readPositiveInteger(env, ENV_SUBAGENT_CONTEXT_WINDOW);
-  if (subagentContextWindowTokens !== undefined && (subagentContextWindowTokens < 1024 || subagentContextWindowTokens > 1000000)) throw new Error(`Invalid ${ENV_SUBAGENT_CONTEXT_WINDOW}: expected 1024–1000000`);
+  // Out-of-range values are clamped rather than rejected, so a stray launch env cannot stop a tab from booting.
+  const rawSubagentContextWindow = readPositiveInteger(env, ENV_SUBAGENT_CONTEXT_WINDOW);
+  const subagentContextWindowTokens = rawSubagentContextWindow === undefined
+    ? undefined
+    : Math.min(1_000_000, Math.max(1_024, rawSubagentContextWindow));
   const subagentStallTimeoutMs = readOptionalInteger(env, ENV_SUBAGENT_STALL_MS);
   const supervisorIdleMs = readPositiveInteger(env, ENV_SUPERVISOR_IDLE_MS);
   const maxOutputTokens = readOptionalInteger(env, ENV_MAX_OUTPUT_TOKENS);
