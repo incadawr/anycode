@@ -850,8 +850,12 @@ describe("output cap + status mapping", () => {
     const runner = createSubagentRunner(makeParent({ modelPort: model }));
 
     const outcome = await runner.run({ ...REQ, agentType: "explore" }, {});
-    expect(outcome.status).toBe("completed");
+    // Every step is cut, so the loop's bounded continuations run out and the
+    // run ends as an error; the reason leads and the cut text is still kept.
+    expect(outcome.status).toBe("error");
     expect(outcome.finalTurnFinishReason).toBe("length");
+    expect(outcome.finalText).toContain("cut off by the output token limit");
+    expect(outcome.finalText).toContain("cut short by the provider's own output ceiling");
   });
 
   it("a length-final run's kind:end progress carries finalTurnFinishReason, a stop-final run's does not", async () => {
