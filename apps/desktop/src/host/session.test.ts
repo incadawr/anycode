@@ -5242,13 +5242,15 @@ describe("Session — child mode: finalizeChildTerminal once-latch (F7, revised 
     }
   });
 
-  it("a final turn_end with finishReason \"length\" carries finalTurnFinishReason on the terminal report (internal status stays \"completed\"); \"stop\" omits it", async () => {
+  it("a final turn_end with finishReason \"length\" carries finalTurnFinishReason on the terminal report (an error once continuations run out); \"stop\" omits it", async () => {
     const lengthStep: ModelStreamEvent[] = [
       { type: "start" },
       { type: "text_delta", id: "t1", text: "cut off mid-report by the provider ceiling" },
       { type: "finish", finishReason: "length", usage: {} },
     ];
-    const h = createChildHarness({ steps: [lengthStep] });
+    // The loop continues a cut step twice before giving up, so the child is
+    // cut on the first step and on both continuations.
+    const h = createChildHarness({ steps: [lengthStep, lengthStep, lengthStep] });
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
@@ -5258,9 +5260,9 @@ describe("Session — child mode: finalizeChildTerminal once-latch (F7, revised 
 
       expect(h.onTerminal).toHaveBeenCalledTimes(1);
       const report = h.onTerminal.mock.calls[0]?.[0];
-      // Internal status keeps the frozen wire vocabulary; the non-success is
-      // produced downstream (notification formatter, renderer labels).
-      expect(report?.status).toBe("completed");
+      // Exhausted continuations end the child as an error; the cut finish
+      // reason still rides the terminal report.
+      expect(report?.status).toBe("error");
       expect(report?.finalTurnFinishReason).toBe("length");
     } finally {
       h.close();
