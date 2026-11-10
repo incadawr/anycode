@@ -2103,7 +2103,13 @@ export function SettingsScreen({
                   {!subagentMaxTurnsValid && <span className="settings-field-error" role="alert">Enter a positive whole number or leave blank.</span>}
                   <span className="settings-field-hint">Enter a positive whole number.</span>
                 </label>
-                <Input label="Subagent context window" className="settings-field-input" type="text" inputMode="numeric" value={subagentContextWindow} disabled={readOnly} placeholder="Same as the model" hint="Tokens; leave blank to use the model window. Range: 1,024–1,000,000." error={windowValid ? undefined : "Enter a whole number from 1,024 to 1,000,000."} onChange={(e) => setSubagentContextWindow(e.target.value)} />
+                <div className="settings-field settings-field--kit">
+                  <Input label="Context window (subagents)" className="settings-field-input" type="text" inputMode="numeric"
+                    value={subagentContextWindow} disabled={readOnly} placeholder="Same as the model"
+                    hint="Tokens, 1,024–1,000,000. Leave blank to use the model's full window."
+                    error={windowValid ? undefined : "Enter a whole number from 1,024 to 1,000,000."}
+                    onChange={(e) => setSubagentContextWindow(e.target.value)} />
+                </div>
                 <div className="settings-field">
                   <label className="settings-field-checkbox">
                     <input type="checkbox" checked={adaptiveTurnBudget === true} disabled={readOnly}

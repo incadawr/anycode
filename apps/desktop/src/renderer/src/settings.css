@@ -719,6 +719,27 @@
   color: var(--text-dim);
 }
 
+/* Kit field inside a settings list: match the neighbouring raw settings-field rows. */
+.settings-field--kit .ak-field {
+  gap: 0.3rem;
+}
+
+.settings-field--kit .ak-field__label {
+  font-size: var(--fs-sm);
+  font-weight: inherit;
+  color: var(--text-dim);
+}
+
+.settings-field--kit .ak-field__hint {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.settings-field--kit .ak-field__hint--error {
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
 .settings-field-error {
   color: var(--danger);
   font-size: var(--fs-xs);
