@@ -383,6 +383,11 @@ export class NodeExecutionAdapter implements ExecutionPort {
         killProcessTree(child, "SIGTERM");
         killTimer = setTimeout(() => {
           killProcessTree(child, "SIGKILL");
+          // A descendant in another process group can keep a pipe open even
+          // after escalation. Bound foreground Bash settlement in that case.
+          if (!settled && opts.settleOnShellExit) {
+            drainTimer = setTimeout(() => finish(status, child.exitCode, child.signalCode), PIPE_DRAIN_GRACE_MS);
+          }
         }, SIGKILL_GRACE_MS);
       };
 

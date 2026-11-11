@@ -1004,6 +1004,58 @@ describe("NodeExecutionAdapter", () => {
       }
     });
 
+    it.each(["timed_out", "cancelled"] as const)("bounds %s when a detached child holds a pipe", async (status) => {
+      const dir = await mkdtemp(join(tmpdir(), "anycode-detached-"));
+      const pidFile = join(dir, "pid");
+      const controller = new AbortController();
+      let deadline: NodeJS.Timeout | undefined;
+      try {
+        await writeFile(join(dir, "launcher.cjs"), `
+          const { spawn } = require("node:child_process");
+          const { writeFileSync } = require("node:fs");
+          const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
+            { detached: true, stdio: ["ignore", 1, 2] });
+          writeFileSync("pid", String(child.pid));
+          setInterval(() => {}, 1000);
+        `);
+        const started = Date.now();
+        const pending = adapter.run({
+          command: `${JSON.stringify(process.execPath)} launcher.cjs`, cwd: dir,
+          timeoutMs: status === "timed_out" ? 1000 : 10_000,
+          abortSignal: controller.signal, settleOnShellExit: true,
+        });
+        const readyDeadline = Date.now() + 3000;
+        while (!existsSync(pidFile) && Date.now() < readyDeadline) await new Promise((r) => setTimeout(r, 25));
+        expect(existsSync(pidFile)).toBe(true);
+        const pid = Number((await readFile(pidFile, "utf8")).trim());
+        expect(pid).toBeGreaterThan(1);
+        expect(isPidAlive(pid)).toBe(true);
+        if (status === "cancelled") controller.abort();
+        const result = await Promise.race([
+          pending,
+          new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("execution did not settle")), 3500); }),
+        ]);
+        expect(result.status).toBe(status);
+        expect(Date.now() - started).toBeLessThan(4500);
+        expect(isPidAlive(pid)).toBe(true);
+      } finally {
+        clearTimeout(deadline);
+        controller.abort();
+        try {
+          if (existsSync(pidFile)) {
+            const pid = Number((await readFile(pidFile, "utf8")).trim());
+            if (!Number.isInteger(pid) || pid <= 1) throw new Error("invalid detached child pid");
+            try { process.kill(pid, "SIGKILL"); } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+            }
+            const until = Date.now() + 3000;
+            while (await groupHasLiveProcesses(pid) && Date.now() < until) await new Promise((r) => setTimeout(r, 25));
+            expect(await groupHasLiveProcesses(pid)).toBe(false);
+          }
+        } finally { await rm(dir, { recursive: true, force: true }); }
+      }
+    }, 10_000);
+
     it("argv launchers wait for a worker's late output", async () => {
       const result = await adapter.runBinary({ file: "/bin/bash", args: ["-c", "(sleep 0.6; echo late-output) &"], cwd: tmpdir(), timeoutMs: 5000 });
       expect(result.status).toBe("completed");
