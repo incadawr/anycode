@@ -318,6 +318,7 @@ describe("NodeExecutionAdapter", () => {
         expect(result.status).toBe("timed_out");
 
         const pid = Number((await readFile(pidFile, "utf-8")).trim());
+        expect(pid).toBeGreaterThan(1);
         expect(Number.isNaN(pid)).toBe(false);
         expect(await waitPidDead(pid)).toBe(true);
       },
@@ -919,6 +920,32 @@ describe("NodeExecutionAdapter", () => {
         expect(result.stdout).toContain("fg-done");
         expect(result.durationMs).toBeLessThan(5_000);
         const pid = Number((await readFile(pidFile, "utf-8")).trim());
+        expect(pid).toBeGreaterThan(1);
+        expect(isPidAlive(pid)).toBe(true);
+        process.kill(pid, "SIGKILL");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not SIGPIPE an unredirected job that writes after the call returned", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "anycode-bg-"));
+      try {
+        const result = await new NodeExecutionAdapter().run({
+          command: `cd ${dir} && { sh -c 'echo $PPID > pid.tmp'; mv pid.tmp pid; sleep 1.2; echo late; echo done > wrote; sleep 30; } & sleep 0.2; echo fg`,
+          cwd: dir,
+          timeoutMs: 10_000,
+        });
+        expect(result.status).toBe("completed");
+        expect(result.stdout).toContain("fg");
+        const pid = Number((await readFile(join(dir, "pid"), "utf-8")).trim());
+        expect(pid).toBeGreaterThan(1);
+        const deadline = Date.now() + 5_000;
+        while (!existsSync(join(dir, "wrote")) && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        expect(existsSync(join(dir, "wrote"))).toBe(true);
+        await new Promise((r) => setTimeout(r, 200));
         expect(isPidAlive(pid)).toBe(true);
         process.kill(pid, "SIGKILL");
       } finally {

@@ -343,12 +343,14 @@ export class NodeExecutionAdapter implements ExecutionPort {
       };
 
       child.stdout?.on("data", (chunk: Buffer) => {
+        if (settled) return; // post-settle: keep draining into nothing
         opts.onOutput?.({ stream: "stdout", text: chunk.toString("utf-8") });
         const res = appendCapped(stdout, chunk, maxBytes);
         stdout = res.text;
         if (res.truncated) stdoutTruncated = true;
       });
       child.stderr?.on("data", (chunk: Buffer) => {
+        if (settled) return;
         opts.onOutput?.({ stream: "stderr", text: chunk.toString("utf-8") });
         const res = appendCapped(stderr, chunk, maxBytes);
         stderr = res.text;
@@ -387,14 +389,17 @@ export class NodeExecutionAdapter implements ExecutionPort {
       // job (or the subshell bash forks for `a && b &`) keeps them open long after
       // the shell itself has exited, which used to stall the call until the tool
       // timeout. Once the shell has exited, give the pipes a short grace period to
-      // drain, then report the shell's own result and release our read ends.
+      // drain, then report the shell's own result and stop tracking the pipes.
       child.on("exit", (code, signal) => {
         if (settled) return;
         const drainTimer = setTimeout(() => {
           const status: ExecStatus = forcedStatus ?? (code === 0 ? "completed" : "failed");
           finish(status, code, signal);
-          child.stdout?.destroy();
-          child.stderr?.destroy();
+          // Do not destroy: closing our read ends would SIGPIPE an unredirected
+          // background job on its first write. The data listeners keep draining
+          // (and discarding); unref so the pipes never keep this process alive.
+          (child.stdout as { unref?: () => void } | null)?.unref?.();
+          (child.stderr as { unref?: () => void } | null)?.unref?.();
         }, PIPE_DRAIN_GRACE_MS);
         drainTimer.unref?.();
       });
