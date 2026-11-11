@@ -66,6 +66,21 @@ describe("InProcessTaskManager", () => {
     manager = new InProcessTaskManager(exec);
   }
 
+  it.skipIf(process.platform === "win32")("tracks and kills a task whose shell exited while a child holds the pipe", async () => {
+    await fresh();
+    const res = manager.start({ command: "(sleep 0.6; echo late; sleep 30) &", cwd: tmpDir });
+    expect(res.ok).toBe(true);
+    const id = res.ok ? res.taskId : "";
+    try {
+      expect(await waitFor(() => (manager.peekOutput(id)?.output ?? "").includes("late"))).toBe(true);
+      expect(manager.get(id)?.status).toBe("running");
+      expect(manager.kill(id)).toBe(true);
+      expect(await waitFor(() => manager.get(id)?.status === "killed")).toBe(true);
+    } finally {
+      await manager.disposeAll();
+    }
+  });
+
   it("runs a short command to completion and maps status/exit + queues one notice", async () => {
     await fresh();
     const res = manager.start({ command: "echo hi", cwd: tmpDir });

@@ -97,11 +97,14 @@ function cancelledResult(start: number): ExecResult {
   };
 }
 
+function discardOutput(): void {}
+
 /** How long after the shell exits we keep waiting for its stdout/stderr pipes to close. */
 const PIPE_DRAIN_GRACE_MS = 300;
 
 interface TrackOptions {
   timeoutMs: number;
+  settleOnShellExit?: boolean;
   maxOutputBytes: number;
   abortSignal?: AbortSignal;
   /** Written to the child's stdin then EOF; only meaningful when the spawn used a "pipe" stdin. */
@@ -130,6 +133,7 @@ export class NodeExecutionAdapter implements ExecutionPort {
         }),
       {
         timeoutMs: request.timeoutMs,
+        settleOnShellExit: request.settleOnShellExit,
         maxOutputBytes: request.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
         abortSignal: request.abortSignal,
         stdin: request.stdin,
@@ -323,13 +327,27 @@ export class NodeExecutionAdapter implements ExecutionPort {
       let settled = false;
       let killTimer: NodeJS.Timeout | undefined;
       let forcedStatus: ExecStatus | undefined;
+      let drainTimer: NodeJS.Timeout | undefined;
 
       const finish = (status: ExecStatus, exitCode: number | null, signal: string | null) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutTimer);
-        clearTimeout(killTimer);
+        // A shell can exit while a SIGTERM-resistant descendant remains.
+        // Do not cancel escalation merely because the shell or pipes closed.
+        if (!forcedStatus) clearTimeout(killTimer);
+        clearTimeout(drainTimer);
         opts.abortSignal?.removeEventListener("abort", onAbort);
+        child.stdout?.removeListener("data", onStdout);
+        child.stderr?.removeListener("data", onStderr);
+        child.stdout?.on("data", discardOutput);
+        child.stderr?.on("data", discardOutput);
+        (child.stdout as { unref?: () => void } | null)?.unref?.();
+        (child.stderr as { unref?: () => void } | null)?.unref?.();
+        child.removeListener("exit", onExit);
+        child.removeListener("close", onClose);
+        child.removeListener("error", onError);
+        child.on("error", discardOutput);
         resolve({
           status,
           exitCode,
@@ -340,22 +358,24 @@ export class NodeExecutionAdapter implements ExecutionPort {
           stderrTruncated,
           durationMs: Date.now() - start,
         });
+        stdout = "";
+        stderr = "";
       };
 
-      child.stdout?.on("data", (chunk: Buffer) => {
-        if (settled) return; // post-settle: keep draining into nothing
+      const onStdout = (chunk: Buffer) => {
         opts.onOutput?.({ stream: "stdout", text: chunk.toString("utf-8") });
         const res = appendCapped(stdout, chunk, maxBytes);
         stdout = res.text;
         if (res.truncated) stdoutTruncated = true;
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        if (settled) return;
+      };
+      const onStderr = (chunk: Buffer) => {
         opts.onOutput?.({ stream: "stderr", text: chunk.toString("utf-8") });
         const res = appendCapped(stderr, chunk, maxBytes);
         stderr = res.text;
         if (res.truncated) stderrTruncated = true;
-      });
+      };
+      child.stdout?.on("data", onStdout);
+      child.stderr?.on("data", onStderr);
 
       const startKillSequence = (status: ExecStatus) => {
         if (settled || forcedStatus) return;
@@ -375,34 +395,26 @@ export class NodeExecutionAdapter implements ExecutionPort {
       };
       opts.abortSignal?.addEventListener("abort", onAbort);
 
-      child.on("error", (err) => {
-        if (!stderr) stderr = err instanceof Error ? err.message : String(err);
+      const onError = (err: Error) => {
+        if (!stderr) stderr = err.message;
         finish("spawn_error", null, null);
-      });
-
-      child.on("close", (code, signal) => {
+      };
+      const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
         const status: ExecStatus = forcedStatus ?? (code === 0 ? "completed" : "failed");
         finish(status, code, signal);
-      });
-
-      // `close` waits for every holder of the stdout/stderr pipes. A backgrounded
-      // job (or the subshell bash forks for `a && b &`) keeps them open long after
-      // the shell itself has exited, which used to stall the call until the tool
-      // timeout. Once the shell has exited, give the pipes a short grace period to
-      // drain, then report the shell's own result and stop tracking the pipes.
-      child.on("exit", (code, signal) => {
-        if (settled) return;
-        const drainTimer = setTimeout(() => {
-          const status: ExecStatus = forcedStatus ?? (code === 0 ? "completed" : "failed");
-          finish(status, code, signal);
-          // Do not destroy: closing our read ends would SIGPIPE an unredirected
-          // background job on its first write. The data listeners keep draining
-          // (and discarding); unref so the pipes never keep this process alive.
-          (child.stdout as { unref?: () => void } | null)?.unref?.();
-          (child.stderr as { unref?: () => void } | null)?.unref?.();
-        }, PIPE_DRAIN_GRACE_MS);
+      };
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        if (settled || forcedStatus || !opts.settleOnShellExit) return;
+        // A successful shell exit before the deadline fixes the result even if
+        // descendants keep the pipes open beyond the deadline.
+        clearTimeout(timeoutTimer);
+        opts.abortSignal?.removeEventListener("abort", onAbort);
+        drainTimer = setTimeout(() => finish(code === 0 ? "completed" : "failed", code, signal), PIPE_DRAIN_GRACE_MS);
         drainTimer.unref?.();
-      });
+      };
+      child.on("error", onError);
+      child.on("close", onClose);
+      child.on("exit", onExit);
     });
   }
 }

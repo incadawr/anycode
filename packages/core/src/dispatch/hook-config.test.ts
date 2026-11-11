@@ -7,6 +7,8 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NodeExecutionAdapter } from "../adapters/node/node-execution.js";
+import { tmpdir } from "node:os";
 import {
   HOOK_STDOUT_CAP_BYTES,
   createCommandHook,
@@ -459,5 +461,16 @@ describe("createCommandHook — observers and UserPromptSubmit", () => {
     )(upsInput(), freshSignal());
     expect(result).toBeUndefined();
     expect(warn).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe.skipIf(process.platform === "win32")("command hook output lifetime", () => {
+  it("waits for a worker's delayed deny decision", async () => {
+    const hook = preHookOf(createCommandHook(new NodeExecutionAdapter(), {
+      event: "PreToolUse", command: ` (sleep 0.6; echo '{"permissionDecision":"deny","reason":"late deny"}') &`,
+    }, tmpdir()));
+    const result = await hook(preInput(), new AbortController().signal);
+    expect(result?.permissionDecision).toBe("deny");
   });
 });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SIGKILL_GRACE_MS } from "../../types/config.js";
@@ -905,60 +905,114 @@ describe("NodeExecutionAdapter", () => {
   });
 
   describe.skipIf(process.platform === "win32")("backgrounded jobs holding the pipes", () => {
+    async function groupHasLiveProcesses(pgid: number): Promise<boolean> {
+      if (process.platform !== "linux") {
+        const { execFileSync } = await import("node:child_process");
+        const ps = execFileSync("ps", ["-eo", "pgid=,stat="], { encoding: "utf8" });
+        return ps.split("\n").some((line) => {
+          const [group, state] = line.trim().split(/\s+/);
+          return Number(group) === pgid && !!state && !state.startsWith("Z");
+        });
+      }
+      // PID 1 in containers may leave killed processes as zombies. They are
+      // no longer running, so inspect Linux state as well as process group.
+      for (const pid of await readdir("/proc")) {
+        if (!/^\d+$/.test(pid)) continue;
+        try {
+          const stat = await readFile(`/proc/${pid}/stat`, "utf8");
+          const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+          if (Number(fields[2]) === pgid && fields[0] !== "Z") return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      return false;
+    }
+
+    async function cleanupGroup(dir: string): Promise<void> {
+      let pgid: number;
+      try { pgid = Number((await readFile(join(dir, "pgid"), "utf-8")).trim()); } catch { return; }
+      if (!Number.isInteger(pgid) || pgid <= 1) throw new Error("invalid process group");
+      try { process.kill(-pgid, "SIGKILL"); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+      const deadline = Date.now() + 3000;
+      while (Date.now() < deadline) {
+        if (!await groupHasLiveProcesses(pgid)) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`process group ${pgid} survived cleanup`);
+    }
+
     it("returns when the shell exits and leaves the job running", async () => {
       const dir = await mkdtemp(join(tmpdir(), "anycode-bg-"));
       try {
-        const pidFile = join(dir, "pid");
-        // `a && b &` backgrounds a subshell that keeps stdout/stderr open while b runs.
         const result = await new NodeExecutionAdapter().run({
-          command: `cd ${dir} && { sleep 30 & echo $! > pid; wait; } & sleep 0.3; echo fg-done`,
-          cwd: dir,
-          timeoutMs: 10_000,
+          command: `echo $$ > pgid; cd ${dir} && { sleep 30 & echo $! > pid; wait; } & sleep 0.3; echo fg-done`,
+          cwd: dir, timeoutMs: 10_000, settleOnShellExit: true,
         });
         expect(result.status).toBe("completed");
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain("fg-done");
         expect(result.durationMs).toBeLessThan(5_000);
-        const pid = Number((await readFile(pidFile, "utf-8")).trim());
+        const pid = Number((await readFile(join(dir, "pid"), "utf-8")).trim());
         expect(pid).toBeGreaterThan(1);
         expect(isPidAlive(pid)).toBe(true);
-        process.kill(pid, "SIGKILL");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        try { await cleanupGroup(dir); } finally { await rm(dir, { recursive: true, force: true }); }
       }
     });
 
-    it("does not SIGPIPE an unredirected job that writes after the call returned", async () => {
+    it("drains unredirected output while the host remains alive", async () => {
       const dir = await mkdtemp(join(tmpdir(), "anycode-bg-"));
       try {
         const result = await new NodeExecutionAdapter().run({
-          command: `cd ${dir} && { sh -c 'echo $PPID > pid.tmp'; mv pid.tmp pid; sleep 1.2; echo late; echo done > wrote; sleep 30; } & sleep 0.2; echo fg`,
-          cwd: dir,
-          timeoutMs: 10_000,
+          command: `echo $$ > pgid; cd ${dir} && { sleep 1.2; echo late; echo done > wrote; sleep 30; } & sleep 0.2; echo fg`,
+          cwd: dir, timeoutMs: 10_000, settleOnShellExit: true,
         });
         expect(result.status).toBe("completed");
-        expect(result.stdout).toContain("fg");
-        const pid = Number((await readFile(join(dir, "pid"), "utf-8")).trim());
-        expect(pid).toBeGreaterThan(1);
         const deadline = Date.now() + 5_000;
-        while (!existsSync(join(dir, "wrote")) && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 50));
-        }
+        while (!existsSync(join(dir, "wrote")) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
         expect(existsSync(join(dir, "wrote"))).toBe(true);
-        await new Promise((r) => setTimeout(r, 200));
-        expect(isPidAlive(pid)).toBe(true);
-        process.kill(pid, "SIGKILL");
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        try { await cleanupGroup(dir); } finally { await rm(dir, { recursive: true, force: true }); }
       }
     });
 
+    it("does not time out during the drain grace after shell exit", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "anycode-bg-"));
+      try {
+        const result = await adapter.run({ command: "echo $$ > pgid; sleep 3 & sleep 0.2; echo finished", cwd: dir, timeoutMs: 350, settleOnShellExit: true });
+        expect(result.status).toBe("completed");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("finished");
+      } finally {
+        try { await cleanupGroup(dir); } finally { await rm(dir, { recursive: true, force: true }); }
+      }
+    });
+
+    it("escalates after timeout when a descendant ignores SIGTERM", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "anycode-bg-"));
+      try {
+        const result = await adapter.run({ command: `echo $$ > pgid; bash -c 'trap "" TERM; echo ready; while :; do sleep 1; done' & wait`, cwd: dir, timeoutMs: 400, settleOnShellExit: true });
+        expect(result.status).toBe("timed_out");
+        expect(result.stdout).toContain("ready");
+        const pgid = Number((await readFile(join(dir, "pgid"), "utf-8")).trim());
+        expect(await groupHasLiveProcesses(pgid)).toBe(false);
+      } finally {
+        try { await cleanupGroup(dir); } finally { await rm(dir, { recursive: true, force: true }); }
+      }
+    });
+
+    it("argv launchers wait for a worker's late output", async () => {
+      const result = await adapter.runBinary({ file: "/bin/bash", args: ["-c", "(sleep 0.6; echo late-output) &"], cwd: tmpdir(), timeoutMs: 5000 });
+      expect(result.status).toBe("completed");
+      expect(result.stdout).toContain("late-output");
+      expect(result.stdoutTruncated).toBe(false);
+    });
+
     it("still times out and kills a stuck foreground command", async () => {
-      const result = await new NodeExecutionAdapter().run({
-        command: "echo started; sleep 30",
-        cwd: tmpdir(),
-        timeoutMs: 500,
-      });
+      const result = await adapter.run({ command: "echo started; sleep 30", cwd: tmpdir(), timeoutMs: 500, settleOnShellExit: true });
       expect(result.status).toBe("timed_out");
       expect(result.stdout).toContain("started");
     });

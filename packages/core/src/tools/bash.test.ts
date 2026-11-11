@@ -50,6 +50,15 @@ describe("bashTool", () => {
     expect(result.error).toContain("err-marker");
   });
 
+  it("reports the actual rolling tail and capture truncation on failure", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-bash-"));
+    const result = await bashTool.handler({ command: "head -c 1100000 /dev/zero | tr '\\0' x; echo FINAL-MARKER; sleep 30", timeout: 700 }, ctxFor(tmpDir));
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("capture truncated");
+    expect(result.error).toContain("FINAL-MARKER");
+    expect(result.output?.stdoutTruncated).toBe(true);
+  });
+
   it("runs a command and reports stdout/exit code", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-bash-"));
     const result = await bashTool.handler({ command: "echo hi-there" }, ctxFor(tmpDir));

@@ -14,6 +14,8 @@ export interface ExecRequest {
   /** Data written to the child's stdin, then EOF. Omitted → stdin closed (current "ignore" behavior). */
   stdin?: string;
   timeoutMs: number;
+  /** Return shortly after shell exit even if descendants hold output pipes. */
+  settleOnShellExit?: boolean;
   /** Per-stream capture cap; overflow sets the corresponding *Truncated flag. */
   maxOutputBytes?: number;
   abortSignal?: AbortSignal;

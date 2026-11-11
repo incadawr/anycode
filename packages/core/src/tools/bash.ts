@@ -24,6 +24,7 @@ const metadata: ToolMetadata = {
     "- In POSIX shells, a pipeline normally reports the exit code of its LAST command, so `make | tail` can report 0 even when make fails. " +
     "When supported by the shell, use `set -o pipefail;` before the pipeline, or redirect to a log file and check the producer's exit code before reading the log.\n" +
     "- A nonzero exitCode means the command failed, even if the tool call returned normally. A null exitCode means no exit code is available; check status. Background starts return a task id instead of an exit code.\n" +
+    "- Redirect background job stdout and stderr to a file or /dev/null if it must survive the AnyCode process exiting. During the session, output after the foreground call returns is discarded.\n" +
     "- timeout is in milliseconds (max 600000); the default is 120000 for foreground commands and 21600000 for background commands.",
   readOnly: false,
   destructive: true,
@@ -62,11 +63,19 @@ export const bashTool: ToolDefinition<BashInput, BashOutput> = {
   handler: async (input, ctx) => {
     const timeoutMs = input.timeout ?? metadata.timeoutMs;
 
+    let stdoutTail: Buffer = Buffer.alloc(0);
+    let stderrTail: Buffer = Buffer.alloc(0);
     const result = await ctx.ports.exec.run({
       command: input.command,
       cwd: ctx.cwd,
       timeoutMs,
       maxOutputBytes: metadata.maxOutputBytes,
+      settleOnShellExit: true,
+      onOutput: ({ stream, text }) => {
+        const chunk = Buffer.from(text);
+        if (stream === "stdout") stdoutTail = rollingTail(stdoutTail, chunk);
+        else stderrTail = rollingTail(stderrTail, chunk);
+      },
       abortSignal: ctx.abortSignal,
     });
 
@@ -91,7 +100,7 @@ export const bashTool: ToolDefinition<BashInput, BashOutput> = {
     return {
       ok,
       output,
-      error: ok ? undefined : describeFailure(result),
+      error: ok ? undefined : describeFailure(result, stdoutTail.toString("utf-8"), stderrTail.toString("utf-8")),
       errorKind,
     };
   },
@@ -101,17 +110,21 @@ export const bashTool: ToolDefinition<BashInput, BashOutput> = {
 
 const FAILURE_TAIL_BYTES = 2000;
 
-function tailOf(text: string): string {
-  const buf = Buffer.from(text, "utf-8");
-  if (buf.length <= FAILURE_TAIL_BYTES) return text;
-  return "..." + buf.subarray(buf.length - FAILURE_TAIL_BYTES).toString("utf-8");
+function rollingTail(current: Buffer, chunk: Buffer): Buffer {
+  const combined = Buffer.concat([current, chunk]);
+  return Buffer.from(combined.subarray(Math.max(0, combined.length - FAILURE_TAIL_BYTES)));
 }
 
-/** Status line plus the tail of captured output, so a timeout tells the model what the command printed. */
-function describeFailure(result: { status: string; stdout: string; stderr: string }): string {
+/** Status and bounded rolling output tails, including a capture truncation notice. */
+function describeFailure(result: { status: string; stdout: string; stderr: string; stdoutTruncated: boolean; stderrTruncated: boolean }, stdoutTail: string, stderrTail: string): string {
   const parts = [`command ${result.status}`];
-  if (result.stdout.length > 0) parts.push(`stdout (tail):\n${tailOf(result.stdout)}`);
-  if (result.stderr.length > 0) parts.push(`stderr (tail):\n${tailOf(result.stderr)}`);
+  for (const [name, captured, tail, truncated] of [
+    ["stdout", result.stdout, stdoutTail, result.stdoutTruncated],
+    ["stderr", result.stderr, stderrTail, result.stderrTruncated],
+  ] as const) {
+    const text = tail || captured.slice(-FAILURE_TAIL_BYTES);
+    if (text) parts.push(`${name} (tail${truncated ? "; capture truncated" : ""}):\n${text}`);
+  }
   return parts.join("\n");
 }
 
