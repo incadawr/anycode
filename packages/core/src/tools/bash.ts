@@ -91,13 +91,29 @@ export const bashTool: ToolDefinition<BashInput, BashOutput> = {
     return {
       ok,
       output,
-      error: ok ? undefined : `command ${result.status}`,
+      error: ok ? undefined : describeFailure(result),
       errorKind,
     };
   },
 
   formatPersistedModelContent: formatPersistedBashOutput,
 };
+
+const FAILURE_TAIL_BYTES = 2000;
+
+function tailOf(text: string): string {
+  const buf = Buffer.from(text, "utf-8");
+  if (buf.length <= FAILURE_TAIL_BYTES) return text;
+  return "..." + buf.subarray(buf.length - FAILURE_TAIL_BYTES).toString("utf-8");
+}
+
+/** Status line plus the tail of captured output, so a timeout tells the model what the command printed. */
+function describeFailure(result: { status: string; stdout: string; stderr: string }): string {
+  const parts = [`command ${result.status}`];
+  if (result.stdout.length > 0) parts.push(`stdout (tail):\n${tailOf(result.stdout)}`);
+  if (result.stderr.length > 0) parts.push(`stderr (tail):\n${tailOf(result.stderr)}`);
+  return parts.join("\n");
+}
 
 /** Fields of the persisted result this envelope speaks about; anything else is ignored. */
 interface PersistedBashFields {

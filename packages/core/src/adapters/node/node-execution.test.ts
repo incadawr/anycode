@@ -902,4 +902,38 @@ describe("NodeExecutionAdapter", () => {
       }
     });
   });
+
+  describe.skipIf(process.platform === "win32")("backgrounded jobs holding the pipes", () => {
+    it("returns when the shell exits and leaves the job running", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "anycode-bg-"));
+      try {
+        const pidFile = join(dir, "pid");
+        // `a && b &` backgrounds a subshell that keeps stdout/stderr open while b runs.
+        const result = await new NodeExecutionAdapter().run({
+          command: `cd ${dir} && { sleep 30 & echo $! > pid; wait; } & sleep 0.3; echo fg-done`,
+          cwd: dir,
+          timeoutMs: 10_000,
+        });
+        expect(result.status).toBe("completed");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("fg-done");
+        expect(result.durationMs).toBeLessThan(5_000);
+        const pid = Number((await readFile(pidFile, "utf-8")).trim());
+        expect(isPidAlive(pid)).toBe(true);
+        process.kill(pid, "SIGKILL");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("still times out and kills a stuck foreground command", async () => {
+      const result = await new NodeExecutionAdapter().run({
+        command: "echo started; sleep 30",
+        cwd: tmpdir(),
+        timeoutMs: 500,
+      });
+      expect(result.status).toBe("timed_out");
+      expect(result.stdout).toContain("started");
+    });
+  });
 });

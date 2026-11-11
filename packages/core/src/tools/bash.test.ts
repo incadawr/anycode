@@ -38,6 +38,18 @@ describe("bashTool", () => {
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("includes the captured output tail in the timeout error", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-bash-"));
+    const result = await bashTool.handler(
+      { command: "echo out-marker; echo err-marker >&2; sleep 30", timeout: 700 },
+      ctxFor(tmpDir),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/^command timed_out/);
+    expect(result.error).toContain("out-marker");
+    expect(result.error).toContain("err-marker");
+  });
+
   it("runs a command and reports stdout/exit code", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-bash-"));
     const result = await bashTool.handler({ command: "echo hi-there" }, ctxFor(tmpDir));

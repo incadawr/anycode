@@ -97,6 +97,9 @@ function cancelledResult(start: number): ExecResult {
   };
 }
 
+/** How long after the shell exits we keep waiting for its stdout/stderr pipes to close. */
+const PIPE_DRAIN_GRACE_MS = 300;
+
 interface TrackOptions {
   timeoutMs: number;
   maxOutputBytes: number;
@@ -378,6 +381,22 @@ export class NodeExecutionAdapter implements ExecutionPort {
       child.on("close", (code, signal) => {
         const status: ExecStatus = forcedStatus ?? (code === 0 ? "completed" : "failed");
         finish(status, code, signal);
+      });
+
+      // `close` waits for every holder of the stdout/stderr pipes. A backgrounded
+      // job (or the subshell bash forks for `a && b &`) keeps them open long after
+      // the shell itself has exited, which used to stall the call until the tool
+      // timeout. Once the shell has exited, give the pipes a short grace period to
+      // drain, then report the shell's own result and release our read ends.
+      child.on("exit", (code, signal) => {
+        if (settled) return;
+        const drainTimer = setTimeout(() => {
+          const status: ExecStatus = forcedStatus ?? (code === 0 ? "completed" : "failed");
+          finish(status, code, signal);
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+        }, PIPE_DRAIN_GRACE_MS);
+        drainTimer.unref?.();
       });
     });
   }
