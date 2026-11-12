@@ -9,9 +9,9 @@
  * view, performs the write and hands the refreshed view back. Every rule
  * that decides what is shown lives in `session-peers-dialog-model.ts`.
  */
-import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Modal, SearchInput, Switch } from "../ui/index.js";
+import { Button, Modal, SearchInput, Switch } from "../ui/index.js";
 import type { NativeProjectView, SessionPeerView } from "../../../shared/session-peer-view.js";
 import {
   commonReasonLine,
@@ -40,14 +40,26 @@ export interface SessionPeersDialogProps {
   error?: string;
   /** Ask the caller to write one peer grant. */
   onChange(peerKey: string, enabled: boolean): void;
+  /**
+   * Switch native session access on for the current folder: the same action as the
+   * environment menu's "Native session access" switch. Offered next to the reason
+   * "off for this folder"; a peer folder's own switch is not reachable from here.
+   */
+  onEnableCurrent?(): void;
 }
 
-export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, onChange }: SessionPeersDialogProps) {
+export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, onChange, onEnableCurrent }: SessionPeersDialogProps) {
   useOverlayFlag(open);
   const [query, setQuery] = useState("");
   const searchHost = useRef<HTMLDivElement>(null);
   // The search field takes the initial focus. SearchInput does not forward a
   // ref, so the input is looked up inside the host it renders in.
+  const focusSearch = useCallback(() => {
+    const active = document.activeElement;
+    // Only when the focus fell out of the dialog because the button went away.
+    if (active !== null && active !== document.body) return;
+    searchHost.current?.querySelector<HTMLInputElement>("input")?.focus();
+  }, []);
   const initialFocus = useMemo<RefObject<HTMLElement | null>>(() => ({
     get current() { return searchHost.current?.querySelector<HTMLInputElement>("input") ?? null; },
   }), []);
@@ -79,7 +91,14 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
         </div>
         {view && knownPeers.length > 0 && <p className="session-peers-summary">{grantedSummary(knownPeers)}</p>}
         {note && <p className="session-peers-note">{note}</p>}
-        {common && <p id={commonId} className="session-peers-common-reason">{commonReasonLine(common.reason, common.count)}</p>}
+        {common && (
+          <div className="session-peers-common">
+            <p id={commonId} className="session-peers-common-reason">{commonReasonLine(common.reason, common.count)}</p>
+            {common.reason === "current_off" && onEnableCurrent && project && (
+              <EnableCurrentButton busy={busy} onEnable={onEnableCurrent} project={project} onGone={focusSearch} />
+            )}
+          </div>
+        )}
         {error && <div role="alert" className="session-peers-error">{error}</div>}
         {!project && !error && <p className="session-peers-empty">{peersDialogText.loading}</p>}
         {project && knownPeers.length === 0 && <p className="session-peers-empty">{peersDialogText.noPeers}</p>}
@@ -87,7 +106,7 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
           <p className="session-peers-empty">{peersDialogText.noMatch}</p>
         )}
         {project && rows.map(peer => (
-          <PeerRow key={peer.key} project={project} peer={peer} busy={busy} onChange={onChange}
+          <PeerRow key={peer.key} project={project} peer={peer} busy={busy} onChange={onChange} onEnableCurrent={onEnableCurrent} onEnableGone={focusSearch}
             commonId={common && !peer.granted ? commonId : undefined} />
         ))}
       </div>
@@ -95,11 +114,28 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
   );
 }
 
-function PeerRow({ project, peer, busy, onChange, commonId }: {
+/**
+ * Its own control next to the reason line, never inside it: the peer switches
+ * use the reason as their description. When the save succeeds the button goes
+ * away; `onGone` then moves the focus to a stop that still exists.
+ */
+function EnableCurrentButton({ busy, onEnable, project, onGone }: { busy: boolean; onEnable(): void; project: NativeProjectView; onGone(): void }) {
+  const goneRef = useRef(onGone);
+  goneRef.current = onGone;
+  useEffect(() => () => goneRef.current(), []);
+  return (
+    <Button size="sm" type="button" className="session-peers-enable" disabled={busy} onClick={onEnable}
+      aria-label={`Enable native session access for ${project.name}`}>Enable</Button>
+  );
+}
+
+function PeerRow({ project, peer, busy, onChange, onEnableCurrent, onEnableGone, commonId }: {
   project: NativeProjectView;
   peer: NativeProjectView;
   busy: boolean;
   onChange(peerKey: string, enabled: boolean): void;
+  onEnableCurrent?(): void;
+  onEnableGone(): void;
   /** Set when the row's reason is shown once above the list: the row points at that line. */
   commonId?: string;
 }) {
@@ -122,6 +158,11 @@ function PeerRow({ project, peer, busy, onChange, commonId }: {
       {ownReason && (
         <span id={reasonId} className="session-peers-row-reason">
           {reason === "busy" ? reasonText : peer.granted ? `Currently inactive: ${reasonText}` : reasonText}
+        </span>
+      )}
+      {ownReason && reason === "current_off" && onEnableCurrent && (
+        <span className="session-peers-row-action">
+          <EnableCurrentButton busy={busy} onEnable={onEnableCurrent} project={project} onGone={onEnableGone} />
         </span>
       )}
       <span className="session-peers-row-switch">

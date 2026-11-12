@@ -33,9 +33,9 @@ export const peersDialogText = {
   reason: {
     busy: "Saving…",
     current_untrusted: "This folder is not trusted",
-    current_off: "Native access is off for this folder",
+    current_off: "Native session access is off for this folder",
     peer_untrusted: "That folder is not trusted",
-    peer_off: "Native access is off for that folder",
+    peer_off: "Native session access is off for that folder",
   } as Record<PeerBlockedReason, string>,
 };
 

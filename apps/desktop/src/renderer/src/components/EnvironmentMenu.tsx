@@ -305,7 +305,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             <div className="environment-menu-row">
               <Folder />
               <span className="environment-menu-row-main">
-                <span>{basename(workspacePath)}</span>
+                <span className="environment-workspace-name" title={basename(workspacePath)}>{basename(workspacePath)}</span>
                 <span className="environment-menu-row-detail environment-workspace-path" title={workspacePath}><bdi dir="ltr">{workspacePath}</bdi></span>
               </span>
               {copied && <span role="status">Copied</span>}
@@ -347,7 +347,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
             {!statusKnown && <div className="environment-menu-note">Checking repository…</div>}
           </section>
           <section className="environment-menu-section environment-menu-group" aria-label="Session access">
-            <div className="environment-menu-title">Session access <span className="environment-menu-scope">{accessCount ? `${accessCount} on` : "this session only"}</span></div>
+            <div className="environment-menu-title">Session access <span className="environment-menu-scope">{accessCount ? `${accessNames.map(name => name === "Full browser access" ? "Browser" : name).join(" + ")} on` : "this session only"}</span></div>
             {/* the per-session Sessions API switch (any engine; main owns the state). */}
             <SessionAccessRow onEnabledChange={onSessionsEnabledChange} />
             {tabId && <NativeSessionAccess controller={native} onManage={() => { setOpen(false); setPeersOpen(true); }} />}
@@ -361,7 +361,8 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
       {tabId && native.view?.available !== false && <SessionPeersDialog open={peersOpen} tabId={tabId}
         view={native.view} busy={native.busy} error={native.error}
         onClose={() => setPeersOpen(false)}
-        onChange={(peerKey, enabled) => void native.save({ peerKey, enabled })} />}
+        onChange={(peerKey, enabled) => void native.save({ peerKey, enabled })}
+        onEnableCurrent={() => void native.save({ enabled: true })} />}
     </div>
   );
 }

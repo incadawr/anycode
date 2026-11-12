@@ -38,11 +38,11 @@ it("a shared session in a project that is off offers Enable for the canonical pr
   const set = vi.fn(async (): Promise<CommunicationMutationResult> => ({ ok: true, view: viewWith(true) }));
   const t = await mount(bridgeWith(set));
   try {
-    expect(t.host.textContent).toContain("Project not enabled for agents");
+    expect(t.host.textContent).toContain("Allow agents to open tasks here");
     await click(enableButton(t.host));
     expect(set).toHaveBeenCalledWith("/canonical/project", true);
     expect(enableButton(t.host)).toBeNull();
-    expect(t.host.textContent).not.toContain("Project not enabled for agents");
+    expect(t.host.textContent).not.toContain("Allow agents to open tasks here");
   } finally { await t.close(); }
 });
 
@@ -53,6 +53,8 @@ it("keeps the warning and the Enable button when saving the project switch fails
     await click(enableButton(t.host));
     expect(set).toHaveBeenCalledWith("/canonical/project", true);
     expect(enableButton(t.host)).not.toBeNull();
-    expect(t.host.textContent).toContain("Project not enabled for agents");
+    expect(t.host.textContent).toContain("Allow agents to open tasks here");
+    // The failure is shown next to the button, not swallowed.
+    expect(t.host.querySelector(".environment-menu-row-error")?.textContent).toBe("The settings could not be saved or the folder could not be read.");
   } finally { await t.close(); }
 });

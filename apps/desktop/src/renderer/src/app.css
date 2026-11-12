@@ -1963,6 +1963,7 @@ button.environment-menu-row:hover,
 /* The row's title line: the title plus the optional help button. */
 .environment-menu-row-heading {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-1);
 }
@@ -1970,8 +1971,7 @@ button.environment-menu-row:hover,
 /* The help button that carries a row's long explanation. Scoped to the
    help component's own classes so no other tooltip in the app changes. */
 .row-help {
-  display: inline-flex;
-  flex-shrink: 0;
+  display: contents;
 }
 
 .row-help-button {
@@ -1998,16 +1998,14 @@ button.environment-menu-row:hover,
   outline-offset: 1px;
 }
 
-/* The tooltip is anchored to the menu row, so it starts at the menu's
-   content edge. Its width is capped by the row (the menu's content width)
-   minus the same inset on both sides, so it never runs past the menu. It
-   floats over the rows below. */
+/* The tooltip sits in the row's own flow, on a line of its own under the
+   title, so it pushes the rows below down instead of covering them. Its width
+   is capped by the row (the menu's content width) minus the same inset on
+   both sides, so it never runs past the menu. */
 .row-help-tooltip {
-  position: absolute;
-  z-index: 21;
-  top: 100%;
-  left: var(--sp-2);
-  width: max-content;
+  display: none;
+  flex: 0 0 100%;
+  box-sizing: border-box;
   max-width: min(20rem, calc(100% - 2 * var(--sp-2)));
   padding: var(--sp-1) var(--sp-2);
   border: 1px solid var(--border);
@@ -2020,15 +2018,13 @@ button.environment-menu-row:hover,
   line-height: 1.4;
   text-align: left;
   white-space: normal;
-  opacity: 0;
   pointer-events: none;
-  transition: opacity var(--dur-1) var(--ease-out);
 }
 
-/* The tooltip text stays in the DOM either way: aria-describedby must
-   resolve to it, so it is faded out rather than removed. */
+/* The tooltip text stays in the DOM either way: aria-describedby resolves to
+   it even while it is not displayed. */
 .row-help-tooltip[data-open="true"] {
-  opacity: 1;
+  display: block;
 }
 
 .environment-menu-row-detail {
@@ -2140,6 +2136,21 @@ button.environment-menu-row:hover,
   font-size: var(--fs-2xs);
 }
 
+/* Enable is its own control beside the reason line it resolves. */
+.session-peers-common {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.session-peers-row-action {
+  grid-column: 1 / 3;
+  grid-row: 3;
+  justify-self: start;
+  margin-top: var(--sp-1);
+}
+
 /* The header subtitle is one line: the tail of the path with an ellipsis. */
 .session-peers-dialog .ak-modal__subtitle {
   margin-top: 0.15rem;
@@ -2217,6 +2228,12 @@ button.environment-menu-row:hover,
 /* A row with an error line wraps it onto its own line under the whole row. */
 .environment-menu-row.environment-menu-row-with-error {
   flex-wrap: wrap;
+}
+
+/* A row with help keeps its icon and control on the title line: the tooltip
+   opens under the title and must not re-centre them. */
+.environment-menu-row.environment-menu-row-with-help {
+  align-items: flex-start;
 }
 
 .environment-menu-row-with-error > .environment-menu-row-error {
@@ -2327,6 +2344,7 @@ button.environment-menu-row:hover,
 
 .environment-git-count { flex: none; font-size: var(--fs-xs); }
 .environment-workspace-path { direction: rtl; text-align: left; }
+.environment-workspace-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .environment-branch-count { margin-left: auto; color: var(--text-3); font-size: var(--fs-xs); }
 .environment-switch-error { max-height: 10rem; overflow: auto; }
 

@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Session access menu and Sessions API wording: the project switch is called "Allow agents to open tasks here" everywhere (refusal texts, Settings, menu), the Enable button shows a failed save, the help tooltip no longer covers the rows below it, the handle hint and error are plain English, "Manage projects…" names what it manages, the folder row stays on one line, and the Peer projects dialog can enable native session access for this folder. A `create_session` firstMessage refusal now names the new tab's ids. The migration of the old folder list no longer loses its list when settings.json cannot be read or the state file cannot be written, and handles a removed worktree.
+
 ## [0.0.100] - 2026-11-12
 
 ### Changed

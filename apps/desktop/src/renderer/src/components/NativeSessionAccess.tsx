@@ -19,7 +19,7 @@ export function NativeSessionAccess({ controller, onManage }: {
     {view?.available && <div className="native-access-summary">
       <span className="native-access-summary-text">Communicates with {count} {count === 1 ? "project" : "projects"}</span>{" "}
       {count > 0 && (!view.project.enabled || !view.project.trusted) && <><span className="native-access-summary-state">Currently inactive</span>{" "}</>}
-      <Button variant="ghost" size="sm" className="native-access-manage" onClick={onManage}>Manage…</Button>
+      <Button variant="ghost" size="sm" className="native-access-manage" onClick={onManage}>Manage projects…</Button>
     </div>}
     {error && <div role="alert" className="environment-menu-note">{error}</div>}
   </div>;

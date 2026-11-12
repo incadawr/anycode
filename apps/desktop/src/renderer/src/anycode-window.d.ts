@@ -665,8 +665,6 @@ declare global {
         get(): Promise<CommunicationGetResult>;
         setEnabled(enabled: boolean): Promise<CommunicationMutationResult>;
         setPort(port: number | null): Promise<CommunicationMutationResult>;
-        addWorkspace(): Promise<CommunicationMutationResult>;
-        removeWorkspace(workspace: string): Promise<CommunicationMutationResult>;
         regenerateToken(): Promise<CommunicationRegenerateResult>;
         copyConfig(client: CommunicationCopyClient): Promise<CommunicationCopyConfigResult>;
         setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;

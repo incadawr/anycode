@@ -2239,6 +2239,32 @@ describe("Sessions API access: project switch x session switch", () => {
     }
   });
 
+  it("create_session: firstMessage refused because the project switch went off keeps the project_not_enabled reason and names the tab ids", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-access-fm-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    let projectOn = true;
+    const tabs: Array<{ sessionId: string; workspace: string; state: string; pid: number }> = [];
+    const request = vi.fn(async (_s: string, op: string, payload?: unknown): Promise<unknown> => (op === "send_message" ? { envelope: payload, state: "queued" } : { engine: "codex", state: "idle" }));
+    const service = await startCommunicationServer({
+      manager: { listTabs: () => tabs, communicationRequest: request }, userData: dir, config: { workspaces: [], port: 0, discoveryFile },
+      isSessionExposed: () => true, isProjectEnabled: () => projectOn,
+      createSessionByAgent: async (): Promise<CreateSessionOutcome> => { tabs.push({ sessionId: "created", workspace: dir, state: "running", pid: 1 }); projectOn = false; return { ok: true, sessionId: "created", tabId: "tab-created" }; },
+      readyTimeoutMs: 150, readyPollMs: 10,
+    });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "access-fm", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    const result = await client.callTool({ name: "create_session", arguments: { workspace: dir, firstMessage: "hello" } });
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    const text = callText(result);
+    expect(text).toContain("project_not_enabled:");
+    expect(text).toContain("sessionId created");
+    expect(text).toContain("tabId tab-created");
+    expect(request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);
+  });
+
   it("an unknown session id is not_found whatever the switches say", async () => {
     const f = await accessFixture({ project: false, session: false });
     expect(callText(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "ghost" } }))).toMatch(/^not_found:/);

@@ -99,11 +99,11 @@ describe("SessionsApiPaneView", () => {
     expect(on).toContain("Paste it into your agent&#x27;s MCP settings and restart the agent.");
   });
 
-  it("step 1 also points at the project switch that gates agent-opened tasks", () => {
-    const html = render(props({ view: base({ enabled: true }) }));
-    expect(html).toContain("Choose which sessions to share");
-    expect(html).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu)`);
-    expect(html).toContain("Agents reach a session, and may open new tasks, only in a project whose");
+  it("one line under the enable switch names the project switch, whether or not the API is on", () => {
+    for (const enabled of [false, true]) {
+      const html = render(props({ view: base({ enabled }) }));
+      expect(html).toContain(`A project must also have “${AGENT_PROJECT_SWITCH_LABEL}” switched on (sidebar project ⋯ menu)`);
+    }
   });
 
   it("Advanced is a collapsed details disclosure by default", () => {
@@ -182,7 +182,7 @@ describe("SessionsApiPaneView agent projects", () => {
     const empty = render(props());
     expect(empty).toContain("No project allows agents to open tasks yet");
     const html = render(props({ view: base({ agentProjects: [{ key: "/Users/me/app", name: "app", displayPath: "~/app" }, { key: "/srv/api", name: "api", displayPath: "/srv/api" }] }) }));
-    expect(html).toContain("Agents may open tasks here");
+    expect(html).toContain("Allow agents to open tasks here");
     expect(html).toContain("~/app");
     expect(html).toContain("/srv/api");
     expect(html).not.toContain("No project allows agents");

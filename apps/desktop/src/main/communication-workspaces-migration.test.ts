@@ -1,8 +1,10 @@
 import { mkdirSync, mkdtempSync, existsSync, rmSync, realpathSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentProjectsStore } from "./communication-agent-projects.js";
+import { loadSettings } from "../settings/files.js";
+import { cloneDefaults } from "../settings/schema.js";
 import { migrateAllowedFolders } from "./communication-workspaces-migration.js";
 
 const dirs: string[] = [];
@@ -19,8 +21,9 @@ function setup() {
   const warnings: string[] = [];
   const sessions = new Map<string, string>();
   const folderRoots = new Map<string, string>();
-  const run = (workspaces: string[], exposed: string[] = [], store = projects, maxAttempts?: number) => migrateAllowedFolders({
-    markerFile, workspaces, projects: store,
+  const run = (workspaces: string[], exposed: string[] = [], store = projects, maxAttempts?: number, extra: { settingsLoaded?: boolean; markerFile?: string } = {}) => migrateAllowedFolders({
+    markerFile: extra.markerFile ?? markerFile, workspaces, projects: store,
+    ...(extra.settingsLoaded !== undefined ? { settingsLoaded: extra.settingsLoaded } : {}),
     exposedSessionIds: () => exposed,
     resolveSession: async (id) => sessions.get(id) ?? null,
     resolveFolder: async (folder) => folderRoots.get(folder) ?? folder,
@@ -146,5 +149,69 @@ describe("allowed folders migration", () => {
       exposedSessionIds: () => [], resolveSession: async () => null,
     });
     expect(result.ran).toBe(false);
+  });
+
+  it("a listed root and a worktree that is gone: the root is switched on and the pass finishes", async () => {
+    const f = setup();
+    const gone = join(f.b, "wt-gone");
+    f.folderRoots.set(gone, f.b);
+    expect(await f.run([f.b, gone])).toEqual({ migrated: [f.b], ran: true });
+    expect(f.projects.isAllowed(f.b)).toBe(true);
+    expect(f.projects.isAllowed(gone)).toBe(false);
+  });
+
+  it("only a worktree that is gone is listed: its project root is still switched on", async () => {
+    const f = setup();
+    const gone = join(f.b, "wt-gone");
+    f.folderRoots.set(gone, f.b);
+    expect(await f.run([gone])).toEqual({ migrated: [f.b], ran: true });
+  });
+
+  it("a listed folder that is missing and has no project stays pending", async () => {
+    const f = setup();
+    const gone = join(f.root, "nowhere");
+    expect(await f.run([f.a, gone])).toEqual({ migrated: [f.a], ran: false });
+    expect(f.projects.isAllowed(gone)).toBe(false);
+  });
+
+  it("when the state file cannot be written nothing is switched on, so a project turned off is not turned back on", async () => {
+    const f = setup();
+    writeFileSync(join(f.root, "blocked"), "x");
+    const blocked = join(f.root, "blocked", "marker.json");
+    expect(await f.run([f.a], [], f.projects, undefined, { markerFile: blocked })).toEqual({ migrated: [], ran: false });
+    expect(f.projects.isAllowed(f.a)).toBe(false);
+    expect(existsSync(blocked)).toBe(false);
+  });
+
+  it("settings that were not loaded change nothing and write no state, so the list is still migrated on the next start", async () => {
+    const f = setup();
+    f.sessions.set("s1", f.b);
+    expect(await f.run([], ["s1"], f.projects, undefined, { settingsLoaded: false })).toEqual({ migrated: [], ran: false });
+    expect(existsSync(f.markerFile)).toBe(false);
+    expect(f.projects.allowedKeys()).toEqual([]);
+    expect(await f.run([f.a])).toEqual({ migrated: [f.a], ran: true });
+    expect(f.projects.isAllowed(f.a)).toBe(true);
+  });
+
+  it.each([
+    ["unreadable", (file: string) => mkdirSync(file)],
+    ["broken JSON", (file: string) => writeFileSync(file, "{ not json")],
+  ])("startup wiring: a settings file that is %s defers the migration, and the next good start migrates the saved list", async (_name, breakIt) => {
+    const f = setup();
+    const settingsFile = join(dirname(f.markerFile), "settings.json");
+    breakIt(settingsFile);
+    const loaded = await loadSettings(settingsFile);
+    expect(loaded.loadFailed).toBe(true);
+    // Exactly what index.ts passes at startup.
+    expect(await f.run(loaded.settings.communication?.workspaces ?? [], [], f.projects, undefined, { settingsLoaded: loaded.loadFailed !== true })).toEqual({ migrated: [], ran: false });
+    expect(existsSync(f.markerFile)).toBe(false);
+    // Next start: the file is readable again and still holds the old list.
+    rmSync(settingsFile, { recursive: true, force: true });
+    writeFileSync(settingsFile, JSON.stringify({ ...cloneDefaults(), communication: { ...cloneDefaults().communication, workspaces: [f.a] } }));
+    const good = await loadSettings(settingsFile);
+    expect(good.loadFailed).toBeUndefined();
+    expect(good.settings.communication?.workspaces).toEqual([f.a]);
+    expect(await f.run(good.settings.communication?.workspaces ?? [], [], f.projects, undefined, { settingsLoaded: good.loadFailed !== true })).toEqual({ migrated: [f.a], ran: true });
+    expect(f.projects.isAllowed(f.a)).toBe(true);
   });
 });

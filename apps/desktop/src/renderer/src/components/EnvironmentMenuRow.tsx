@@ -44,7 +44,7 @@ export function EnvironmentMenuRow({ icon, title, detail, detailTitle, detailTon
     : help;
   const hasError = error !== undefined && error !== null && error !== "";
   return (
-    <div className={`environment-menu-row${hasError ? " environment-menu-row-with-error" : ""}`} role="group" aria-label={ariaLabel}>
+    <div className={`environment-menu-row${hasError ? " environment-menu-row-with-error" : ""}${helpSlot ? " environment-menu-row-with-help" : ""}`} role="group" aria-label={ariaLabel}>
       {icon}
       <span className="environment-menu-row-main">
         <span className="environment-menu-row-heading">

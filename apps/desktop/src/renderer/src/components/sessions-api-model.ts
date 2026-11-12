@@ -24,7 +24,9 @@ export const SESSIONS_API_NODE_HINT = "Needs Node 22+ where the agent runs.";
 export const SESSIONS_API_FOOTER =
   "The token is stored only in a private file on this computer and is never shown here. Anyone who can read that file can message shared sessions.";
 /** The Advanced row that lists projects where agents may open tasks (view, plus a Turn off action; turning one on is the sidebar project menu). */
-export const SESSIONS_API_AGENT_PROJECTS_LABEL = "Agents may open tasks here";
+export const SESSIONS_API_AGENT_PROJECTS_LABEL = AGENT_PROJECT_SWITCH_LABEL;
+/** One line under the enable switch: the project-level switch is the second requirement for agent access. */
+export const SESSIONS_API_PROJECT_SWITCH_NOTE = `A project must also have “${AGENT_PROJECT_SWITCH_LABEL}” switched on (sidebar project ⋯ menu) before agents can reach its sessions.`;
 /** The row's STATE label: every listed project is ON (main lists only allowed ones). */
 export const SESSIONS_API_AGENT_PROJECT_ON = "On";
 /** The row's ACTION label: the listed project is on, so the button turns it off (never a bare "Off", which reads as state). */
@@ -34,13 +36,11 @@ export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. A project must 
 /**
  * The step-1 hint: says WHERE a session is switched on (the session's own ⋯
  * environment menu) before the live count, so the pane explains per-session
- * sharing instead of only listing "Currently shared: 4". It also names the
- * second, project-level switch — agents may open new tasks in a project only
- * when that switch is on — using the sidebar menu's own label.
+ * sharing instead of only listing "Currently shared: 4". The project-level
+ * switch is stated once, in SESSIONS_API_PROJECT_SWITCH_NOTE under the enable switch.
  */
 export const SESSIONS_API_SHARE_HINT =
-  "Open a session's ⋯ environment menu and turn on Sessions API; only sessions you switch on are shared. Currently shared: {count}. " +
-  `Agents reach a session, and may open new tasks, only in a project whose “${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu).`;
+  "Open a session's ⋯ environment menu and turn on Sessions API; only sessions you switch on are shared. Currently shared: {count}.";
 
 export type SessionsApiTone = "ok" | "danger" | "muted";
 
@@ -65,7 +65,6 @@ export function sessionsApiStatusTone(status: CommunicationStatus, envControlled
 function errorDetailText(detail: CommunicationStatus["detail"]): string {
   switch (detail) {
     case "port in use": return "the port is already in use; choose another port.";
-    case "folder not found": return "a folder in the list is no longer available; remove it or re-add it.";
     case "host not ready": return "the app is still starting; try again in a moment.";
     default: return "the server could not start. Check the app log.";
   }
@@ -108,9 +107,6 @@ export function mutationRefusalText(reason: CommunicationMutationReason): string
     case "folder_changed": return "The folder changed while you were confirming trust. Try again.";
     case "env_controlled": return SESSIONS_API_ENV_NOTE + ".";
     case "cancelled": return "";
-    case "not_a_directory": return "That path is not a folder.";
-    case "duplicate": return "That folder is already in the list.";
-    case "too_many": return "You can add at most 20 folders.";
     case "not_found": return "That session is no longer open.";
     case "not_running": return "The Sessions API is not listening.";
     default: return "The change could not be made.";
@@ -125,8 +121,8 @@ export function sessionSwitchDetail(enabled: boolean): string {
 }
 
 /** The effective-state line when the session is shared but its project switch is off. */
-export const SESSION_PROJECT_OFF_TITLE = "Project not enabled for agents";
-export const SESSION_PROJECT_OFF_DETAIL = "Agents cannot reach this session until the project allows them.";
+export const SESSION_PROJECT_OFF_TITLE = `“${AGENT_PROJECT_SWITCH_LABEL}” is off`;
+export const SESSION_PROJECT_OFF_DETAIL = "Agents cannot reach this session until it is switched on for this project.";
 export const SESSION_PROJECT_ENABLE_LABEL = "Enable";
 
 /**
@@ -135,7 +131,7 @@ export const SESSION_PROJECT_ENABLE_LABEL = "Enable";
  * reach it because the project switch is off (the row then offers Enable).
  */
 export function sessionEffectiveAccess(enabled: boolean, projectEnabled: boolean): { detail: string; blockedByProject: boolean } {
-  if (enabled && !projectEnabled) return { detail: `Shared, but ${SESSION_PROJECT_OFF_TITLE.toLowerCase()}`, blockedByProject: true };
+  if (enabled && !projectEnabled) return { detail: `Shared, but ${SESSION_PROJECT_OFF_TITLE}`, blockedByProject: true };
   return { detail: sessionSwitchDetail(enabled), blockedByProject: false };
 }
 
@@ -159,14 +155,14 @@ export function sessionApprovalsLabel(enabled: boolean): string {
 export const SESSION_HANDLE_LABEL = "Handle (optional)";
 export const SESSION_HANDLE_PLACEHOLDER = "Agent name";
 /** The row's visible secondary line; the full explanation is the row's help tooltip. */
-export const SESSION_HANDLE_DETAIL = "Shown in list_sessions";
+export const SESSION_HANDLE_DETAIL = "Shown in the session list for agents";
 /** The full explanation behind the row's help button: what the name is for. */
-export const SESSION_HANDLE_HINT = "A short name external agents see in list_sessions to find this session, e.g. build-bot. Leave empty to show only the session id.";
+export const SESSION_HANDLE_HINT = "A short name external agents see in their session list to find this session, e.g. build-bot. Leave empty to show only the session id.";
 
 /** The inline error under the handle field (plain text). `null` = nothing to show. */
 export function handleErrorText(reason: Extract<CommunicationHandleResult, { ok: false }>["reason"] | undefined): string | null {
   switch (reason) {
-    case "invalid": return "Use lowercase letters, digits and - _ . @, up to 64.";
+    case "invalid": return "Use lowercase letters, digits, hyphens, underscores, dots or @ (max 64 characters).";
     case "duplicate": return "Another live session already uses this handle.";
     case "unknown_tab": return "That session is no longer open.";
     case "io_error": return "The handle could not be saved.";

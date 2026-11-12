@@ -2,8 +2,7 @@
  * Sessions API control-plane IPC: the Settings → Sessions API
  * pane's only write path. Exported pure handlers over a deps bag (unit-testable
  * without ipcMain), zod `.strict()` on every payload, and the renderer NEVER
- * supplies a filesystem path: folders come only from the native dialog owned by
- * main (`pickFolder`), and `remove-workspace` is an exact-match lookup key.
+ * supplies a filesystem path: the sidebar names its workspace and main canonicalises it.
  *
  * Writes go through `withSettingsFileLock` (the same discipline as
  * recognizer-set): load -> mutate `settings.communication` -> save -> apply the
@@ -20,16 +19,13 @@ import { z } from "zod";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import {
-  COMMUNICATION_ADD_WORKSPACE_CHANNEL,
   COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL,
   COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL,
   COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL,
   COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL,
   COMMUNICATION_COPY_CONFIG_CHANNEL,
   COMMUNICATION_GET_CHANNEL,
-  COMMUNICATION_MAX_WORKSPACES,
   COMMUNICATION_REGENERATE_TOKEN_CHANNEL,
-  COMMUNICATION_REMOVE_WORKSPACE_CHANNEL,
   COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL,
   COMMUNICATION_SET_ENABLED_CHANNEL,
   COMMUNICATION_SET_PORT_CHANNEL,
@@ -73,8 +69,6 @@ export interface CommunicationIpcDeps {
   tabs(): ReadonlyArray<{ tabId: string; sessionId: string; workspace?: string; projectRoot?: string }>;
   /** The legacy env override; when set, every write is refused and the pane is read-only. */
   env(): string | undefined;
-  /** Native folder dialog owned by main; resolves to an absolute path or undefined when cancelled. */
-  pickFolder(): Promise<string | undefined>;
   /** Stable userData copy of the stdio adapter, or null when this build does not carry it. */
   stdioScriptPath(): string | null;
   realpath(path: string): Promise<string>;
@@ -84,7 +78,6 @@ export interface CommunicationIpcDeps {
   realpathSync(path: string): string;
   homedir(): string;
   offerEmptyFolderTrust(workspace: string): Promise<{ folder: string } | "folder_changed">;
-  stat(path: string): Promise<{ isDirectory(): boolean }>;
 }
 
 type Block = NonNullable<AnycodeSettings["communication"]>;
@@ -94,7 +87,6 @@ const EMPTY_BLOCK: Block = { enabled: false, workspaces: [], defaultSessionAcces
 const emptyPayload = z.object({}).strict();
 const enabledSchema = z.object({ enabled: z.boolean() }).strict();
 const portSchema = z.object({ port: z.number().int().min(0).max(65535).nullable() }).strict();
-const removeSchema = z.object({ workspace: z.string().min(1).max(4096) }).strict();
 const copySchema = z.object({ client: z.enum(["claude-code", "codex", "generic"]) }).strict();
 const defaultAccessSchema = z.object({ access: z.enum(["off", "on"]) }).strict();
 const sessionAccessSchema = z.object({ tabId: z.string().min(1).max(200), enabled: z.boolean() }).strict();
@@ -207,45 +199,6 @@ export async function handleSetDefaultAccess(deps: CommunicationIpcDeps, raw: un
   if (!parsed.success) return { ok: false, reason: "invalid" };
   // The default only seeds NEW sessions; it does not restart the server.
   return mutateBlock(deps, async (block) => ({ ok: true, apply: false, block: { ...block, defaultSessionAccess: parsed.data.access } }));
-}
-
-/**
- * Adds a folder chosen in the native dialog. The dialog is the only source: the
- * payload carries no path (`.strict()` rejects one). Validated: absolute,
- * resolvable, a directory, not a duplicate by realpath, under the cap.
- */
-export async function handleAddWorkspace(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationMutationResult> {
-  if (!emptyPayload.safeParse(raw).success) return { ok: false, reason: "invalid" };
-  if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
-  const picked = await deps.pickFolder();
-  if (picked === undefined) return { ok: false, reason: "cancelled" };
-  if (!isAbsolute(picked)) return { ok: false, reason: "invalid" };
-  let resolved: string;
-  try {
-    resolved = await deps.realpath(picked);
-    if (!(await deps.stat(resolved)).isDirectory()) return { ok: false, reason: "not_a_directory" };
-  } catch {
-    return { ok: false, reason: "io_error" };
-  }
-  return mutateBlock(deps, async (block) => {
-    const existing = new Set<string>();
-    for (const entry of block.workspaces) {
-      try { existing.add(await deps.realpath(entry)); } catch { existing.add(entry); }
-    }
-    if (existing.has(resolved)) return { ok: false, reason: "duplicate" };
-    if (block.workspaces.length >= COMMUNICATION_MAX_WORKSPACES) return { ok: false, reason: "too_many" };
-    return { ok: true, apply: true, block: { ...block, workspaces: [...block.workspaces, resolved] } };
-  });
-}
-
-/** Removes an EXACT stored entry. The value is a lookup key, never a new path; unknown => not_found. */
-export async function handleRemoveWorkspace(deps: CommunicationIpcDeps, raw: unknown): Promise<CommunicationMutationResult> {
-  const parsed = removeSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false, reason: "invalid" };
-  return mutateBlock(deps, async (block) => {
-    if (!block.workspaces.includes(parsed.data.workspace)) return { ok: false, reason: "not_found" };
-    return { ok: true, apply: true, block: { ...block, workspaces: block.workspaces.filter((w) => w !== parsed.data.workspace) } };
-  });
 }
 
 /** Sidebar check state. Main canonicalises; the renderer never learns a key. */
@@ -407,8 +360,6 @@ export function registerCommunicationIpc(deps: CommunicationIpcDeps): void {
   guardedIpcHandle(COMMUNICATION_GET_CHANNEL, (_event, raw: unknown) => handleCommunicationGet(deps, raw));
   guardedIpcHandle(COMMUNICATION_SET_ENABLED_CHANNEL, (_event, raw: unknown) => handleSetEnabled(deps, raw));
   guardedIpcHandle(COMMUNICATION_SET_PORT_CHANNEL, (_event, raw: unknown) => handleSetPort(deps, raw));
-  guardedIpcHandle(COMMUNICATION_ADD_WORKSPACE_CHANNEL, (_event, raw: unknown) => handleAddWorkspace(deps, raw));
-  guardedIpcHandle(COMMUNICATION_REMOVE_WORKSPACE_CHANNEL, (_event, raw: unknown) => handleRemoveWorkspace(deps, raw));
   guardedIpcHandle(COMMUNICATION_REGENERATE_TOKEN_CHANNEL, (_event, raw: unknown) => handleRegenerateToken(deps, raw));
   guardedIpcHandle(COMMUNICATION_COPY_CONFIG_CHANNEL, (_event, raw: unknown) => handleCopyConfig(deps, raw));
   guardedIpcHandle(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetDefaultAccess(deps, raw));

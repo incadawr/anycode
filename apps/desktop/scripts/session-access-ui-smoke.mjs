@@ -74,7 +74,7 @@ try {
     await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:2,y:2});
     await d.evaluate(`document.querySelector('.environment-menu .row-help-button').focus()`); await delay();
     await shot(`help-focus-${theme}-${width}`,`!!document.querySelector('[role=tooltip][data-open=true]')`,{tooltip:true});
-    await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage…'))?.click()`); await delay();
+    await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage projects…'))?.click()`); await delay();
     await shot(`dialog-${theme}-${width}`,`document.querySelectorAll('.session-peers-row').length === 50`);
     console.log('ROWS', await d.evaluate(`JSON.stringify([...document.querySelectorAll('.session-peers-row')].map(x=>x.dataset.granted))`));
     await check('granted first',`(()=>{const x=[...document.querySelectorAll('.session-peers-row')].map(e=>e.dataset.granted);return x.length===50 && x.includes('true') && x.every((v,i)=>v!=='true'||!x.slice(0,i).includes('false'))})()`);
@@ -98,7 +98,7 @@ try {
     await check('real Escape focus returned',`!!document.activeElement?.matches('button.environment-trigger[aria-label^=Environment]')`);
     await check('overlay preview restored',`!document.body.innerText.includes('Preview hidden')`);
     for (const how of ['close button','outside']) {
-      await menu(); await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage…'))?.click()`); await delay();
+      await menu(); await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage projects…'))?.click()`); await delay();
       if (how==='close button') await d.evaluate(`document.querySelector('.session-peers-dialog button[aria-label="Close"]').click()`);
       else { await d.cdp.call('Input.dispatchMouseEvent',{type:'mousePressed',x:2,y:2,button:'left',clickCount:1}); await d.cdp.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:2,y:2,button:'left',clickCount:1}); }
       await delay(); console.log('ACTIVE AFTER '+how.toUpperCase(),JSON.stringify(await d.evaluate(`(()=>{const e=document.activeElement;return {tag:e?.tagName,aria:e?.getAttribute('aria-label'),text:e?.textContent?.trim().slice(0,100)}})()`)));
@@ -119,7 +119,7 @@ try {
     await shot('handle-error',`document.body.innerText.includes('Use lowercase letters')`); await dismiss();
   });
   await attempt('project off and revoke',async()=>{
-    await menu(); await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage…'))?.click()`); await delay();
+    await menu(); await d.evaluate(`[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Manage projects…'))?.click()`); await delay();
     const off=await d.invoke('sessionPeers.set',{tabId:a.tabId,projectKey:a.workspace,enabled:false}); if(!off.ok) throw Error('off failed');
     const before=await d.invoke('sessionPeers.get',a.tabId); const count=before.view.peers.filter(p=>p.granted).length;
     await d.evaluate(`document.querySelector('.session-peers-row[data-granted=true] [role=switch]')?.click()`); await delay();

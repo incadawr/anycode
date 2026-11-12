@@ -471,7 +471,7 @@ export function createBridge(options = {}) {
         if (stopped) throw new StopError("stopped");
         if (error instanceof ToolError) {
           const text = error.message;
-          if (text === "Session unavailable or outside authorized workspace" || /^(not_found|not_exposed|project_not_enabled|workspace_not_allowed):/.test(text)) {
+          if (text === "Session unavailable or outside authorized workspace" || /^(not_found|not_exposed|project_not_enabled):/.test(text)) {
             await reply(entry.chatId, `Session ${entry.label} is no longer shared or was closed.`);
             await clearSelectionIf(entry.chatId, entry.sessionId);
             await removePending(entry.messageId);

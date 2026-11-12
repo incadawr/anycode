@@ -171,6 +171,8 @@ export interface LoadSettingsResult {
   readOnly: boolean;
   /** set when the on-disk file was unreadable/corrupt and was quarantined here. */
   corruptBackupPath?: string;
+  /** true when the file exists but could not be read or validated, so `settings` are defaults and not the saved values. */
+  loadFailed?: true;
 }
 
 export interface LoadSecretsResult {
@@ -286,7 +288,7 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
     if (errno(err) !== "ENOENT") {
       logger?.warn(`settings: read failed for ${path}`, err);
     }
-    return { settings: cloneDefaults(), readOnly: false };
+    return { settings: cloneDefaults(), readOnly: false, ...(errno(err) !== "ENOENT" ? { loadFailed: true as const } : {}) };
   }
 
   let json: unknown;
@@ -295,14 +297,14 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
   } catch (err) {
     logger?.warn(`settings: corrupt JSON at ${path}; using defaults`, err);
     const corruptBackupPath = await quarantine(path);
-    return { settings: cloneDefaults(), readOnly: false, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
+    return { settings: cloneDefaults(), readOnly: false, loadFailed: true, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
   }
 
   const result = parseSettings(json, (field) => logger?.warn(`settings: invalid tools.${field}; ignoring saved value`));
   if (result.status === "corrupt") {
     logger?.warn(`settings: schema-invalid at ${path}; using defaults`);
     const corruptBackupPath = await quarantine(path);
-    return { settings: result.settings, readOnly: false, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
+    return { settings: result.settings, readOnly: false, loadFailed: true, ...(corruptBackupPath ? { corruptBackupPath } : {}) };
   }
   // W12-FIX2 §2: repair the active<->non-empty invariant on BOTH
   // success arms (ok and read_only) in memory — a newer-version file must

@@ -118,9 +118,9 @@ it("shows the reason a peer cannot be granted", async () => {
 it("shows a reason for every blocked state", async () => {
   const cases: Array<[Partial<NativeProjectView>, Partial<NativeProjectView>, string]> = [
     [{ trusted: false }, {}, "This folder is not trusted"],
-    [{ enabled: false }, {}, "Native access is off for this folder"],
+    [{ enabled: false }, {}, "Native session access is off for this folder"],
     [{}, { trusted: false }, "That folder is not trusted"],
-    [{}, { enabled: false }, "Native access is off for that folder"],
+    [{}, { enabled: false }, "Native session access is off for that folder"],
   ];
   for (const [project, other, expected] of cases) {
     const { host, unmount } = await mount({ view: view(project, [peer("/w/other", other)]) });
@@ -135,7 +135,7 @@ it("keeps a saved grant revocable while it is inactive", async () => {
   const granted = peer("/w/other", { granted: true, enabled: false });
   const { host, onChange, unmount } = await mount({ view: view({ enabled: false }, [granted]) });
   try {
-    expect(host.textContent).toContain("Currently inactive: Native access is off for this folder");
+    expect(host.textContent).toContain("Currently inactive: Native session access is off for this folder");
     expect(switches(host)[0]?.disabled).toBe(false);
     await act(async () => switches(host)[0]!.click());
     expect(onChange).toHaveBeenCalledWith("/w/other", false);
@@ -146,10 +146,10 @@ it("locks the rows while a save runs and shows the error of the last save", asyn
   const { host, unmount } = await mount({
     view: view({}, [peer("/w/other", { granted: true })]),
     busy: true,
-    error: "Could not save native access.",
+    error: "Could not save native session access.",
   });
   try {
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Could not save native access.");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Could not save native session access.");
     expect(host.textContent).toContain("Saving…");
     expect(switches(host)[0]?.getAttribute("aria-disabled")).toBe("true");
   } finally { await unmount(); }
@@ -254,7 +254,7 @@ it("gives every row the same grid and carries the full values in title attribute
     expect(long.querySelector(".session-peers-row-path")?.getAttribute("title")).toBe("/w/deep/nested/off-a");
     // The reason is its own element after the path, never inside the name/path cells.
     const reason = long.querySelector(".session-peers-row-reason")!;
-    expect(reason.textContent).toBe("Native access is off for that folder");
+    expect(reason.textContent).toBe("Native session access is off for that folder");
     expect(reason.previousElementSibling?.className).toBe("session-peers-row-path");
     expect(reason.parentElement).toBe(long);
   } finally { await unmount(); }
@@ -265,7 +265,7 @@ it("shows a reason that every open row shares once above the list", async () => 
   const { host, unmount } = await mount({ view: view({}, peers) });
   try {
     const common = host.querySelector(".session-peers-common-reason")!;
-    expect(common.textContent).toBe("3 projects cannot be enabled: Native access is off for that folder");
+    expect(common.textContent).toBe("3 projects cannot be enabled: Native session access is off for that folder");
     expect(host.querySelectorAll(".session-peers-row-reason")).toHaveLength(0);
     // The list follows the line, and the open rows' switches point at it.
     expect(common.compareDocumentPosition(rows(host)[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -285,8 +285,8 @@ it("keeps the reasons on the rows when they differ, and a granted row keeps its 
   try {
     expect(host.querySelector(".session-peers-common-reason")).toBeNull();
     expect([...host.querySelectorAll(".session-peers-row-reason")].map(node => node.textContent)).toEqual([
-      "Currently inactive: Native access is off for that folder",
-      "Native access is off for that folder",
+      "Currently inactive: Native session access is off for that folder",
+      "Native session access is off for that folder",
       "That folder is not trusted",
     ]);
   } finally { await unmount(); }
@@ -318,4 +318,46 @@ it("styles the rows as one grid and the subtitle as one ellipsized line", () => 
   expect(css).toMatch(/\.session-peers > :not\(\.session-peers-row\) \+ \.session-peers-row \{[^}]*border-top: 1px solid var\(--border\)/);
   expect(rule(".session-peers-dialog .ak-modal__subtitle")).toContain("white-space: nowrap");
   expect(rule(".session-peers-dialog .ak-modal__subtitle")).toContain("text-overflow: ellipsis");
+});
+
+const enableButtons = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("button.session-peers-enable")];
+
+it("offers Enable only where the environment menu's own action applies: this folder's native access", async () => {
+  const onEnableCurrent = vi.fn();
+  const current = await mount({ view: view({ enabled: false }, [peer("/w/other")]), onEnableCurrent });
+  try {
+    expect(enableButtons(current.host)).toHaveLength(1);
+    await act(async () => enableButtons(current.host)[0]!.click());
+    expect(onEnableCurrent).toHaveBeenCalledTimes(1);
+  } finally { await current.unmount(); }
+  const common = await mount({ view: view({ enabled: false }, [peer("/w/a"), peer("/w/b")]), onEnableCurrent });
+  try {
+    expect(enableButtons(common.host)).toHaveLength(1);
+    const reason = common.host.querySelector(".session-peers-common-reason")!;
+    // Beside the reason, never inside it (the switches are described by it), and named after the project.
+    expect(reason.contains(enableButtons(common.host)[0]!)).toBe(false);
+    expect(reason.textContent).not.toContain("Enable");
+    expect(enableButtons(common.host)[0]!.getAttribute("aria-label")).toBe("Enable native session access for current");
+  } finally { await common.unmount(); }
+  const peerOff = await mount({ view: view({}, [peer("/w/other", { enabled: false })]), onEnableCurrent });
+  try {
+    expect(enableButtons(peerOff.host)).toHaveLength(0);
+  } finally { await peerOff.unmount(); }
+  const none = await mount({ view: view({ enabled: false }, [peer("/w/other")]) });
+  try {
+    expect(enableButtons(none.host)).toHaveLength(0);
+  } finally { await none.unmount(); }
+});
+
+it("moves the focus into the dialog once Enable succeeds and the button goes away", async () => {
+  const onEnableCurrent = vi.fn();
+  const m = await mount({ view: view({ enabled: false }, [peer("/w/other")]), onEnableCurrent });
+  try {
+    const button = enableButtons(m.host)[0]!;
+    await act(async () => button.focus());
+    expect(document.activeElement).toBe(button);
+    await m.rerender({ view: view({ enabled: true }, [peer("/w/other")]) });
+    expect(enableButtons(m.host)).toHaveLength(0);
+    expect(document.activeElement).toBe(searchInput(m.host));
+  } finally { await m.unmount(); }
 });

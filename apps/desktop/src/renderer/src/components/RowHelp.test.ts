@@ -136,7 +136,7 @@ describe("EnvironmentMenuRow with a help slot", () => {
       createElement(EnvironmentMenuRow, {
         icon: null,
         title: "Handle (optional)",
-        detail: "Shown in list_sessions",
+        detail: "Shown in the session list for agents",
         help: EXPLANATION,
         ariaLabel: "Session handle",
         error: "Another live session already uses this handle.",
@@ -147,12 +147,22 @@ describe("EnvironmentMenuRow with a help slot", () => {
     expect(container.querySelector(".environment-menu-row-error")?.textContent).toContain("Another live session already uses this handle.");
   });
 
-  it("caps the tooltip width by the menu row it sits in, so it never runs past the menu", () => {
+  it("keeps the tooltip in the row's flow, and the icon and control on the title line while it is open", () => {
     const css = readFileSync(resolve(import.meta.dirname, "..", "app.css"), "utf8");
-    const rule = css.match(/\.row-help-tooltip \{([^}]*)\}/)?.[1] ?? "";
-    expect(rule).toContain("max-width: min(20rem, calc(100% - 2 * var(--sp-2)))");
-    expect(rule).not.toContain("100vw");
-    expect(rule).toContain("opacity: 0");
-    expect(css.match(/\.environment-menu-row \{([^}]*)\}/)?.[1]).toContain("position: relative");
+    const style = document.createElement("style");
+    style.textContent = css;
+    document.head.append(style);
+    try {
+      const { container } = mount(createElement(EnvironmentMenuRow, { icon: null, title: "Native session access", help: EXPLANATION, control: createElement("button", null, "x"), ariaLabel: "row" }));
+      const row = container.querySelector<HTMLElement>(".environment-menu-row")!;
+      const tip = tooltip(container);
+      expect(getComputedStyle(tip).display).toBe("none");
+      act(() => { helpButton(container).focus(); });
+      expect(getComputedStyle(tip).display).toBe("block");
+      expect(getComputedStyle(tip).position).not.toBe("absolute");
+      expect(getComputedStyle(tip).maxWidth).toContain("calc(100% - 2 * var(--sp-2))");
+      // Not re-centred by the taller heading.
+      expect(getComputedStyle(row).alignItems).toBe("flex-start");
+    } finally { style.remove(); }
   });
 });

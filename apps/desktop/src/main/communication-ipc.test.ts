@@ -12,7 +12,6 @@ import { createAgentProjectsStore } from "./communication-agent-projects.js";
 import { mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import {
   buildCopyConfig,
-  handleAddWorkspace,
   handleAgentProjectsGet,
   handleAgentProjectsList,
   handleAgentProjectsOff,
@@ -20,7 +19,6 @@ import {
   handleCommunicationGet,
   handleCopyConfig,
   handleRegenerateToken,
-  handleRemoveWorkspace,
   handleSetDefaultAccess,
   handleSetEnabled,
   handleSetPort,
@@ -36,23 +34,20 @@ let dir: string;
 let settingsPath: string;
 let workspaceA: string;
 let workspaceB: string;
-let fileTarget: string;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "anycode-comm-ipc-"));
   settingsPath = join(dir, "settings.json");
   workspaceA = join(dir, "ws-a");
   workspaceB = join(dir, "ws-b");
-  fileTarget = join(dir, "plain.txt");
   await saveSettings(settingsPath, cloneDefaults());
   await (await import("node:fs/promises")).mkdir(workspaceA);
   await (await import("node:fs/promises")).mkdir(workspaceB);
-  await writeFile(fileTarget, "x");
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 /** A controller over a fake server whose discovery file DOES hold the token; results must never show it. */
-function rig(over: { env?: string; picked?: string | undefined; script?: string | null } = {}) {
+function rig(over: { env?: string; script?: string | null } = {}) {
   const startServer = vi.fn(async (options: Record<string, unknown>) => {
     const discoveryFile = join(dir, "communication.json");
     await writeFile(discoveryFile, JSON.stringify({ url: "http://127.0.0.1:43123/mcp", token: TOKEN, workspaces: [] }), { mode: 0o600 });
@@ -83,12 +78,10 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
     approvals,
     tabs: () => [{ tabId: "tab-1", sessionId: "sess-1" }],
     env: () => over.env,
-    pickFolder: vi.fn(async () => over.picked),
     stdioScriptPath: () => (over.script === undefined ? "/ud/agent-communication/stdio.mjs" : over.script),
     realpath: (p: string) => import("node:fs/promises").then((fs) => fs.realpath(p)),
-    stat: (p: string) => import("node:fs/promises").then((fs) => fs.stat(p)),
   };
-  return { deps, controller, sessions, approvals, agentProjects, startServer, pickFolder: deps.pickFolder as ReturnType<typeof vi.fn> };
+  return { deps, controller, sessions, approvals, agentProjects, startServer };
 }
 
 describe("Sessions API IPC — writes go through the dedicated channel", () => {
@@ -147,74 +140,11 @@ describe("Sessions API IPC — writes go through the dedicated channel", () => {
     expect((await loadSettings(settingsPath)).settings.communication?.port).toBeUndefined();
   });
 
-  it("add-workspace refuses ANY path key in the payload (renderer never supplies a path)", async () => {
-    const { deps, pickFolder } = rig({ picked: workspaceA });
-    expect(await handleAddWorkspace(deps, { path: workspaceA })).toEqual({ ok: false, reason: "invalid" });
-    expect(await handleAddWorkspace(deps, { workspace: workspaceA })).toEqual({ ok: false, reason: "invalid" });
-    expect(pickFolder).not.toHaveBeenCalled();
-  });
-
-  it("add-workspace stores the dialog pick (realpath) and applies live", async () => {
-    const { deps, startServer, controller } = rig({ picked: workspaceA });
-    await handleSetEnabled(deps, { enabled: true });
-    expect(startServer).toHaveBeenCalledTimes(1);
-    const result = await handleAddWorkspace(deps, {});
-    expect(result.ok).toBe(true);
-    const stored = (await loadSettings(settingsPath)).settings.communication?.workspaces;
-    expect(stored).toHaveLength(1);
-    expect(stored?.[0]).toMatch(/ws-a$/);
-    expect(startServer).toHaveBeenCalledTimes(2);
-    expect(controller.status().workspaces).toBe(1);
-  });
-
-  it("add-workspace cancelled dialog changes nothing", async () => {
-    const { deps } = rig({ picked: undefined });
-    expect(await handleAddWorkspace(deps, {})).toEqual({ ok: false, reason: "cancelled" });
-    expect((await loadSettings(settingsPath)).settings.communication).toBeUndefined();
-  });
-
-  it("add-workspace refuses a regular file", async () => {
-    expect(await handleAddWorkspace(rig({ picked: fileTarget }).deps, {})).toEqual({ ok: false, reason: "not_a_directory" });
-  });
-
-  it("add-workspace refuses a relative pick and a missing folder as io_error", async () => {
-    expect(await handleAddWorkspace(rig({ picked: "relative/dir" }).deps, {})).toEqual({ ok: false, reason: "invalid" });
-    expect(await handleAddWorkspace(rig({ picked: join(dir, "does-not-exist") }).deps, {})).toEqual({ ok: false, reason: "io_error" });
-  });
-
-  it("add-workspace refuses a duplicate by realpath (a symlink to the same folder)", async () => {
-    const link = join(dir, "link-to-a");
-    await (await import("node:fs/promises")).symlink(workspaceA, link);
-    const { deps } = rig({ picked: workspaceA });
-    expect((await handleAddWorkspace(deps, {})).ok).toBe(true);
-    (deps as { pickFolder: () => Promise<string> }).pickFolder = async () => link;
-    expect(await handleAddWorkspace(deps, {})).toEqual({ ok: false, reason: "duplicate" });
-  });
-
-  it("add-workspace enforces the cap of 20 folders", async () => {
-    const seeded = cloneDefaults();
-    seeded.communication = { enabled: true, workspaces: Array.from({ length: 20 }, (_, i) => join(dir, `pre-${i}`)), defaultSessionAccess: "off" };
-    await saveSettings(settingsPath, seeded);
-    const { deps } = rig({ picked: workspaceB });
-    expect(await handleAddWorkspace(deps, {})).toEqual({ ok: false, reason: "too_many" });
-  });
-
-  it("remove-workspace matches exactly; an unknown or prefix value is not_found and removes nothing", async () => {
-    const { deps } = rig({ picked: workspaceA });
-    await handleAddWorkspace(deps, {});
-    const [stored] = (await loadSettings(settingsPath)).settings.communication!.workspaces;
-    expect(await handleRemoveWorkspace(deps, { workspace: stored!.slice(0, -2) })).toEqual({ ok: false, reason: "not_found" });
-    expect((await loadSettings(settingsPath)).settings.communication!.workspaces).toHaveLength(1);
-    expect((await handleRemoveWorkspace(deps, { workspace: stored })).ok).toBe(true);
-    expect((await loadSettings(settingsPath)).settings.communication!.workspaces).toEqual([]);
-  });
-
   it("the view marks allowed folders that are missing on disk, and unmarks them once back", async () => {
     const gone = join(dir, "gone");
-    const { deps } = rig({ picked: workspaceA });
-    await handleAddWorkspace(deps, {});
-    const seeded = (await loadSettings(settingsPath)).settings;
-    seeded.communication = { ...seeded.communication!, workspaces: [...seeded.communication!.workspaces, gone] };
+    const { deps } = rig();
+    const seeded = cloneDefaults();
+    seeded.communication = { enabled: false, workspaces: [workspaceA, gone], defaultSessionAccess: "off" };
     await saveSettings(settingsPath, seeded);
     // The stored entries are realpaths of the temp dirs; the gone entry was stored verbatim.
     const first = await handleCommunicationGet(deps, {});
@@ -245,7 +175,6 @@ describe("Sessions API IPC — writes go through the dedicated channel", () => {
   it("env override: every write is refused env_controlled and get says envControlled", async () => {
     const { deps } = rig({ env: "/abs/config.json" });
     expect(await handleSetEnabled(deps, { enabled: true })).toEqual({ ok: false, reason: "env_controlled" });
-    expect(await handleAddWorkspace(deps, {})).toEqual({ ok: false, reason: "env_controlled" });
     expect(await handleRegenerateToken(deps, {})).toEqual({ ok: false, reason: "env_controlled" });
     expect(await handleCommunicationGet(deps, {})).toMatchObject({ ok: true, envControlled: true });
   });
@@ -370,17 +299,15 @@ describe("Sessions API IPC — regenerate and copy-config", () => {
 
 describe("Sessions API IPC — token absence over every result", () => {
   it("no handler result, serialised, contains the token (copy-config may carry the discovery PATH, never the token)", async () => {
-    const { deps } = rig({ picked: workspaceA });
+    const { deps } = rig();
     const results: unknown[] = [];
     const copies: unknown[] = [];
     results.push(await handleCommunicationGet(deps, {}));
     results.push(await handleSetEnabled(deps, { enabled: true }));
     results.push(await handleSetPort(deps, { port: 0 }));
-    results.push(await handleAddWorkspace(deps, {}));
     results.push(await handleSetDefaultAccess(deps, { access: "on" }));
     results.push(await handleRegenerateToken(deps, {}));
     for (const client of ["claude-code", "codex", "generic"] as const) copies.push(await handleCopyConfig(deps, { client }));
-    results.push(await handleRemoveWorkspace(deps, { workspace: "/nope" }));
     results.push(await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: true }));
     expect(JSON.stringify(results)).not.toContain("communication.json");
     expect(JSON.stringify([...results, ...copies])).not.toContain(TOKEN);
@@ -389,7 +316,7 @@ describe("Sessions API IPC — token absence over every result", () => {
 
 describe("Sessions API IPC — persisted settings never carry the token", () => {
   it("settings.json holds no token after enabling and regenerating", async () => {
-    const { deps } = rig({ picked: workspaceA });
+    const { deps } = rig();
     await handleSetEnabled(deps, { enabled: true });
     await handleRegenerateToken(deps, {});
     expect(await readFile(settingsPath, "utf8")).not.toContain(TOKEN);

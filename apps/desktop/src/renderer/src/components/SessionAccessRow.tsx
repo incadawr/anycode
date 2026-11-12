@@ -11,7 +11,7 @@
  */
 import { useContext, useEffect, useId, useState } from "react";
 import { TabContext } from "../tab-context.js";
-import { handleErrorText, sessionApprovalsLabel, sessionEffectiveAccess, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_DETAIL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_PROJECT_ENABLE_LABEL, SESSION_PROJECT_OFF_DETAIL, SESSION_PROJECT_OFF_TITLE, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
+import { handleErrorText, mutationRefusalText, sessionApprovalsLabel, sessionEffectiveAccess, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_DETAIL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_PROJECT_ENABLE_LABEL, SESSION_PROJECT_OFF_DETAIL, SESSION_PROJECT_OFF_TITLE, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
 import { RowHelp } from "./RowHelp.js";
@@ -24,7 +24,7 @@ export interface SessionAccessBridge {
   setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
   /** the External approvals switch. Refused by main unless the session is shared. */
   setSessionApprovals(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
-  /** The existing per-project switch ("Agents may open tasks here"), by the tab's folder. */
+  /** The existing per-project switch ("Allow agents to open tasks here"), by the tab's folder. */
   agentProjectsSet?(workspace: string, enabled: boolean): Promise<CommunicationMutationResult>;
 }
 
@@ -121,6 +121,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
   const [projectRoot, setProjectRoot] = useState<string | undefined>(undefined);
   const [handle, setHandle] = useState("");
   const [handleError, setHandleError] = useState<string | null>(null);
+  const [enableError, setEnableError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -191,7 +192,8 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
           title={SESSION_PROJECT_OFF_TITLE}
           detail={SESSION_PROJECT_OFF_DETAIL}
           detailTone="warning"
-          ariaLabel="Project not enabled for agents"
+          error={enableError}
+          ariaLabel={SESSION_PROJECT_OFF_TITLE}
           control={
             bridge.agentProjectsSet && tabContext ? (
               <Button
@@ -200,9 +202,11 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
                 data-environment-action="sessions-api-enable-project"
                 onClick={() => {
                   if (!projectRoot) return;
+                  setEnableError(null);
                   void bridge.agentProjectsSet?.(projectRoot, true).then((result) => {
                     if (result.ok) setProjectEnabled(result.view.tabs.find((tab) => tab.tabId === tabId)?.projectEnabled ?? true);
-                  });
+                    else if (result.reason !== "cancelled") setEnableError(mutationRefusalText(result.reason) || "The project switch could not be changed.");
+                  }).catch(() => setEnableError("The project switch could not be changed."));
                 }}
               >
                 {SESSION_PROJECT_ENABLE_LABEL}

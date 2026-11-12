@@ -1,6 +1,6 @@
 /**
  * One-time migration of the retired Sessions API "Allowed folders" list into
- * the per-project "Agents may open tasks here" switches, so agents keep the
+ * the per-project "Allow agents to open tasks here" switches, so agents keep the
  * access they had.
  *
  * - A non-empty list: every listed folder is mapped to its canonical project
@@ -35,6 +35,11 @@ export interface WorkspacesMigrationDeps {
   projects: AgentProjectsStore;
   isDirectory?(path: string): boolean;
   warn?(message: string): void;
+  /**
+   * False while the settings file could not be read at this start: `workspaces`
+   * is then not the saved list, so nothing may be decided from it. Default true.
+   */
+  settingsLoaded?: boolean;
   /** Starts after which a still-pending item is dropped. Default 10. */
   maxAttempts?: number;
 }
@@ -65,6 +70,8 @@ function writeState(file: string, state: MigrationState): boolean {
 }
 
 export async function migrateAllowedFolders(deps: WorkspacesMigrationDeps): Promise<{ migrated: string[]; ran: boolean }> {
+  // Unreadable settings look like an empty list; recording a finished pass now would lose the list for good.
+  if (deps.settingsLoaded === false) return { migrated: [], ran: false };
   const existing = readState(deps.markerFile);
   if (existing !== null && (!Array.isArray(existing.pending) || existing.pending.length === 0)) return { migrated: [], ran: false };
   const isDirectory = deps.isDirectory ?? existsSync;
@@ -77,14 +84,21 @@ export async function migrateAllowedFolders(deps: WorkspacesMigrationDeps): Prom
   const attempts: Record<string, number> = { ...(existing?.attempts ?? {}) };
   let writable = true;
   const save = (): void => { if (!writeState(deps.markerFile, { pending, attempts })) writable = false; };
-  if (existing === null) save();
+  if (existing === null) {
+    save();
+    // Without a state file the pass cannot be recorded, so it would repeat on every start and switch
+    // a project back on after the user turned it off. Change nothing until the file can be written.
+    if (!writable) return { migrated, ran: false };
+  }
 
   for (const item of [...pending]) {
     let project: string | null = null;
     try {
       if (item.startsWith(FOLDER)) {
+        // A listed worktree that is gone still maps to its project root, so resolve first and
+        // check the resulting project folder, not the listed path.
         const folder = item.slice(FOLDER.length);
-        if (isDirectory(folder)) project = deps.resolveFolder ? await deps.resolveFolder(folder) : folder;
+        project = deps.resolveFolder ? await deps.resolveFolder(folder) : isDirectory(folder) ? folder : null;
       } else {
         project = await deps.resolveSession(item.slice(SESSION.length));
       }

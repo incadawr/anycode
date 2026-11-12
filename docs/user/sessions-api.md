@@ -200,8 +200,8 @@ Two switches decide whether an agent can reach a session, and both must be on:
 the project's **Allow agents to open tasks here** and the session's own **Sessions
 API** row (**Shared with external agents**), which stays the finer opt-out inside
 an enabled project. When the session is shared but its project is off, the
-session's environment menu says **Project not enabled for agents** and offers
-**Enable**. The old Settings **Allowed folders** list no longer gates anything. On the
+session's environment menu says **“Allow agents to open tasks here” is off** and
+offers **Enable** (a failed save is shown next to the button). The old Settings **Allowed folders** list no longer gates anything. On the
 first start after this change, each folder in it is switched on as a project (a
 worktree folder switches on its project root); with an empty list, the project of
 each session shared at that moment is switched on, a child session through its
@@ -269,7 +269,8 @@ works on it. If the new tab's host is not ready within 10 seconds, the reply
 omits `messageId`; the tab exists, so send the message yourself with
 `send_message`. If the new tab ends up in a project that is off (the switch
 changed while the tab was opening), `firstMessage` is not delivered and the error
-names the tab's ids instead of silently dropping it.
+names the tab's ids instead of silently dropping it. The same applies when
+delivery is refused for another reason after the tab opened.
 
 `model` picks what the new session runs:
 

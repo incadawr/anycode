@@ -92,8 +92,8 @@ it("the external approvals handler never creates a native grant", async () => {
     tabs: () => [{ tabId: "a", sessionId: "session" }], env: () => undefined,
     controller: { status, discoveryFile: () => undefined, apply: async () => status(), regenerateToken: async () => ({ ok: false, reason: "not_running" }) },
     agentProjects: createAgentProjectsStore({ file: join(root, "projects.json"), realpathSync: p => p }),
-    pickFolder: async () => undefined, stdioScriptPath: () => null, realpath: async p => p, realpathSync: p => p,
-    homedir: () => root, offerEmptyFolderTrust: async folder => ({ folder }), stat: async () => ({ isDirectory: () => true }),
+    stdioScriptPath: () => null, realpath: async p => p, realpathSync: p => p,
+    homedir: () => root, offerEmptyFolderTrust: async folder => ({ folder }),
   }, { tabId: "a", enabled: true });
   expect(result.ok).toBe(true); expect(approvals.isExposed("session")).toBe(true);
   expect(readFileSync(join(root, "policy.json"), "utf8")).toBe(before);
