@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Rendered Markdown in the preview dock no longer blanks to "Preview hidden" when a popover or menu opens, and screenshots of it work while one is open. Web previews still hide behind overlays.
 - The OpenCode Go subscription usage block on the connection tile now uses the same smaller, dimmer text as the other providers' quota line.
 
 ## [0.0.99] - 2026-11-12

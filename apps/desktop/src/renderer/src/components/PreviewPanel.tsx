@@ -128,6 +128,8 @@ export function PreviewPanel({ tabId: _dockTabId, previewId, onToast, publishBou
   }
 
   const isMdPreview = visible?.viewKind === "dom-md";
+  // Only the native web view must yield to DOM overlays; dom-md is ordinary DOM and stacks below them.
+  const hideForOverlay = overlayOpen && !isMdPreview;
   const title = visible?.title ?? visible?.sourcePath ?? visible?.url ?? "Preview";
 
   return (
@@ -162,7 +164,7 @@ export function PreviewPanel({ tabId: _dockTabId, previewId, onToast, publishBou
         </div>
       )}
       <div ref={bodyRef} className="preview-panel-body">
-        {overlayOpen ? (
+        {hideForOverlay ? (
           <div className="preview-panel-empty">Preview hidden</div>
         ) : !visible ? (
           <div className="preview-panel-empty">No preview open.</div>
