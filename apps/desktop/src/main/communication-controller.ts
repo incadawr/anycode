@@ -43,6 +43,8 @@ export interface CommunicationControllerDeps {
   createSessionByAgent?(request: CreateSessionRequest): Promise<CreateSessionOutcome>;
   /** canonical keys with the per-project agent switch on, for `list_agent_projects`. Settings mode only; the env-file mode never gets it. */
   listAgentProjects?(): string[];
+  /** Per-project agent switch for a workspace folder; gates list/status/send/create in settings mode. Absent = no project gate. */
+  isProjectEnabled?(workspace: string): boolean;
   agentOpenedSessions?: Set<string>;
   creatorOwnsAdmission?: boolean;
   closeSessionByAgent?(sessionId: string): Promise<CloseSessionOutcome>;
@@ -121,7 +123,8 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
       running = await startServer({
         manager, getBroker,
         userData: deps.userData,
-        config: { workspaces: input.workspaces, port: input.port ?? 0 },
+        // The saved Allowed folders list is no longer a gate: the per-project switch decides.
+        config: { workspaces: [], port: input.port ?? 0 },
         ...(warn ? { warn } : {}),
         isSessionExposed: (sessionId) => deps.isSessionExposed(sessionId),
         handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined,
@@ -129,6 +132,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         ...(deps.agentOpenedSessions ? { agentOpenedSessions: deps.agentOpenedSessions } : {}),
         ...(deps.closeSessionByAgent ? { closeSessionByAgent: (sessionId: string) => deps.closeSessionByAgent!(sessionId) } : {}),
         ...(deps.createSessionByAgent ? { createSessionByAgent: (request: CreateSessionRequest) => deps.createSessionByAgent!(request) } : {}),
+        ...(deps.isProjectEnabled ? { isProjectEnabled: (workspace: string) => deps.isProjectEnabled!(workspace) } : {}),
         ...(deps.listAgentProjects ? { listAgentProjects: () => deps.listAgentProjects!() } : {}),
         ...(deps.isExternalApprovalEnabled ? { isExternalApprovalEnabled: (sessionId: string) => deps.isExternalApprovalEnabled?.(sessionId) === true } : {}),
       });

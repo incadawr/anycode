@@ -204,6 +204,7 @@ import { migrateLegacyProxyUrls, type LegacyProxyImportDeps } from "./proxy-scop
 import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { createScopeWorkspaceRegistry } from "./scope-workspaces.js";
+import { migrateAllowedFolders } from "./communication-workspaces-migration.js";
 import { registerScopeWorkspacesIpc } from "./scope-workspaces-ipc.js";
 import { registerPathRootsIpc } from "./path-roots-ipc.js";
 import { McpSecretForkCache } from "./mcp-secret-fork-cache.js";
@@ -2646,6 +2647,7 @@ void app.whenReady().then(async () => {
     creatorOwnsAdmission: true,
     createSessionByAgent: (request) => createSessionForAgent(request),
     listAgentProjects: () => communicationAgentProjects?.allowedKeys() ?? [],
+    isProjectEnabled: (workspace) => communicationAgentProjects?.isAllowed(workspace) ?? false,
     agentOpenedSessions,
     closeSessionByAgent: (sessionId) => closeSessionForAgent(manager, agentOpenedSessions, sessionId, (tabId) => {
       agentSessionTitles.delete(sessionId);
@@ -4006,7 +4008,7 @@ void app.whenReady().then(async () => {
       ),
       realpathSync,
       homedir: () => homedir(),
-      tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
+      tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId, workspace: tab.workspace, ...(tab.projectRoot !== undefined ? { projectRoot: tab.projectRoot } : {}) })),
       env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
       pickFolder: async () => {
         const result = await dialog.showOpenDialog(win!, { properties: ["openDirectory"] });
@@ -4427,6 +4429,16 @@ void app.whenReady().then(async () => {
   // settings.json is picked up at the next launch. A failed start never blocks boot.
   if (communicationController !== null) {
     const controller = communicationController;
+    if (communicationAgentProjects !== null) {
+      const projects = communicationAgentProjects;
+      await migrateAllowedFolders({
+        markerFile: join(app.getPath("userData"), "communication-workspaces-migrated.json"),
+        workspaces: settings?.communication?.workspaces ?? [],
+        knownProjectIds: async () => new Set((await scopeRegistry.list()).map((entry) => entry.id)),
+        projects,
+        realpathSync,
+      }).catch(() => console.warn("[main] Sessions API folder migration skipped"));
+    }
     await controller.apply(applyInputFromBlock(settings?.communication));
     // the first Sessions-API state is known now — services may start with it.
     reconcileServices();

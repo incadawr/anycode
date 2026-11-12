@@ -44,13 +44,13 @@ describe("communication controller — settings-driven live server", () => {
     expect(status.state).toBe("off");
   });
 
-  it("starts with the exact workspaces and port when enabled, with no folder yet allowed", async () => {
+  it("starts with the port and no folder gate (the saved Allowed folders list is no longer read) when enabled", async () => {
     const { d, server } = deps();
     const c = createCommunicationController(d);
     const status = await c.apply({ enabled: true, workspaces: ["/abs/one"], port: 4310 });
     expect(server.start).toHaveBeenCalledTimes(1);
     const arg = server.starts[0] as { config: unknown; userData: string; configFile?: string };
-    expect(arg.config).toEqual({ workspaces: ["/abs/one"], port: 4310 });
+    expect(arg.config).toEqual({ workspaces: [], port: 4310 });
     expect(arg.configFile).toBeUndefined();
     expect(status).toMatchObject({ state: "listening", url: "http://127.0.0.1:43123/mcp", port: 43123, workspaces: 1 });
   });
@@ -145,7 +145,7 @@ describe("communication controller — settings-driven live server", () => {
       c.apply({ enabled: true, workspaces: ["/abs/c"], port: 0 }),
     ]);
     expect(log).toEqual(["start", "close", "start", "close", "start"]);
-    expect((server.starts[2] as { config: { workspaces: string[] } }).config.workspaces).toEqual(["/abs/c"]);
+    expect((server.starts[2] as { config: { workspaces: string[] } }).config.workspaces).toEqual([]);
     expect(c.status().state).toBe("listening");
   });
 

@@ -1072,6 +1072,8 @@ export interface TabSummary {
   tabId: string;
   workspace: string;
   sessionId: string;
+  /** Present only when the session runs in a worktree of a different project folder. */
+  projectRoot?: string;
   state: TabHost["state"];
   activityState?: SessionActivityState;
   activitySnapshot?: SessionActivitySnapshot;
@@ -1408,6 +1410,7 @@ export class TabHostManager {
       tabId: tab.tabId,
       workspace: tab.workspace,
       sessionId: tab.sessionId,
+      ...(tab.projectRoot !== tab.workspace ? { projectRoot: tab.projectRoot } : {}),
       state: tab.state,
       activityState: tab.activityState ?? "idle",
       ...(tab.activitySnapshot ? { activitySnapshot: tab.activitySnapshot } : {}),

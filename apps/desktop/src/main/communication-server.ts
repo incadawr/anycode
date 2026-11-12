@@ -14,7 +14,7 @@ export { writePrivateFile } from "./communication-ledger.js";
 import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 
 export interface CommunicationManager {
-  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; activitySnapshot?: import("../shared/communication.js").SessionActivitySnapshot; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; projectRoot?: string; state: string; activityState?: SessionActivityState; activitySnapshot?: import("../shared/communication.js").SessionActivitySnapshot; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onSessionPeerTerminal?(listener: (sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void): () => void;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationStatusDetails?(sessionId: string): Record<string, unknown>;
@@ -88,7 +88,7 @@ const CLOSE_REFUSAL_TEXT: { [K in CloseSessionRefusal]: string } = {
 };
 const closeRefusal = (code: CloseSessionRefusal) => new Error(`close_session ${code}: ${CLOSE_REFUSAL_TEXT[code]}`);
 /** fixed create_session refusal codes, prefixed in error text. */
-export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model" | "invalid_effort" | "invalid_account" | "invalid_argument";
+export type CreateSessionRefusal = "not_allowed" | "project_not_enabled" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model" | "invalid_effort" | "invalid_account" | "invalid_argument";
 export type CreateSessionRequest = {
   workspace: string;
   engine?: "core" | "codex" | "claude";
@@ -108,6 +108,7 @@ export type CreateSessionRequest = {
  */
 export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string; delivery?: { state: string; messageId?: string } } | { ok: false; reason: CreateSessionRefusal; detail?: string; sessionId?: string; tabId?: string };
 const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
+  project_not_enabled: "the project does not allow agents to open tasks here; turn on 'Agents may open tasks here' in the sidebar project menu",
   not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
   not_trusted: "the folder is not trusted in AnyCode; use the project sidebar menu to turn on Allow agents to open tasks here and trust the folder, or open the folder and approve its project settings",
   folder_not_found: "the workspace folder does not exist",
@@ -152,6 +153,13 @@ export interface CommunicationServerOptions {
   userData: string;
   /** Per-session exposure gate, read on every request (live switch changes need no restart). Absent = every session. */
   isSessionExposed?: (sessionId: string) => boolean;
+  /**
+   * Per-project switch ("Agents may open tasks here"), read on every request.
+   * When present it gates listing, status, send_message, create_session and
+   * message status for every session whose folder is not an enabled project.
+   * Absent (legacy env-file mode, standalone embedders) = no project gate.
+   */
+  isProjectEnabled?: (workspace: string) => boolean;
   /** Session handle of a session (main-owned). Absent = `list_sessions` carries no `handle` key at all. */
   handleOf?: (sessionId: string) => string | undefined;
   /** Delay between host polls inside wait_for_result (tests shorten it). */
@@ -297,15 +305,20 @@ export async function startCommunicationServer(options: CommunicationServerOptio
    * reconciliation timer passes false, so an idle server never resolves a
    * missing path.
    */
+  /** A session is in an enabled project when its folder or (for a worktree) its project root has the switch on. */
+  const projectOn = (tab: { workspace: string; projectRoot?: string }): boolean =>
+    !options.isProjectEnabled || options.isProjectEnabled(tab.workspace) || (tab.projectRoot !== undefined && options.isProjectEnabled(tab.projectRoot));
   const tabs = async (retryMissing: boolean) => {
     const result = [];
     // One re-resolution per request at most, and none while every entry is present.
     if (retryMissing && unresolved.size > 0) await resolveMissing();
     for (const tab of options.manager.listTabs()) {
-      if (!restricted) { if (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) result.push(tab); continue; }
+      if (options.isSessionExposed && !options.isSessionExposed(tab.sessionId)) continue;
+      if (!projectOn(tab)) continue;
+      if (!restricted) { result.push(tab); continue; }
       let path: string;
       try { path = await resolvePath(tab.workspace); } catch { continue; }
-      if (allowed.has(path) && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId))) result.push(tab);
+      if (allowed.has(path)) result.push(tab);
     }
     const current = new Map(options.manager.listTabs().map((tab) => [tab.sessionId, tab]));
     return result.flatMap((tab) => {
@@ -313,15 +326,23 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       return latest && latest.workspace === tab.workspace && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) ? [latest] : [];
     });
   };
+  /** Why a session id is not reachable: the three cases an agent must tell apart to know what to flip. */
+  const unreachable = async (sessionId: string): Promise<Error> => {
+    const tab = options.manager.listTabs().find((t) => t.sessionId === sessionId);
+    if (!tab) return new Error("not_found: no open session with this id");
+    if (options.isSessionExposed && !options.isSessionExposed(sessionId)) return new Error("not_exposed: this session is not shared with external agents (its Sessions API switch is off)");
+    if (!projectOn(tab)) return new Error(`project_not_enabled: the project ${tab.workspace} is not enabled for agents ('Agents may open tasks here' is off)`);
+    return new Error(`workspace_not_allowed: the folder ${tab.workspace} is outside the allowed folders`);
+  };
   const requireSession = async (sessionId: string) => {
     const tab = (await tabs(true)).find((t) => t.sessionId === sessionId);
-    if (!tab) throw new Error("Session unavailable or outside authorized workspace");
+    if (!tab) throw await unreachable(sessionId);
     return tab;
   };
   const terminalState = (tab: { missingWorkspace?: boolean; hostFailure?: unknown }) =>
     tab.missingWorkspace ? "missing_workspace" : tab.hostFailure ? "crash_looped" : undefined;
   const publicTab = (tab: Awaited<ReturnType<typeof requireSession>>) => {
-    const { activityState, activitySnapshot, ...rest } = tab;
+    const { activityState, activitySnapshot, projectRoot: _projectRoot, ...rest } = tab;
     return { ...rest, ...activitySnapshot, state: terminalState(tab) ?? activityState ?? "idle" };
   };
   const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
@@ -547,6 +568,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         let resolved: string;
         try { resolved = await resolvePath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
         if (restricted && !(await isAllowed(resolved))) throw createRefusal("not_allowed");
+        if (options.isProjectEnabled && !options.isProjectEnabled(resolved)) throw createRefusal("project_not_enabled", resolved);
         const create = async () => {
           let created: CreateSessionOutcome;
           try {
@@ -594,6 +616,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         const { messageId } = statusSchema.parse(raw); const record = messages.get(messageId);
         if (!record) throw new Error("Message unavailable");
         if (options.isSessionExposed && !options.isSessionExposed(record.envelope.recipientSessionId)) throw new Error("Message unavailable");
+        if (record.workspace && options.isProjectEnabled && !options.isProjectEnabled(record.workspace)) throw new Error(`project_not_enabled: the project ${record.workspace} is not enabled for agents`);
         if (record.workspace) { if (restricted && !(await isAllowed(record.workspace))) throw new Error("Message outside authorized workspace"); }
         else await requireSession(record.envelope.recipientSessionId);
         if (!await markLostGeneration(record)) {
