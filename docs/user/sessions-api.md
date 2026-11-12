@@ -185,7 +185,8 @@ that session. Open the tab's environment menu and tick the checkbox under
 2. Turn on **Allow agents to open tasks here** for each project agents may work
    in (the project's **⋯** menu in the sidebar). This one switch gates listing,
    status, `send_message` and `create_session` for every session in that
-   project folder. A session in a project that is off is invisible to agents.
+   project folder (a worktree session follows its project's switch). A session in a
+   project that is off is invisible to agents.
 3. Optional: set a **Port**. Leave it empty for a random free port.
 4. Check the status line. It reads `Listening · 127.0.0.1:PORT · N shared` when
    the endpoint is up, where N is the number of shared sessions.
@@ -201,8 +202,10 @@ API** row (**Shared with external agents**), which stays the finer opt-out insid
 an enabled project. When the session is shared but its project is off, the
 session's environment menu says **Project not enabled for agents** and offers
 **Enable**. The old Settings **Allowed folders** list no longer gates anything;
-on the first start after this change, each folder in it that is a known project
-was switched on once.
+on the first start after this change, every folder in it that still exists was
+switched on (with an empty list, the project of each session shared at that moment
+was). **Enable** in a worktree session's menu switches on the project the session
+belongs to.
 
 Every tab has a **Sessions API** row in its environment menu. Switch it on to
 share that session. Once it is on, you can give the session a **handle** in the

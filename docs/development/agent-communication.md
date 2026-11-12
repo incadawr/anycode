@@ -27,19 +27,26 @@ that path is explicitly allowed in a subsequent launch.
 In Settings mode the per-project switch ("Allow agents to open tasks here",
 `communication-agent-projects.json`) gates listing, status, `send_message`,
 `get_message_status` and `create_session` for sessions in that project folder;
-a worktree session counts as enabled when its own folder or its project root is
-on. The per-session switch ("Shared with external agents",
+the switch of a session is the switch of its one canonical project folder, the
+folder of the sidebar's project row: a worktree session uses its project root and
+has no switch of its own, and the same identity is used for the message ledger,
+so a message sent to a worktree stays readable while its root is on. The per-session switch ("Shared with external agents",
 `communication-sessions.json`) is the finer opt-out. `communication.workspaces`
-is no longer read as a gate: on the first start after the change each listed
-folder that is a known project is switched on once (marker
-`communication-workspaces-migrated.json`), and the saved value stays on disk.
+is no longer read as a gate. On the first start after the change every listed
+folder that still exists is switched on (one that is already on is left alone);
+an empty list, which used to mean any folder, switches on the project of each
+session that is shared at that moment and can be resolved. The marker
+`communication-workspaces-migrated.json` is written only after all writes
+succeeded, so a failed write is retried at the next start. The saved value stays
+on disk.
 
 A session that cannot be reached answers a distinct code instead of one combined
 text: `not_found` (no open session with that id), `not_exposed` (session switch
 off), `project_not_enabled` (project switch off, names the folder). `create_session`
 in a project that is off answers `create_session project_not_enabled`. The
-environment-variable file mode below keeps its exact workspace allowlist, and
-answers `workspace_not_allowed` for a folder outside it.
+environment-variable file mode below keeps its exact workspace allowlist and its
+single combined text, `Session unavailable or outside authorized workspace`, for
+every refusal.
 
 AnyCode binds only `127.0.0.1`, chooses a free port when `port` is zero, and writes
 `{url, token, workspaces}` to the discovery file with mode `0600`. Its parent
