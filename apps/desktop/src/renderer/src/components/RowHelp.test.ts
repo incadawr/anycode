@@ -147,13 +147,22 @@ describe("EnvironmentMenuRow with a help slot", () => {
     expect(container.querySelector(".environment-menu-row-error")?.textContent).toContain("Another live session already uses this handle.");
   });
 
-  it("keeps the tooltip in the row's flow so it never covers the rows below, and caps its width by the row", () => {
+  it("keeps the tooltip in the row's flow, and the icon and control on the title line while it is open", () => {
     const css = readFileSync(resolve(import.meta.dirname, "..", "app.css"), "utf8");
-    const rule = css.match(/\.row-help-tooltip \{([^}]*)\}/)?.[1] ?? "";
-    expect(rule).toContain("max-width: min(20rem, calc(100% - 2 * var(--sp-2)))");
-    expect(rule).not.toContain("100vw");
-    expect(rule).not.toContain("position: absolute");
-    expect(rule).toContain("display: none");
-    expect(css.match(/\.row-help-tooltip\[data-open="true"\] \{([^}]*)\}/)?.[1]).toContain("display: block");
+    const style = document.createElement("style");
+    style.textContent = css;
+    document.head.append(style);
+    try {
+      const { container } = mount(createElement(EnvironmentMenuRow, { icon: null, title: "Native session access", help: EXPLANATION, control: createElement("button", null, "x"), ariaLabel: "row" }));
+      const row = container.querySelector<HTMLElement>(".environment-menu-row")!;
+      const tip = tooltip(container);
+      expect(getComputedStyle(tip).display).toBe("none");
+      act(() => { helpButton(container).focus(); });
+      expect(getComputedStyle(tip).display).toBe("block");
+      expect(getComputedStyle(tip).position).not.toBe("absolute");
+      expect(getComputedStyle(tip).maxWidth).toContain("calc(100% - 2 * var(--sp-2))");
+      // Not re-centred by the taller heading.
+      expect(getComputedStyle(row).alignItems).toBe("flex-start");
+    } finally { style.remove(); }
   });
 });

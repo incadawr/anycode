@@ -333,7 +333,11 @@ it("offers Enable only where the environment menu's own action applies: this fol
   const common = await mount({ view: view({ enabled: false }, [peer("/w/a"), peer("/w/b")]), onEnableCurrent });
   try {
     expect(enableButtons(common.host)).toHaveLength(1);
-    expect(common.host.querySelector(".session-peers-common-reason")?.contains(enableButtons(common.host)[0]!)).toBe(true);
+    const reason = common.host.querySelector(".session-peers-common-reason")!;
+    // Beside the reason, never inside it (the switches are described by it), and named after the project.
+    expect(reason.contains(enableButtons(common.host)[0]!)).toBe(false);
+    expect(reason.textContent).not.toContain("Enable");
+    expect(enableButtons(common.host)[0]!.getAttribute("aria-label")).toBe("Enable native session access for current");
   } finally { await common.unmount(); }
   const peerOff = await mount({ view: view({}, [peer("/w/other", { enabled: false })]), onEnableCurrent });
   try {
@@ -343,4 +347,17 @@ it("offers Enable only where the environment menu's own action applies: this fol
   try {
     expect(enableButtons(none.host)).toHaveLength(0);
   } finally { await none.unmount(); }
+});
+
+it("moves the focus into the dialog once Enable succeeds and the button goes away", async () => {
+  const onEnableCurrent = vi.fn();
+  const m = await mount({ view: view({ enabled: false }, [peer("/w/other")]), onEnableCurrent });
+  try {
+    const button = enableButtons(m.host)[0]!;
+    await act(async () => button.focus());
+    expect(document.activeElement).toBe(button);
+    await m.rerender({ view: view({ enabled: true }, [peer("/w/other")]) });
+    expect(enableButtons(m.host)).toHaveLength(0);
+    expect(document.activeElement).toBe(searchInput(m.host));
+  } finally { await m.unmount(); }
 });

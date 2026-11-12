@@ -630,7 +630,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         // is not the project: a live session resolves to its current project, a closed one keeps the workspace.
         const recordLive = options.manager.listTabs().find((t) => t.sessionId === record.envelope.recipientSessionId);
         const recordProject = record.projectRoot ?? (recordLive !== undefined ? recordLive.projectRoot ?? recordLive.workspace : record.workspace);
-        if (recordProject && options.isProjectEnabled && !options.isProjectEnabled(recordProject)) throw new Error(`project_not_enabled: the project ${recordProject} is not enabled for agents`);
+        if (recordProject && options.isProjectEnabled && !options.isProjectEnabled(recordProject)) throw new Error(`project_not_enabled: the project ${recordProject} is not enabled for agents ('Allow agents to open tasks here' is off)`);
         if (record.workspace) { if (restricted && !(await isAllowed(record.workspace))) throw new Error("Message outside authorized workspace"); }
         else await requireSession(record.envelope.recipientSessionId);
         if (!await markLostGeneration(record)) {

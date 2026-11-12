@@ -733,6 +733,8 @@ let bootEnv: NodeJS.ProcessEnv = {};
 const nativeSessionsOn = (): boolean => selfCheckProfile === undefined && nativeSessionsEnabledForBoot(bootEnv);
 /** Loaded settings (source of provider defaults + consent flag). */
 let settings: AnycodeSettings | null = null;
+/** True when settings.json existed but could not be read or validated at this start. */
+let settingsLoadFailed = false;
 /** Current readiness = apiKey(env|vault) && model(env|settings); gates host spawns. */
 let providerReady = false;
 /**
@@ -2276,6 +2278,7 @@ void app.whenReady().then(async () => {
   settingsPathForQuitFlush = settingsPath;
   const loaded = await loadSettings(settingsPath, fileLogger);
   settings = loaded.settings;
+  settingsLoadFailed = loaded.loadFailed === true;
   vault = new Vault({ safeStorage: isolatedSmoke ? isolatedSmokeStorage : selfCheckProfile === undefined ? safeStorage : selfCheckStorage, secretsPath, logger: fileLogger });
   // Boot-time scrub of stale v1 provider secrets (W9 §2): W9′ keys every
   // credential by connection, so a leftover legacy `provider.apiKey` /
@@ -4429,7 +4432,7 @@ void app.whenReady().then(async () => {
       await migrateAllowedFolders({
         markerFile: join(app.getPath("userData"), "communication-workspaces-migrated.json"),
         workspaces: settings?.communication?.workspaces ?? [],
-        settingsLoaded: settings !== undefined && settings !== null,
+        settingsLoaded: settings !== null && !settingsLoadFailed,
         exposedSessionIds: () => {
           try {
             const raw = JSON.parse(readFileSync(join(app.getPath("userData"), "communication-sessions.json"), "utf8")) as Record<string, unknown>;

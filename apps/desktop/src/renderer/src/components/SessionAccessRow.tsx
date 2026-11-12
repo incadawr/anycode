@@ -205,7 +205,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
                   setEnableError(null);
                   void bridge.agentProjectsSet?.(projectRoot, true).then((result) => {
                     if (result.ok) setProjectEnabled(result.view.tabs.find((tab) => tab.tabId === tabId)?.projectEnabled ?? true);
-                    else setEnableError(mutationRefusalText(result.reason) || "The project switch could not be changed.");
+                    else if (result.reason !== "cancelled") setEnableError(mutationRefusalText(result.reason) || "The project switch could not be changed.");
                   }).catch(() => setEnableError("The project switch could not be changed."));
                 }}
               >

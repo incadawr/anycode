@@ -1,8 +1,10 @@
 import { mkdirSync, mkdtempSync, existsSync, rmSync, realpathSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentProjectsStore } from "./communication-agent-projects.js";
+import { loadSettings } from "../settings/files.js";
+import { cloneDefaults } from "../settings/schema.js";
 import { migrateAllowedFolders } from "./communication-workspaces-migration.js";
 
 const dirs: string[] = [];
@@ -188,6 +190,28 @@ describe("allowed folders migration", () => {
     expect(existsSync(f.markerFile)).toBe(false);
     expect(f.projects.allowedKeys()).toEqual([]);
     expect(await f.run([f.a])).toEqual({ migrated: [f.a], ran: true });
+    expect(f.projects.isAllowed(f.a)).toBe(true);
+  });
+
+  it.each([
+    ["unreadable", (file: string) => mkdirSync(file)],
+    ["broken JSON", (file: string) => writeFileSync(file, "{ not json")],
+  ])("startup wiring: a settings file that is %s defers the migration, and the next good start migrates the saved list", async (_name, breakIt) => {
+    const f = setup();
+    const settingsFile = join(dirname(f.markerFile), "settings.json");
+    breakIt(settingsFile);
+    const loaded = await loadSettings(settingsFile);
+    expect(loaded.loadFailed).toBe(true);
+    // Exactly what index.ts passes at startup.
+    expect(await f.run(loaded.settings.communication?.workspaces ?? [], [], f.projects, undefined, { settingsLoaded: loaded.loadFailed !== true })).toEqual({ migrated: [], ran: false });
+    expect(existsSync(f.markerFile)).toBe(false);
+    // Next start: the file is readable again and still holds the old list.
+    rmSync(settingsFile, { recursive: true, force: true });
+    writeFileSync(settingsFile, JSON.stringify({ ...cloneDefaults(), communication: { ...cloneDefaults().communication, workspaces: [f.a] } }));
+    const good = await loadSettings(settingsFile);
+    expect(good.loadFailed).toBeUndefined();
+    expect(good.settings.communication?.workspaces).toEqual([f.a]);
+    expect(await f.run(good.settings.communication?.workspaces ?? [], [], f.projects, undefined, { settingsLoaded: good.loadFailed !== true })).toEqual({ migrated: [f.a], ran: true });
     expect(f.projects.isAllowed(f.a)).toBe(true);
   });
 });

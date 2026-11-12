@@ -1219,9 +1219,8 @@ contextBridge.exposeInMainWorld("anycode", {
     set: (change) => ipcRenderer.invoke(SESSION_PEER_SET_CHANNEL, change),
   } satisfies SessionPeerBridge,
   // `communication.*` — the Sessions API (local MCP for external
-  // agents) control plane. The renderer names folders only by asking for the
-  // native dialog and sends a tabId for the
-  // per-session switch; no path and no token ever cross this bridge.
+  // agents) control plane. The renderer sends a tabId for the per-session
+  // switch; no path and no token ever cross this bridge.
   communication: {
     get: (): Promise<CommunicationGetResult> =>
       ipcRenderer.invoke(COMMUNICATION_GET_CHANNEL, {}) as Promise<CommunicationGetResult>,

@@ -2136,10 +2136,19 @@ button.environment-menu-row:hover,
   font-size: var(--fs-2xs);
 }
 
-/* Enable sits at the end of the reason line it resolves. */
-.session-peers-enable {
-  margin-left: var(--sp-2);
-  vertical-align: baseline;
+/* Enable is its own control beside the reason line it resolves. */
+.session-peers-common {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.session-peers-row-action {
+  grid-column: 1 / 3;
+  grid-row: 3;
+  justify-self: start;
+  margin-top: var(--sp-1);
 }
 
 /* The header subtitle is one line: the tail of the path with an ellipsis. */
@@ -2219,6 +2228,12 @@ button.environment-menu-row:hover,
 /* A row with an error line wraps it onto its own line under the whole row. */
 .environment-menu-row.environment-menu-row-with-error {
   flex-wrap: wrap;
+}
+
+/* A row with help keeps its icon and control on the title line: the tooltip
+   opens under the title and must not re-centre them. */
+.environment-menu-row.environment-menu-row-with-help {
+  align-items: flex-start;
 }
 
 .environment-menu-row-with-error > .environment-menu-row-error {

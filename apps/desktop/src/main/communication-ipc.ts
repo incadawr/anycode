@@ -69,7 +69,6 @@ export interface CommunicationIpcDeps {
   tabs(): ReadonlyArray<{ tabId: string; sessionId: string; workspace?: string; projectRoot?: string }>;
   /** The legacy env override; when set, every write is refused and the pane is read-only. */
   env(): string | undefined;
-  /** Native folder dialog owned by main; resolves to an absolute path or undefined when cancelled. */
   /** Stable userData copy of the stdio adapter, or null when this build does not carry it. */
   stdioScriptPath(): string | null;
   realpath(path: string): Promise<string>;

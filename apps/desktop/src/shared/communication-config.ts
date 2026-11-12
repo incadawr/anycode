@@ -27,9 +27,6 @@ export const COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL = "anycode:communication-a
 export const COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL = "anycode:communication-agent-projects-set";
 export const COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL = "anycode:communication-agent-projects-off";
 
-/** Hard cap on the optional outer folder boundary. */
-export const COMMUNICATION_MAX_WORKSPACES = 20;
-
 /** Renderer-safe status of the running (or refused) server. Never the token, never the discovery path. */
 export interface CommunicationStatus {
   state: "off" | "listening" | "env" | "error";
