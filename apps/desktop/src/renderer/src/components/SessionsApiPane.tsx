@@ -1,8 +1,7 @@
 /**
  * Settings → Sessions API pane: enable the local MCP that lets an
  * external agent (Claude Code, Codex) list and message the sessions the user
- * switches on. Everything is main-authoritative: folders come only from the
- * native dialog (`addWorkspace` takes no arguments), the token never reaches
+ * switches on. Everything is main-authoritative: the token never reaches
  * this pane, and copied configs point at the stdio adapter + discovery file.
  * All text is rendered as PLAIN TEXT.
  *
@@ -23,6 +22,7 @@ import {
   SESSIONS_API_FOOTER,
   SESSIONS_API_NODE_HINT,
   SESSIONS_API_PORT_HINT,
+  SESSIONS_API_PROJECT_SWITCH_NOTE,
   SESSIONS_API_REGENERATE_CONFIRM,
   SESSIONS_API_REGENERATE_HINT,
   SESSIONS_API_SHARE_HINT,
@@ -50,8 +50,6 @@ export interface CommunicationBridge {
   get(): Promise<CommunicationGetResult>;
   setEnabled(enabled: boolean): Promise<CommunicationMutationResult>;
   setPort(port: number | null): Promise<CommunicationMutationResult>;
-  addWorkspace(): Promise<CommunicationMutationResult>;
-  removeWorkspace(workspace: string): Promise<CommunicationMutationResult>;
   regenerateToken(): Promise<CommunicationRegenerateResult>;
   copyConfig(client: CommunicationCopyClient): Promise<CommunicationCopyConfigResult>;
   setDefaultAccess(access: "off" | "on"): Promise<CommunicationMutationResult>;
@@ -119,6 +117,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
           </span>
         </div>
         {envControlled && <p className="settings-field-hint">{SESSIONS_API_ENV_NOTE}</p>}
+        <p className="settings-field-hint">{SESSIONS_API_PROJECT_SWITCH_NOTE}</p>
       </div>
 
       {view.enabled && (

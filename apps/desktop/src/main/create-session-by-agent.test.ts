@@ -683,14 +683,12 @@ describe("agent title resume wiring (production create_session → handle rename
         approvals: createSessionAccessStore({ file: join(dir, "approvals.json"), defaultOn: () => false }),
         tabs: () => [{ tabId: created.tabId, sessionId: "sess-1" }],
         env: () => undefined,
-        pickFolder: async () => undefined,
         stdioScriptPath: () => null,
         realpath: async (path) => path,
         agentProjects: createAgentProjectsStore({ file: join(dir, "projects.json"), realpathSync: (path) => path }),
         offerEmptyFolderTrust: async (folder) => ({ folder }),
         realpathSync: (path) => path,
         homedir: () => dir,
-        stat: async () => ({ isDirectory: () => true }),
       };
       expect((await handleSetSessionHandle(ipc, { tabId: created.tabId, handle: "worker-2" })).ok).toBe(true);
 

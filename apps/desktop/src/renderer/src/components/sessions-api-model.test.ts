@@ -21,6 +21,9 @@ import {
   SESSIONS_API_AGENT_PROJECTS_HINT,
   SESSIONS_API_AGENT_PROJECTS_EMPTY,
   SESSIONS_API_SHARE_HINT,
+  SESSIONS_API_AGENT_PROJECTS_LABEL,
+  SESSIONS_API_PROJECT_SWITCH_NOTE,
+  SESSION_PROJECT_OFF_TITLE,
 } from "./sessions-api-model.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import type { CommunicationMutationReason, CommunicationStatus } from "../../../shared/communication-config.js";
@@ -44,7 +47,7 @@ describe("Sessions API pane model", () => {
 
   it("error detail text never echoes a path or a secret (fixed vocabulary only)", () => {
     const text = sessionsApiStatusLine({ state: "error", reason: "start_failed", detail: "folder not found", workspaces: 1, sessions: 0 }, false);
-    expect(text).toMatch(/no longer available/);
+    expect(text).toMatch(/could not start/);
     expect(text).not.toMatch(/\//);
   });
 
@@ -82,7 +85,7 @@ describe("Sessions API pane model", () => {
   });
 
   it("refusal wording covers every reason and never empty except for a cancelled dialog", () => {
-    const reasons: CommunicationMutationReason[] = ["read_only", "invalid", "io_error", "env_controlled", "not_a_directory", "duplicate", "too_many", "not_found", "not_running"];
+    const reasons: CommunicationMutationReason[] = ["read_only", "invalid", "io_error", "env_controlled", "not_found", "not_running"];
     for (const reason of reasons) expect(mutationRefusalText(reason).length).toBeGreaterThan(0);
     expect(mutationRefusalText("cancelled")).toBe("");
   });
@@ -114,13 +117,12 @@ describe("Sessions API pane discoverability copy (audit D9)", () => {
     expect(SESSIONS_API_SHARE_HINT).toMatch(/Currently shared/);
   });
 
-  it("the shared-sessions hint also names the project switch that gates new agent-opened tasks", () => {
-    // The exact label the sidebar project menu renders — one constant, so copy and menu cannot drift.
-    expect(SESSIONS_API_SHARE_HINT).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}”`);
-    const sentence = SESSIONS_API_SHARE_HINT.slice(SESSIONS_API_SHARE_HINT.indexOf("Agents reach"));
-    expect(sentence).toMatch(/open new tasks, only in a project whose/);
-    expect(sentence).toMatch(/sidebar project ⋯ menu/);
-    expect(sentence).toMatch(/switch is on/);
+  it("every text about the project switch uses the sidebar menu's exact label", () => {
+    // One constant, so copy and menu cannot drift.
+    expect(SESSIONS_API_PROJECT_SWITCH_NOTE).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}”`);
+    expect(SESSIONS_API_PROJECT_SWITCH_NOTE).toMatch(/sidebar project ⋯ menu/);
+    expect(SESSIONS_API_AGENT_PROJECTS_LABEL).toBe(AGENT_PROJECT_SWITCH_LABEL);
+    expect(SESSION_PROJECT_OFF_TITLE).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}”`);
   });
 
   it("the pane subtitle mentions the per-session switch (sharing is opt-in per session)", () => {
@@ -130,7 +132,7 @@ describe("Sessions API pane discoverability copy (audit D9)", () => {
 
 describe("session handle wording", () => {
   it("invalid and duplicate handles show their inline message", () => {
-    expect(handleErrorText("invalid")).toBe("Use lowercase letters, digits and - _ . @, up to 64.");
+    expect(handleErrorText("invalid")).toBe("Use lowercase letters, digits, hyphens, underscores, dots or @ (max 64 characters).");
     expect(handleErrorText("duplicate")).toBe("Another live session already uses this handle.");
   });
   it("other failures have plain wording and success shows nothing", () => {
@@ -145,7 +147,7 @@ describe("effective Sessions API state in the environment menu", () => {
     expect(sessionEffectiveAccess(true, true)).toEqual({ detail: sessionSwitchDetail(true), blockedByProject: false });
   });
   it("shared + project off says the project blocks it and offers the project action", () => {
-    expect(sessionEffectiveAccess(true, false)).toEqual({ detail: "Shared, but project not enabled for agents", blockedByProject: true });
+    expect(sessionEffectiveAccess(true, false)).toEqual({ detail: "Shared, but “Allow agents to open tasks here” is off", blockedByProject: true });
   });
   it("not shared never reports a project block, whatever the project switch says", () => {
     expect(sessionEffectiveAccess(false, false)).toEqual({ detail: sessionSwitchDetail(false), blockedByProject: false });

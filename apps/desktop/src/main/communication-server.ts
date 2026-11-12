@@ -108,9 +108,9 @@ export type CreateSessionRequest = {
  */
 export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string; delivery?: { state: string; messageId?: string } } | { ok: false; reason: CreateSessionRefusal; detail?: string; sessionId?: string; tabId?: string };
 const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
-  project_not_enabled: "the project does not allow agents to open tasks here; turn on 'Agents may open tasks here' in the sidebar project menu",
+  project_not_enabled: "the project does not allow agents to open tasks here; turn on 'Allow agents to open tasks here' in the sidebar project menu",
   not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
-  not_trusted: "the folder is not trusted in AnyCode; use the project sidebar menu to turn on Allow agents to open tasks here and trust the folder, or open the folder and approve its project settings",
+  not_trusted: "the folder is not trusted in AnyCode; use the project sidebar menu to turn on 'Allow agents to open tasks here' and trust the folder, or open the folder and approve its project settings",
   folder_not_found: "the workspace folder does not exist",
   rate_limited: `at most ${CREATE_SESSION_RATE_LIMIT} sessions per minute`,
   too_many: `at most ${MAX_AGENT_OPENED_TABS} agent-opened sessions alive at once`,
@@ -154,7 +154,7 @@ export interface CommunicationServerOptions {
   /** Per-session exposure gate, read on every request (live switch changes need no restart). Absent = every session. */
   isSessionExposed?: (sessionId: string) => boolean;
   /**
-   * Per-project switch ("Agents may open tasks here"), read on every request.
+   * Per-project switch ("Allow agents to open tasks here"), read on every request.
    * When present it gates listing, status, send_message, create_session and
    * message status for every session whose folder is not an enabled project.
    * Absent (legacy env-file mode, standalone embedders) = no project gate.
@@ -338,7 +338,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     const tab = options.manager.listTabs().find((t) => t.sessionId === sessionId);
     if (!tab) return new Error("not_found: no open session with this id");
     if (options.isSessionExposed && !options.isSessionExposed(sessionId)) return new Error("not_exposed: this session is not shared with external agents (its Sessions API switch is off)");
-    if (!projectOn(tab)) return new Error(`project_not_enabled: the project ${tab.projectRoot ?? tab.workspace} is not enabled for agents ('Agents may open tasks here' is off)`);
+    if (!projectOn(tab)) return new Error(`project_not_enabled: the project ${tab.projectRoot ?? tab.workspace} is not enabled for agents ('Allow agents to open tasks here' is off)`);
     return new Error("Session unavailable or outside authorized workspace");
   };
   const requireSession = async (sessionId: string) => {
@@ -608,7 +608,10 @@ export async function startCommunicationServer(options: CommunicationServerOptio
             try { await options.manager.communicationRequest(outcome.sessionId, "get_session_status", undefined, resolved); ready = true; }
             catch { /* host still booting */ }
             if (ready) {
-              const delivery = await sendMessage({ sessionId: outcome.sessionId, payload: input.firstMessage, mode: "next_turn", kind: "agent_message" });
+              // A refusal here (for example the project was switched off while the tab opened) must still
+              // name the tab: it exists and the caller needs its ids to find or close it.
+              const delivery = await sendMessage({ sessionId: outcome.sessionId, payload: input.firstMessage, mode: "next_turn", kind: "agent_message" })
+                .catch((error: unknown) => { throw new Error(`${error instanceof Error ? error.message : "create_session firstMessage delivery failed"}; the tab exists — sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`); });
               if (delivery.state !== "queued" && delivery.state !== "acknowledged") throw new Error(`create_session firstMessage delivery failed: ${delivery.detail ?? delivery.state}; sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
               messageId = delivery.envelope.messageId;
               break;

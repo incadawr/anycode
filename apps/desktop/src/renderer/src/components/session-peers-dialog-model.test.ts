@@ -170,7 +170,7 @@ describe("commonRowReason", () => {
   });
 
   it("words the line above the list", () => {
-    expect(commonReasonLine("peer_off", 46)).toBe("46 projects cannot be enabled: Native access is off for that folder");
+    expect(commonReasonLine("peer_off", 46)).toBe("46 projects cannot be enabled: Native session access is off for that folder");
     expect(commonReasonLine("busy", 3)).toBe("Saving…");
   });
 });

@@ -39,7 +39,6 @@ import {
 // as mcpConfig above; main owns zod validation + path custody in
 // main/lsp-config-ipc.ts).
 import {
-  COMMUNICATION_ADD_WORKSPACE_CHANNEL,
   COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL,
   COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL,
   COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL,
@@ -47,7 +46,6 @@ import {
   COMMUNICATION_COPY_CONFIG_CHANNEL,
   COMMUNICATION_GET_CHANNEL,
   COMMUNICATION_REGENERATE_TOKEN_CHANNEL,
-  COMMUNICATION_REMOVE_WORKSPACE_CHANNEL,
   COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL,
   COMMUNICATION_SET_ENABLED_CHANNEL,
   COMMUNICATION_SET_PORT_CHANNEL,
@@ -1222,7 +1220,7 @@ contextBridge.exposeInMainWorld("anycode", {
   } satisfies SessionPeerBridge,
   // `communication.*` — the Sessions API (local MCP for external
   // agents) control plane. The renderer names folders only by asking for the
-  // native dialog (`addWorkspace` takes NO arguments) and sends a tabId for the
+  // native dialog and sends a tabId for the
   // per-session switch; no path and no token ever cross this bridge.
   communication: {
     get: (): Promise<CommunicationGetResult> =>
@@ -1231,10 +1229,6 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(COMMUNICATION_SET_ENABLED_CHANNEL, { enabled }) as Promise<CommunicationMutationResult>,
     setPort: (port: number | null): Promise<CommunicationMutationResult> =>
       ipcRenderer.invoke(COMMUNICATION_SET_PORT_CHANNEL, { port }) as Promise<CommunicationMutationResult>,
-    addWorkspace: (): Promise<CommunicationMutationResult> =>
-      ipcRenderer.invoke(COMMUNICATION_ADD_WORKSPACE_CHANNEL, {}) as Promise<CommunicationMutationResult>,
-    removeWorkspace: (workspace: string): Promise<CommunicationMutationResult> =>
-      ipcRenderer.invoke(COMMUNICATION_REMOVE_WORKSPACE_CHANNEL, { workspace }) as Promise<CommunicationMutationResult>,
     regenerateToken: (): Promise<CommunicationRegenerateResult> =>
       ipcRenderer.invoke(COMMUNICATION_REGENERATE_TOKEN_CHANNEL, {}) as Promise<CommunicationRegenerateResult>,
     copyConfig: (client: CommunicationCopyClient): Promise<CommunicationCopyConfigResult> =>

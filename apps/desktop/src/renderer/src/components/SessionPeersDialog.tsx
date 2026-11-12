@@ -11,7 +11,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Modal, SearchInput, Switch } from "../ui/index.js";
+import { Button, Modal, SearchInput, Switch } from "../ui/index.js";
 import type { NativeProjectView, SessionPeerView } from "../../../shared/session-peer-view.js";
 import {
   commonReasonLine,
@@ -40,9 +40,15 @@ export interface SessionPeersDialogProps {
   error?: string;
   /** Ask the caller to write one peer grant. */
   onChange(peerKey: string, enabled: boolean): void;
+  /**
+   * Switch native session access on for the current folder: the same action as the
+   * environment menu's "Native session access" switch. Offered next to the reason
+   * "off for this folder"; a peer folder's own switch is not reachable from here.
+   */
+  onEnableCurrent?(): void;
 }
 
-export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, onChange }: SessionPeersDialogProps) {
+export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, onChange, onEnableCurrent }: SessionPeersDialogProps) {
   useOverlayFlag(open);
   const [query, setQuery] = useState("");
   const searchHost = useRef<HTMLDivElement>(null);
@@ -79,7 +85,12 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
         </div>
         {view && knownPeers.length > 0 && <p className="session-peers-summary">{grantedSummary(knownPeers)}</p>}
         {note && <p className="session-peers-note">{note}</p>}
-        {common && <p id={commonId} className="session-peers-common-reason">{commonReasonLine(common.reason, common.count)}</p>}
+        {common && (
+          <p id={commonId} className="session-peers-common-reason">
+            {commonReasonLine(common.reason, common.count)}
+            {common.reason === "current_off" && onEnableCurrent && <EnableCurrentButton busy={busy} onEnable={onEnableCurrent} />}
+          </p>
+        )}
         {error && <div role="alert" className="session-peers-error">{error}</div>}
         {!project && !error && <p className="session-peers-empty">{peersDialogText.loading}</p>}
         {project && knownPeers.length === 0 && <p className="session-peers-empty">{peersDialogText.noPeers}</p>}
@@ -87,7 +98,7 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
           <p className="session-peers-empty">{peersDialogText.noMatch}</p>
         )}
         {project && rows.map(peer => (
-          <PeerRow key={peer.key} project={project} peer={peer} busy={busy} onChange={onChange}
+          <PeerRow key={peer.key} project={project} peer={peer} busy={busy} onChange={onChange} onEnableCurrent={onEnableCurrent}
             commonId={common && !peer.granted ? commonId : undefined} />
         ))}
       </div>
@@ -95,11 +106,16 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
   );
 }
 
-function PeerRow({ project, peer, busy, onChange, commonId }: {
+function EnableCurrentButton({ busy, onEnable }: { busy: boolean; onEnable(): void }) {
+  return <Button size="sm" type="button" className="session-peers-enable" disabled={busy} onClick={onEnable}>Enable</Button>;
+}
+
+function PeerRow({ project, peer, busy, onChange, onEnableCurrent, commonId }: {
   project: NativeProjectView;
   peer: NativeProjectView;
   busy: boolean;
   onChange(peerKey: string, enabled: boolean): void;
+  onEnableCurrent?(): void;
   /** Set when the row's reason is shown once above the list: the row points at that line. */
   commonId?: string;
 }) {
@@ -122,6 +138,7 @@ function PeerRow({ project, peer, busy, onChange, commonId }: {
       {ownReason && (
         <span id={reasonId} className="session-peers-row-reason">
           {reason === "busy" ? reasonText : peer.granted ? `Currently inactive: ${reasonText}` : reasonText}
+          {reason === "current_off" && onEnableCurrent && <EnableCurrentButton busy={busy} onEnable={onEnableCurrent} />}
         </span>
       )}
       <span className="session-peers-row-switch">

@@ -136,7 +136,7 @@ describe("EnvironmentMenuRow with a help slot", () => {
       createElement(EnvironmentMenuRow, {
         icon: null,
         title: "Handle (optional)",
-        detail: "Shown in list_sessions",
+        detail: "Shown in the session list for agents",
         help: EXPLANATION,
         ariaLabel: "Session handle",
         error: "Another live session already uses this handle.",
@@ -147,12 +147,13 @@ describe("EnvironmentMenuRow with a help slot", () => {
     expect(container.querySelector(".environment-menu-row-error")?.textContent).toContain("Another live session already uses this handle.");
   });
 
-  it("caps the tooltip width by the menu row it sits in, so it never runs past the menu", () => {
+  it("keeps the tooltip in the row's flow so it never covers the rows below, and caps its width by the row", () => {
     const css = readFileSync(resolve(import.meta.dirname, "..", "app.css"), "utf8");
     const rule = css.match(/\.row-help-tooltip \{([^}]*)\}/)?.[1] ?? "";
     expect(rule).toContain("max-width: min(20rem, calc(100% - 2 * var(--sp-2)))");
     expect(rule).not.toContain("100vw");
-    expect(rule).toContain("opacity: 0");
-    expect(css.match(/\.environment-menu-row \{([^}]*)\}/)?.[1]).toContain("position: relative");
+    expect(rule).not.toContain("position: absolute");
+    expect(rule).toContain("display: none");
+    expect(css.match(/\.row-help-tooltip\[data-open="true"\] \{([^}]*)\}/)?.[1]).toContain("display: block");
   });
 });

@@ -27,7 +27,7 @@ async function mount(bridge: SessionPeerBridge) {
   return { host, render, close: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
 const click = async (element: Element | null) => act(async () => (element as HTMLButtonElement).click());
-const manage = (host: HTMLElement) => [...host.querySelectorAll("button")].find(b => b.textContent === "Manage…")!;
+const manage = (host: HTMLElement) => [...host.querySelectorAll("button")].find(b => b.textContent === "Manage projects…")!;
 
 it("shows summary and toggle, updates both views, and retains the old view after a failed save", async () => {
   let current = makeView("a");

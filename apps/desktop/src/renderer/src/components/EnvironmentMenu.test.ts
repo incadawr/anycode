@@ -91,7 +91,7 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     for (const title of ["Workspace", "Session access"]) {
       expect(dialog.querySelector('section[aria-label="' + title + '"]')).not.toBeNull();
     }
-    expect(dialog.textContent).toContain("1 on");
+    expect(dialog.textContent).toContain("Browser on");
     expect(dialog.querySelector('section[aria-label="Workspace"] .environment-menu-row-main > span')?.textContent).toBe("notes");
     expect(dialog.querySelector('section[aria-label="Diagnostics"]')).toBeNull();
     expect(dialog.lastElementChild?.textContent).toContain("Export diagnostics…");
@@ -101,7 +101,7 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("false");
     await click(access);
     expect(communication.setSessionAccess).toHaveBeenCalledWith("tab", true);
-    expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("2 on");
+    expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("Browser + Sessions API on");
     expect(host.querySelector(access)?.getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector(".environment-menu-dependents input")).not.toBeNull();
     await click('[data-environment-action="sessions-api-approvals"]');
@@ -113,7 +113,7 @@ it("opens one dialog trigger with sections and preserves access toggle handlers"
     expect(browserAccess.set).toHaveBeenCalledWith("tab", false);
     expect(host.querySelector('[title^="Full browser access"]')).toBeNull();
     expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
-    expect(host.querySelector('.environment-menu-title .environment-menu-scope')?.textContent).toBe("1 on");
+    expect(host.querySelector('.environment-menu-title .environment-menu-scope')?.textContent).toBe("Sessions API on");
     expect(host.querySelector(browser)?.getAttribute("aria-checked")).toBe("false");
     expect(host.querySelector(".environment-trigger")?.getAttribute("aria-label")).toContain(", Sessions API enabled");
     expect(host.querySelector(".environment-trigger")?.getAttribute("aria-label")).not.toContain("accesses");
@@ -675,7 +675,7 @@ it.each([true, false, undefined])("shows worktree context and guards owned branc
     expect(host.querySelector('.environment-risk-summary')?.textContent).toBe("2");
     expect(host.querySelector('.environment-trigger')?.getAttribute('aria-label')).toContain(", Full browser access and Sessions API enabled");
     await act(async () => host.querySelector<HTMLButtonElement>('.environment-trigger')!.click());
-    expect(host.querySelector('section[aria-label="Session access"] .environment-menu-title')?.textContent).toContain("2 on");
+    expect(host.querySelector('section[aria-label="Session access"] .environment-menu-title')?.textContent).toContain("Browser + Sessions API on");
     const branch = Array.from(host.querySelectorAll('button')).find(b => b.textContent?.startsWith('Branch'))!;
     expect(branch.disabled).toBe(owned === true);
     if (worktree) {
@@ -761,7 +761,7 @@ it("keeps the Sessions API risk state while the menu reopens (no reset to off wh
     // opening the menu refetches (the trigger's own fetch plus SessionAccessRow's); the state stays on while they are in flight
     expect(pendingOpen).toHaveLength(2);
     expect(host.querySelector('[title="Sessions API enabled"]')).not.toBeNull();
-    expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("1 on");
+    expect(host.querySelector(".environment-menu-scope")?.textContent).toBe("Sessions API on");
     await act(async () => pendingOpen.forEach(resolve => resolve(sessionsView(true))));
   } finally { await restore(); }
 });
@@ -925,7 +925,7 @@ it("manages peers outside the menu, refetches on reopen and restores focus on Es
     expect(host.textContent).toContain("Communicates with 0 projects");
     expect(host.querySelector(".session-peers-row")).toBeNull();
     expect(host.querySelector('button[aria-label="Native session access"]')).not.toBeNull();
-    await clickText(host, "Manage…");
+    await clickText(host, "Manage projects…");
     expect(host.querySelector('[aria-label="Environment"]')).toBeNull();
     expect(host.querySelector(".session-peers-row")).not.toBeNull();
     expect(isOverlayOpen()).toBe(true);
@@ -1005,7 +1005,7 @@ describe("peers dialog focus return", () => {
       const t = await mountPeersMenu(peersView);
       try {
         await act(async () => t.trigger().click());
-        await clickText(t.host, "Manage…");
+        await clickText(t.host, "Manage projects…");
         expect(t.host.querySelector("dialog[open]")).not.toBeNull();
         await close(t.host);
         expect(t.host.querySelector("dialog")).toBeNull();
@@ -1034,7 +1034,7 @@ describe("menu summary after the current project is switched off", () => {
       await act(async () => t.trigger().click());
       expect(summary()).toContain("Communicates with 1 project");
       expect(summary()).not.toContain("Currently inactive");
-      await clickText(t.host, "Manage…");
+      await clickText(t.host, "Manage projects…");
       // The project is switched off behind the open dialog (main, not this view).
       enabled = false;
       const key = (type: string) => act(async () => t.host.querySelector<HTMLInputElement>('input[type="search"]')!
@@ -1064,7 +1064,7 @@ describe("menu summary after the current project is switched off", () => {
     t.set.mockImplementation(async () => { granted = [false, true]; return { ok: true as const, view: view() }; });
     try {
       await act(async () => t.trigger().click());
-      await clickText(t.host, "Manage…");
+      await clickText(t.host, "Manage projects…");
       enabled = false;
       await act(async () => t.host.querySelector<HTMLButtonElement>('.session-peers-row[data-granted="true"] button[role="switch"]')!.click());
       expect(t.set).toHaveBeenCalledTimes(1);

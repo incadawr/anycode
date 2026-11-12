@@ -10,8 +10,6 @@
 export const COMMUNICATION_GET_CHANNEL = "anycode:communication-get";
 export const COMMUNICATION_SET_ENABLED_CHANNEL = "anycode:communication-set-enabled";
 export const COMMUNICATION_SET_PORT_CHANNEL = "anycode:communication-set-port";
-export const COMMUNICATION_ADD_WORKSPACE_CHANNEL = "anycode:communication-add-workspace";
-export const COMMUNICATION_REMOVE_WORKSPACE_CHANNEL = "anycode:communication-remove-workspace";
 export const COMMUNICATION_REGENERATE_TOKEN_CHANNEL = "anycode:communication-regenerate-token";
 export const COMMUNICATION_COPY_CONFIG_CHANNEL = "anycode:communication-copy-config";
 export const COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL = "anycode:communication-set-default-access";
@@ -82,9 +80,6 @@ export type CommunicationMutationReason =
   | "folder_changed"
   | "env_controlled"
   | "cancelled"
-  | "not_a_directory"
-  | "duplicate"
-  | "too_many"
   | "not_found"
   | "not_running";
 

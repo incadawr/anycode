@@ -4010,13 +4010,8 @@ void app.whenReady().then(async () => {
       homedir: () => homedir(),
       tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId, workspace: tab.workspace, ...(tab.projectRoot !== undefined ? { projectRoot: tab.projectRoot } : {}) })),
       env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
-      pickFolder: async () => {
-        const result = await dialog.showOpenDialog(win!, { properties: ["openDirectory"] });
-        return result.canceled ? undefined : result.filePaths[0];
-      },
       stdioScriptPath: () => stdioAdapterForHost(app.getPath("userData")),
       realpath: (path) => fsRealpath(path),
-      stat: (path) => fsStat(path),
     });
   }
 
@@ -4434,6 +4429,7 @@ void app.whenReady().then(async () => {
       await migrateAllowedFolders({
         markerFile: join(app.getPath("userData"), "communication-workspaces-migrated.json"),
         workspaces: settings?.communication?.workspaces ?? [],
+        settingsLoaded: settings !== undefined && settings !== null,
         exposedSessionIds: () => {
           try {
             const raw = JSON.parse(readFileSync(join(app.getPath("userData"), "communication-sessions.json"), "utf8")) as Record<string, unknown>;

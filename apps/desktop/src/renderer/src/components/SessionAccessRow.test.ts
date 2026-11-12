@@ -185,7 +185,7 @@ describe("SessionAccessRow layout", () => {
 
   it("marks the handle input invalid and describes it by the error, which sits after the control", () => {
     const html = renderToStaticMarkup(
-      createElement(SessionHandleField, { value: "UPPER", error: "Use lowercase letters, digits and - _ . @, up to 64.", onChange: () => {}, onCommit: () => {} }),
+      createElement(SessionHandleField, { value: "UPPER", error: "Use lowercase letters, digits, hyphens, underscores, dots or @ (max 64 characters).", onChange: () => {}, onCommit: () => {} }),
     );
     expect(html).toContain('aria-invalid="true"');
     const errorId = html.match(/<span id="([^"]+)" class="environment-menu-row-error"/)?.[1];
