@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.100] - 2026-11-12
+
 ### Changed
 
 - Sessions API access is now decided by two switches: the project's "Allow agents to open tasks here" and the session's own switch, so agents need the project switch on as well. The separate Allowed folders setting is gone. On first start the folders you had listed (a worktree folder counts as its project) are switched on as projects; with an empty list, the project of each session shared at that moment is switched on. This also lets agents open tasks there, so switch a project off if you do not want that. A listed folder that is missing, or a session that cannot be found, is retried on the next starts.
