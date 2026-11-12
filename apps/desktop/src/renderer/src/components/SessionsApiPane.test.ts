@@ -12,7 +12,6 @@ import {
   SESSIONS_API_AGENT_PROJECT_ON,
   SESSIONS_API_AGENT_PROJECT_TURN_OFF,
   SESSIONS_API_DESCRIPTION,
-  SESSIONS_API_FOLDER_HINT,
 } from "./sessions-api-model.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import type { CommunicationView } from "../../../shared/communication-config.js";
@@ -40,7 +39,7 @@ function props(over: Partial<SessionsApiPaneViewProps> & { view?: CommunicationV
     copyClient: "claude-code",
     copied: null,
     confirmingRegenerate: false,
-    onToggle: noop, onAddFolder: noop, onRemoveFolder: noop, onPortText: noop, onApplyPort: noop,
+    onToggle: noop, onPortText: noop, onApplyPort: noop,
     onAgentProjectOff: noop, onDefaultAccess: noop, onCopyClient: noop, onCopy: noop, onRegenerateAsk: noop, onRegenerateConfirm: noop, onRegenerateCancel: noop,
     ...over,
   };
@@ -85,11 +84,10 @@ describe("SessionsApiPaneView", () => {
     expect(render(props({ view: base({ enabled: true }) }))).toMatch(/<button(?=[^>]*role="switch")(?=[^>]*aria-checked="true")[^>]*>/);
   });
 
-  it("the env override disables the switch, the folder controls and the port field, and says why", () => {
+  it("the env override disables the switch and the port field, and says why", () => {
     const html = render(props({ envControlled: true }));
     expect(html).toContain("Controlled by ANYCODE_COMMUNICATION_CONFIG");
     expect(html).toMatch(/<button(?=[^>]*role="switch")(?=[^>]*disabled="")[^>]*>/);
-    expect(buttonTag(html, "Add folder…")).toContain("disabled");
     expect(buttonTag(html, "Apply")).toContain("disabled");
   });
 
@@ -105,7 +103,7 @@ describe("SessionsApiPaneView", () => {
     const html = render(props({ view: base({ enabled: true }) }));
     expect(html).toContain("Choose which sessions to share");
     expect(html).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu)`);
-    expect(html).toContain("Agents may open new tasks in a project only when");
+    expect(html).toContain("Agents reach a session, and may open new tasks, only in a project whose");
   });
 
   it("Advanced is a collapsed details disclosure by default", () => {
@@ -136,34 +134,11 @@ describe("SessionsApiPaneView", () => {
     expect(html).not.toContain(TOKEN);
   });
 
-  it("folders render as escaped text, never as markup", () => {
-    const html = render(props({ view: base({ workspaces: ['/x/<img src=x onerror=1>/"q"'] }) }));
-    expect(html).toContain("&lt;img src=x onerror=1&gt;");
-    expect(html).not.toContain("<img src=x");
-  });
-
-  it("a listed folder that is missing on disk is marked Missing with wording that explains the effect", () => {
-    const html = render(props({ view: base({ enabled: true, workspaces: ["/gone", "/kept"], missingWorkspaces: ["/gone"], status: listeningStatus() }) }));
-    const rows = html.match(/<li[^>]*>[\s\S]*?<\/li>/g) ?? [];
-    const gone = rows.find((row) => row.includes("/gone"));
-    const kept = rows.find((row) => row.includes("/kept"));
-    expect(gone).toBeDefined();
-    expect(kept).toBeDefined();
-    // The missing row states the problem in plain words (not a bare chip word).
-    expect(gone).toContain("Missing on disk");
-    expect(gone).toContain("grants nothing until the folder is back");
-    // A present folder carries no mark.
-    expect(kept).not.toContain("Missing on disk");
-  });
-
-  it("the missing mark disappears once the folder is back (no missingWorkspaces entry)", () => {
-    const html = render(props({ view: base({ enabled: true, workspaces: ["/back"], missingWorkspaces: [], status: listeningStatus() }) }));
-    expect(html).not.toContain("Missing on disk");
-  });
-
-  it("the folder hint says an empty list means any folder", () => {
-    const html = render(props({ view: base({ enabled: true }) }));
-    expect(html).toContain(SESSIONS_API_FOLDER_HINT);
+  it("the Allowed folders field is gone: projects control access now", () => {
+    const html = render(props({ view: base({ enabled: true, workspaces: ["/legacy"], status: listeningStatus() }) }));
+    expect(html).not.toContain("Allowed folders");
+    expect(html).not.toContain("Add folder");
+    expect(html).not.toContain("/legacy");
     expect(html).not.toContain('role="alert"');
   });
 
@@ -199,15 +174,6 @@ describe("SessionsApiPaneView", () => {
   it("the new-sessions default switch reflects the saved value", () => {
     expect(render(props({ view: base({ defaultSessionAccess: "on" }) }))).toMatch(/<button(?=[^>]*aria-checked="true")(?=[^>]*aria-labelledby="sessions-api-default-caption")[^>]*>/);
     expect(render(props())).toMatch(/<button(?=[^>]*aria-checked="false")(?=[^>]*aria-labelledby="sessions-api-default-caption")[^>]*>/);
-  });
-});
-
-describe("SessionsApiPane wiring", () => {
-  it("the container calls addWorkspace with NO arguments and never builds a path client-side", () => {
-    const source = readFileSync(new URL("./SessionsApiPane.tsx", import.meta.url), "utf8");
-    expect(source).toMatch(/bridge\.addWorkspace\(\)/);
-    expect(source).not.toMatch(/addWorkspace\([^)]/);
-    expect(source).not.toMatch(/\bpath\b\s*:/);
   });
 });
 

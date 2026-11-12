@@ -20,10 +20,6 @@ import {
   SESSIONS_API_AGENT_PROJECT_TURN_OFF,
   SESSIONS_API_ENABLE_LABEL,
   SESSIONS_API_ENV_NOTE,
-  SESSIONS_API_FOLDER_HINT,
-  SESSIONS_API_FOLDER_MISSING_LABEL,
-  SESSIONS_API_FOLDER_MISSING_NOTE,
-  SESSIONS_API_FOLDER_NOTE,
   SESSIONS_API_FOOTER,
   SESSIONS_API_NODE_HINT,
   SESSIONS_API_PORT_HINT,
@@ -85,8 +81,6 @@ export interface SessionsApiPaneViewProps {
   copied: { label: string; note: string } | null;
   confirmingRegenerate: boolean;
   onToggle(enabled: boolean): void;
-  onAddFolder(): void;
-  onRemoveFolder(workspace: string): void;
   onPortText(text: string): void;
   onApplyPort(): void;
   onAgentProjectOff(key: string): void;
@@ -175,35 +169,6 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
 
       <details className="connection-drawer-advanced sessions-api-advanced">
         <summary className="settings-section-title">Advanced</summary>
-
-        <div className="sessions-api-row sessions-api-folders">
-          <div className="sessions-api-row-main">
-            <span className="settings-field-label">Allowed folders (optional)</span>
-            <div className="sessions-api-row-control">
-              <Button type="button" disabled={!editable} onClick={() => props.onAddFolder()}>Add folder…</Button>
-            </div>
-          </div>
-          {view.workspaces.length > 0 && (
-            <ul className="sessions-api-folder-list">
-              {view.workspaces.map((workspace) => {
-                const missing = view.missingWorkspaces.includes(workspace);
-                return (
-                  <li key={workspace} className={missing ? "sessions-api-folder-missing" : undefined}>
-                    <span className="sessions-api-folder-path">{workspace}</span>
-                    {missing && (
-                      <span className="settings-secret-status settings-secret-status-danger sessions-api-folder-state">
-                        {SESSIONS_API_FOLDER_MISSING_LABEL}
-                      </span>
-                    )}
-                    <Button type="button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</Button>
-                    {missing && <p className="settings-field-hint">{SESSIONS_API_FOLDER_MISSING_NOTE}</p>}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <p className="settings-field-hint" title={SESSIONS_API_FOLDER_NOTE}>{SESSIONS_API_FOLDER_HINT}</p>
-        </div>
 
         <div className="sessions-api-row sessions-api-agent-projects">
           <div className="sessions-api-row-main">
@@ -356,8 +321,6 @@ export function SessionsApiPane({ bridge = window.anycode.communication }: Sessi
       copied={copied}
       confirmingRegenerate={confirmingRegenerate}
       onToggle={(enabled) => void bridge.setEnabled(enabled).then(take)}
-      onAddFolder={() => void bridge.addWorkspace().then(take)}
-      onRemoveFolder={(workspace) => void bridge.removeWorkspace(workspace).then(take)}
       onPortText={setPortText}
       onApplyPort={() => {
         const parsed = parsePortInput(portText);

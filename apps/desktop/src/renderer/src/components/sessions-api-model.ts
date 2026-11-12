@@ -23,15 +23,6 @@ export const SESSIONS_API_NODE_HINT = "Needs Node 22+ where the agent runs.";
 /** The one-line footer under the pane. */
 export const SESSIONS_API_FOOTER =
   "The token is stored only in a private file on this computer and is never shown here. Anyone who can read that file can message shared sessions.";
-/** The one-line folder hint; the full exact-folder rule is kept as the field's tooltip. */
-export const SESSIONS_API_FOLDER_HINT = "Empty = any folder; only sessions you switch on are shared.";
-export const SESSIONS_API_FOLDER_NOTE =
-  "Optional. When empty, only the sessions you switch on are shared. When set, a session must also be inside one of these exact folders (subfolders are not included; symlinks are resolved).";
-/** The mark on a listed folder that is not on disk right now (a danger chip). */
-export const SESSIONS_API_FOLDER_MISSING_LABEL = "Missing on disk";
-/** One plain-text sentence under the chip: what the mark means for the user. */
-export const SESSIONS_API_FOLDER_MISSING_NOTE = "This folder grants nothing until the folder is back; agents calling with it get folder_not_found. It is allowed again automatically once it exists — no restart needed.";
-
 /** The Advanced row that lists projects where agents may open tasks (view, plus a Turn off action; turning one on is the sidebar project menu). */
 export const SESSIONS_API_AGENT_PROJECTS_LABEL = "Agents may open tasks here";
 /** The row's STATE label: every listed project is ON (main lists only allowed ones). */
@@ -39,7 +30,7 @@ export const SESSIONS_API_AGENT_PROJECT_ON = "On";
 /** The row's ACTION label: the listed project is on, so the button turns it off (never a bare "Off", which reads as state). */
 export const SESSIONS_API_AGENT_PROJECT_TURN_OFF = "Turn off";
 export const SESSIONS_API_AGENT_PROJECTS_EMPTY = "No project allows agents to open tasks yet. Use the project ⋯ menu in the sidebar.";
-export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. Turn one on in the sidebar project ⋯ menu; trusted folders only.";
+export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. A project must be on for agents to list, read or message its shared sessions or open tasks in it. Turn one on in the sidebar project ⋯ menu; trusted folders only.";
 /**
  * The step-1 hint: says WHERE a session is switched on (the session's own ⋯
  * environment menu) before the live count, so the pane explains per-session
@@ -49,7 +40,7 @@ export const SESSIONS_API_AGENT_PROJECTS_HINT = "Off by default. Turn one on in 
  */
 export const SESSIONS_API_SHARE_HINT =
   "Open a session's ⋯ environment menu and turn on Sessions API; only sessions you switch on are shared. Currently shared: {count}. " +
-  `Agents may open new tasks in a project only when that project's “${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu).`;
+  `Agents reach a session, and may open new tasks, only in a project whose “${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu).`;
 
 export type SessionsApiTone = "ok" | "danger" | "muted";
 
@@ -131,6 +122,21 @@ export const SESSION_SWITCH_TITLE = "Sessions API";
 
 export function sessionSwitchDetail(enabled: boolean): string {
   return enabled ? "Shared with external agents" : "Not shared";
+}
+
+/** The effective-state line when the session is shared but its project switch is off. */
+export const SESSION_PROJECT_OFF_TITLE = "Project not enabled for agents";
+export const SESSION_PROJECT_OFF_DETAIL = "Agents cannot reach this session until the project allows them.";
+export const SESSION_PROJECT_ENABLE_LABEL = "Enable";
+
+/**
+ * Effective state of the Sessions API for one session: both levels must be on.
+ * `blockedByProject` means the session switch is on but agents still cannot
+ * reach it because the project switch is off (the row then offers Enable).
+ */
+export function sessionEffectiveAccess(enabled: boolean, projectEnabled: boolean): { detail: string; blockedByProject: boolean } {
+  if (enabled && !projectEnabled) return { detail: `Shared, but ${SESSION_PROJECT_OFF_TITLE.toLowerCase()}`, blockedByProject: true };
+  return { detail: sessionSwitchDetail(enabled), blockedByProject: false };
 }
 
 export function sessionSwitchDisabledReason(envControlled: boolean, hasTab: boolean): string | null {

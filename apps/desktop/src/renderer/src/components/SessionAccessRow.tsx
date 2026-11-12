@@ -11,11 +11,11 @@
  */
 import { useContext, useEffect, useId, useState } from "react";
 import { TabContext } from "../tab-context.js";
-import { handleErrorText, sessionApprovalsLabel, sessionSwitchDetail, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_DETAIL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
+import { handleErrorText, sessionApprovalsLabel, sessionEffectiveAccess, sessionSwitchDisabledReason, SESSION_APPROVALS_ARIA_LABEL, SESSION_APPROVALS_DETAIL, SESSION_APPROVALS_NOTE, SESSION_HANDLE_DETAIL, SESSION_HANDLE_HINT, SESSION_HANDLE_LABEL, SESSION_HANDLE_PLACEHOLDER, SESSION_PROJECT_ENABLE_LABEL, SESSION_PROJECT_OFF_DETAIL, SESSION_PROJECT_OFF_TITLE, SESSION_SWITCH_TITLE } from "./sessions-api-model.js";
 import type { CommunicationGetResult, CommunicationHandleResult, CommunicationMutationResult } from "../../../shared/communication-config.js";
 import { EnvironmentMenuRow } from "./EnvironmentMenuRow.js";
 import { RowHelp } from "./RowHelp.js";
-import { Switch } from "../ui/index.js";
+import { Button, Switch } from "../ui/index.js";
 import { Robot } from "./icons.js";
 
 export interface SessionAccessBridge {
@@ -24,6 +24,8 @@ export interface SessionAccessBridge {
   setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
   /** the External approvals switch. Refused by main unless the session is shared. */
   setSessionApprovals(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
+  /** The existing per-project switch ("Agents may open tasks here"), by the tab's folder. */
+  agentProjectsSet?(workspace: string, enabled: boolean): Promise<CommunicationMutationResult>;
 }
 
 /**
@@ -109,11 +111,13 @@ export function commitSessionHandle(bridge: Pick<SessionAccessBridge, "setSessio
 }
 
 export function SessionAccessRow({ bridge = window.anycode.communication, onEnabledChange }: { bridge?: SessionAccessBridge; onEnabledChange?: (enabled: boolean) => void }) {
-  const tabId = useContext(TabContext)?.tabId;
+  const tabContext = useContext(TabContext);
+  const tabId = tabContext?.tabId;
   const [enabled, setEnabled] = useState(false);
   const [approvals, setApprovals] = useState(false);
   const [envControlled, setEnvControlled] = useState(false);
   const [known, setKnown] = useState(false);
+  const [projectEnabled, setProjectEnabled] = useState(true);
   const [handle, setHandle] = useState("");
   const [handleError, setHandleError] = useState<string | null>(null);
 
@@ -126,6 +130,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
       setKnown(tab !== undefined);
       setEnabled(tab?.enabled ?? false);
       setApprovals(tab?.approvals ?? false);
+      setProjectEnabled(tab?.projectEnabled ?? true);
       setHandle(tab?.handle ?? "");
     });
     return () => {
@@ -135,6 +140,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
 
   useEffect(() => { if (known) onEnabledChange?.(enabled); }, [enabled, known, onEnabledChange]);
 
+  const effective = sessionEffectiveAccess(enabled, projectEnabled);
   const reason = sessionSwitchDisabledReason(envControlled, tabId !== undefined && known);
 
   const commitHandle = (text: string) => {
@@ -154,7 +160,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
       <EnvironmentMenuRow
         icon={<Robot />}
         title={SESSION_SWITCH_TITLE}
-        detail={reason ?? sessionSwitchDetail(enabled)}
+        detail={reason ?? effective.detail}
         ariaLabel="Sessions API"
         control={
           <Switch
@@ -169,12 +175,40 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
                   const tab = result.view.tabs.find((candidate) => candidate.tabId === tabId);
                   setEnabled(tab?.enabled ?? next);
                   setApprovals(tab?.approvals ?? false);
+                  setProjectEnabled(tab?.projectEnabled ?? true);
                 }
               });
             }}
           />
         }
       />
+      {enabled && reason === null && effective.blockedByProject && (
+        <EnvironmentMenuRow
+          icon={null}
+          title={SESSION_PROJECT_OFF_TITLE}
+          detail={SESSION_PROJECT_OFF_DETAIL}
+          detailTone="warning"
+          ariaLabel="Project not enabled for agents"
+          control={
+            bridge.agentProjectsSet && tabContext ? (
+              <Button
+                size="sm"
+                type="button"
+                data-environment-action="sessions-api-enable-project"
+                onClick={() => {
+                  const workspace = tabContext?.store.getState().workspace;
+                  if (!workspace) return;
+                  void bridge.agentProjectsSet?.(workspace, true).then((result) => {
+                    if (result.ok) setProjectEnabled(result.view.tabs.find((tab) => tab.tabId === tabId)?.projectEnabled ?? true);
+                  });
+                }}
+              >
+                {SESSION_PROJECT_ENABLE_LABEL}
+              </Button>
+            ) : null
+          }
+        />
+      )}
       {enabled && reason === null && (
         <div className="environment-menu-dependents">
           <SessionApprovalsField

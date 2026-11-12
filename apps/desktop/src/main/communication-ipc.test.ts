@@ -9,7 +9,7 @@ import { loadSettings, saveSettings } from "../settings/files.js";
 import { createCommunicationController } from "./communication-controller.js";
 import { createSessionAccessStore } from "./communication-sessions.js";
 import { createAgentProjectsStore } from "./communication-agent-projects.js";
-import { realpathSync, symlinkSync } from "node:fs";
+import { mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import {
   buildCopyConfig,
   handleAddWorkspace,
@@ -265,12 +265,32 @@ describe("Sessions API IPC — per-session switch", () => {
     expect(await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: true, sessionId: "sess-1" })).toEqual({ ok: false, reason: "invalid" });
   });
 
+  it("view reports the effective project level per tab, including a worktree's project root", async () => {
+    const { deps, agentProjects } = rig();
+    const dirA = realpathSync(mkdtempSync(join(tmpdir(), "anycode-proj-a-")));
+    const dirB = realpathSync(mkdtempSync(join(tmpdir(), "anycode-proj-b-")));
+    deps.tabs = () => [
+      { tabId: "tab-1", sessionId: "sess-1", workspace: dirA },
+      { tabId: "tab-2", sessionId: "sess-2", workspace: join(dirB, "wt"), projectRoot: dirB },
+    ];
+    const projectLevel = async () => {
+      const result = await handleCommunicationGet(deps, {});
+      if (!result.ok) throw new Error("expected ok");
+      return result.view.tabs.map((tab) => tab.projectEnabled);
+    };
+    expect(await projectLevel()).toEqual([false, false]);
+    agentProjects.setAllowed(dirA, true);
+    expect(await projectLevel()).toEqual([true, false]);
+    agentProjects.setAllowed(dirB, true);
+    expect(await projectLevel()).toEqual([true, true]);
+  });
+
   it("view lists root tabs by tabId and enabled only (no session ids, no paths)", async () => {
     const { deps, sessions } = rig();
     sessions.register({ sessionId: "sess-1" }); sessions.set("sess-1", true);
     const result = await handleCommunicationGet(deps, {});
     if (!result.ok) throw new Error("expected ok");
-    expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: false }]);
+    expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: false, projectEnabled: true }]);
     expect(JSON.stringify(result)).not.toContain("sess-1");
   });
 });
@@ -380,7 +400,7 @@ describe("session handles over IPC", () => {
     const result = await handleSetSessionHandle(deps, { tabId: "tab-1", handle: "build-bot" });
     expect(result.ok).toBe(true);
     expect(sessions.getHandle("sess-1")).toBe("build-bot");
-    if (result.ok) expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: false, approvals: false, handle: "build-bot" }]);
+    if (result.ok) expect(result.view.tabs).toEqual([{ tabId: "tab-1", enabled: false, approvals: false, projectEnabled: true, handle: "build-bot" }]);
     expect(JSON.stringify(result)).not.toContain("sess-1");
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
@@ -430,7 +450,7 @@ describe("Sessions API IPC — External approvals switch", () => {
     const happy = await handleSetSessionApprovals(deps, { tabId: "tab-1", enabled: true });
     expect(happy.ok).toBe(true);
     expect(approvals.isExposed("sess-1")).toBe(true);
-    if (happy.ok) expect(happy.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: true }]);
+    if (happy.ok) expect(happy.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: true, projectEnabled: true }]);
     expect(await handleSetSessionApprovals(deps, { tabId: "tab-1", enabled: true, sessionId: "sess-1" })).toEqual({ ok: false, reason: "invalid" });
     expect(await handleSetSessionApprovals(deps, { tabId: "", enabled: true })).toEqual({ ok: false, reason: "invalid" });
     expect(await handleSetSessionApprovals(deps, { tabId: "ghost", enabled: true })).toEqual({ ok: false, reason: "not_found" });
@@ -446,13 +466,13 @@ describe("Sessions API IPC — External approvals switch", () => {
     await handleSetSessionApprovals(deps, { tabId: "tab-1", enabled: true });
     const shown = await handleCommunicationGet(deps, {});
     if (!shown.ok) throw new Error("expected ok");
-    expect(shown.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: true }]);
+    expect(shown.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: true, projectEnabled: true }]);
     expect(await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: false })).toMatchObject({ ok: true });
     expect(approvals.isExposed("sess-1")).toBe(false);
     await handleSetSessionAccess(deps, { tabId: "tab-1", enabled: true });
     const again = await handleCommunicationGet(deps, {});
     if (!again.ok) throw new Error("expected ok");
-    expect(again.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: false }]);
+    expect(again.view.tabs).toEqual([{ tabId: "tab-1", enabled: true, approvals: false, projectEnabled: true }]);
   });
 });
 
