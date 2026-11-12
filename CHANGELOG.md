@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Sessions API access is now decided by two switches: the project's "Allow agents to open tasks here" and the session's own switch. The separate Allowed folders setting is gone (folders you had listed are switched on once), and refusals say why with `not_found`, `not_exposed` or `project_not_enabled`. A shared session whose project is off now says so in its environment menu, with an Enable button.
+- Sessions API access is now decided by two switches: the project's "Allow agents to open tasks here" and the session's own switch, so agents need the project switch on as well. The separate Allowed folders setting is gone: on first start every folder you had listed that still exists is switched on, and with an empty list (any folder) the project of each session shared at that moment is switched on. Refusals say why with `not_found`, `not_exposed` or `project_not_enabled`. A shared session whose project is off now says so in its environment menu, with an Enable button.
 
 ### Fixed
 

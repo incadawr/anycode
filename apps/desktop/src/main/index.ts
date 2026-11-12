@@ -70,7 +70,7 @@ import { assertChildModel, connectionChildModels, connectionRoutingSettings } fr
  */
 import { randomUUID } from "node:crypto";
 import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
-import { existsSync, mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
 import { access, chmod, realpath as fsRealpath, stat as fsStat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
@@ -4434,9 +4434,15 @@ void app.whenReady().then(async () => {
       await migrateAllowedFolders({
         markerFile: join(app.getPath("userData"), "communication-workspaces-migrated.json"),
         workspaces: settings?.communication?.workspaces ?? [],
-        knownProjectIds: async () => new Set((await scopeRegistry.list()).map((entry) => entry.id)),
+        exposedSessionIds: () => {
+          try {
+            const raw = JSON.parse(readFileSync(join(app.getPath("userData"), "communication-sessions.json"), "utf8")) as Record<string, unknown>;
+            return Object.entries(raw).filter(([, on]) => on === true).map(([id]) => id);
+          } catch { return []; }
+        },
+        resolveSession: async (sessionId) => (await persistence?.getRootSession(sessionId)) ?? null,
         projects,
-        realpathSync,
+        warn: (message) => console.warn(`[main] ${message}`),
       }).catch(() => console.warn("[main] Sessions API folder migration skipped"));
     }
     await controller.apply(applyInputFromBlock(settings?.communication));
