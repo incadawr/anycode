@@ -621,9 +621,27 @@ describe("withLiveChildCounters (F11: a detached child's counters come off its o
     const transcript: TranscriptBlock[] = [toolCall("a", "Read")];
     expect(withLiveChildCounters(zeroCard, null)).toBe(zeroCard);
     const settled: SubagentSubStatus = { ...zeroCard, final: { status: "completed", durationMs: 10 } };
-    expect(withLiveChildCounters(settled, { transcript, modelTurns: 0, running: true })).toBe(settled);
+    expect(withLiveChildCounters(settled, { transcript, modelTurns: 0, running: false })).toBe(settled);
     const ahead: SubagentSubStatus = { ...zeroCard, toolCalls: 5, turns: 3, lastTool: "Edit" };
     expect(withLiveChildCounters(ahead, { transcript, modelTurns: 0, running: true })).toBe(ahead);
+  });
+
+  it("reopens a settled card while the child's live store runs, and keeps it settled once idle", () => {
+    const transcript: TranscriptBlock[] = [toolCall("a", "Read"), toolCall("b", "Edit")];
+    const settled: SubagentSubStatus = {
+      ...zeroCard,
+      turns: 562,
+      toolCalls: 600,
+      final: { status: "max_turns", durationMs: 3_115_000 },
+    };
+    const running = withLiveChildCounters(settled, { transcript, modelTurns: 0, running: true });
+    expect(running.final).toBeNull();
+    expect(running.turns).toBe(562);
+    expect(childBadgeKind(running)).toBe("running");
+    expect(withLiveChildCounters(settled, { transcript, modelTurns: 0, running: true }, true).final).toBeNull();
+    const idle = withLiveChildCounters(settled, { transcript, modelTurns: 0, running: false });
+    expect(idle).toBe(settled);
+    expect(childBadgeKind(idle)).toBe("done");
   });
 
   const loopEnd = (id: string, reason: string, turns: number, durationMs?: number): TranscriptBlock =>

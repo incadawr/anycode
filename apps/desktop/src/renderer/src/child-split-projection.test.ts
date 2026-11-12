@@ -202,6 +202,24 @@ describe("detached continuation counters (supervisor correction 5, defect 1/2/3)
     expect(reaped[0]!.card).toEqual(rows[0]!.card);
   });
 
+  it("a settled max_turns card whose live child store runs again shows running and counts in the roster head", () => {
+    const id = "settled-but-live";
+    const relations = createChildRelationStore();
+    relations.getState().registerChild(PARENT, id, "tab", "child");
+    relations.getState().registerChild(PARENT, "other", "tab", "child2");
+    const card = baseCard({ turns: 562, toolCalls: 600, final: { status: "max_turns", durationMs: 3_115_000 } });
+    const other = baseCard({ final: { status: "completed", durationMs: 5 } });
+    const input = deps(relations.getState().relations, [agentBlock(id, card), agentBlock("other", other)]);
+    const runningLive = fakeLiveStore({ transcript: [childToolCall("edit")], modelTurns: 0, running: true });
+    const rows = projectChildSplitRows([id, "other"], { ...input, liveChildStores: new Map([[id, runningLive]]) });
+    expect(rows[0]!.badge).toBe("running");
+    expect(buildChildStackHead(rows)).toEqual({ kind: "roster", total: 2, running: 1 });
+    const idleLive = fakeLiveStore({ transcript: [childToolCall("edit")], modelTurns: 0, running: false });
+    const settled = projectChildSplitRows([id, "other"], { ...input, liveChildStores: new Map([[id, idleLive]]) });
+    expect(settled[0]!.badge).toBe("done");
+    expect(buildChildStackHead(settled)).toEqual({ kind: "roster", total: 2, running: 0 });
+  });
+
   it.each([false, true])("settles a background row from its report without live telemetry, explicit detach %s", (explicit) => {
     const id = `dispatch-report-${explicit}`;
     const relations = createChildRelationStore();

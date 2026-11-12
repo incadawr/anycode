@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A subagent row no longer looks finished while the child session is running again; it shows as running and counts in the roster until the child goes idle.
+
 ## [0.0.99] - 2026-11-12
 
 ### Fixed
