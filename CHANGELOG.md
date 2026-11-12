@@ -9,10 +9,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Sessions API access is now decided by two switches: the project's "Allow agents to open tasks here" and the session's own switch, so agents need the project switch on as well. The separate Allowed folders setting is gone: on first start every folder you had listed that still exists is switched on, and with an empty list (any folder) the project of each session shared at that moment is switched on. Refusals say why with `not_found`, `not_exposed` or `project_not_enabled`. A shared session whose project is off now says so in its environment menu, with an Enable button.
+- Sessions API access is now decided by two switches: the project's "Allow agents to open tasks here" and the session's own switch, so agents need the project switch on as well. The separate Allowed folders setting is gone: on first start the folders you had listed (a worktree folder as its project) are switched on as projects, or with an empty list the project of each session shared at that moment, which also lets agents open tasks there; switch a project off if you do not want that. A folder that is missing or a session that cannot be found is retried on the next starts. Refusals say why with `not_found`, `not_exposed` or `project_not_enabled`. A shared session whose project is off now says so in its environment menu, with an Enable button.
 
 ### Fixed
 
+- The Telegram remote example again recognises the earlier refusal text of a session that was closed or unshared while it waited, and a message sent before this release can be read again from a worktree session whose project is on.
+- A finished subagent row keeps its outcome unless the live child ran more turns than the card shows.
 - A subagent row no longer looks finished while the child session is running again; it shows as running and counts in the roster until the child goes idle.
 
 ## [0.0.99] - 2026-11-12

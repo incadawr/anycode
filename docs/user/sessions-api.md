@@ -201,10 +201,15 @@ the project's **Allow agents to open tasks here** and the session's own **Sessio
 API** row (**Shared with external agents**), which stays the finer opt-out inside
 an enabled project. When the session is shared but its project is off, the
 session's environment menu says **Project not enabled for agents** and offers
-**Enable**. The old Settings **Allowed folders** list no longer gates anything;
-on the first start after this change, every folder in it that still exists was
-switched on (with an empty list, the project of each session shared at that moment
-was). **Enable** in a worktree session's menu switches on the project the session
+**Enable**. The old Settings **Allowed folders** list no longer gates anything. On the
+first start after this change, each folder in it is switched on as a project (a
+worktree folder switches on its project root); with an empty list, the project of
+each session shared at that moment is switched on, a child session through its
+root session. This also lets agents open tasks in those projects, because that is
+the same switch; switch a project off if you do not want that. A folder that does
+not exist yet, or a session that cannot be found, is retried on the next starts
+and given up on after 10; a project you switch off is never switched on again by
+the migration. **Enable** in a worktree session's menu switches on the project the session
 belongs to.
 
 Every tab has a **Sessions API** row in its environment menu. Switch it on to
