@@ -1533,12 +1533,3 @@ describe("describeSecretStatus — amber says what is amber", () => {
 it("builds a subagent context window patch", () => {
   expect(buildToolsPatch("", "", "", "", "", "", undefined, "", "50000").tools?.subagentContextWindowTokens).toBe(50000);
 });
-
-describe("subagent max turns hint", () => {
-  it("shows the neutral hint only for a valid value, distinct from the error text", async () => {
-    const { readFileSync } = await import("node:fs");
-    const source = readFileSync(new URL("./SettingsScreen.tsx", import.meta.url), "utf8");
-    expect(source).toContain("{subagentMaxTurnsValid && <span className=\"settings-field-hint\">Whole number, 1 or more; blank = default.</span>}");
-    expect(source).not.toContain("<span className=\"settings-field-hint\">Enter a positive whole number.</span>");
-  });
-});

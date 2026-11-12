@@ -1826,7 +1826,17 @@ export function invalidInputDetail(block: Pick<ToolCallBlock, "status" | "modelT
     return null;
   }
   const line = block.modelText.split("\n").find((l) => l.trim() !== "");
-  return line === undefined ? null : flattenSummary(line);
+  if (line === undefined) {
+    return null;
+  }
+  // The badge already says "Invalid input"; keep only what failed.
+  const detail = line.trim().replace(/^Invalid input for [^:]+:\s*/, "");
+  return detail === "" ? null : flattenSummary(detail);
+}
+
+/** Collapsed-row text: the validation message for a rejected call (before the badge, so the badge stays last), else the input summary. */
+function collapsedSummary(block: Pick<ToolCallBlock, "toolName" | "input" | "status" | "modelText">): string {
+  return invalidInputDetail(block) ?? flattenSummary(summarizeInput(block.toolName, block.input));
 }
 
 /**
@@ -2139,14 +2149,12 @@ export function ToolCallHeaderRow({
                   {collapsedIdentity.engine.label}
                 </span>
               )}
-            <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
+            <span className="tool-call-summary">{collapsedSummary(block)}</span>
           </span>
         ) : (
           <>
             <span className="tool-call-name">{block.toolName}</span>
-            {!expanded && (
-              <span className="tool-call-summary">{flattenSummary(summarizeInput(block.toolName, block.input))}</span>
-            )}
+            {!expanded && <span className="tool-call-summary">{collapsedSummary(block)}</span>}
           </>
         )}
         {/* slice S7: the run's shape while the card is folded. Guarded
@@ -2156,9 +2164,6 @@ export function ToolCallHeaderRow({
           <WorkflowCollapsedTicks workflow={block.workflow} />
         )}
         <span className="tool-call-status-badge" title={invalidInputDetail(block) ?? undefined}>{statusLabel(block)}</span>
-        {!expanded && invalidInputDetail(block) !== null && (
-          <span className="tool-call-summary">{invalidInputDetail(block)}</span>
-        )}
         {/* CUT-S2 §2.5 (C3): the session-child badge lives in the
             ALWAYS-visible toggle row, not just the expanded body below — an
             Agent card defaults to COLLAPSED in every status

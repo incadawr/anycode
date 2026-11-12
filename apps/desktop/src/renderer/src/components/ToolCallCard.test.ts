@@ -682,12 +682,15 @@ describe("summarizeInput", () => {
   it("shows the validation message of an invalid_input card in the collapsed row", () => {
     const block = mkAgentBlock({ status: "invalid_input", input: { subagent_type: 5 }, modelText: "Agent: subagent_type must be a string\nmore" });
     expect(invalidInputDetail(block)).toBe("Agent: subagent_type must be a string");
+    expect(invalidInputDetail({ status: "invalid_input", modelText: "Invalid input for Agent: prompt: Required" })).toBe("prompt: Required");
     expect(invalidInputDetail({ status: "success", modelText: "x" })).toBeNull();
     const html = renderToStaticMarkup(
       createElement(ToolCallHeaderRow, { block, expanded: false, bodyId: "b", onToggleExpanded: () => {} }),
     );
     expect(html).toContain("subagent_type must be a string");
     expect(html).not.toContain("{&quot;subagent_type");
+    // the badge stays the last element of the row
+    expect(html.indexOf("subagent_type must be a string")).toBeLessThan(html.indexOf("tool-call-status-badge"));
   });
 
   it("falls back to JSON for an unknown tool", () => {

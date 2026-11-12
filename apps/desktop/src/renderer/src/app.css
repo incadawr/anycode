@@ -1647,7 +1647,7 @@ body {
   white-space: normal;
   overflow: hidden;
   overflow-wrap: anywhere;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   line-height: 1.25;
 }
 

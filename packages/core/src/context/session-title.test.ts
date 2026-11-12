@@ -100,6 +100,23 @@ const emptyScript = (): ModelStreamEvent[] => [
 // ---------------------------------------------------------------------------
 
 describe("deriveSessionTitle", () => {
+  it("cuts an over-long title at the last word boundary with an ellipsis, within the cap", () => {
+    const words = "Fixture answer paragraph. Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod";
+    const title = deriveSessionTitle(words);
+    expect(title.length).toBeLessThanOrEqual(SESSION_TITLE_MAX_LENGTH);
+    expect(title.endsWith("…")).toBe(true);
+    expect(title).toBe("Fixture answer paragraph. Lorem ipsum dolor sit amet, consectetur adipiscing…");
+    expect(words.startsWith(title.slice(0, -1))).toBe(true);
+  });
+
+  it("hard-cuts a single over-long word and keeps an exact-length title intact", () => {
+    const hard = deriveSessionTitle("x".repeat(120));
+    expect(hard).toBe(`${"x".repeat(SESSION_TITLE_MAX_LENGTH - 1)}…`);
+    const exact = `${"word ".repeat(15)}12345`.slice(0, SESSION_TITLE_MAX_LENGTH).padEnd(SESSION_TITLE_MAX_LENGTH, "z");
+    expect(exact).toHaveLength(SESSION_TITLE_MAX_LENGTH);
+    expect(deriveSessionTitle(exact)).toBe(exact);
+  });
+
   it("caps the derived title at 80 characters (first line only)", () => {
     expect(deriveSessionTitle("short")).toBe("short");
     expect(deriveSessionTitle("  padded  \nrest")).toBe("padded");

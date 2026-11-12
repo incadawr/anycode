@@ -95,9 +95,24 @@ export function sanitizeTitleSource(text: string): string {
 export function deriveSessionTitle(text: string): string {
   const firstLine = sanitizeTitleSource(text).split("\n", 1)[0] ?? "";
   const trimmed = firstLine.trim();
-  return trimmed.length > SESSION_TITLE_MAX_LENGTH
-    ? trimmed.slice(0, SESSION_TITLE_MAX_LENGTH)
-    : trimmed;
+  return capTitle(trimmed);
+}
+
+/**
+ * Caps a title at SESSION_TITLE_MAX_LENGTH including the ellipsis: a longer
+ * title is cut at the last word boundary that fits and ends with "…"; a single
+ * word longer than the cap is hard-cut. A title at or under the cap is untouched.
+ */
+function capTitle(title: string): string {
+  if (title.length <= SESSION_TITLE_MAX_LENGTH) {
+    return title;
+  }
+  const room = SESSION_TITLE_MAX_LENGTH - 1;
+  const head = title.slice(0, room);
+  // Cut at a word boundary only when the next character really starts a new word.
+  const boundary = /\s/.test(title.charAt(room)) ? head.length : head.search(/\s\S*$/);
+  const cut = boundary > 0 ? head.slice(0, boundary) : head;
+  return `${cut.trimEnd()}…`;
 }
 
 /**
@@ -173,9 +188,7 @@ function postProcessTitle(raw: string): string | null {
   candidate = stripTrailingPeriod(candidate);
   candidate = stripTitleEcho(candidate);
   candidate = candidate.trim().replace(/\s+/g, " ");
-  if (candidate.length > SESSION_TITLE_MAX_LENGTH) {
-    candidate = candidate.slice(0, SESSION_TITLE_MAX_LENGTH);
-  }
+  candidate = capTitle(candidate);
   return candidate.length > 0 ? candidate : null;
 }
 
