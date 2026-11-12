@@ -55,8 +55,8 @@ async function reconnect(discoveryFile: string): Promise<Client> {
   cleanups.push(() => client.close());
   return client;
 }
-/** The distinct refusal codes that replaced the combined "unavailable or outside authorized workspace" text. */
-const UNREACHABLE = /^(not_found|not_exposed|project_not_enabled|workspace_not_allowed):/;
+/** Legacy env-file mode (no project switch) keeps the one combined refusal text. */
+const UNREACHABLE = "Session unavailable or outside authorized workspace";
 describe("production communication MCP over real SDK HTTP", () => {
   it("connects a portable stdio MCP client through the discovery-file adapter", async () => {
     const f = await fixture();
@@ -135,14 +135,14 @@ describe("production communication MCP over real SDK HTTP", () => {
     expect(result).not.toHaveProperty("networkWait");
     expect(result).toMatchObject({ sessionId: "allowed", availability: "available", latestResult: { publicAnswer: "PUBLIC_ANSWER", turnId: "host-turn" } });
   });
-  it("names why a wait target is unreachable: not_exposed for a hidden session, not_found for an unknown one", async () => {
+  it("answers a hidden and an unknown wait target with the same combined text (legacy mode)", async () => {
     const exposed = new Set(["on"]);
     const f = await approvalFixture({ approvals: new Set(), exposed });
     exposed.clear();
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions).toEqual([]);
     const hidden = await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "on" } });
     const unknown = await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "unknown" } });
-    expect(hidden.isError).toBe(true); expect(errorText(hidden)).toMatch(/^not_exposed:/); expect(errorText(unknown)).toMatch(/^not_found:/);
+    expect(hidden.isError).toBe(true); expect(errorText(hidden)).toBe(UNREACHABLE); expect(errorText(unknown)).toBe(UNREACHABLE);
   });
   it("lists a restarting session without waiting for a stalled host", async () => {
     const f = await fixture();
@@ -610,14 +610,14 @@ describe("live config option and session exposure", () => {
     expect(value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["b"]);
   });
 
-  it("refuses a not-exposed session with not_exposed and an unknown one with not_found", async () => {
+  it("refuses a not-exposed session exactly like an unknown one in legacy mode", async () => {
     const f = await liveFixture({ workspaces: [], exposed: () => false });
     const client = await connect(f.discoveryFile);
     const unknown = await client.callTool({ name: "get_session_status", arguments: { sessionId: "missing" } });
     const hidden = await client.callTool({ name: "get_session_status", arguments: { sessionId: "a" } });
     expect(hidden.isError).toBe(true);
-    expect((hidden.content as Array<{ text: string }>)[0]!.text).toMatch(/^not_exposed:/);
-    expect((unknown.content as Array<{ text: string }>)[0]!.text).toMatch(/^not_found:/);
+    expect((hidden.content as Array<{ text: string }>)[0]!.text).toBe(UNREACHABLE);
+    expect((unknown.content as Array<{ text: string }>)[0]!.text).toBe(UNREACHABLE);
     expect(f.request.mock.calls.filter((c) => c[1] === "get_session_status")).toHaveLength(0);
   });
 
@@ -711,8 +711,8 @@ describe("a listed folder that is missing (live config)", () => {
     expect(value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "present", payload: "hello", mode: "next_turn" } })).state).toBe("queued");
     // A tab whose workspace string IS the missing entry stays unauthorised: the check
     // compares canonical paths only, so the stored string never authorises anything.
-    expect(errorText(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "gone" } }))).toMatch(UNREACHABLE);
-    expect(errorText(await f.client.callTool({ name: "send_message", arguments: { sessionId: "gone", payload: "no", mode: "next_turn" } }))).toMatch(UNREACHABLE);
+    expect(errorText(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "gone" } }))).toBe(UNREACHABLE);
+    expect(errorText(await f.client.callTool({ name: "send_message", arguments: { sessionId: "gone", payload: "no", mode: "next_turn" } }))).toBe(UNREACHABLE);
     expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.missing } }))).toMatch(/^create_session folder_not_found/);
     expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_allowed/);
     // The folder that does exist is still allowed through the same check.
@@ -913,16 +913,16 @@ describe("session handles and wait_for_result", () => {
     const f = await waitFixture();
     const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "ghost", messageId: "m" } });
     expect(result.isError).toBe(true);
-    expect(errorText(result)).toMatch(UNREACHABLE);
+    expect(errorText(result)).toBe(UNREACHABLE);
   });
 
-  it("wait_for_result for a session that is NOT shared returns not_exposed, an unknown one not_found", async () => {
+  it("wait_for_result answers a session that is NOT shared like an unknown one in legacy mode", async () => {
     const f = await waitFixture({ isSessionExposed: (id) => id !== "allowed" });
     const sent = await f.send("allowed2");
     const hidden = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId } });
     const unknown = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "ghost", messageId: sent.envelope.messageId } });
-    expect(errorText(hidden)).toMatch(/^not_exposed:/);
-    expect(errorText(unknown)).toMatch(/^not_found:/);
+    expect(errorText(hidden)).toBe(UNREACHABLE);
+    expect(errorText(unknown)).toBe(UNREACHABLE);
   });
 
   it("wait_for_result foreign message (recipient is another session) is Message unavailable", async () => {
@@ -939,7 +939,7 @@ describe("session handles and wait_for_result", () => {
     const sent = await f.send("allowed");
     const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 5000 } });
     expect(result.isError).toBe(true);
-    expect(errorText(result)).toMatch(UNREACHABLE);
+    expect(errorText(result)).toBe(UNREACHABLE);
   });
 
   it("wait_for_result session unshared mid-wait errors", async () => {
@@ -948,7 +948,7 @@ describe("session handles and wait_for_result", () => {
     const sent = await f.send("allowed");
     const result = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 5000 } });
     expect(result.isError).toBe(true);
-    expect(errorText(result)).toMatch(UNREACHABLE);
+    expect(errorText(result)).toBe(UNREACHABLE);
   });
 
   it("wait_for_result host RPC failure errors as Session closed", async () => {
@@ -1036,7 +1036,7 @@ describe("Sessions API cancel_turn", () => {
     for (const sessionId of ["forbidden", "nope"]) {
       const result = await f.client.callTool({ name: "cancel_turn", arguments: { sessionId } });
       expect(result.isError).toBe(true);
-      expect((result.content as Array<{ text: string }>)[0]!.text).toMatch(UNREACHABLE);
+      expect((result.content as Array<{ text: string }>)[0]!.text).toBe(UNREACHABLE);
     }
     expect(f.request.mock.calls.filter((c) => c[1] === "cancel_turn")).toHaveLength(0);
   });
@@ -1132,7 +1132,7 @@ describe("External approvals on the Sessions API", () => {
       { name: "list_pending_approvals", arguments: { sessionId: "unshared-approving" } },
       { name: "answer_approval", arguments: { sessionId: "unshared-approving", approvalId: "a", decision: "deny" } },
     ]) {
-      expect(errorText(await f.client.callTool(call))).toMatch(UNREACHABLE);
+      expect(errorText(await f.client.callTool(call))).toBe(UNREACHABLE);
     }
     expect(f.request.mock.calls.filter((c) => c[0] === "unshared-approving")).toHaveLength(0);
   });
@@ -1183,7 +1183,7 @@ describe("External approvals on the Sessions API", () => {
     expect(errorText(await f.client.callTool({ name: "answer_approval", arguments: { sessionId: "on", approvalId: "a", decision: "allow" } }))).toBe("External approval is off for this session");
     approvals.add("on");
     exposed.delete("on");
-    expect(errorText(await f.client.callTool({ name: "list_pending_approvals", arguments: { sessionId: "on" } }))).toMatch(UNREACHABLE);
+    expect(errorText(await f.client.callTool({ name: "list_pending_approvals", arguments: { sessionId: "on" } }))).toBe(UNREACHABLE);
     expect(value(await f.client.callTool({ name: "list_pending_approvals", arguments: {} })).approvals).toEqual([]);
   });
 
@@ -2257,6 +2257,66 @@ describe("Sessions API access: project switch x session switch", () => {
     const sessions = value(await client.callTool({ name: "list_sessions", arguments: {} })).sessions as Array<Record<string, unknown>>;
     expect(sessions.map((s) => s.sessionId)).toEqual(["wt"]);
     expect(sessions[0]).not.toHaveProperty("projectRoot");
+  });
+
+  async function worktreeFixture(enabled: (folder: string) => boolean, legacy = false) {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-access-wt-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    const request = vi.fn(async (_session: string, op: string, payload?: unknown): Promise<unknown> => (op === "send_message" ? { envelope: payload, state: "queued" } : { engine: "codex", state: "idle" }));
+    const manager = { listTabs: () => [{ sessionId: "wt", workspace: join(dir, "wt"), projectRoot: dir, state: "running", pid: 1 }], communicationRequest: request };
+    await mkdir(join(dir, "wt"));
+    const service = await startCommunicationServer({
+      manager, userData: dir, config: { workspaces: [], port: 0, discoveryFile },
+      isSessionExposed: () => true, ...(legacy ? {} : { isProjectEnabled: (folder: string) => enabled(folder === dir ? "root" : folder === join(dir, "wt") ? "wt" : folder) }),
+    });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "access-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    return { client, dir };
+  }
+
+  it("a worktree message is sent and its status read while the project root is on", async () => {
+    const f = await worktreeFixture((key) => key === "root");
+    const sent = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "wt", payload: "hi", mode: "next_turn" } })) as { envelope: { messageId: string } };
+    const status = await f.client.callTool({ name: "get_message_status", arguments: { messageId: sent.envelope.messageId } });
+    expect(status.isError).toBeFalsy();
+  });
+
+  it("a worktree is refused when its project root is off even if the worktree folder has a key of its own", async () => {
+    const f = await worktreeFixture((key) => key === "wt");
+    expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions).toEqual([]);
+    const send = await f.client.callTool({ name: "send_message", arguments: { sessionId: "wt", payload: "hi", mode: "next_turn" } });
+    expect(callText(send)).toMatch(/^project_not_enabled:/);
+  });
+
+  it("a worktree message status is refused once the project root is switched off", async () => {
+    let root = true;
+    const f = await worktreeFixture((key) => key === "root" && root);
+    const sent = value(await f.client.callTool({ name: "send_message", arguments: { sessionId: "wt", payload: "hi", mode: "next_turn" } })) as { envelope: { messageId: string } };
+    root = false;
+    expect(callText(await f.client.callTool({ name: "get_message_status", arguments: { messageId: sent.envelope.messageId } }))).toMatch(/^project_not_enabled:/);
+  });
+
+  it("legacy env-file mode answers the one combined text for an unknown session", async () => {
+    const f = await worktreeFixture(() => true, true);
+    expect(callText(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "ghost" } }))).toBe("Session unavailable or outside authorized workspace");
+  });
+
+  it("legacy env-file mode answers the same combined text for a session that is not shared", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-access-legacy-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    const manager = { listTabs: () => [{ sessionId: "s1", workspace: dir, state: "running", pid: 1 }], communicationRequest: vi.fn(async () => ({ state: "idle" })) };
+    const service = await startCommunicationServer({ manager, userData: dir, config: { workspaces: [], port: 0, discoveryFile }, isSessionExposed: () => false });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "access-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    for (const sessionId of ["s1", "ghost"]) {
+      expect(callText(await client.callTool({ name: "get_session_status", arguments: { sessionId } }))).toBe("Session unavailable or outside authorized workspace");
+    }
   });
 
   it("create_session in a project that is off answers project_not_enabled and never reaches main", async () => {

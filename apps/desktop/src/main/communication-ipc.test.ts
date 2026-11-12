@@ -278,6 +278,9 @@ describe("Sessions API IPC — per-session switch", () => {
       if (!result.ok) throw new Error("expected ok");
       return result.view.tabs.map((tab) => tab.projectEnabled);
     };
+    const roots = await handleCommunicationGet(deps, {});
+    if (!roots.ok) throw new Error("expected ok");
+    expect(roots.view.tabs.map((tab) => tab.projectRoot)).toEqual([dirA, dirB]);
     expect(await projectLevel()).toEqual([false, false]);
     agentProjects.setAllowed(dirA, true);
     expect(await projectLevel()).toEqual([true, false]);

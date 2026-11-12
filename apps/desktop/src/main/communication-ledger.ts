@@ -8,7 +8,7 @@ const namespace = (principal: CommunicationPrincipal) => principal.kind === "ext
 
 export interface PeerMessageBudget { chainId: string; startedAt: number; hop: number; acceptedAt: number; senderWorkspace: string }
 
-export type CommunicationRecord = AgentDelivery & { subscription?: { state: "pending" | "explicit" | "auto" | "unknown"; messageId?: string }; peer?: PeerMessageBudget; idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
+export type CommunicationRecord = AgentDelivery & { subscription?: { state: "pending" | "explicit" | "auto" | "unknown"; messageId?: string }; peer?: PeerMessageBudget; idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; projectRoot?: string; hostPid?: number | null };
 
 const DELIVERY_KINDS = ["core_seam", "next_turn", "native_input"];
 const REASON_CODES = ["core_seam_inactive"];

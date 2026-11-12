@@ -305,9 +305,12 @@ export async function startCommunicationServer(options: CommunicationServerOptio
    * reconciliation timer passes false, so an idle server never resolves a
    * missing path.
    */
-  /** A session is in an enabled project when its folder or (for a worktree) its project root has the switch on. */
+  /**
+   * One project identity: the switch of a session is the switch of its canonical project folder, the
+   * same one the sidebar uses (the project root of a worktree, else the workspace).
+   */
   const projectOn = (tab: { workspace: string; projectRoot?: string }): boolean =>
-    !options.isProjectEnabled || options.isProjectEnabled(tab.workspace) || (tab.projectRoot !== undefined && options.isProjectEnabled(tab.projectRoot));
+    !options.isProjectEnabled || options.isProjectEnabled(tab.projectRoot ?? tab.workspace);
   const tabs = async (retryMissing: boolean) => {
     const result = [];
     // One re-resolution per request at most, and none while every entry is present.
@@ -326,12 +329,16 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       return latest && latest.workspace === tab.workspace && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) ? [latest] : [];
     });
   };
-  /** Why a session id is not reachable: the three cases an agent must tell apart to know what to flip. */
+  /**
+   * Why a session id is not reachable: the cases an agent must tell apart to know what to flip.
+   * The legacy env-file mode (no project switch) keeps its single combined text.
+   */
   const unreachable = async (sessionId: string): Promise<Error> => {
+    if (!options.isProjectEnabled) return new Error("Session unavailable or outside authorized workspace");
     const tab = options.manager.listTabs().find((t) => t.sessionId === sessionId);
     if (!tab) return new Error("not_found: no open session with this id");
     if (options.isSessionExposed && !options.isSessionExposed(sessionId)) return new Error("not_exposed: this session is not shared with external agents (its Sessions API switch is off)");
-    if (!projectOn(tab)) return new Error(`project_not_enabled: the project ${tab.workspace} is not enabled for agents ('Agents may open tasks here' is off)`);
+    if (!projectOn(tab)) return new Error(`project_not_enabled: the project ${tab.projectRoot ?? tab.workspace} is not enabled for agents ('Agents may open tasks here' is off)`);
     return new Error(`workspace_not_allowed: the folder ${tab.workspace} is outside the allowed folders`);
   };
   const requireSession = async (sessionId: string) => {
@@ -616,7 +623,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         const { messageId } = statusSchema.parse(raw); const record = messages.get(messageId);
         if (!record) throw new Error("Message unavailable");
         if (options.isSessionExposed && !options.isSessionExposed(record.envelope.recipientSessionId)) throw new Error("Message unavailable");
-        if (record.workspace && options.isProjectEnabled && !options.isProjectEnabled(record.workspace)) throw new Error(`project_not_enabled: the project ${record.workspace} is not enabled for agents`);
+        const recordProject = record.projectRoot ?? record.workspace;
+        if (recordProject && options.isProjectEnabled && !options.isProjectEnabled(recordProject)) throw new Error(`project_not_enabled: the project ${recordProject} is not enabled for agents`);
         if (record.workspace) { if (restricted && !(await isAllowed(record.workspace))) throw new Error("Message outside authorized workspace"); }
         else await requireSession(record.envelope.recipientSessionId);
         if (!await markLostGeneration(record)) {

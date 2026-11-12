@@ -118,6 +118,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
   const [envControlled, setEnvControlled] = useState(false);
   const [known, setKnown] = useState(false);
   const [projectEnabled, setProjectEnabled] = useState(true);
+  const [projectRoot, setProjectRoot] = useState<string | undefined>(undefined);
   const [handle, setHandle] = useState("");
   const [handleError, setHandleError] = useState<string | null>(null);
 
@@ -131,6 +132,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
       setEnabled(tab?.enabled ?? false);
       setApprovals(tab?.approvals ?? false);
       setProjectEnabled(tab?.projectEnabled ?? true);
+      setProjectRoot(tab?.projectRoot);
       setHandle(tab?.handle ?? "");
     });
     return () => {
@@ -176,6 +178,7 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
                   setEnabled(tab?.enabled ?? next);
                   setApprovals(tab?.approvals ?? false);
                   setProjectEnabled(tab?.projectEnabled ?? true);
+                  setProjectRoot(tab?.projectRoot);
                 }
               });
             }}
@@ -196,9 +199,8 @@ export function SessionAccessRow({ bridge = window.anycode.communication, onEnab
                 type="button"
                 data-environment-action="sessions-api-enable-project"
                 onClick={() => {
-                  const workspace = tabContext?.store.getState().workspace;
-                  if (!workspace) return;
-                  void bridge.agentProjectsSet?.(workspace, true).then((result) => {
+                  if (!projectRoot) return;
+                  void bridge.agentProjectsSet?.(projectRoot, true).then((result) => {
                     if (result.ok) setProjectEnabled(result.view.tabs.find((tab) => tab.tabId === tabId)?.projectEnabled ?? true);
                   });
                 }}

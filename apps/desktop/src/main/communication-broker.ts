@@ -52,10 +52,11 @@ export async function createCommunicationBroker(options: {
         const tab = await requireSession(sessionId);
         if (closed || stopped) return;
         const workspace = await resolvePath(tab.workspace);
+        const projectRoot = tab.projectRoot;
         if (closed || stopped) return;
         const existing = messages.get(delivery.envelope.messageId);
         if (existing && delivery.detail !== "Dispatch pending") { applyDeliveryUpdate(existing, delivery); }
-        else if (!existing && !ledger.isFull()) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
+        else if (!existing && !ledger.isFull()) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, ...(projectRoot !== undefined && projectRoot !== workspace ? { projectRoot } : {}), hostPid: tab.pid }); }
         await persist();
       })().catch(() => { /* closing or no longer authorized */ });
       pending.add(task); void task.finally(() => pending.delete(task));

@@ -144,10 +144,9 @@ async function viewOf(deps: CommunicationIpcDeps, block: Block): Promise<Communi
     agentProjects: agentProjectRows(deps),
     tabs: deps.tabs().map((tab) => {
       const handle = deps.sessions.getHandle(tab.sessionId);
-      const projectEnabled = tab.workspace === undefined
-        || deps.agentProjects.isAllowed(tab.workspace)
-        || (tab.projectRoot !== undefined && deps.agentProjects.isAllowed(tab.projectRoot));
-      return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), approvals: deps.approvals.isExposed(tab.sessionId), projectEnabled, ...(handle !== undefined ? { handle } : {}) };
+      const projectRoot = tab.projectRoot ?? tab.workspace;
+      const projectEnabled = projectRoot === undefined || deps.agentProjects.isAllowed(projectRoot);
+      return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), approvals: deps.approvals.isExposed(tab.sessionId), projectEnabled, ...(projectRoot !== undefined ? { projectRoot } : {}), ...(handle !== undefined ? { handle } : {}) };
     }),
   };
 }
