@@ -280,7 +280,7 @@ import {
   type SettingsIpcDeps,
 } from "./settings-ipc.js";
 import type { ProviderHealthEvent } from "../shared/provider-health.js";
-import { TabHostManager, createPinReservations, workspaceMissing } from "./tabs.js";
+import { TabHostManager, canonicalWorkspace, createPinReservations, workspaceMissing } from "./tabs.js";
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { handleCreate, registerTabIpc, type ResolveCodexProfileResult, type TabIpcDeps } from "./tab-ipc.js";
@@ -4440,7 +4440,29 @@ void app.whenReady().then(async () => {
             return Object.entries(raw).filter(([, on]) => on === true).map(([id]) => id);
           } catch { return []; }
         },
-        resolveSession: async (sessionId) => (await persistence?.getRootSession(sessionId)) ?? null,
+        // The same canonical project a tab opens with: the session's projectRoot
+        // (else its workspace). A child session resolves through its root session;
+        // when the chain is broken the child's own recorded folders are used.
+        resolveSession: async (sessionId) => {
+          if (persistence === null) return null;
+          const first = await persistence.getSessionById(sessionId);
+          if (first === null) return null;
+          let row = first;
+          for (let depth = 0; row.parentSessionId !== undefined && depth < 32; depth += 1) {
+            const parent = await persistence.getSessionById(row.parentSessionId);
+            if (parent === null) { row = first; break; }
+            row = parent;
+          }
+          return canonicalWorkspace(row.projectRoot ?? row.workspace);
+        },
+        // A listed folder that is a session's worktree maps to that session's project root.
+        resolveFolder: async (folder) => {
+          const canonical = canonicalWorkspace(folder);
+          const rows = (await persistence?.listSessionsForMaintenance()) ?? [];
+          const owner = rows.find((row) => row.worktree !== undefined && row.projectRoot !== undefined &&
+            (canonicalWorkspace(row.workspace) === canonical || canonicalWorkspace(row.worktree.path) === canonical));
+          return owner?.projectRoot !== undefined ? canonicalWorkspace(owner.projectRoot) : canonical;
+        },
         projects,
         warn: (message) => console.warn(`[main] ${message}`),
       }).catch(() => console.warn("[main] Sessions API folder migration skipped"));

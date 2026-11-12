@@ -3,74 +3,112 @@
  * the per-project "Agents may open tasks here" switches, so agents keep the
  * access they had.
  *
- * - A non-empty list: every listed folder that still exists is switched on
- *   (a folder that is already on is left alone).
+ * - A non-empty list: every listed folder is mapped to its canonical project
+ *   folder (a worktree path maps to its project root) and that project is
+ *   switched on.
  * - An empty list used to mean "any folder" for shared sessions: the canonical
- *   project folder of every session that is currently shared is switched on,
- *   when it can be resolved. Sessions that cannot be resolved are skipped and
- *   reported once.
+ *   project folder of every session that is shared at the first start is
+ *   switched on (a child session is resolved through its root session).
  *
- * The saved setting is left untouched on disk. The marker file is written only
- * after every write succeeded; on any failure no marker is left, so the next
- * start retries (the pass is idempotent).
+ * The item list is fixed at the first start and kept in the state file. An
+ * item is removed once it is processed, so a later start never touches it
+ * again (a project the user switched off stays off). An item whose folder does
+ * not exist yet or whose session cannot be resolved stays pending and is
+ * retried on the next starts; after 10 starts it is dropped and logged once.
+ * The saved setting is left untouched on disk.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AgentProjectsStore } from "./communication-agent-projects.js";
 
-export interface MigratedSession {
-  workspace: string;
-  projectRoot?: string;
-  worktree?: unknown;
-}
-
 export interface WorkspacesMigrationDeps {
+  /** State file: the pending items and their failed attempts. */
   markerFile: string;
   /** The folders saved in `communication.workspaces`. */
   workspaces: readonly string[];
   /** Ids of the sessions whose own Sessions API switch is on. Read only for an empty list. */
   exposedSessionIds(): readonly string[];
-  /** The stored folders of a session, or null when it cannot be resolved. */
-  resolveSession(sessionId: string): Promise<MigratedSession | null>;
+  /** The canonical project folder of a session (a child through its root), or null when it cannot be resolved. */
+  resolveSession(sessionId: string): Promise<string | null>;
+  /** The canonical project folder of a listed folder; a worktree path maps to its project root. Defaults to the folder itself. */
+  resolveFolder?(folder: string): Promise<string>;
   projects: AgentProjectsStore;
   isDirectory?(path: string): boolean;
   warn?(message: string): void;
+  /** Starts after which a still-pending item is dropped. Default 10. */
+  maxAttempts?: number;
 }
 
-/** The canonical project folder of a session: the project root of a worktree, else its workspace. */
-function projectFolderOf(session: MigratedSession): string {
-  return session.worktree !== undefined && session.projectRoot !== undefined ? session.projectRoot : session.workspace;
+interface MigrationState {
+  /** Absent in the older marker format, which means the pass is complete. */
+  pending?: string[];
+  attempts?: Record<string, number>;
+}
+
+const FOLDER = "folder:";
+const SESSION = "session:";
+
+function readState(file: string): MigrationState | null {
+  if (!existsSync(file)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as MigrationState;
+    return typeof raw === "object" && raw !== null ? raw : {};
+  } catch { return {}; }
+}
+
+function writeState(file: string, state: MigrationState): boolean {
+  try {
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
+    return true;
+  } catch { return false; }
 }
 
 export async function migrateAllowedFolders(deps: WorkspacesMigrationDeps): Promise<{ migrated: string[]; ran: boolean }> {
-  if (existsSync(deps.markerFile)) return { migrated: [], ran: false };
+  const existing = readState(deps.markerFile);
+  if (existing !== null && (!Array.isArray(existing.pending) || existing.pending.length === 0)) return { migrated: [], ran: false };
   const isDirectory = deps.isDirectory ?? existsSync;
-  const folders = new Set<string>();
-  if (deps.workspaces.length > 0) {
-    for (const folder of deps.workspaces) folders.add(folder);
-  } else {
-    let unresolved = 0;
-    for (const sessionId of deps.exposedSessionIds()) {
-      let session: MigratedSession | null = null;
-      try { session = await deps.resolveSession(sessionId); } catch { session = null; }
-      if (session === null) { unresolved += 1; continue; }
-      folders.add(projectFolderOf(session));
-    }
-    if (unresolved > 0) deps.warn?.(`Sessions API migration skipped ${unresolved} shared session(s) whose folder could not be resolved`);
-  }
+  const maxAttempts = deps.maxAttempts ?? 10;
   const migrated: string[] = [];
-  let failed = false;
-  for (const folder of folders) {
-    if (!isDirectory(folder)) continue;
+  let pending: string[];
+  if (existing !== null) pending = existing.pending ?? [];
+  else if (deps.workspaces.length > 0) pending = deps.workspaces.map((folder) => FOLDER + folder);
+  else pending = deps.exposedSessionIds().map((id) => SESSION + id);
+  const attempts: Record<string, number> = { ...(existing?.attempts ?? {}) };
+  let writable = true;
+  const save = (): void => { if (!writeState(deps.markerFile, { pending, attempts })) writable = false; };
+  if (existing === null) save();
+
+  for (const item of [...pending]) {
+    let project: string | null = null;
     try {
-      if (deps.projects.isAllowed(folder)) continue;
-      if (deps.projects.setAllowed(folder, true)) migrated.push(folder); else failed = true;
-    } catch { failed = true; }
+      if (item.startsWith(FOLDER)) {
+        const folder = item.slice(FOLDER.length);
+        if (isDirectory(folder)) project = deps.resolveFolder ? await deps.resolveFolder(folder) : folder;
+      } else {
+        project = await deps.resolveSession(item.slice(SESSION.length));
+      }
+    } catch { project = null; }
+    let done = false;
+    if (project !== null && isDirectory(project)) {
+      try {
+        if (deps.projects.isAllowed(project)) done = true;
+        else if (deps.projects.setAllowed(project, true)) { migrated.push(project); done = true; }
+      } catch { done = false; }
+    }
+    if (done) {
+      pending = pending.filter((entry) => entry !== item);
+      delete attempts[item];
+    } else {
+      attempts[item] = (attempts[item] ?? 0) + 1;
+      if (attempts[item] >= maxAttempts) {
+        deps.warn?.(`Sessions API migration gave up on ${item.startsWith(FOLDER) ? "folder" : "session"} ${item.slice(item.indexOf(":") + 1)}: it could not be resolved`);
+        pending = pending.filter((entry) => entry !== item);
+        delete attempts[item];
+      }
+    }
+    save();
   }
-  if (failed) return { migrated, ran: false };
-  try {
-    mkdirSync(dirname(deps.markerFile), { recursive: true, mode: 0o700 });
-    writeFileSync(deps.markerFile, "{}", { mode: 0o600 });
-  } catch { return { migrated, ran: false }; }
-  return { migrated, ran: true };
+  if (!writable) return { migrated, ran: false };
+  return { migrated, ran: pending.length === 0 };
 }
