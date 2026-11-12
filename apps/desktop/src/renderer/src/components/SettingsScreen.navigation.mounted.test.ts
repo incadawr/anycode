@@ -297,3 +297,24 @@ it("clears a saved turn limit and shows inline errors for invalid input", async 
   await click("Save tools settings");
   expect(setPatch).toHaveBeenCalledWith(expect.objectContaining({ tools: expect.objectContaining({ maxTurns: "" }) }));
 });
+
+it("shows the subagent turns hint only for a valid value and the error only for an invalid one", async () => {
+  await mount();
+  const childTurns = container.querySelector<HTMLInputElement>('input[placeholder="150"]')!;
+  const setValue = async (value: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(childTurns, value);
+      childTurns.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  const field = () => childTurns.closest("label")!;
+  const hint = () => field().querySelector(".settings-field-hint")?.textContent ?? null;
+  const error = () => field().querySelector(".settings-field-error")?.textContent ?? null;
+  await setValue("150");
+  expect(hint()).toBe("Whole number, 1 or more; blank = default.");
+  expect(error()).toBeNull();
+  await setValue("oops");
+  expect(hint()).toBeNull();
+  expect(error()).toBe("Enter a positive whole number or leave blank.");
+  expect(error()).not.toBe(hint());
+});

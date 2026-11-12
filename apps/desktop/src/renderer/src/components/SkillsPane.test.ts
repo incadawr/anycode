@@ -395,7 +395,7 @@ describe("app builtin settings", () => {
     const { BuiltinSkillGroup } = await import("./SkillsPane.js");
     const html = renderToStaticMarkup(createElement(BuiltinSkillGroup, {
       settings: [{ id: "anycode-setup", userDisabled: true, projectDisabled: false }],
-      notice: "Settings for the next engine process for Claude and Codex",
+      notice: "Settings for the next engine process for Claude and Codex, including resume. Availability is checked at launch.",
       scope: "project", query: "", onToggle: () => {},
     }));
     expect(html).toContain('data-skill-name="builtin:anycode-setup"');
@@ -410,6 +410,8 @@ describe("app builtin settings", () => {
     expect(html).toContain("Disabled in personal settings");
     expect(html).toContain('aria-checked="true"');
     expect(html).toContain("Codex: anycode-app-setup");
+    expect(html.toLowerCase().split("availability").length - 1).toBe(1);
+    expect(html).not.toContain("Enabled in settings; availability checked at launch.");
     expect(html).not.toMatch(/not yet delivered|Codex \(planned\)|next Claude process/);
     expect(html).not.toMatch(/Reveal|Delete|Import|delivered to Claude/);
   });

@@ -79,9 +79,11 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
             <div className="mcp-row-line1">{def.id}</div>
             <div className="mcp-row-line2">{def.description}</div>
             <div className="mcp-row-line2">Claude: {def.claude} · Codex: {def.codex}</div>
-            <div className="mcp-row-line2">{setting.userDisabled ? "Disabled in personal settings. " : ""}
-              {setting.projectDisabled ? "Disabled in workspace settings. " : ""}
-              {!setting.userDisabled && !setting.projectDisabled ? "Enabled in settings; availability checked at launch." : "Either scope can disable this skill."}</div>
+            {(setting.userDisabled || setting.projectDisabled) && (
+              <div className="mcp-row-line2">{setting.userDisabled ? "Disabled in personal settings. " : ""}
+                {setting.projectDisabled ? "Disabled in workspace settings. " : ""}
+                Either scope can disable this skill.</div>
+            )}
           </div>
           <Switch checked={enabled}
             aria-label={`${enabled ? "Disable" : "Enable"} ${def.id} in ${scope} settings for Claude and Codex`}
