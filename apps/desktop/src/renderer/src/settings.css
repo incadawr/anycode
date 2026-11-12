@@ -3663,6 +3663,12 @@
 .go-quota-warning { color: var(--warning); }
 .go-quota-danger { color: var(--danger); }
 
+/* Connection tile: match the generic quota line (.connection-quota). */
+.connection-tile .go-quota { font-size: 12px; color: var(--text-3); }
+.connection-tile .go-quota-title { opacity: .8; }
+.connection-tile .go-quota-warning { color: var(--warning); }
+.connection-tile .go-quota-danger { color: var(--danger); }
+
 .settings-update-progress {
   width: 100%;
 }

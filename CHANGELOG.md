@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The OpenCode Go subscription usage block on the connection tile now uses the same smaller, dimmer text as the other providers' quota line.
+
 ## [0.0.99] - 2026-11-12
 
 ### Fixed
