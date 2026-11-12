@@ -100,7 +100,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
         const statusText = item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : item.status === "finished" ? `Turn ${item.terminalReason === "max_turns" ? "reached its turn limit" : item.terminalReason === "error" ? "failed" : item.terminalReason}; payload is retained until dismissed` : "Turn started; a restored copy remains in the composer";
         const systemText = item.origin === "system" ? systemReportBadge(item.status) : null;
         const chipTitle = deliveryChipTitle(messageText, statusText, systemText);
-        return <div key={item.requestId} className="prompt-queue-item prompt-queue-item-delivery" role="status" title={chipTitle}>
+        return <div key={item.requestId} className={item.origin === "system" ? "prompt-queue-item prompt-queue-item-delivery prompt-queue-item-system" : "prompt-queue-item prompt-queue-item-delivery"} role="status" title={chipTitle}>
         <span className="prompt-queue-text">{messageText}</span>
         <span className="prompt-queue-badge">{statusText}</span>
         {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
@@ -174,8 +174,9 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
           {promptQueue.map((item, index) => {
             const badge = queueImageBadge(item.images.length);
             const ordinal = index + 1;
+            const queuedTitle = item.origin === "system" ? deliveryChipTitle(item.text, badge, systemReportBadge("pending")) : undefined;
             return (
-              <li key={item.id} className="prompt-queue-item">
+              <li key={item.id} className="prompt-queue-item" title={queuedTitle}>
                 {editing?.id === item.id ? (
                   <div className="prompt-queue-edit">
                     <textarea
