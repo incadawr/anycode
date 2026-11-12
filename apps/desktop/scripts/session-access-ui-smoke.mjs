@@ -78,7 +78,7 @@ try {
     await shot(`dialog-${theme}-${width}`,`document.querySelectorAll('.session-peers-row').length === 50`);
     console.log('ROWS', await d.evaluate(`JSON.stringify([...document.querySelectorAll('.session-peers-row')].map(x=>x.dataset.granted))`));
     await check('granted first',`(()=>{const x=[...document.querySelectorAll('.session-peers-row')].map(e=>e.dataset.granted);return x.length===50 && x.includes('true') && x.every((v,i)=>v!=='true'||!x.slice(0,i).includes('false'))})()`);
-    await check('overlay preview hidden while open',`document.body.innerText.includes('Preview hidden')`);
+    await check('markdown preview stays visible while open',`!document.body.innerText.includes('Preview hidden')`);
     await check('search focused',`!!document.activeElement?.closest('.session-peers-search')`);
     await check('dialog overflow',`(()=>{const e=document.querySelector('.session-peers-dialog');return !!e && e.scrollWidth<=e.clientWidth})()`);
     const ends = `(()=>{const d=document.querySelector('.session-peers-dialog'); const a=[...d.querySelectorAll('button:not(:disabled),input:not(:disabled),[tabindex]:not([tabindex="-1"])')].filter(e=>e.getClientRects().length); window.__tabEnds=[a[0],a.at(-1)]; return a.length})()`;
