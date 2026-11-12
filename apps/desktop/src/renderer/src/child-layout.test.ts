@@ -655,6 +655,14 @@ describe("withLiveChildCounters (F11: a detached child's counters come off its o
     expect(behind).toBe(settled);
   });
 
+  it("an equal turn count keeps the card, a continuation with more turns shows the new outcome", () => {
+    const settled: SubagentSubStatus = { ...zeroCard, turns: 5, final: { status: "completed", durationMs: 10 } };
+    const replayed: TranscriptBlock[] = [loopEnd("e1", "max_turns", 5, 20)];
+    expect(withLiveChildCounters(settled, { transcript: replayed, modelTurns: 5, running: false })).toBe(settled);
+    const continued: TranscriptBlock[] = [...replayed, loopEnd("e2", "max_turns", 2, 5)];
+    expect(withLiveChildCounters(settled, { transcript: continued, modelTurns: 7, running: false }).final).toEqual({ status: "max_turns", durationMs: 25 });
+  });
+
   it("a settled card stays running while the idle child has a permission request pending", () => {
     const settled: SubagentSubStatus = { ...zeroCard, turns: 2, final: { status: "completed", durationMs: 10 } };
     const transcript: TranscriptBlock[] = [toolCall("a", "Read"), loopEnd("e1", "completed", 2, 10)];

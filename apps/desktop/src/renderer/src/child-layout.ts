@@ -354,7 +354,7 @@ export function withLiveChildCounters(
         turnsSoFar += block.turns;
         spent += block.durationMs ?? 0;
       }
-      const notBehind = Math.max(turnsSoFar, live.modelTurns) >= card.turns;
+      const notBehind = Math.max(turnsSoFar, live.modelTurns) > card.turns;
       const status = end === null ? null : (LOOP_END_TO_FINAL[end.reason] ?? ("error" as const));
       if (status === null || !notBehind || status === card.final.status) return card;
       settledOverride = { status, durationMs: spent };
