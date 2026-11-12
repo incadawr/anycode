@@ -105,7 +105,7 @@ export function resolveChildRowCard(
     // resumed store has replayed its history.
     const liveCard = withLiveChildCounters(
       baseCard,
-      { transcript: state.transcript, modelTurns: state.modelTurns, running: state.turn.status !== "idle" },
+      { transcript: state.transcript, modelTurns: state.modelTurns, running: state.turn.status !== "idle", permissionPending: Boolean(state.permission) },
       detached,
     );
     if (detached) rememberLiveChildCard(spawnToolCallId, liveCard);

@@ -154,12 +154,13 @@ describe("detached continuation counters (supervisor correction 5, defect 1/2/3)
   // fresh ids no earlier test touched (id sets are disjoint per test).
 
   /** A minimal live DesktopStoreApi fake: cumulative transcript + modelTurns + turn status. */
-  function fakeLiveStore(state: { transcript: TranscriptBlock[]; modelTurns: number; running: boolean }) {
+  function fakeLiveStore(state: { transcript: TranscriptBlock[]; modelTurns: number; running: boolean; permission?: boolean }) {
     const listeners = new Set<() => void>();
     const snapshot = {
       transcript: state.transcript,
       modelTurns: state.modelTurns,
       turn: { status: (state.running ? "running" : "idle") as "running" | "idle", turnId: null, requestId: null },
+      permission: state.permission === true ? { requestId: "perm" } : null,
     };
     return {
       getState: () => snapshot,
@@ -218,6 +219,19 @@ describe("detached continuation counters (supervisor correction 5, defect 1/2/3)
     const settled = projectChildSplitRows([id, "other"], { ...input, liveChildStores: new Map([[id, idleLive]]) });
     expect(settled[0]!.badge).toBe("done");
     expect(buildChildStackHead(settled)).toEqual({ kind: "roster", total: 2, running: 0 });
+  });
+
+  it("a settled card shows running while its idle child store has a pending permission, and the newest live outcome wins once idle", () => {
+    const id = "settled-permission";
+    const relations = createChildRelationStore();
+    relations.getState().registerChild(PARENT, id, "tab", "child");
+    const card = baseCard({ turns: 5, toolCalls: 1, final: { status: "max_turns", durationMs: 100 } });
+    const input = deps(relations.getState().relations, [agentBlock(id, card)]);
+    const transcript = [childToolCall("edit"), { kind: "loop_end", id: "end", reason: "completed", turns: 7, durationMs: 50 } as TranscriptBlock];
+    const waiting = fakeLiveStore({ transcript, modelTurns: 7, running: false, permission: true });
+    expect(projectChildSplitRows([id], { ...input, liveChildStores: new Map([[id, waiting]]) })[0]!.badge).toBe("running");
+    const idle = fakeLiveStore({ transcript, modelTurns: 7, running: false });
+    expect(projectChildSplitRows([id], { ...input, liveChildStores: new Map([[id, idle]]) })[0]!.card.final?.status).toBe("completed");
   });
 
   it.each([false, true])("settles a background row from its report without live telemetry, explicit detach %s", (explicit) => {

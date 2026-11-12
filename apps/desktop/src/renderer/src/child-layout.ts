@@ -300,6 +300,8 @@ export interface LiveChildSnapshot {
   modelTurns: number;
   /** The child's own turn is running (or compacting). */
   running: boolean;
+  /** The child's own store has a permission request waiting for an answer (it can be idle meanwhile). */
+  permissionPending?: boolean;
 }
 
 const LOOP_END_TO_FINAL: Record<string, NonNullable<SubagentSubStatus["final"]>["status"]> = {
@@ -319,8 +321,11 @@ const LOOP_END_TO_FINAL: Record<string, NonNullable<SubagentSubStatus["final"]>[
  * `detached`: the parent's card can never settle for such a call, so once the
  * child is idle after a finished loop, its last `loop_end` becomes the card's
  * `final` — otherwise a finished planner stays an orange "running" row
- * forever. A settled card (`final !== null`) is returned untouched while the
- * child is idle, and is reopened (`final: null`) while the child runs; a
+ * forever. A settled card (`final !== null`) is reopened (`final: null`) while
+ * the child runs or waits for a permission answer. Once the child is idle with
+ * nothing pending, the newest loop end of its live transcript wins when the
+ * transcript is not behind the card (an independent continuation can end
+ * differently from the call the card recorded); otherwise the card stays. A
  * derived value never lowers a counter the card already carries.
  */
 export function withLiveChildCounters(
@@ -333,9 +338,27 @@ export function withLiveChildCounters(
   }
   // A child whose own store runs again is running, whatever its last Agent
   // card settled on; once it is idle the latest outcome wins again.
+  const active = live.running || live.permissionPending === true;
+  let settledOverride: SubagentSubStatus["final"] = null;
   if (card.final !== null) {
-    if (!live.running) return card;
-    card = { ...card, final: null };
+    if (active) {
+      card = { ...card, final: null };
+    } else {
+      // Idle with nothing pending: the live transcript may hold a newer outcome than the card.
+      let end: Extract<TranscriptBlock, { kind: "loop_end" }> | null = null;
+      let turnsSoFar = 0;
+      let spent = 0;
+      for (const block of live.transcript) {
+        if (block.kind !== "loop_end") continue;
+        end = block;
+        turnsSoFar += block.turns;
+        spent += block.durationMs ?? 0;
+      }
+      const notBehind = Math.max(turnsSoFar, live.modelTurns) >= card.turns;
+      const status = end === null ? null : (LOOP_END_TO_FINAL[end.reason] ?? ("error" as const));
+      if (status === null || !notBehind || status === card.final.status) return card;
+      settledOverride = { status, durationMs: spent };
+    }
   }
   let toolCalls = 0;
   let lastTool: string | null = null;
@@ -354,7 +377,9 @@ export function withLiveChildCounters(
   }
   const turns = Math.max(loopTurns, live.modelTurns);
   const final =
-    detached && !live.running && lastLoopEnd !== null
+    settledOverride !== null
+      ? settledOverride
+      : detached && !active && lastLoopEnd !== null
       ? { status: LOOP_END_TO_FINAL[lastLoopEnd.reason] ?? ("error" as const), durationMs }
       : null;
   if (toolCalls <= card.toolCalls && turns <= card.turns && final === null) {
