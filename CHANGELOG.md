@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Sessions API access is now decided by two switches: the project's "Allow agents to open tasks here" and the session's own switch. The separate Allowed folders setting is gone (folders you had listed are switched on once), and refusals say why with `not_found`, `not_exposed` or `project_not_enabled`. A shared session whose project is off now says so in its environment menu, with an Enable button.
+
 ### Fixed
 
 - A subagent row no longer looks finished while the child session is running again; it shows as running and counts in the roster until the child goes idle.

@@ -22,6 +22,25 @@ subdirectories and unrelated workspaces are not implicitly authorized. A session
 that relocates into a worktree outside the allowlist becomes unavailable until
 that path is explicitly allowed in a subsequent launch.
 
+## Access model (Settings mode)
+
+In Settings mode the per-project switch ("Allow agents to open tasks here",
+`communication-agent-projects.json`) gates listing, status, `send_message`,
+`get_message_status` and `create_session` for sessions in that project folder;
+a worktree session counts as enabled when its own folder or its project root is
+on. The per-session switch ("Shared with external agents",
+`communication-sessions.json`) is the finer opt-out. `communication.workspaces`
+is no longer read as a gate: on the first start after the change each listed
+folder that is a known project is switched on once (marker
+`communication-workspaces-migrated.json`), and the saved value stays on disk.
+
+A session that cannot be reached answers a distinct code instead of one combined
+text: `not_found` (no open session with that id), `not_exposed` (session switch
+off), `project_not_enabled` (project switch off, names the folder). `create_session`
+in a project that is off answers `create_session project_not_enabled`. The
+environment-variable file mode below keeps its exact workspace allowlist, and
+answers `workspace_not_allowed` for a folder outside it.
+
 AnyCode binds only `127.0.0.1`, chooses a free port when `port` is zero, and writes
 `{url, token, workspaces}` to the discovery file with mode `0600`. Its parent
 folder should be private. The file defaults to `communication.json` under the
