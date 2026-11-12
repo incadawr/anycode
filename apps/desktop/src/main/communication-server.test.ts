@@ -2299,6 +2299,31 @@ describe("Sessions API access: project switch x session switch", () => {
     expect(callText(await f.client.callTool({ name: "get_message_status", arguments: { messageId: sent.envelope.messageId } }))).toMatch(/^project_not_enabled:/);
   });
 
+  it("a message saved before project roots were stored resolves through the live worktree session", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "anycode-access-oldrec-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discoveryFile = join(dir, "communication.json");
+    await mkdir(join(dir, "wt"));
+    const old = (id: string, recipient: string, workspace: string) => ({ envelope: { messageId: id, recipientSessionId: recipient }, state: "acknowledged", detail: "ok", workspace });
+    await writeFile(`${discoveryFile}.messages`, JSON.stringify([old("m-live", "wt", join(dir, "wt")), old("m-closed", "gone", join(dir, "wt"))]));
+    let root = true;
+    const manager = { listTabs: () => [{ sessionId: "wt", workspace: join(dir, "wt"), projectRoot: dir, state: "running", pid: 1 }], communicationRequest: vi.fn(async () => ({ state: "acknowledged" })) };
+    const service = await startCommunicationServer({
+      manager, userData: dir, config: { workspaces: [], port: 0, discoveryFile },
+      isSessionExposed: () => true, isProjectEnabled: (folder) => folder === dir && root,
+    });
+    cleanups.push(() => service.close());
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    const client = new Client({ name: "access-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    cleanups.push(() => client.close());
+    const status = (messageId: string) => client.callTool({ name: "get_message_status", arguments: { messageId } });
+    expect((await status("m-live")).isError).toBeFalsy();
+    // a closed session keeps the stored workspace, which is not an enabled project
+    expect(callText(await status("m-closed"))).toMatch(/^project_not_enabled:/);
+    root = false;
+    expect(callText(await status("m-live"))).toMatch(/^project_not_enabled:/);
+  });
+
   it("legacy env-file mode answers the one combined text for an unknown session", async () => {
     const f = await worktreeFixture(() => true, true);
     expect(callText(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "ghost" } }))).toBe("Session unavailable or outside authorized workspace");
