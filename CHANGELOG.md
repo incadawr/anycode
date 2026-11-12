@@ -7,6 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A queued system report chip in the composer keeps its message text visible (badges wrap instead of squeezing it out), shows the full text on hover, and says "delivered after this turn" while pending instead of a failure-sounding warning.
+- Rendered Markdown in the preview dock no longer blanks to "Preview hidden" when a popover or menu opens, and screenshots of it work while one is open. Web previews still hide behind overlays.
+- The OpenCode Go subscription usage block on the connection tile now uses the same smaller, dimmer text as the other providers' quota line.
+
 ## [0.0.99] - 2026-11-12
 
 ### Fixed

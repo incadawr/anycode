@@ -25,6 +25,20 @@ export function shouldShowPromptQueue(
   return queueLength > 0 || queuePaused || pendingSteerCount > 0;
 }
 
+/** Badge copy for a system report delivery: neutral while pending, the no-auto-resend warning only once delivery is in doubt or refused. */
+export function systemReportBadge(status: string): string {
+  return status === "unknown" || status === "rejected"
+    ? "System report — check session history; it will not resend automatically."
+    : status === "pending"
+      ? "System report · delivered after this turn"
+      : "System report";
+}
+
+/** Hover text for a delivery chip: the full message followed by every badge's full text. */
+export function deliveryChipTitle(messageText: string, ...badges: Array<string | null>): string {
+  return [messageText, ...badges].filter((part): part is string => part !== null && part !== "").join("\n");
+}
+
 export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, deliveryRequestId?: string) => boolean }) {
   const send = useTabSend();
   function remove(item: QueuedPrompt): void {
@@ -81,11 +95,16 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
 
   return (
     <div className="prompt-queue">
-      {visibleDeliveries.map((item) => <div key={item.requestId} className="prompt-queue-item" role="status">
-        <span className="prompt-queue-text">{item.payloadOmitted ? "Earlier completed message (payload released)" : item.text}</span>
-        <span className="prompt-queue-badge">{item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : item.status === "finished" ? `Turn ${item.terminalReason === "max_turns" ? "reached its turn limit" : item.terminalReason === "error" ? "failed" : item.terminalReason}; payload is retained until dismissed` : "Turn started; a restored copy remains in the composer"}</span>
+      {visibleDeliveries.map((item) => {
+        const messageText = item.payloadOmitted ? "Earlier completed message (payload released)" : item.text;
+        const statusText = item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : item.status === "finished" ? `Turn ${item.terminalReason === "max_turns" ? "reached its turn limit" : item.terminalReason === "error" ? "failed" : item.terminalReason}; payload is retained until dismissed` : "Turn started; a restored copy remains in the composer";
+        const systemText = item.origin === "system" ? systemReportBadge(item.status) : null;
+        const chipTitle = deliveryChipTitle(messageText, statusText, systemText);
+        return <div key={item.requestId} className={item.origin === "system" ? "prompt-queue-item prompt-queue-item-delivery prompt-queue-item-system" : "prompt-queue-item prompt-queue-item-delivery"} role="status" title={chipTitle}>
+        <span className="prompt-queue-text">{messageText}</span>
+        <span className="prompt-queue-badge">{statusText}</span>
         {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
-        {item.origin === "system" && <span className="prompt-queue-badge">System report — check session history; it will not resend automatically.</span>}
+        {systemText !== null && <span className="prompt-queue-badge">{systemText}</span>}
         {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="system-delivery-retry" disabled={connection !== "ready" || !systemRetrySafe(deliveries,item.requestId)} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
         {item.origin === "system" && item.retryQueued && item.status === "rejected" && <span>Retry requested.</span>}
         {item.origin !== "system" && !item.payloadOmitted && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
@@ -108,7 +127,8 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
           tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === item.requestId && (entry.status === "unknown" || entry.status === "conflict") ? {...entry,reviewed:true} : entry)}));
         }}>Mark delivery reviewed</button>}
         {item.reviewed && (item.status === "unknown" || item.status === "conflict") && <span>Reviewed; delivery remains unconfirmed.</span>}
-      </div>)}
+      </div>;
+      })}
       {queuePaused && (
         <div className="prompt-queue-paused">
           <span className="prompt-queue-paused-text">
@@ -154,8 +174,9 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
           {promptQueue.map((item, index) => {
             const badge = queueImageBadge(item.images.length);
             const ordinal = index + 1;
+            const queuedTitle = item.origin === "system" ? deliveryChipTitle(item.text, badge, systemReportBadge("pending")) : undefined;
             return (
-              <li key={item.id} className="prompt-queue-item">
+              <li key={item.id} className="prompt-queue-item" title={queuedTitle}>
                 {editing?.id === item.id ? (
                   <div className="prompt-queue-edit">
                     <textarea

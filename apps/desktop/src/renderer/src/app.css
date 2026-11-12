@@ -5896,6 +5896,22 @@ button.environment-menu-row:hover,
   font-size: var(--fs-2xs);
 }
 
+/* System report chips: badges wrap to a second line and shrink instead of squeezing the message text out. */
+.prompt-queue-item-system {
+  flex-wrap: wrap;
+}
+
+.prompt-queue-item-system .prompt-queue-text {
+  flex: 1 1 12em;
+}
+
+.prompt-queue-item-system .prompt-queue-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 .prompt-queue-edit-button,
 .prompt-queue-delete {
   display: inline-flex;

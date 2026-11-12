@@ -1701,7 +1701,6 @@ class PreviewHost implements PreviewHostHandle {
     const bounds = this.panelBounds;
     const gatesOk =
       this.panelState.panelMounted &&
-      !this.panelState.overlayOpen &&
       record.tabId === this.panelState.activeTabId &&
       bounds !== null &&
       bounds.width > 0 &&

@@ -4139,17 +4139,13 @@ describe("PreviewHost — markdown: BrowserScreenshot (M4, CUT.md GAP 2)", () =>
     }
   });
 
-  it("overlay open -> honest refusal, captureMainWindowRect NOT called", async () => {
+  it("overlay open -> markdown panel (plain DOM) still captures with the host's panelBounds", async () => {
     const { rig, previewId } = await openedMdPanelRig();
     rig.host.setPanelState({ activeTabId: TAB, panelMounted: true, overlayOpen: true });
     rig.host.setPanelBounds(MD_FULL_BOUNDS);
     const shot = await rig.host.screenshotFor(TAB, previewId);
-    expect(shot).toMatchObject({
-      ok: false,
-      errorKind: "unavailable",
-      error: expect.stringContaining("switch to the tab or move the preview to a window"),
-    });
-    expect(rig.captureMainWindowRectCalls).toEqual([]);
+    expect(shot).toMatchObject({ ok: true, value: { previewId, mediaType: "image/png" } });
+    expect(rig.captureMainWindowRectCalls).toEqual([MD_FULL_BOUNDS]);
   });
 
   it("inactive tab (wrong activeTabId) -> honest refusal, captureMainWindowRect NOT called", async () => {
