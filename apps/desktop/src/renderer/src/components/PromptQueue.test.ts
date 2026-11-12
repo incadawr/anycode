@@ -6,7 +6,7 @@
  * pure functions the component's JSX calls into.
  */
 import { describe, expect, it } from "vitest";
-import { queueImageBadge, shouldShowPromptQueue } from "./PromptQueue.js";
+import { deliveryChipTitle, queueImageBadge, shouldShowPromptQueue, systemReportBadge } from "./PromptQueue.js";
 
 describe("queueImageBadge", () => {
   it("returns null when there are no images", () => {
@@ -35,5 +35,26 @@ describe("shouldShowPromptQueue", () => {
 
   it("shows when both paused and non-empty", () => {
     expect(shouldShowPromptQueue(2, true)).toBe(true);
+  });
+});
+
+describe("systemReportBadge", () => {
+  it("is a short neutral note while pending", () => {
+    const text = systemReportBadge("pending");
+    expect(text).toBe("System report · delivered after this turn");
+    expect(text).not.toContain("will not resend");
+  });
+
+  it("keeps the no-auto-resend warning for unknown and rejected", () => {
+    for (const status of ["unknown", "rejected"]) {
+      expect(systemReportBadge(status)).toContain("will not resend automatically");
+    }
+  });
+});
+
+describe("deliveryChipTitle", () => {
+  it("carries the full message text and the full badge text", () => {
+    const title = deliveryChipTitle("Background subagent X finished", "Waiting for host response", systemReportBadge("pending"), null);
+    expect(title).toBe("Background subagent X finished\nWaiting for host response\nSystem report · delivered after this turn");
   });
 });
