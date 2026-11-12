@@ -109,6 +109,17 @@ describe("deriveSessionTitle", () => {
     expect(words.startsWith(title.slice(0, -1))).toBe(true);
   });
 
+  it("hard-cuts when the only word boundary is too early to keep a useful title", () => {
+    const url = deriveSessionTitle(`Review https://github.com/example/${"very-long-repository-name/".repeat(5)}pull/1`);
+    expect(url.length).toBe(SESSION_TITLE_MAX_LENGTH);
+    expect(url.startsWith("Review https://github.com/example/")).toBe(true);
+    expect(url.endsWith("…")).toBe(true);
+    const cyr = deriveSessionTitle(`Почини ${"ё".repeat(120)}`);
+    expect(cyr.length).toBe(SESSION_TITLE_MAX_LENGTH);
+    expect(cyr.startsWith("Почини ёёё")).toBe(true);
+    expect(cyr.endsWith("…")).toBe(true);
+  });
+
   it("hard-cuts a single over-long word and keeps an exact-length title intact", () => {
     const hard = deriveSessionTitle("x".repeat(120));
     expect(hard).toBe(`${"x".repeat(SESSION_TITLE_MAX_LENGTH - 1)}…`);

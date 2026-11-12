@@ -133,8 +133,9 @@ describe("deriveRolloutRowLabel", () => {
   it("caps at 80 characters, mirroring deriveSessionTitle's convention", () => {
     const long = "x".repeat(200);
     const result = deriveRolloutRowLabel({ firstUserMessage: long, mtimeMs });
-    expect(result.length).toBe(80);
-    expect(result).toBe(long.slice(0, 80));
+    expect(result).toBe(`${"x".repeat(79)}…`);
+    const words = deriveRolloutRowLabel({ firstUserMessage: "Fixture answer paragraph. Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod", mtimeMs });
+    expect(words).toBe("Fixture answer paragraph. Lorem ipsum dolor sit amet, consectetur adipiscing…");
   });
 
   it("falls back to the formatted timestamp when firstUserMessage is absent", () => {

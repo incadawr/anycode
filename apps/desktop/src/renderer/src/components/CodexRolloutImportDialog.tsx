@@ -90,7 +90,7 @@ const SYSTEM_PROFILE_LABEL = "System (current environment)";
 const MAX_ROLLOUT_FILE_MIB = 32;
 /** List-row first-user-message preview cap — a rollout's first message can run long; the list view only needs enough to recognize the session. */
 const FIRST_MESSAGE_PREVIEW_CAP = 96;
-/** Row-label cap, mirroring `@anycode/core`'s `SESSION_TITLE_MAX_LENGTH`/`deriveSessionTitle` first-line convention — duplicated as a literal rather than imported since this renderer bundle deliberately never pulls in `@anycode/core` (see file header). */
+/** Row-label cap, mirroring `@anycode/core`'s `SESSION_TITLE_MAX_LENGTH`/`capTitle` — duplicated rather than imported since this renderer bundle deliberately never pulls in `@anycode/core` (see file header). Keep `capRowLabel` in sync with core's `capTitle`. */
 const ROLLOUT_ROW_LABEL_MAX_LENGTH = 80;
 
 // ── pure helpers (unit-tested directly — see CodexRolloutImportDialog.test.ts) ──
@@ -124,16 +124,25 @@ export function truncateRolloutPreview(text: string | undefined): string | undef
  * The list row's PRIMARY, human-readable label (owner: "in the list
  * of importable sessions we must show the session name"): the first line of
  * the rollout's own first user message, trimmed and capped — the exact
- * "first line, 80 chars" convention `deriveSessionTitle` (`@anycode/core`)
+ * "first line, 80 chars, word-boundary ellipsis" convention `deriveSessionTitle` (`@anycode/core`)
  * uses for a session's own title, so an imported session's list entry and
  * its eventual title read as the same kind of name. Falls back to the
  * formatted timestamp when there is no first-user-message to name it after
  * (no user turn in the rollout at all, or an empty/whitespace-only peek).
  */
+function capRowLabel(title: string): string {
+  if (title.length <= ROLLOUT_ROW_LABEL_MAX_LENGTH) return title;
+  const room = ROLLOUT_ROW_LABEL_MAX_LENGTH - 1;
+  const head = title.slice(0, room);
+  const boundary = /\s/.test(title.charAt(room)) ? head.length : head.search(/\s\S*$/);
+  const cut = boundary >= room / 2 ? head.slice(0, boundary) : head;
+  return `${cut.trimEnd()}…`;
+}
+
 export function deriveRolloutRowLabel(entry: { firstUserMessage?: string; mtimeMs: number }): string {
   const firstLine = (entry.firstUserMessage ?? "").split("\n", 1)[0]?.trim() ?? "";
   if (firstLine.length > 0) {
-    return firstLine.length > ROLLOUT_ROW_LABEL_MAX_LENGTH ? firstLine.slice(0, ROLLOUT_ROW_LABEL_MAX_LENGTH) : firstLine;
+    return capRowLabel(firstLine);
   }
   return formatRolloutTimestamp(entry.mtimeMs);
 }

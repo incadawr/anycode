@@ -100,8 +100,8 @@ export function deriveSessionTitle(text: string): string {
 
 /**
  * Caps a title at SESSION_TITLE_MAX_LENGTH including the ellipsis: a longer
- * title is cut at the last word boundary that fits and ends with "…"; a single
- * word longer than the cap is hard-cut. A title at or under the cap is untouched.
+ * title is cut at the last word boundary that fits (if it keeps at least half
+ * the room) and ends with "…"; otherwise it is hard-cut. A title at or under the cap is untouched.
  */
 function capTitle(title: string): string {
   if (title.length <= SESSION_TITLE_MAX_LENGTH) {
@@ -109,9 +109,11 @@ function capTitle(title: string): string {
   }
   const room = SESSION_TITLE_MAX_LENGTH - 1;
   const head = title.slice(0, room);
-  // Cut at a word boundary only when the next character really starts a new word.
+  // Cut at a word boundary only when the next character really starts a new
+  // word AND the cut keeps at least half the room (a short word before a long
+  // URL/path must not collapse the title to that word).
   const boundary = /\s/.test(title.charAt(room)) ? head.length : head.search(/\s\S*$/);
-  const cut = boundary > 0 ? head.slice(0, boundary) : head;
+  const cut = boundary >= room / 2 ? head.slice(0, boundary) : head;
   return `${cut.trimEnd()}…`;
 }
 
