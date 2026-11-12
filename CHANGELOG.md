@@ -7,6 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.99] - 2026-11-12
+
+### Fixed
+
+- A Bash command that starts a background job without redirecting its output, for example `cd app && npm start &`, no longer hangs until the Bash timeout. The call returns once the shell exits and the background job keeps running. A timed-out or cancelled command now shows the last lines of its output.
+
 ## [0.0.98] - 2026-11-10
 
 ### Changed
