@@ -1801,7 +1801,12 @@ export function summarizeInput(toolName: string, input: unknown): string {
       return path ? `${pattern} in ${path}` : pattern;
     }
     case "Agent":
-      return typeof record.description === "string" ? record.description : (JSON.stringify(input) ?? "");
+      // Never the raw JSON args: a rejected call (no description) would put
+      // the whole payload in the row title. Prompt is the next-best human line.
+      if (typeof record.description === "string" && record.description.trim() !== "") {
+        return record.description;
+      }
+      return typeof record.prompt === "string" ? record.prompt : "";
     case "TodoWrite": {
       const todos = parseTodos(input);
       return todos !== null ? todoSummary(todos) : (JSON.stringify(input) ?? "");
@@ -1809,6 +1814,19 @@ export function summarizeInput(toolName: string, input: unknown): string {
     default:
       return JSON.stringify(input) ?? "";
   }
+}
+
+/**
+ * The validation message of a rejected call (first non-empty line of the
+ * model-facing text, which names the failing argument), or `null` when the
+ * card is not `invalid_input` or carries no text.
+ */
+export function invalidInputDetail(block: Pick<ToolCallBlock, "status" | "modelText">): string | null {
+  if (block.status !== "invalid_input" || block.modelText === null) {
+    return null;
+  }
+  const line = block.modelText.split("\n").find((l) => l.trim() !== "");
+  return line === undefined ? null : flattenSummary(line);
 }
 
 /**
@@ -2137,7 +2155,10 @@ export function ToolCallHeaderRow({
         {block.workflow !== null && !expanded && block.workflow.steps.length > 0 && (
           <WorkflowCollapsedTicks workflow={block.workflow} />
         )}
-        <span className="tool-call-status-badge">{statusLabel(block)}</span>
+        <span className="tool-call-status-badge" title={invalidInputDetail(block) ?? undefined}>{statusLabel(block)}</span>
+        {!expanded && invalidInputDetail(block) !== null && (
+          <span className="tool-call-summary">{invalidInputDetail(block)}</span>
+        )}
         {/* CUT-S2 §2.5 (C3): the session-child badge lives in the
             ALWAYS-visible toggle row, not just the expanded body below — an
             Agent card defaults to COLLAPSED in every status

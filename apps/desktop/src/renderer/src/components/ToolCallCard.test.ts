@@ -56,6 +56,7 @@ import {
   subagentResponseModelNote,
   substatusKind,
   summarizeInput,
+  invalidInputDetail,
   SUMMARY_MAX_CHARS,
   todoSummary,
   toggleWorkflowStepSelection,
@@ -672,9 +673,21 @@ describe("summarizeInput", () => {
     expect(summarizeInput("Agent", { description: "survey the repo", prompt: "..." })).toBe("survey the repo");
   });
 
-  it("falls back to JSON for an Agent input without a description", () => {
-    const input = { prompt: "..." };
-    expect(summarizeInput("Agent", input)).toBe(JSON.stringify(input));
+  it("falls back to the prompt, never raw JSON, for an Agent input without a description", () => {
+    expect(summarizeInput("Agent", { prompt: "look around" })).toBe("look around");
+    expect(summarizeInput("Agent", { subagent_type: 5 })).toBe("");
+    expect(summarizeInput("Agent", undefined)).toBe("");
+  });
+
+  it("shows the validation message of an invalid_input card in the collapsed row", () => {
+    const block = mkAgentBlock({ status: "invalid_input", input: { subagent_type: 5 }, modelText: "Agent: subagent_type must be a string\nmore" });
+    expect(invalidInputDetail(block)).toBe("Agent: subagent_type must be a string");
+    expect(invalidInputDetail({ status: "success", modelText: "x" })).toBeNull();
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, { block, expanded: false, bodyId: "b", onToggleExpanded: () => {} }),
+    );
+    expect(html).toContain("subagent_type must be a string");
+    expect(html).not.toContain("{&quot;subagent_type");
   });
 
   it("falls back to JSON for an unknown tool", () => {

@@ -59,7 +59,7 @@ describe("session-header title-wrap clamp (audit D12 regression: the header has 
     // boundary instead of breaking between words.
     const rule = cssRule(".session-header-title-wrap");
     expect(rule).toMatch(/white-space:\s*normal/);
-    expect(rule).toMatch(/text-overflow:\s*clip/);
+    expect(rule).toMatch(/text-overflow:\s*ellipsis/);
     const base = cssRule(".session-header-title");
     expect(base).toMatch(/white-space:\s*nowrap/);
     expect(sessionHeaderTitleClass("fix the header bug")).toBe("session-header-title session-header-title-wrap");

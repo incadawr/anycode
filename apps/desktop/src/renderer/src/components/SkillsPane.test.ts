@@ -410,6 +410,8 @@ describe("app builtin settings", () => {
     expect(html).toContain("Disabled in personal settings");
     expect(html).toContain('aria-checked="true"');
     expect(html).toContain("Codex: anycode-app-setup");
+    expect(html.split("availability").length - 1).toBe(1);
+    expect(html).not.toContain("Enabled in settings; availability checked at launch.");
     expect(html).not.toMatch(/not yet delivered|Codex \(planned\)|next Claude process/);
     expect(html).not.toMatch(/Reveal|Delete|Import|delivered to Claude/);
   });

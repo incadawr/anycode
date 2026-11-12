@@ -994,5 +994,8 @@ describe("disabled \"Remove project from list\" explains itself without hover", 
     // The note is a rendered block (CSS), so it is layout, not a stray span.
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.sidebar-project-menu-item-note\s*\{/);
+    // The reason wraps onto its own line under the label instead of sitting beside it.
+    expect(css).toMatch(/\.sidebar-project-menu-item\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.sidebar-project-menu-item-note\s*\{[^}]*flex-basis:\s*100%/);
   });
 });

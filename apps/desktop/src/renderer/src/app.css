@@ -1528,6 +1528,10 @@ body {
 .session-extensions-status .session-extensions-dot { margin: 0; }
 .session-extensions-category[aria-expanded="true"] { background: var(--bg-hover); }
 .session-extensions-details { padding: var(--sp-2); border-left: 1px solid var(--border); }
+/* The region is focused programmatically (tabindex -1); its default focus ring
+   is clipped by the panel and showed as a full-height accent line down the
+   column's left edge. Focusable controls inside keep their own rings. */
+.session-extensions-details:focus, .session-extensions-details:focus-visible { outline: none; }
 .session-extensions-details h3 { margin: var(--sp-2) 0; font-size: inherit; }
 .session-extensions-details p { color: var(--text-2); }
 .session-extensions-details button:not(.ak-switch) {
@@ -1643,7 +1647,7 @@ body {
   white-space: normal;
   overflow: hidden;
   overflow-wrap: anywhere;
-  text-overflow: clip;
+  text-overflow: ellipsis;
   line-height: 1.25;
 }
 
@@ -6199,6 +6203,7 @@ button.environment-menu-row:hover,
 
 .sidebar-project-menu-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
@@ -6228,6 +6233,7 @@ button.environment-menu-row:hover,
    left edge so it reads as the item's own explanation. */
 .sidebar-project-menu-item-note {
   display: block;
+  flex-basis: 100%;
   margin-top: var(--sp-1);
   white-space: normal;
   font-size: var(--fs-xs);

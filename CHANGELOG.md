@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- UI polish: clearer subagent turn-limit hint, project menu reason on its own line, invalid tool input shows the failing message instead of raw JSON, built-in skills note shown once, session title clamp ellipsis, no stray focus line in the Extensions panel.
+
 ## [0.0.100] - 2026-11-12
 
 ### Changed

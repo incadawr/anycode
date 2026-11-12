@@ -2101,7 +2101,7 @@ export function SettingsScreen({
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
                     disabled={readOnly} placeholder="150" aria-invalid={!subagentMaxTurnsValid} onChange={(e) => setSubagentMaxTurns(e.target.value)} />
                   {!subagentMaxTurnsValid && <span className="settings-field-error" role="alert">Enter a positive whole number or leave blank.</span>}
-                  <span className="settings-field-hint">Enter a positive whole number.</span>
+                  {subagentMaxTurnsValid && <span className="settings-field-hint">Whole number, 1 or more; blank = default.</span>}
                 </label>
                 <div className="settings-field settings-field--kit">
                   <Input label="Context window (subagents)" className="settings-field-input" type="text" inputMode="numeric"

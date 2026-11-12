@@ -67,6 +67,7 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
   return <div className="mcp-section">
     <div className="mcp-section-title">Built into AnyCode</div>
     <p className="skills-pane-hint">{notice}</p>
+    <p className="skills-pane-hint">Enabled skills are checked for availability at launch.</p>
     <p className="skills-pane-hint">Switches affect Claude and Codex at the next engine process launch, including resume; running sessions keep their skills.
       Workspace settings are ignored by Claude and Codex in untrusted workspaces. This pane shows settings, not whether a skill was loaded or used.</p>
     <ul className="skills-row-list mcp-row-list">
@@ -81,7 +82,7 @@ export function BuiltinSkillGroup({ settings, notice, scope, query, onToggle }: 
             <div className="mcp-row-line2">Claude: {def.claude} · Codex: {def.codex}</div>
             <div className="mcp-row-line2">{setting.userDisabled ? "Disabled in personal settings. " : ""}
               {setting.projectDisabled ? "Disabled in workspace settings. " : ""}
-              {!setting.userDisabled && !setting.projectDisabled ? "Enabled in settings; availability checked at launch." : "Either scope can disable this skill."}</div>
+              {!setting.userDisabled && !setting.projectDisabled ? "" : "Either scope can disable this skill."}</div>
           </div>
           <Switch checked={enabled}
             aria-label={`${enabled ? "Disable" : "Enable"} ${def.id} in ${scope} settings for Claude and Codex`}
