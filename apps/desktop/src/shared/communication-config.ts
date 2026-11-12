@@ -61,7 +61,13 @@ export interface CommunicationView {
   defaultSessionAccess: "off" | "on";
   status: CommunicationStatus;
   /** `approvals` is the per-session External approvals switch; always false while `enabled` is false. */
-  tabs: Array<{ tabId: string; enabled: boolean; approvals: boolean; handle?: string }>;
+  /**
+   * `projectEnabled` is the effective project level: false when the session's folder (or its project
+   * root) has the per-project agent switch off, which hides the session from agents even while
+   * `enabled` is on. `projectRoot` is that canonical project folder (the sidebar's project row), the
+   * one the Enable button switches on.
+   */
+  tabs: Array<{ tabId: string; enabled: boolean; approvals: boolean; projectEnabled: boolean; projectRoot?: string; handle?: string }>;
   /** projects where agents may open tasks. `key` is the exact stored canonical key (a lookup key for Off, never a new path). */
   agentProjects: Array<{ key: string; name: string; displayPath: string }>;
 }

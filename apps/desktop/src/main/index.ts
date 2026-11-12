@@ -70,7 +70,7 @@ import { assertChildModel, connectionChildModels, connectionRoutingSettings } fr
  */
 import { randomUUID } from "node:crypto";
 import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
-import { existsSync, mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
 import { access, chmod, realpath as fsRealpath, stat as fsStat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
@@ -204,6 +204,7 @@ import { migrateLegacyProxyUrls, type LegacyProxyImportDeps } from "./proxy-scop
 import { sendToMainWindow } from "./main-window-send.js";
 import { NodeMcpConfigFs, registerMcpConfigIpc } from "./mcp-config-ipc.js";
 import { createScopeWorkspaceRegistry } from "./scope-workspaces.js";
+import { migrateAllowedFolders } from "./communication-workspaces-migration.js";
 import { registerScopeWorkspacesIpc } from "./scope-workspaces-ipc.js";
 import { registerPathRootsIpc } from "./path-roots-ipc.js";
 import { McpSecretForkCache } from "./mcp-secret-fork-cache.js";
@@ -279,7 +280,7 @@ import {
   type SettingsIpcDeps,
 } from "./settings-ipc.js";
 import type { ProviderHealthEvent } from "../shared/provider-health.js";
-import { TabHostManager, createPinReservations, workspaceMissing } from "./tabs.js";
+import { TabHostManager, canonicalWorkspace, createPinReservations, workspaceMissing } from "./tabs.js";
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { handleCreate, registerTabIpc, type ResolveCodexProfileResult, type TabIpcDeps } from "./tab-ipc.js";
@@ -2646,6 +2647,7 @@ void app.whenReady().then(async () => {
     creatorOwnsAdmission: true,
     createSessionByAgent: (request) => createSessionForAgent(request),
     listAgentProjects: () => communicationAgentProjects?.allowedKeys() ?? [],
+    isProjectEnabled: (workspace) => communicationAgentProjects?.isAllowed(workspace) ?? false,
     agentOpenedSessions,
     closeSessionByAgent: (sessionId) => closeSessionForAgent(manager, agentOpenedSessions, sessionId, (tabId) => {
       agentSessionTitles.delete(sessionId);
@@ -4006,7 +4008,7 @@ void app.whenReady().then(async () => {
       ),
       realpathSync,
       homedir: () => homedir(),
-      tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
+      tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId, workspace: tab.workspace, ...(tab.projectRoot !== undefined ? { projectRoot: tab.projectRoot } : {}) })),
       env: () => process.env.ANYCODE_COMMUNICATION_CONFIG,
       pickFolder: async () => {
         const result = await dialog.showOpenDialog(win!, { properties: ["openDirectory"] });
@@ -4427,6 +4429,44 @@ void app.whenReady().then(async () => {
   // settings.json is picked up at the next launch. A failed start never blocks boot.
   if (communicationController !== null) {
     const controller = communicationController;
+    if (communicationAgentProjects !== null) {
+      const projects = communicationAgentProjects;
+      await migrateAllowedFolders({
+        markerFile: join(app.getPath("userData"), "communication-workspaces-migrated.json"),
+        workspaces: settings?.communication?.workspaces ?? [],
+        exposedSessionIds: () => {
+          try {
+            const raw = JSON.parse(readFileSync(join(app.getPath("userData"), "communication-sessions.json"), "utf8")) as Record<string, unknown>;
+            return Object.entries(raw).filter(([, on]) => on === true).map(([id]) => id);
+          } catch { return []; }
+        },
+        // The same canonical project a tab opens with: the session's projectRoot
+        // (else its workspace). A child session resolves through its root session;
+        // when the chain is broken the child's own recorded folders are used.
+        resolveSession: async (sessionId) => {
+          if (persistence === null) return null;
+          const first = await persistence.getSessionById(sessionId);
+          if (first === null) return null;
+          let row = first;
+          for (let depth = 0; row.parentSessionId !== undefined && depth < 32; depth += 1) {
+            const parent = await persistence.getSessionById(row.parentSessionId);
+            if (parent === null) { row = first; break; }
+            row = parent;
+          }
+          return canonicalWorkspace(row.projectRoot ?? row.workspace);
+        },
+        // A listed folder that is a session's worktree maps to that session's project root.
+        resolveFolder: async (folder) => {
+          const canonical = canonicalWorkspace(folder);
+          const rows = (await persistence?.listSessionsForMaintenance()) ?? [];
+          const owner = rows.find((row) => row.worktree !== undefined && row.projectRoot !== undefined &&
+            (canonicalWorkspace(row.workspace) === canonical || canonicalWorkspace(row.worktree.path) === canonical));
+          return owner?.projectRoot !== undefined ? canonicalWorkspace(owner.projectRoot) : canonical;
+        },
+        projects,
+        warn: (message) => console.warn(`[main] ${message}`),
+      }).catch(() => console.warn("[main] Sessions API folder migration skipped"));
+    }
     await controller.apply(applyInputFromBlock(settings?.communication));
     // the first Sessions-API state is known now — services may start with it.
     reconcileServices();

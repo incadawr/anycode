@@ -14,7 +14,7 @@ export { writePrivateFile } from "./communication-ledger.js";
 import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 
 export interface CommunicationManager {
-  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; activitySnapshot?: import("../shared/communication.js").SessionActivitySnapshot; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; projectRoot?: string; state: string; activityState?: SessionActivityState; activitySnapshot?: import("../shared/communication.js").SessionActivitySnapshot; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
   onSessionPeerTerminal?(listener: (sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void): () => void;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationStatusDetails?(sessionId: string): Record<string, unknown>;
@@ -88,7 +88,7 @@ const CLOSE_REFUSAL_TEXT: { [K in CloseSessionRefusal]: string } = {
 };
 const closeRefusal = (code: CloseSessionRefusal) => new Error(`close_session ${code}: ${CLOSE_REFUSAL_TEXT[code]}`);
 /** fixed create_session refusal codes, prefixed in error text. */
-export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model" | "invalid_effort" | "invalid_account" | "invalid_argument";
+export type CreateSessionRefusal = "not_allowed" | "project_not_enabled" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model" | "invalid_effort" | "invalid_account" | "invalid_argument";
 export type CreateSessionRequest = {
   workspace: string;
   engine?: "core" | "codex" | "claude";
@@ -108,6 +108,7 @@ export type CreateSessionRequest = {
  */
 export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string; delivery?: { state: string; messageId?: string } } | { ok: false; reason: CreateSessionRefusal; detail?: string; sessionId?: string; tabId?: string };
 const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
+  project_not_enabled: "the project does not allow agents to open tasks here; turn on 'Agents may open tasks here' in the sidebar project menu",
   not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
   not_trusted: "the folder is not trusted in AnyCode; use the project sidebar menu to turn on Allow agents to open tasks here and trust the folder, or open the folder and approve its project settings",
   folder_not_found: "the workspace folder does not exist",
@@ -142,7 +143,7 @@ const tools = [
   { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
   { name: "list_agent_projects", description: "Read-only discovery for create_session: lists the folders whose canonical path has 'Allow agents to open tasks here' switched on (sidebar project menu, off by default). Answers an empty list when the store is not wired (env-file mode).", inputSchema: { type: "object", properties: {}, additionalProperties: false } },
-  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. model picks what the new session runs: for engine \"core\" (the default) it selects the configured provider connection — by connection id, its label, providerId/model, or a model id that connection offers — and an unknown or ambiguous value is refused with invalid_model, whose text lists the candidates; omit model to use the active connection. For \"codex\"/\"claude\" model is applied and confirmed on that engine before the session is shared: either id its catalog carries is accepted (the short alias or the full model id), and a value the account does not offer is refused with invalid_model, whose text lists the ids it does offer — never a silent switch to the engine default. Optional account (engine \"codex\" only) picks the Codex account the session runs on: a profile id or its label from Settings → Codex; an unknown or ambiguous value is refused with invalid_account, whose text lists the candidates; omit it to start on the account marked as default. Optional effort sets the session's reasoning effort for the whole session (a string; the allowed values are model-dependent, so there is no fixed list here) — it is validated exactly against the selected model's advertised levels and an unsupported or malformed value is refused with invalid_effort, whose text names the engine, model, requested value and the complete allowed list; a model that advertises no levels refuses every explicit effort. Omitting effort keeps the engine's own default and the connection's settings. Optional fast (Codex only) enables or disables Fast mode for this session; Fast is quicker but consumes the usage limit faster. Optional firstMessage is delivered like send_message next_turn and returns messageId (explicit error if the host was not ready within 10 s; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready, invalid_model, invalid_effort, invalid_account, invalid_argument.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, effort: { type: "string", minLength: 1, maxLength: 64 }, fast: { type: "boolean" }, account: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
+  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. model picks what the new session runs: for engine \"core\" (the default) it selects the configured provider connection — by connection id, its label, providerId/model, or a model id that connection offers — and an unknown or ambiguous value is refused with invalid_model, whose text lists the candidates; omit model to use the active connection. For \"codex\"/\"claude\" model is applied and confirmed on that engine before the session is shared: either id its catalog carries is accepted (the short alias or the full model id), and a value the account does not offer is refused with invalid_model, whose text lists the ids it does offer — never a silent switch to the engine default. Optional account (engine \"codex\" only) picks the Codex account the session runs on: a profile id or its label from Settings → Codex; an unknown or ambiguous value is refused with invalid_account, whose text lists the candidates; omit it to start on the account marked as default. Optional effort sets the session's reasoning effort for the whole session (a string; the allowed values are model-dependent, so there is no fixed list here) — it is validated exactly against the selected model's advertised levels and an unsupported or malformed value is refused with invalid_effort, whose text names the engine, model, requested value and the complete allowed list; a model that advertises no levels refuses every explicit effort. Omitting effort keeps the engine's own default and the connection's settings. Optional fast (Codex only) enables or disables Fast mode for this session; Fast is quicker but consumes the usage limit faster. Optional firstMessage is delivered like send_message next_turn and returns messageId (explicit error, naming the session and tab ids, if the host was not ready within 10 s or the delivery failed; the tab exists then). Errors start with a code: not_allowed, project_not_enabled (the project's \"Allow agents to open tasks here\" is off), not_trusted, folder_not_found, rate_limited, too_many, not_ready, invalid_model, invalid_effort, invalid_account, invalid_argument.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, effort: { type: "string", minLength: 1, maxLength: 64 }, fast: { type: "boolean" }, account: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
   { name: "close_session", description: "Close a shared tab opened by create_session, through the same path as closing it in the UI. A running turn must be stopped with cancel_turn first. Errors start with a code: not_allowed (including env-file mode), not_found (unknown, closing or not shared), not_agent_opened (user tab), busy (running turn or host not ready), last_tab (open another tab first).", inputSchema: { type: "object", properties: { sessionId: { type: "string", minLength: 1 } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
@@ -152,6 +153,13 @@ export interface CommunicationServerOptions {
   userData: string;
   /** Per-session exposure gate, read on every request (live switch changes need no restart). Absent = every session. */
   isSessionExposed?: (sessionId: string) => boolean;
+  /**
+   * Per-project switch ("Agents may open tasks here"), read on every request.
+   * When present it gates listing, status, send_message, create_session and
+   * message status for every session whose folder is not an enabled project.
+   * Absent (legacy env-file mode, standalone embedders) = no project gate.
+   */
+  isProjectEnabled?: (workspace: string) => boolean;
   /** Session handle of a session (main-owned). Absent = `list_sessions` carries no `handle` key at all. */
   handleOf?: (sessionId: string) => string | undefined;
   /** Delay between host polls inside wait_for_result (tests shorten it). */
@@ -297,15 +305,23 @@ export async function startCommunicationServer(options: CommunicationServerOptio
    * reconciliation timer passes false, so an idle server never resolves a
    * missing path.
    */
+  /**
+   * One project identity: the switch of a session is the switch of its canonical project folder, the
+   * same one the sidebar uses (the project root of a worktree, else the workspace).
+   */
+  const projectOn = (tab: { workspace: string; projectRoot?: string }): boolean =>
+    !options.isProjectEnabled || options.isProjectEnabled(tab.projectRoot ?? tab.workspace);
   const tabs = async (retryMissing: boolean) => {
     const result = [];
     // One re-resolution per request at most, and none while every entry is present.
     if (retryMissing && unresolved.size > 0) await resolveMissing();
     for (const tab of options.manager.listTabs()) {
-      if (!restricted) { if (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) result.push(tab); continue; }
+      if (options.isSessionExposed && !options.isSessionExposed(tab.sessionId)) continue;
+      if (!projectOn(tab)) continue;
+      if (!restricted) { result.push(tab); continue; }
       let path: string;
       try { path = await resolvePath(tab.workspace); } catch { continue; }
-      if (allowed.has(path) && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId))) result.push(tab);
+      if (allowed.has(path)) result.push(tab);
     }
     const current = new Map(options.manager.listTabs().map((tab) => [tab.sessionId, tab]));
     return result.flatMap((tab) => {
@@ -313,15 +329,27 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       return latest && latest.workspace === tab.workspace && (!options.isSessionExposed || options.isSessionExposed(tab.sessionId)) ? [latest] : [];
     });
   };
+  /**
+   * Why a session id is not reachable: the cases an agent must tell apart to know what to flip.
+   * The legacy env-file mode (no project switch) keeps its single combined text.
+   */
+  const unreachable = async (sessionId: string): Promise<Error> => {
+    if (!options.isProjectEnabled) return new Error("Session unavailable or outside authorized workspace");
+    const tab = options.manager.listTabs().find((t) => t.sessionId === sessionId);
+    if (!tab) return new Error("not_found: no open session with this id");
+    if (options.isSessionExposed && !options.isSessionExposed(sessionId)) return new Error("not_exposed: this session is not shared with external agents (its Sessions API switch is off)");
+    if (!projectOn(tab)) return new Error(`project_not_enabled: the project ${tab.projectRoot ?? tab.workspace} is not enabled for agents ('Agents may open tasks here' is off)`);
+    return new Error("Session unavailable or outside authorized workspace");
+  };
   const requireSession = async (sessionId: string) => {
     const tab = (await tabs(true)).find((t) => t.sessionId === sessionId);
-    if (!tab) throw new Error("Session unavailable or outside authorized workspace");
+    if (!tab) throw await unreachable(sessionId);
     return tab;
   };
   const terminalState = (tab: { missingWorkspace?: boolean; hostFailure?: unknown }) =>
     tab.missingWorkspace ? "missing_workspace" : tab.hostFailure ? "crash_looped" : undefined;
   const publicTab = (tab: Awaited<ReturnType<typeof requireSession>>) => {
-    const { activityState, activitySnapshot, ...rest } = tab;
+    const { activityState, activitySnapshot, projectRoot: _projectRoot, ...rest } = tab;
     return { ...rest, ...activitySnapshot, state: terminalState(tab) ?? activityState ?? "idle" };
   };
   const resolveStatus = async (tab: Awaited<ReturnType<typeof requireSession>>) => {
@@ -547,6 +575,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         let resolved: string;
         try { resolved = await resolvePath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
         if (restricted && !(await isAllowed(resolved))) throw createRefusal("not_allowed");
+        if (options.isProjectEnabled && !options.isProjectEnabled(resolved)) throw createRefusal("project_not_enabled", resolved);
         const create = async () => {
           let created: CreateSessionOutcome;
           try {
@@ -594,6 +623,11 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         const { messageId } = statusSchema.parse(raw); const record = messages.get(messageId);
         if (!record) throw new Error("Message unavailable");
         if (options.isSessionExposed && !options.isSessionExposed(record.envelope.recipientSessionId)) throw new Error("Message unavailable");
+        // Records saved before the project root was stored name only the workspace, which for a worktree
+        // is not the project: a live session resolves to its current project, a closed one keeps the workspace.
+        const recordLive = options.manager.listTabs().find((t) => t.sessionId === record.envelope.recipientSessionId);
+        const recordProject = record.projectRoot ?? (recordLive !== undefined ? recordLive.projectRoot ?? recordLive.workspace : record.workspace);
+        if (recordProject && options.isProjectEnabled && !options.isProjectEnabled(recordProject)) throw new Error(`project_not_enabled: the project ${recordProject} is not enabled for agents`);
         if (record.workspace) { if (restricted && !(await isAllowed(record.workspace))) throw new Error("Message outside authorized workspace"); }
         else await requireSession(record.envelope.recipientSessionId);
         if (!await markLostGeneration(record)) {

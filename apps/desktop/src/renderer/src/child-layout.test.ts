@@ -621,9 +621,55 @@ describe("withLiveChildCounters (F11: a detached child's counters come off its o
     const transcript: TranscriptBlock[] = [toolCall("a", "Read")];
     expect(withLiveChildCounters(zeroCard, null)).toBe(zeroCard);
     const settled: SubagentSubStatus = { ...zeroCard, final: { status: "completed", durationMs: 10 } };
-    expect(withLiveChildCounters(settled, { transcript, modelTurns: 0, running: true })).toBe(settled);
+    expect(withLiveChildCounters(settled, { transcript, modelTurns: 0, running: false })).toBe(settled);
     const ahead: SubagentSubStatus = { ...zeroCard, toolCalls: 5, turns: 3, lastTool: "Edit" };
     expect(withLiveChildCounters(ahead, { transcript, modelTurns: 0, running: true })).toBe(ahead);
+  });
+
+  it("reopens a settled card while the child's live store runs, and keeps it settled once idle", () => {
+    const transcript: TranscriptBlock[] = [toolCall("a", "Read"), toolCall("b", "Edit")];
+    const settled: SubagentSubStatus = {
+      ...zeroCard,
+      turns: 562,
+      toolCalls: 600,
+      final: { status: "max_turns", durationMs: 3_115_000 },
+    };
+    const running = withLiveChildCounters(settled, { transcript, modelTurns: 0, running: true });
+    expect(running.final).toBeNull();
+    expect(running.turns).toBe(562);
+    expect(childBadgeKind(running)).toBe("running");
+    expect(withLiveChildCounters(settled, { transcript, modelTurns: 0, running: true }, true).final).toBeNull();
+    const idle = withLiveChildCounters(settled, { transcript, modelTurns: 0, running: false });
+    expect(idle).toBe(settled);
+    expect(childBadgeKind(idle)).toBe("done");
+  });
+
+  it("an idle child whose newest loop end differs from the settled card shows the newer outcome", () => {
+    const settled: SubagentSubStatus = { ...zeroCard, turns: 562, toolCalls: 600, final: { status: "max_turns", durationMs: 3_115_000 } };
+    const transcript: TranscriptBlock[] = [toolCall("a", "Read"), loopEnd("e1", "max_turns", 562, 3_115_000), loopEnd("e2", "completed", 4, 9_000)];
+    const idle = withLiveChildCounters(settled, { transcript, modelTurns: 0, running: false });
+    expect(idle.final).toEqual({ status: "completed", durationMs: 3_124_000 });
+    expect(childBadgeKind(idle)).toBe("done");
+    // A transcript that is behind the card (history not replayed yet) never overrides it.
+    const behind = withLiveChildCounters(settled, { transcript: [loopEnd("e0", "completed", 3, 1)], modelTurns: 0, running: false });
+    expect(behind).toBe(settled);
+  });
+
+  it("an equal turn count keeps the card, a continuation with more turns shows the new outcome", () => {
+    const settled: SubagentSubStatus = { ...zeroCard, turns: 5, final: { status: "completed", durationMs: 10 } };
+    const replayed: TranscriptBlock[] = [loopEnd("e1", "max_turns", 5, 20)];
+    expect(withLiveChildCounters(settled, { transcript: replayed, modelTurns: 5, running: false })).toBe(settled);
+    const continued: TranscriptBlock[] = [...replayed, loopEnd("e2", "max_turns", 2, 5)];
+    expect(withLiveChildCounters(settled, { transcript: continued, modelTurns: 7, running: false }).final).toEqual({ status: "max_turns", durationMs: 25 });
+  });
+
+  it("a settled card stays running while the idle child has a permission request pending", () => {
+    const settled: SubagentSubStatus = { ...zeroCard, turns: 2, final: { status: "completed", durationMs: 10 } };
+    const transcript: TranscriptBlock[] = [toolCall("a", "Read"), loopEnd("e1", "completed", 2, 10)];
+    const waiting = withLiveChildCounters(settled, { transcript, modelTurns: 2, running: false, permissionPending: true });
+    expect(waiting.final).toBeNull();
+    expect(childBadgeKind(waiting)).toBe("running");
+    expect(withLiveChildCounters(settled, { transcript, modelTurns: 2, running: false, permissionPending: false })).toBe(settled);
   });
 
   const loopEnd = (id: string, reason: string, turns: number, durationMs?: number): TranscriptBlock =>

@@ -70,7 +70,7 @@ export interface CommunicationIpcDeps {
   /** per-session External approvals switch. Only this module writes it. */
   approvals: SessionAccessStore;
   /** Live tab list (root and child). Only tabId and sessionId are read here. */
-  tabs(): ReadonlyArray<{ tabId: string; sessionId: string }>;
+  tabs(): ReadonlyArray<{ tabId: string; sessionId: string; workspace?: string; projectRoot?: string }>;
   /** The legacy env override; when set, every write is refused and the pane is read-only. */
   env(): string | undefined;
   /** Native folder dialog owned by main; resolves to an absolute path or undefined when cancelled. */
@@ -144,7 +144,9 @@ async function viewOf(deps: CommunicationIpcDeps, block: Block): Promise<Communi
     agentProjects: agentProjectRows(deps),
     tabs: deps.tabs().map((tab) => {
       const handle = deps.sessions.getHandle(tab.sessionId);
-      return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), approvals: deps.approvals.isExposed(tab.sessionId), ...(handle !== undefined ? { handle } : {}) };
+      const projectRoot = tab.projectRoot ?? tab.workspace;
+      const projectEnabled = projectRoot === undefined || deps.agentProjects.isAllowed(projectRoot);
+      return { tabId: tab.tabId, enabled: deps.sessions.isExposed(tab.sessionId), approvals: deps.approvals.isExposed(tab.sessionId), projectEnabled, ...(projectRoot !== undefined ? { projectRoot } : {}), ...(handle !== undefined ? { handle } : {}) };
     }),
   };
 }

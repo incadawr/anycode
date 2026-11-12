@@ -7,8 +7,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Sessions API access is now decided by two switches: the project's "Allow agents to open tasks here" and the session's own switch, so agents need the project switch on as well. The separate Allowed folders setting is gone. On first start the folders you had listed (a worktree folder counts as its project) are switched on as projects; with an empty list, the project of each session shared at that moment is switched on. This also lets agents open tasks there, so switch a project off if you do not want that. A listed folder that is missing, or a session that cannot be found, is retried on the next starts.
+- Sessions API refusals now say why: `not_found`, `not_exposed` (the session's switch is off) or `project_not_enabled`. A shared session whose project is off says so in its environment menu, with an Enable button.
+
 ### Fixed
 
+- A subagent row no longer looks finished while the child session is running again or waiting for a permission; it shows as running and counts in the roster, and shows the new outcome once the child goes idle.
 - A queued system report chip in the composer keeps its message text visible (badges wrap instead of squeezing it out), shows the full text on hover, and says "delivered after this turn" while pending instead of a failure-sounding warning.
 - Rendered Markdown in the preview dock no longer blanks to "Preview hidden" when a popover or menu opens, and screenshots of it work while one is open. Web previews still hide behind overlays.
 - The OpenCode Go subscription usage block on the connection tile now uses the same smaller, dimmer text as the other providers' quota line.

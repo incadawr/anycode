@@ -182,17 +182,35 @@ that session. Open the tab's environment menu and tick the checkbox under
 ## Enable it in Settings
 
 1. Open **Settings → Sessions API** and turn on **Enable local Sessions API**.
-2. Optional: **Add folder…** to limit sharing to exact folders. The picker is the
-   only way to add one. Subfolders are not included, and symlinks are resolved.
-   With no folder, only the sessions you switch on are shared.
+2. Turn on **Allow agents to open tasks here** for each project agents may work
+   in (the project's **⋯** menu in the sidebar). This one switch gates listing,
+   status, `send_message` and `create_session` for every session in that
+   project folder (a worktree session follows its project's switch). A session in a
+   project that is off is invisible to agents.
 3. Optional: set a **Port**. Leave it empty for a random free port.
 4. Check the status line. It reads `Listening · 127.0.0.1:PORT · N shared` when
    the endpoint is up, where N is the number of shared sessions.
 
 Changes apply immediately. Open client connections are dropped when you change
-the toggle, the port, the folders or the token.
+the toggle, the port or the token.
 
 ## Share a session
+
+Two switches decide whether an agent can reach a session, and both must be on:
+the project's **Allow agents to open tasks here** and the session's own **Sessions
+API** row (**Shared with external agents**), which stays the finer opt-out inside
+an enabled project. When the session is shared but its project is off, the
+session's environment menu says **Project not enabled for agents** and offers
+**Enable**. The old Settings **Allowed folders** list no longer gates anything. On the
+first start after this change, each folder in it is switched on as a project (a
+worktree folder switches on its project root); with an empty list, the project of
+each session shared at that moment is switched on, a child session through its
+root session. This also lets agents open tasks in those projects, because that is
+the same switch; switch a project off if you do not want that. A folder that does
+not exist yet, or a session that cannot be found, is retried on the next starts
+and given up on after 10; a project you switch off is never switched on again by
+the migration. **Enable** in a worktree session's menu switches on the project the session
+belongs to.
 
 Every tab has a **Sessions API** row in its environment menu. Switch it on to
 share that session. Once it is on, you can give the session a **handle** in the
@@ -249,9 +267,9 @@ AnyCode strips first. `firstMessage` is delivered like `send_message` with
 `mode: next_turn` and the reply carries its `messageId`, so `wait_for_result`
 works on it. If the new tab's host is not ready within 10 seconds, the reply
 omits `messageId`; the tab exists, so send the message yourself with
-`send_message`. If the new tab ends up outside the folders list (the list
-changed while the tab was opening), `firstMessage` is refused with
-`not_allowed` naming the tab's ids instead of being silently dropped.
+`send_message`. If the new tab ends up in a project that is off (the switch
+changed while the tab was opening), `firstMessage` is not delivered and the error
+names the tab's ids instead of silently dropping it.
 
 `model` picks what the new session runs:
 
@@ -386,8 +404,9 @@ Rules and limits:
   follows the tabs still open in AnyCode.
   Only creations that succeed count towards the 5-per-minute limit; refused
   attempts never consume it.
-- A refusal is an error whose text starts with a code: `not_allowed` (the
-  project switch is off, or the folders list excludes it), `not_trusted`,
+- A refusal is an error whose text starts with a code: `project_not_enabled` (the
+  project switch is off; the text names the folder), `not_allowed` (creation is
+  unavailable, for example in the legacy env-file mode), `not_trusted`,
   `folder_not_found`, `rate_limited`, `too_many`, `not_ready` (the engine is not
   signed in, or the tab limit is reached, or the new session could not confirm
   its model or effort), `invalid_model` (`model` does not select exactly one
@@ -501,8 +520,8 @@ Services that bridge an outside channel use the same tools. See the
 - Local only. The server binds `127.0.0.1` and refuses browser origins.
 - Every holder of the token acts as the same local supervisor. It can message
   the shared sessions. Treat the discovery file as a credential.
-- The folder list is an outer boundary, and the per-session switch is the
-  inner one. A session must pass both when folders are set.
+- The project switch is the outer boundary, and the per-session switch is the
+  inner one. A session must pass both.
 - A token holder can open new tabs only in projects where you switched on
   **Allow agents to open tasks here**, only in trusted folders, and within the
   limits above.
@@ -527,10 +546,12 @@ Services that bridge an outside channel use the same tools. See the
 |---|---|
 | Status reads **Off** | The toggle is off. Turn it on. |
 | Status reads **Error: the port is already in use** | Another program holds the port. Pick another port, or leave it empty. |
-| Status reads **Error: a folder in the list is no longer available** | The folder was moved or deleted. Remove it, or re-add it. |
 | Status reads **Error: the server could not start** | Check the AnyCode log. The log names the problem without the token. |
-| `list_sessions` returns no sessions | No session is shared yet. Switch on the session's **Sessions API** row. |
-| `create_session` says `not_allowed` | Tick **Allow agents to open tasks here** in the project's sidebar **⋯** menu. |
+| `list_sessions` returns no sessions | No session is both shared and in an enabled project. Switch on the session's **Sessions API** row and the project's **Allow agents to open tasks here**. |
+| `get_session_status` or `send_message` says `not_exposed` | The session's **Sessions API** row is off. Switch it on. |
+| `get_session_status` or `send_message` says `project_not_enabled` | The project is off. Tick **Allow agents to open tasks here** in the project's sidebar **⋯** menu, or press **Enable** in the session's environment menu. |
+| Either call says `not_found` | No open session has that id. |
+| `create_session` says `project_not_enabled` | Tick **Allow agents to open tasks here** in the project's sidebar **⋯** menu. |
 | `create_session` says `not_trusted` | Trust the folder first (Settings → Permissions). |
 | `create_session` says `rate_limited` or `too_many` | At most 5 per minute and 8 agent-opened tabs alive. Wait, or close some. |
 | `create_session` says `invalid_model` | For `core`, the `model` value matches no configured provider connection, or more than one; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. For `codex`/`claude`, the account does not offer that model; retry with one of the ids the error lists, or omit `model`. |
@@ -546,4 +567,4 @@ See also [configuration.md](configuration.md) and
 
 When a session host stops after repeated failures, `get_session_status` returns `state: "crash_looped"`, its engine, and a safe `hostFailure` summary without model or effort details. `list_sessions` reports the same state and includes the same summary.
 
-When the workspace folder is missing and the session passes the authorized-workspace check, `get_session_status` returns `state: "missing_workspace"`, its engine, and `missingWorkspace: true`, without model or effort details; a retained `hostFailure` summary may also be present. `list_sessions` reports the same state and retains `missingWorkspace: true`. With a restricted workspace list, a missing folder is refused as unavailable or outside the authorized workspace.
+When the workspace folder is missing and the session is reachable (shared, in an enabled project), `get_session_status` returns `state: "missing_workspace"`, its engine, and `missingWorkspace: true`, without model or effort details; a retained `hostFailure` summary may also be present. `list_sessions` reports the same state and retains `missingWorkspace: true`.

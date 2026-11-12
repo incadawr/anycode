@@ -345,10 +345,13 @@ Tool errors come back with `"isError": true` and this text:
 
 | Text | Meaning and what the bridge should do |
 |---|---|
-| `Session unavailable or outside authorized workspace` | The session is unknown, not shared, or outside the allowed folders. The three cases give the same text on purpose. Treat the handle as gone; tell the user. |
+| `Session unavailable or outside authorized workspace` | Legacy env-file mode only: the session is unknown, not shared, or outside the allowed folders, all with the same text. Treat the handle as gone; tell the user. |
+| `not_found: ...` | No open session has that id. Treat the handle as gone; tell the user. |
+| `not_exposed: ...` | The session exists but its Sessions API switch is off. Tell the user to switch it on (session menu). |
+| `project_not_enabled: ...` | The session's project is off ("Allow agents to open tasks here"; the text names the folder). Tell the user to enable the project (sidebar project menu, or Enable in the session menu). |
 | `External approval is off for this session` | `list_pending_approvals` or `answer_approval` on a session whose External approvals switch is off. Tell the user to switch it on in AnyCode (session menu), or to answer in AnyCode. Nothing was called on the host. |
 | `Message unavailable` | No such message, or it belongs to another session. |
-| `Message outside authorized workspace` | `get_message_status` for a message whose folder is no longer allowed. |
+| `Message outside authorized workspace` | `get_message_status` for a message whose folder is outside the env-file workspaces (legacy mode). A project that is off answers `project_not_enabled`. |
 | `Idempotency key reused with different input` | Same key, different content. Use a new key for new content. |
 | `Message ledger full; restart with a new discovery file after archiving ledger` | Ten thousand messages are stored. Stop sending and tell the user. |
 | `Unknown tool` | The tool name is not one of the six. |

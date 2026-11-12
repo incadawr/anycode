@@ -22,6 +22,38 @@ subdirectories and unrelated workspaces are not implicitly authorized. A session
 that relocates into a worktree outside the allowlist becomes unavailable until
 that path is explicitly allowed in a subsequent launch.
 
+## Access model (Settings mode)
+
+In Settings mode the per-project switch ("Allow agents to open tasks here",
+`communication-agent-projects.json`) gates listing, status, `send_message`,
+`get_message_status` and `create_session` for sessions in that project folder;
+the switch of a session is the switch of its one canonical project folder, the
+folder of the sidebar's project row: a worktree session uses its project root and
+has no switch of its own, and the same identity is used for the message ledger,
+so a message sent to a worktree stays readable while its root is on. The per-session switch ("Shared with external agents",
+`communication-sessions.json`) is the finer opt-out. `communication.workspaces`
+is no longer read as a gate. On the first start after the change the item list is
+fixed and kept in `communication-workspaces-migrated.json`: each listed folder,
+mapped to its canonical project folder (a worktree path maps to its project root
+through the stored sessions), or, for an empty list (which used to mean any
+folder), the canonical project of each session shared at that moment (a child
+session through its root session, else its own recorded folders). Each item is
+switched on and removed from the state once processed, so a later start never
+touches it again and a project the user switched off stays off. An item whose
+folder does not exist or whose session cannot be resolved stays pending and is
+retried at the next starts; after 10 starts it is dropped with one log line. The
+store keeps only switched-on projects, so a past OFF is not visible to the first
+pass; the migration also enables `create_session` there. An older marker file
+without a pending list counts as a finished pass. The saved value stays on disk.
+
+A session that cannot be reached answers a distinct code instead of one combined
+text: `not_found` (no open session with that id), `not_exposed` (session switch
+off), `project_not_enabled` (project switch off, names the folder). `create_session`
+in a project that is off answers `create_session project_not_enabled`. The
+environment-variable file mode below keeps its exact workspace allowlist and its
+single combined text, `Session unavailable or outside authorized workspace`, for
+every refusal.
+
 AnyCode binds only `127.0.0.1`, chooses a free port when `port` is zero, and writes
 `{url, token, workspaces}` to the discovery file with mode `0600`. Its parent
 folder should be private. The file defaults to `communication.json` under the

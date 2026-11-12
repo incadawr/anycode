@@ -8,6 +8,7 @@ import {
   regenerateEnabled,
   sessionSwitchDisabledReason,
   sessionSwitchDetail,
+  sessionEffectiveAccess,
   sessionsApiStatusLine,
   sessionsApiStatusTone,
   settingsEditable,
@@ -116,10 +117,10 @@ describe("Sessions API pane discoverability copy (audit D9)", () => {
   it("the shared-sessions hint also names the project switch that gates new agent-opened tasks", () => {
     // The exact label the sidebar project menu renders — one constant, so copy and menu cannot drift.
     expect(SESSIONS_API_SHARE_HINT).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}”`);
-    const sentence = SESSIONS_API_SHARE_HINT.slice(SESSIONS_API_SHARE_HINT.indexOf("Agents may open"));
-    expect(sentence).toMatch(/open new tasks in a project only when/);
+    const sentence = SESSIONS_API_SHARE_HINT.slice(SESSIONS_API_SHARE_HINT.indexOf("Agents reach"));
+    expect(sentence).toMatch(/open new tasks, only in a project whose/);
     expect(sentence).toMatch(/sidebar project ⋯ menu/);
-    expect(sentence).toMatch(/is on/);
+    expect(sentence).toMatch(/switch is on/);
   });
 
   it("the pane subtitle mentions the per-session switch (sharing is opt-in per session)", () => {
@@ -136,5 +137,18 @@ describe("session handle wording", () => {
     expect(handleErrorText("unknown_tab")).toBe("That session is no longer open.");
     expect(handleErrorText("io_error")).toBe("The handle could not be saved.");
     expect(handleErrorText(undefined)).toBeNull();
+  });
+});
+
+describe("effective Sessions API state in the environment menu", () => {
+  it("shared + project on shows the plain shared state", () => {
+    expect(sessionEffectiveAccess(true, true)).toEqual({ detail: sessionSwitchDetail(true), blockedByProject: false });
+  });
+  it("shared + project off says the project blocks it and offers the project action", () => {
+    expect(sessionEffectiveAccess(true, false)).toEqual({ detail: "Shared, but project not enabled for agents", blockedByProject: true });
+  });
+  it("not shared never reports a project block, whatever the project switch says", () => {
+    expect(sessionEffectiveAccess(false, false)).toEqual({ detail: sessionSwitchDetail(false), blockedByProject: false });
+    expect(sessionEffectiveAccess(false, true).blockedByProject).toBe(false);
   });
 });

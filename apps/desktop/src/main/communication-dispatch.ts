@@ -15,7 +15,7 @@ function projectResponse(raw: unknown): Pick<AgentDelivery, "state" | "detail" |
 
 export function createCommunicationDispatch(options: {
   ledger: Awaited<ReturnType<typeof createCommunicationLedger>>;
-  authorize: (sessionId: string) => Promise<{ workspace: string; pid?: number | null }>;
+  authorize: (sessionId: string) => Promise<{ workspace: string; projectRoot?: string; pid?: number | null }>;
   resolvePath: (path: string) => Promise<string>;
   post: (sessionId: string, envelope: AgentEnvelope, workspace: string) => Promise<unknown>;
   markLostGeneration: (record: CommunicationRecord) => Promise<unknown>;
@@ -61,7 +61,8 @@ export function createCommunicationDispatch(options: {
     const sender = principal.kind === "external" ? "authenticated-local-supervisor" : `session:${principal.sessionId}`;
     const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
     if (options.nativeSessionsEnabled && principal.kind === "session") envelope.principal = { ...principal };
-    const record: CommunicationRecord = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
+    const projectRoot = recipient.projectRoot;
+    const record: CommunicationRecord = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, ...(projectRoot !== undefined && projectRoot !== workspace ? { projectRoot } : {}), hostPid: recipient.pid };
     if (principal.kind === "session") record.principal = { ...principal };
     admit?.(record); // Synchronous reservation shares the dedup boundary.
     messages.set(envelope.messageId, record);
