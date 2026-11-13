@@ -32,6 +32,7 @@ import {
   hasMainAuthLinkProfile,
   isCodexVersionWithinSupportedRange,
   loginFailureMessage,
+  signInPendingLabel,
   manifestRefreshNotice,
   pickBinaryFailureMessage,
   resolveAccountRows,
@@ -773,5 +774,13 @@ describe("codexSystemRowVisibility (R1 fix: the Default marker survives the Syst
   it("follows the plan when the row is visible and a profile is the default", () => {
     const plan: CodexAccountRowPlan = { showSystemRow: true, currentEnvironmentProfileId: null };
     expect(codexSystemRowVisibility(plan, "account-a")).toEqual({ showSystemRow: true, offerMakeSystemDefault: false });
+  });
+});
+
+describe("signInPendingLabel", () => {
+  it("names the flow that is running", () => {
+    expect(signInPendingLabel("device")).toBe("Waiting for code confirmation…");
+    expect(signInPendingLabel("browser")).toBe("Waiting for browser sign-in…");
+    expect(signInPendingLabel(null)).toBe("Waiting for code confirmation…");
   });
 });
