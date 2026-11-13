@@ -663,9 +663,8 @@ function CodexProfileRow(props: CodexProfileRowProps) {
       ))}
       {props.signingIn && props.deviceCode && (
         <div className="codex-profile-device" role="status">
-          <div>
-            Open <span className="codex-profile-device-url">{props.deviceCode.verificationUrl}</span> and enter this code:
-          </div>
+          <div>Open this page and enter the code:</div>
+          <div className="codex-profile-device-url">{props.deviceCode.verificationUrl}</div>
           <code className="codex-profile-device-code">{props.deviceCode.userCode}</code>
           <div className="settings-field-row">
             <Button size="sm" type="button" onClick={props.onOpenDevicePage}>Open page</Button>
@@ -936,6 +935,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   async function createAndSignIn(request: CodexProfileCreateRequest): Promise<void> {
     setNotice(null);
     setDeviceCode(null);
+    let autoSignInId: string | null = null;
     setBusy(true);
     try {
       const created = await bridge.createProfile(request);
@@ -944,25 +944,11 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
         return;
       }
       await refreshAll();
-      if (shouldAutoSignIn(request)) {
-        setSigningInId(created.profile.id);
-        setSigningInMode("device");
-        try {
-          const login = await bridge.loginStart(created.profile.id, "device");
-          if (login.ok) {
-            setReportsById((prev) => ({ ...prev, [created.profile.id]: login.snapshot.report }));
-          } else {
-            setNotice(loginFailureMessage(login.reason, login.detail));
-          }
-        } finally {
-          setSigningInId(null);
-          setSigningInMode(null);
-          setDeviceCode(null);
-        }
-      }
+      autoSignInId = shouldAutoSignIn(request) ? created.profile.id : null;
     } finally {
       setBusy(false);
     }
+    if (autoSignInId !== null) await signInProfile(autoSignInId, "device");
   }
 
   async function submitAddAccount(): Promise<void> {
