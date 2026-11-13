@@ -177,7 +177,7 @@ on 0.168.0 and 39/39 on 0.169.0 (macOS arm64).
 Live GUI smoke on 0.169.0 (isolated signed-in `CODEX_HOME`): run 1 passed 5/10
 and failed at step 5 ("second allowed command's sentinel file was not
 created": the model did not run the second approved command); run 2, same
-command and no code change, passed 10/10. Run 3: PENDING (to be filled in).
+command and no code change, passed 10/10. Run 3 (2026-11-14), same setup: 10/10. Recommended moved to 0.169.0.
 0.168.0 has contract coverage only, no live smoke, as with 0.163.x.
 
 ## Raising the ceiling / updating the pin
