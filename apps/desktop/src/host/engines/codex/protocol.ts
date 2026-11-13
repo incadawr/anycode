@@ -4,7 +4,7 @@
  * or event-to-AgentEvent translation is implied by these shapes.
  */
 
-export const SUPPORTED_CODEX_VERSION = "<0.168.0";
+export const SUPPORTED_CODEX_VERSION = "<0.170.0";
 
 export interface CodexVersion {
   major: number;
