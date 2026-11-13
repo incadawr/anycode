@@ -324,7 +324,7 @@ export class CodexRpcClient {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Codex did not answer in time (${method}, ${opts.timeoutMs >= 1_000 ? `${Math.round(opts.timeoutMs / 1_000)} s` : `${opts.timeoutMs} ms`}). The network or Codex may be slow — try Recheck.`));
+        reject(new Error(`Codex did not answer in time (${method}, ${opts.timeoutMs >= 1_000 ? `${Math.round(opts.timeoutMs / 1_000)} s` : `${opts.timeoutMs} ms`}). The network or Codex may be slow.`));
       }, opts.timeoutMs);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       try {
@@ -935,9 +935,10 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     }
     // Quotas are ADVISORY (cut §6.1 pull side): visible in Settings without a
     // single session, but a failing read never degrades a ready verdict. The
-    // read starts now and runs concurrently with the model list so a slow
-    // quota never delays the verdict; the no-op catch keeps a rejection that
-    // lands while models are still pending (or after they throw) handled.
+    // read starts now and runs concurrently with the model list, so the verdict
+    // waits at most max(models, quota bound) rather than their sum; the no-op
+    // catch keeps a rejection that lands while models are still pending (or
+    // after they throw) handled.
     const rateLimitsRequest = client
       .request<unknown>("account/rateLimits/read", undefined, { timeoutMs: rateLimitsTimeoutMs })
       .then((result): CodexRateLimits | undefined => projectCodexRateLimits(result, new Date().toISOString()))

@@ -433,27 +433,28 @@ describe("runCodexDoctor", () => {
     const started = Date.now();
     const report = await runCodexDoctor("/fake/codex", {
       trust: TRUSTED,
-      spawnImpl: fakeSpawn(["--rate-limits-delay=-1"]),
-      rateLimitsTimeoutMs: 600,
+      spawnImpl: fakeSpawn(["--model-list-delay=500", "--rate-limits-delay=-1"]),
+      rateLimitsTimeoutMs: 1_500,
     });
     expect(report.status).toBe("ready");
     expect(report.rateLimits).toBeUndefined();
     expect(report.error).toBeUndefined();
-    // The quota read ran concurrently with the model list: the run ends at the
-    // quota bound at the latest, not at models + quota.
-    expect(Date.now() - started).toBeLessThan(5_000);
+    // Two model pages take ~1000ms and the quota bound is 1500ms. Concurrent:
+    // the run ends at ~1500ms. Sequential would need ~2500ms.
+    expect(Date.now() - started).toBeLessThan(2_100);
   });
 
   it("starts the quota read before the model list finishes (concurrent, not sequential)", async () => {
     const started = Date.now();
     const report = await runCodexDoctor("/fake/codex", {
       trust: TRUSTED,
-      spawnImpl: fakeSpawn(["--model-list-delay=500", "--rate-limits-delay=500"]),
+      spawnImpl: fakeSpawn(["--model-list-delay=500", "--rate-limits-delay=1000"]),
     });
     expect(report.status).toBe("ready");
     expect(report.rateLimits).toBeDefined();
-    // two model pages x 500ms = 1000ms; a sequential quota read would add 500ms more.
-    expect(Date.now() - started).toBeLessThan(1_000 + 450 + 1_000);
+    // Two model pages take ~1000ms and the quota answers after 1000ms.
+    // Concurrent: ~1000ms. Sequential would need ~2000ms.
+    expect(Date.now() - started).toBeLessThan(1_700);
   });
 
   it("reports a readable error naming account/read when it never answers", async () => {
