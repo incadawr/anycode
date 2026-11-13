@@ -118,7 +118,7 @@ scripts. Managed installs can auto-upgrade to the recommended version; binaries
 you selected yourself are never changed.
 
 In AnyCode 0.0.90, the bundled Codex support range is `>=0.144.0 <0.170.0`,
-recommended 0.167.0. The support manifest refreshes at most every six hours.
+recommended 0.169.0. The support manifest refreshes at most every six hours.
 Read the pane for the current verdict and recommendation. Accepting risk for
 an unsupported version applies to that version only. Claude requires at least
 2.1.212; its doctor uses initialization rather than a model turn. AnyCode does
