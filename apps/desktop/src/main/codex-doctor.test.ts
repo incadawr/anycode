@@ -408,6 +408,60 @@ describe("runCodexDoctor", () => {
     expect(report.rateLimits).toBeUndefined();
   });
 
+  it("accepts an account/read slower than the local rpc bound while inside the account-read bound", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--account-read-delay=400"]),
+      rpcTimeoutMs: 200,
+      accountReadTimeoutMs: 3_000,
+    });
+    expect(report.status).toBe("ready");
+  });
+
+  it("accepts a model/list page slower than the local rpc bound while inside the page bound", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--model-list-delay=400"]),
+      rpcTimeoutMs: 200,
+      modelPageTimeoutMs: 3_000,
+    });
+    expect(report.status).toBe("ready");
+    expect(report.models?.length).toBe(2);
+  });
+
+  it("stays ready without rateLimits when the quota read never answers", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--rate-limits-delay=-1"]),
+      rateLimitsTimeoutMs: 300,
+    });
+    expect(report.status).toBe("ready");
+    expect(report.rateLimits).toBeUndefined();
+    expect(report.error).toBeUndefined();
+  });
+
+  it("sends the quota read before the last model/list page (concurrent, not sequential)", async () => {
+    const log = join(scratchDir, `requests-${Date.now()}.log`);
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn([`--request-log=${log}`]) });
+    expect(report.status).toBe("ready");
+    expect(report.rateLimits).toBeDefined();
+    const methods = readFileSync(log, "utf8").trim().split("\n");
+    expect(methods.filter((m) => m === "model/list")).toHaveLength(2);
+    expect(methods.indexOf("account/rateLimits/read")).toBeGreaterThan(-1);
+    expect(methods.indexOf("account/rateLimits/read")).toBeLessThan(methods.lastIndexOf("model/list"));
+  });
+
+  it("reports a readable error naming account/read when it never answers", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--account-read-delay=-1"]),
+      accountReadTimeoutMs: 300,
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toMatch(/did not answer in time/i);
+    expect(report.error).toContain("account/read");
+  });
+
   it("reports update_required for a version outside the supported range, without spawning app-server at all", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--bad-version"]) });
     expect(report).toEqual({ status: "update_required", version: "0.99.0", supportedRange: BUNDLED_SUPPORTED_RANGE });

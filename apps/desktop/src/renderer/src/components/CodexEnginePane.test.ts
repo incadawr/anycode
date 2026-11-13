@@ -306,8 +306,8 @@ describe("loginFailureMessage", () => {
   // the pane must not swallow main's explanation — the generic
   // "Try again" line made every distinct failure look identical.
   it("shows main's own failure detail instead of the generic line", () => {
-    expect(loginFailureMessage("failed", "the login request failed: codex doctor request timed out: account/login/start")).toContain(
-      "codex doctor request timed out: account/login/start",
+    expect(loginFailureMessage("failed", "the login request failed: Codex did not answer in time (account/login/start, 30 s). The network or Codex may be slow.")).toContain(
+      "Codex did not answer in time (account/login/start, 30 s). The network or Codex may be slow.",
     );
     expect(loginFailureMessage("timeout", "the login did not complete within 300s")).toContain("did not complete within 300s");
   });

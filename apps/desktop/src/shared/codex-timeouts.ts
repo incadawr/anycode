@@ -78,18 +78,27 @@ export const CODEX_BRIDGE_SETTLE_MS = 1_000;
 export const CODEX_VERSION_PREFLIGHT_TIMEOUT_MS = 15_000;
 
 /**
- * Doctor-only per-RPC bounds (post-C0 review MED-1 fix): the doctor is an
- * interactive Settings-card diagnostic, not the patient host engine boot
- * sequence — it must NOT reuse `CODEX_BOOT_RPC_TIMEOUT_MS`/
- * `CODEX_MODEL_LIST_PAGE_TIMEOUT_MS` (15s each), because those are sized for
- * the engine lane's tolerance, not doctor UX, AND because `CODEX_DOCTOR_
- * WATCHDOG_MS` wraps ALL of the doctor's RPC phases — an outer watchdog
- * smaller than the sum of the inner per-RPC deadlines it wraps would kill a
- * valid-but-slow call before that call's OWN allowed deadline, which is
- * exactly the contradiction this pair of constants closes. `initialize` and
- * `account/read` each get one round trip at this bound.
+ * Doctor bound for LOCAL app-server round trips: `initialize` and the login
+ * flow's `initialize` / `account/login/cancel`. These never touch the network;
+ * a cold `initialize` measured 1.7s on 0.144.3, so 10s leaves tail headroom.
+ * `account/read`, `model/list` and the quota read reach the ChatGPT backend and
+ * have their own, wider bounds below. The overall `CODEX_DOCTOR_WATCHDOG_MS`
+ * must stay at least as large as the sum of the inner bounds it wraps.
  */
-export const CODEX_DOCTOR_RPC_TIMEOUT_MS = 3_000;
+export const CODEX_DOCTOR_RPC_TIMEOUT_MS = 10_000;
+
+/**
+ * Doctor `account/read`: the server refreshes/validates the account over the
+ * network before answering (measured 7.1-8.7s on 0.167). Same sizing as
+ * `CODEX_LOGIN_RPC_TIMEOUT_MS`.
+ */
+export const CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS = 30_000;
+
+/**
+ * Doctor advisory `account/rateLimits/read`: runs concurrently with the model
+ * list and never fails the verdict (measured 6.5-20.7s).
+ */
+export const CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS = 20_000;
 
 /**
  * `account/login/start` — the login's ONE RPC that is not a local app-server
@@ -106,25 +115,26 @@ export const CODEX_DOCTOR_RPC_TIMEOUT_MS = 3_000;
  */
 export const CODEX_LOGIN_RPC_TIMEOUT_MS = 30_000;
 
-/** Doctor-only per-page `model/list` bound (see `CODEX_DOCTOR_RPC_TIMEOUT_MS` above) — tighter than the engine's page bound for the same interactive-UX reason. */
-export const CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS = 2_000;
+/** Doctor per-page `model/list` bound: a network call (measured ~5s on 0.144.3), equal to the engine's page bound. */
+export const CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS = 15_000;
 
 /**
- * `main/codex-doctor.ts`'s own overall bounded run (design §2(g)): version
- * preflight -> spawn -> initialize -> account/read -> model/list (paginated,
- * up to CODEX_MODEL_LIST_MAX_PAGES), end to end. Sized to the WORST-CASE sum
- * of every phase it wraps (asserted in the paired test — MED-1 fix, post-C0
- * review): `CODEX_VERSION_PREFLIGHT_TIMEOUT_MS` + 2x`CODEX_DOCTOR_RPC_
- * TIMEOUT_MS` (initialize, account/read) + `CODEX_MODEL_LIST_MAX_PAGES`x
- * `CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS` = 15000 + 6000 + 10000 = 31000,
- * plus headroom for spawn/scheduling overhead. `close()`'s own bounded
- * teardown (`CODEX_TEARDOWN_TOTAL_BUDGET_MS`) runs AFTER this watchdog
- * settles (in the caller's `finally`), not inside it, so it is sized
- * independently and only needs to exceed the teardown budget (still true at
- * this value) — the watchdog and the teardown budget never compete for the
- * same clock.
+ * `main/codex-doctor.ts`'s own overall bounded run: version preflight -> spawn
+ * -> initialize -> account/read -> model/list (paginated, up to
+ * CODEX_MODEL_LIST_MAX_PAGES) running concurrently with the advisory quota
+ * read, end to end. Sized to the WORST-CASE sum of every phase it wraps
+ * (asserted in the paired test): preflight 15000 + initialize 10000 +
+ * account/read 30000 + max(5 pages x 15000, quota 20000) + 5000 headroom for
+ * spawn/scheduling = 135000. `close()`'s own bounded teardown
+ * (`CODEX_TEARDOWN_TOTAL_BUDGET_MS`) runs AFTER this watchdog settles (in the
+ * caller's `finally`), so the two never compete for the same clock.
  */
-export const CODEX_DOCTOR_WATCHDOG_MS = 32_000;
+export const CODEX_DOCTOR_WATCHDOG_MS =
+  CODEX_VERSION_PREFLIGHT_TIMEOUT_MS +
+  CODEX_DOCTOR_RPC_TIMEOUT_MS +
+  CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS +
+  Math.max(CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS * CODEX_MODEL_LIST_MAX_PAGES, CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS) +
+  5_000;
 
 // ── teardown recipe (design §2(b) / NOTES.md "Teardown hardening regression") ──
 // Both the host engine's child and main's doctor child
