@@ -7,6 +7,18 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.102] - 2026-11-14
+
+### Changed
+
+- Codex sign-in uses a one-time code by default: Add account shows the code right away, "Sign in with a code" is the main button, and browser sign-in remains as the alternative. Signing in from Add account no longer locks the rest of the account list.
+- Codex CLI 0.168 and 0.169 are supported (supported range is now `>=0.144.0 <0.170.0`), and AnyCode now installs 0.169.0.
+
+### Fixed
+
+- Codex accounts no longer show "Error" on a slow network: the account check now waits long enough for Codex's own network calls (account, model list) on both older and current Codex versions, the usage-limits read now runs alongside the model list instead of after it, and a timeout now says that Codex or the network was slow. This also unblocks new Codex sessions that were refused while the check kept failing.
+- The one-time code in a Codex account card now sits on its own line inside the card with the code clearly visible; action buttons stay inside the card at any width, and the waiting text matches the sign-in method in use.
+
 ## [0.0.101] - 2026-11-13
 
 ### Fixed

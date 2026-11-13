@@ -199,9 +199,10 @@ shows one of four states, each with an in-UI transition:
   to fetch a supported version, or **Use anyway** to run it at your own risk
   (see below).
 - **Sign in required** — a compatible binary and profile were found, but the
-  profile's account isn't signed in. Click **Sign in**; AnyCode opens the
-  native login page in your system browser and shows a waiting/cancel state
-  until it completes. An `authLink` profile has no login flow of its own by
+  profile's account isn't signed in. Click **Sign in with a code**; AnyCode
+  shows a one-time code and the verification page, and waits (with Cancel)
+  until you confirm it. **Sign in with ChatGPT** (in an account card: **Sign in
+  in browser**) opens the native login page in your system browser instead. An `authLink` profile has no login flow of its own by
   design — the account it mirrors is refreshed by `codex` itself through the
   symlink, or re-authenticated in a terminal / via the `system` profile — so
   attempting to sign in through such a profile is refused at the IPC
@@ -435,7 +436,7 @@ Windows uses direct-child teardown only (no process-group signaling), the
 same platform split as the host engine's own Codex transport.
 
 
-## Device-code fallback
+## Device-code sign-in
 
 Both the setup pane and each account's settings row offer **Sign in with a code**.
 AnyCode requests `account/login/start` with `type: "chatgptDeviceCode"`, shows

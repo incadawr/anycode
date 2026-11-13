@@ -423,7 +423,7 @@ async function getTabState(ctx, step, tabId) {
 // (`codexOnboarding.recheck()`, main/index.ts, never awaited before the
 // window appears) — a real `codex app-server` child spawn + version
 // preflight + `initialize` + `account/read` + paginated `model/list`, bounded
-// by `CODEX_DOCTOR_WATCHDOG_MS` (20_000ms, shared/codex-timeouts.ts). A
+// by `CODEX_DOCTOR_WATCHDOG_MS` (135_000ms, shared/codex-timeouts.ts). A
 // launch that submits the codex draft before that probe resolves gets refused
 // with `not_ready`, rendered as this exact prose by
 // `SessionPicker.tsx`'s `describeCreateTabFailure`.
