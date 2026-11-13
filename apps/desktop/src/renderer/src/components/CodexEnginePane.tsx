@@ -350,6 +350,11 @@ export function pickBinaryFailureMessage(reason: "cancelled" | "invalid"): strin
  * branch refused and why). When it is there, SHOW it — the generic "Try again"
  * line told the user nothing and made every distinct failure look identical.
  */
+/** Pending-state label for a running sign-in, matching the flow that was started. */
+export function signInPendingLabel(mode: CodexLoginMode | null | undefined): string {
+  return mode === "browser" ? "Waiting for browser sign-in…" : "Waiting for code confirmation…";
+}
+
 export function loginFailureMessage(
   reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed",
   detail?: string,
@@ -625,6 +630,7 @@ interface CodexProfileRowProps {
   signingIn: boolean;
   confirmingDelete: boolean;
   busy: boolean;
+  signingInMode?: CodexLoginMode | null;
   onSignIn: () => void;
   onDeviceSignIn: () => void;
   deviceCode?: CodexDeviceCodeProgress | null;
@@ -658,7 +664,7 @@ function CodexProfileRow(props: CodexProfileRowProps) {
       <div className="settings-field-row">
         {props.signingIn ? (
           <>
-            <span className="settings-oauth-pending">Waiting for browser sign-in…</span>
+            <span className="settings-oauth-pending">{signInPendingLabel(props.signingInMode)}</span>
             {props.deviceCode && <div role="status">
               Open {props.deviceCode.verificationUrl} and enter <code>{props.deviceCode.userCode}</code> there.
               <span className="settings-field-row">
@@ -674,10 +680,8 @@ function CodexProfileRow(props: CodexProfileRowProps) {
         ) : (
           canSignIn(props.report, props.profile) && (
             <>
-            <Button size="sm" type="button" variant="primary" disabled={props.busy} onClick={props.onSignIn}>
-              Sign in
-            </Button>
-            <Button size="sm" type="button" disabled={props.busy} onClick={props.onDeviceSignIn}>Sign in with a code</Button>
+            <Button size="sm" type="button" variant="primary" disabled={props.busy} onClick={props.onDeviceSignIn}>Sign in with a code</Button>
+            <Button size="sm" type="button" disabled={props.busy} onClick={props.onSignIn}>Sign in in browser</Button>
             </>
           )
         )}
@@ -726,6 +730,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
   const [addingAccount, setAddingAccount] = useState(false);
   const [newLabel, setNewLabel] = useState("");
   const [signingInId, setSigningInId] = useState<string | null>(null);
+  const [signingInMode, setSigningInMode] = useState<CodexLoginMode | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   // (D-S4-8): the binary-trust consent dialog's open state.
   const [trustDialogOpen, setTrustDialogOpen] = useState(false);
@@ -925,6 +930,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
 
   async function createAndSignIn(request: CodexProfileCreateRequest): Promise<void> {
     setNotice(null);
+    setDeviceCode(null);
     setBusy(true);
     try {
       const created = await bridge.createProfile(request);
@@ -935,8 +941,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       await refreshAll();
       if (shouldAutoSignIn(request)) {
         setSigningInId(created.profile.id);
+        setSigningInMode("device");
         try {
-          const login = await bridge.loginStart(created.profile.id);
+          const login = await bridge.loginStart(created.profile.id, "device");
           if (login.ok) {
             setReportsById((prev) => ({ ...prev, [created.profile.id]: login.snapshot.report }));
           } else {
@@ -944,6 +951,8 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
           }
         } finally {
           setSigningInId(null);
+          setSigningInMode(null);
+          setDeviceCode(null);
         }
       }
     } finally {
@@ -967,10 +976,11 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     void navigator.clipboard.writeText(text).catch(() => setNotice(`Could not copy the ${what}. Select and copy it manually.`));
   }
 
-  async function signInProfile(id: string, mode: CodexLoginMode = "browser"): Promise<void> {
+  async function signInProfile(id: string, mode: CodexLoginMode = "device"): Promise<void> {
     setNotice(null);
     setDeviceCode(null);
     setSigningInId(id);
+    setSigningInMode(mode);
     try {
       const result = await bridge.loginStart(id, mode);
       if (result.ok) {
@@ -980,6 +990,7 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       }
     } finally {
       setSigningInId(null);
+      setSigningInMode(null);
       setDeviceCode(null);
     }
   }
@@ -1061,18 +1072,18 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
     return <section className="settings-section" aria-label="Connect ChatGPT / Codex">
       <h2 className="settings-section-title">Connect ChatGPT / Codex</h2>
       <p role="status">{status.headline}</p>
-      <p className="settings-page-description">{report?.status === "signed_out" ? "Sign in with your ChatGPT account. If the browser cannot return to this app, use a code instead." : status.detail}</p>
+      <p className="settings-page-description">{report?.status === "signed_out" ? "Sign in with your ChatGPT account using a one-time code. Browser sign-in is available as an alternative." : status.detail}</p>
       {notice && <p className="settings-notice" role="alert">{notice}</p>}
       <div className="settings-field-row">
         {signingInId ? <>
-          <span role="status">Waiting for sign-in…</span>
+          <span role="status">{signInPendingLabel(signingInMode)}</span>
           <Button size="sm" type="button" onClick={() => void bridge.loginCancel()}>Cancel</Button>
         </> : <>
           {(binaryActions.showInstall || binaryActions.showUpdate) ?
             <Button size="sm" type="button" variant="primary" disabled={busy || checking} onClick={() => void installBinary()}>{busy ? "Installing…" : binaryActions.showUpdate ? "Update Codex" : "Install Codex"}</Button> :
             canSignIn(report, profile) ? <>
-              <Button size="sm" type="button" variant="primary" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId)}>Sign in with ChatGPT</Button>
-              <Button size="sm" type="button" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId, "device")}>Sign in with a code</Button>
+              <Button size="sm" type="button" variant="primary" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId, "device")}>Sign in with a code</Button>
+              <Button size="sm" type="button" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId, "browser")}>Sign in with ChatGPT</Button>
             </> : <Button size="sm" type="button" variant="primary" disabled={busy || checking} onClick={() => void refreshAll()}>Check again</Button>}
         </>}
       </div>
@@ -1203,9 +1214,10 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             report={reportsById[SYSTEM_PROFILE_ID]}
             checking={checkingIds.has(SYSTEM_PROFILE_ID)}
             signingIn={signingInId === SYSTEM_PROFILE_ID}
+            signingInMode={signingInMode}
             confirmingDelete={false}
             busy={busy}
-            onSignIn={() => void signInProfile(SYSTEM_PROFILE_ID)}
+            onSignIn={() => void signInProfile(SYSTEM_PROFILE_ID, "browser")}
             onDeviceSignIn={() => void signInProfile(SYSTEM_PROFILE_ID, "device")}
             deviceCode={deviceCode?.profileId === SYSTEM_PROFILE_ID ? deviceCode : null}
             onCancelSignIn={() => void bridge.loginCancel()}
@@ -1228,9 +1240,10 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             report={reportsById[profile.id]}
             checking={checkingIds.has(profile.id)}
             signingIn={signingInId === profile.id}
+            signingInMode={signingInMode}
             confirmingDelete={confirmDeleteId === profile.id}
             busy={busy}
-            onSignIn={() => void signInProfile(profile.id)}
+            onSignIn={() => void signInProfile(profile.id, "browser")}
             onDeviceSignIn={() => void signInProfile(profile.id, "device")}
             deviceCode={deviceCode?.profileId === profile.id ? deviceCode : null}
             onCancelSignIn={() => void bridge.loginCancel()}

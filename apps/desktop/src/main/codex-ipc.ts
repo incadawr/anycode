@@ -913,7 +913,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       return { ok: true, snapshot };
     },
 
-    async loginStart(profileId?: string, mode: CodexLoginMode = "browser"): Promise<CodexLoginStartResult> {
+    async loginStart(profileId?: string, mode: CodexLoginMode = "device"): Promise<CodexLoginStartResult> {
       if (shuttingDown || inFlightByKey.size > 0 || activeLoginAbort !== null) {
         return { ok: false, reason: "busy" };
       }

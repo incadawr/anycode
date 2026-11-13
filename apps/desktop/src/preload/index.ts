@@ -872,7 +872,7 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_PICK_BINARY_CHANNEL) as Promise<CodexPickBinaryResult>,
     useBinary: (binaryPath: string): Promise<CodexUseBinaryResult> =>
       ipcRenderer.invoke(CODEX_USE_BINARY_CHANNEL, { binaryPath }) as Promise<CodexUseBinaryResult>,
-    loginStart: (profileId?: string, mode: CodexLoginMode = "browser"): Promise<CodexLoginStartResult> =>
+    loginStart: (profileId?: string, mode: CodexLoginMode = "device"): Promise<CodexLoginStartResult> =>
       ipcRenderer.invoke(CODEX_LOGIN_START_CHANNEL, { ...(profileId ? { profileId } : {}), mode }) as Promise<CodexLoginStartResult>,
     onLoginProgress: (callback: (progress: CodexDeviceCodeProgress) => void): (() => void) => {
       const listener = (_event: unknown, progress: CodexDeviceCodeProgress) => callback(progress);

@@ -1325,6 +1325,28 @@ it("device-code progress is routed to the profile that owns the login", async ()
   expect(onDeviceCode).toHaveBeenCalledExactlyOnceWith({ profileId: "device-account", userCode: "ABCD-1234", verificationUrl: "https://example.invalid/device" });
 });
 
+it("loginStart without a mode runs the device flow", async () => {
+  const runLogin = vi.fn(async (_path: string, opts: import("./codex-login.js").RunCodexLoginOptions) => {
+    expect(opts.mode).toBe("device");
+    return { ok: true as const };
+  });
+  const controller = createCodexOnboardingController(makeDeps({ runLogin }));
+  expect((await controller.createProfile({ label: "default-mode" })).ok).toBe(true);
+  expect((await controller.loginStart("default-mode")).ok).toBe(true);
+  expect(runLogin).toHaveBeenCalledTimes(1);
+});
+
+it("loginStart with an explicit browser mode is still honoured", async () => {
+  const runLogin = vi.fn(async (_path: string, opts: import("./codex-login.js").RunCodexLoginOptions) => {
+    expect(opts.mode).toBe("browser");
+    return { ok: true as const };
+  });
+  const controller = createCodexOnboardingController(makeDeps({ runLogin }));
+  expect((await controller.createProfile({ label: "browser-mode" })).ok).toBe(true);
+  expect((await controller.loginStart("browser-mode", "browser")).ok).toBe(true);
+  expect(runLogin).toHaveBeenCalledTimes(1);
+});
+
 it("loginOpenDevicePage opens only the pending device URL held by main, and nothing once the login ended", async () => {
   const openExternal = vi.fn(async () => {});
   let controllerRef: ReturnType<typeof createCodexOnboardingController> | undefined;
