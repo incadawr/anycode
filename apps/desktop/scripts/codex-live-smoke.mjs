@@ -115,7 +115,7 @@ function skip(message) {
 // src/**/*.ts, same posture as codex-contract-extract.mjs. Raising the
 // ceiling in protocol.ts means raising it here in the same commit.)
 
-const SUPPORTED_CODEX_VERSION = "<0.168.0";
+const SUPPORTED_CODEX_VERSION = "<0.170.0";
 
 function parseCodexVersion(output) {
   const match = /^codex-cli (\d+)\.(\d+)\.(\d+)\s*$/.exec(output);
