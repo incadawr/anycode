@@ -158,6 +158,28 @@ text and image inputs, not audio. No consumed field or variant was removed.
 Layer 2 passes against the real 0.167.0 binary. Live GUI smoke is pending:
 the isolated profile has no authorization.
 
+## 0.168.0 / 0.169.0 verification (2026-11-13)
+
+The 0.167.0 and 0.168.0 extracts have identical consumed methods and approval
+decision enums; the only change is an optional `contentTokenCount` field on the
+item-completed notification, which the adapter does not read. The 0.168.0 and
+0.169.0 extracts also have identical consumed methods and approval decision
+enums. 0.169.0 adds, all optional or additive: `AgentMessageModeration` /
+`AgentMessageDisplay` and an optional `moderation` field on agent messages,
+`Account.userId`, a `modelProvider` filter on the model list request, and the
+`inferenceHookDenied` `CodexErrorInfo` value. The audio function-call output
+item became an alternative of `audio_url` or `file_id` (AnyCode sends text and
+image inputs only). No consumed field or variant was removed; the adapter
+ignores extra fields and translates errors by message independently of the
+code. Layer 2 (`contract-drift.test.ts` against the real binary) passes 39/39
+on 0.168.0 and 39/39 on 0.169.0 (macOS arm64).
+
+Live GUI smoke on 0.169.0 (isolated signed-in `CODEX_HOME`): run 1 passed 5/10
+and failed at step 5 ("second allowed command's sentinel file was not
+created": the model did not run the second approved command); run 2, same
+command and no code change, passed 10/10. Run 3: PENDING (to be filled in).
+0.168.0 has contract coverage only, no live smoke, as with 0.163.x.
+
 ## Raising the ceiling / updating the pin
 
 Treat this as a single reviewed act, landed in ONE commit:
