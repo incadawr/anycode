@@ -429,32 +429,26 @@ describe("runCodexDoctor", () => {
     expect(report.models?.length).toBe(2);
   });
 
-  it("stays ready without rateLimits when the quota read never answers, and does not wait out its bound", async () => {
-    const started = Date.now();
+  it("stays ready without rateLimits when the quota read never answers", async () => {
     const report = await runCodexDoctor("/fake/codex", {
       trust: TRUSTED,
-      spawnImpl: fakeSpawn(["--model-list-delay=500", "--rate-limits-delay=-1"]),
-      rateLimitsTimeoutMs: 1_500,
+      spawnImpl: fakeSpawn(["--rate-limits-delay=-1"]),
+      rateLimitsTimeoutMs: 300,
     });
     expect(report.status).toBe("ready");
     expect(report.rateLimits).toBeUndefined();
     expect(report.error).toBeUndefined();
-    // Two model pages take ~1000ms and the quota bound is 1500ms. Concurrent:
-    // the run ends at ~1500ms. Sequential would need ~2500ms.
-    expect(Date.now() - started).toBeLessThan(2_100);
   });
 
-  it("starts the quota read before the model list finishes (concurrent, not sequential)", async () => {
-    const started = Date.now();
-    const report = await runCodexDoctor("/fake/codex", {
-      trust: TRUSTED,
-      spawnImpl: fakeSpawn(["--model-list-delay=500", "--rate-limits-delay=1000"]),
-    });
+  it("sends the quota read before the last model/list page (concurrent, not sequential)", async () => {
+    const log = join(scratchDir, `requests-${Date.now()}.log`);
+    const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn([`--request-log=${log}`]) });
     expect(report.status).toBe("ready");
     expect(report.rateLimits).toBeDefined();
-    // Two model pages take ~1000ms and the quota answers after 1000ms.
-    // Concurrent: ~1000ms. Sequential would need ~2000ms.
-    expect(Date.now() - started).toBeLessThan(1_700);
+    const methods = readFileSync(log, "utf8").trim().split("\n");
+    expect(methods.filter((m) => m === "model/list")).toHaveLength(2);
+    expect(methods.indexOf("account/rateLimits/read")).toBeGreaterThan(-1);
+    expect(methods.indexOf("account/rateLimits/read")).toBeLessThan(methods.lastIndexOf("model/list"));
   });
 
   it("reports a readable error naming account/read when it never answers", async () => {

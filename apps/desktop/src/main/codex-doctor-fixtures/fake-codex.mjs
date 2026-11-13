@@ -8,7 +8,7 @@
  * reaps the WHOLE process group, not just its direct child.
  */
 import { spawn } from "node:child_process";
-import { closeSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, writeFileSync } from "node:fs";
 import readline from "node:readline";
 
 /** A grandchild that ignores SIGTERM: only a process-GROUP SIGKILL ends it. Its pid is published so a test can assert it actually died. */
@@ -109,6 +109,10 @@ if (args[0] === "--version") {
       } catch {
         return;
       }
+      // `--request-log=<file>`: append each request method on arrival, so a test
+      // can assert the order requests reached the server without timing.
+      const requestLog = value("--request-log");
+      if (requestLog && request.id !== undefined) appendFileSync(requestLog, `${request.method}\n`);
       const methodDelay =
         request.method === "account/read" ? delayFor("account-read")
         : request.method === "model/list" ? delayFor("model-list")
