@@ -8,7 +8,9 @@
 import { describe, expect, it } from "vitest";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
+  CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS,
   CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
+  CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS,
   CODEX_DOCTOR_RPC_TIMEOUT_MS,
   CODEX_DOCTOR_WATCHDOG_MS,
   CODEX_LOGIN_RPC_TIMEOUT_MS,
@@ -33,6 +35,8 @@ const ALL_CONSTANTS = {
   CODEX_POST_INTERRUPT_SETTLE_MS,
   CODEX_VERSION_PREFLIGHT_TIMEOUT_MS,
   CODEX_DOCTOR_RPC_TIMEOUT_MS,
+  CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS,
+  CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS,
   CODEX_LOGIN_RPC_TIMEOUT_MS,
   CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
   CODEX_DOCTOR_WATCHDOG_MS,
@@ -81,14 +85,20 @@ describe("codex-timeouts", () => {
     // exactly the contradiction this test pins shut.
     const worstCasePhaseSum =
       CODEX_VERSION_PREFLIGHT_TIMEOUT_MS +
-      CODEX_DOCTOR_RPC_TIMEOUT_MS * 2 + // initialize + account/read
-      CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS * CODEX_MODEL_LIST_MAX_PAGES;
+      CODEX_DOCTOR_RPC_TIMEOUT_MS + // initialize
+      CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS +
+      Math.max(
+        CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS * CODEX_MODEL_LIST_MAX_PAGES,
+        CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS, // quota read runs concurrently with model/list
+      );
     expect(CODEX_DOCTOR_WATCHDOG_MS).toBeGreaterThanOrEqual(worstCasePhaseSum);
   });
 
   it("the doctor's own per-RPC bounds are tighter than the engine's patient boot bounds (doctor is an interactive Settings diagnostic, not a boot sequence)", () => {
     expect(CODEX_DOCTOR_RPC_TIMEOUT_MS).toBeLessThan(CODEX_BOOT_RPC_TIMEOUT_MS);
-    expect(CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS).toBeLessThan(CODEX_MODEL_LIST_PAGE_TIMEOUT_MS);
+    expect(CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS).toBeLessThanOrEqual(CODEX_MODEL_LIST_PAGE_TIMEOUT_MS);
+    expect(CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS).toBeGreaterThan(CODEX_DOCTOR_RPC_TIMEOUT_MS);
+    expect(CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS).toBeGreaterThanOrEqual(15_000);
   });
 
   it("login/start gets a bound WIDER than the doctor's per-RPC one — it is a network mint, not a local read", () => {

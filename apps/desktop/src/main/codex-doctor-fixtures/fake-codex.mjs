@@ -98,14 +98,30 @@ if (args[0] === "--version") {
     if (selfPidFile) {
       writeFileSync(selfPidFile, String(process.pid));
     }
+    // Per-method answer latency: `--<name>-delay=<ms>` answers late, a negative
+    // value never answers (a network call that hangs).
+    const delayFor = (name) => Number(value(`--${name}-delay`) ?? "0");
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-    rl.on("line", (line) => {
+    rl.on("line", (rawLine) => {
       let request;
       try {
-        request = JSON.parse(line);
+        request = JSON.parse(rawLine);
       } catch {
         return;
       }
+      const methodDelay =
+        request.method === "account/read" ? delayFor("account-read")
+        : request.method === "model/list" ? delayFor("model-list")
+        : request.method === "account/rateLimits/read" ? delayFor("rate-limits")
+        : 0;
+      if (methodDelay < 0) return;
+      if (methodDelay > 0) {
+        setTimeout(() => handle(request), methodDelay);
+        return;
+      }
+      handle(request);
+    });
+    const handle = (request) => {
       if (request.method === "initialize") {
         process.stdout.write(`${JSON.stringify({ id: request.id, result: { userAgent: "fake-codex/0.144.3", codexHome: "/tmp/fake-codex-home", platformFamily: "unix", platformOs: "macos" } })}\n`);
       } else if (request.method === "initialized") {
@@ -182,6 +198,6 @@ if (args[0] === "--version") {
       } else if (request.method === "exit") {
         process.exit(0);
       }
-    });
+    };
   }
 }

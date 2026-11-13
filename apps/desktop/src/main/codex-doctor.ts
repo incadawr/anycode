@@ -25,7 +25,9 @@ import { ENV_CODEX_PROXY_URL, applyEngineProxyOverride } from "../shared/engines
 import { classifyCodexBinaryPathTrust, type CodexBinaryTrustGateOutcome } from "./codex-binary.js";
 import { registerCodexChild } from "./codex-children.js";
 import {
+  CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS,
   CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS,
+  CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS,
   CODEX_DOCTOR_RPC_TIMEOUT_MS,
   CODEX_DOCTOR_WATCHDOG_MS,
   CODEX_MODEL_LIST_MAX_PAGES,
@@ -322,7 +324,7 @@ export class CodexRpcClient {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`codex doctor request timed out: ${method}`));
+        reject(new Error(`Codex did not answer in time (${method}, ${opts.timeoutMs >= 1_000 ? `${Math.round(opts.timeoutMs / 1_000)} s` : `${opts.timeoutMs} ms`}). The network or Codex may be slow — try Recheck.`));
       }, opts.timeoutMs);
       this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       try {
@@ -743,6 +745,10 @@ export interface RunCodexDoctorOptions {
   trust?: (binaryPath: string) => CodexBinaryTrustGateOutcome;
   versionTimeoutMs?: number;
   rpcTimeoutMs?: number;
+  /** Bound for the network-bound `account/read` (default `CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS`). */
+  accountReadTimeoutMs?: number;
+  /** Bound for the advisory `account/rateLimits/read` (default `CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS`). */
+  rateLimitsTimeoutMs?: number;
   modelPageTimeoutMs?: number;
   maxModelPages?: number;
   /**
@@ -801,6 +807,8 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
   const watchdogMs = options.timeoutMs ?? CODEX_DOCTOR_WATCHDOG_MS;
   const versionTimeoutMs = options.versionTimeoutMs ?? CODEX_VERSION_PREFLIGHT_TIMEOUT_MS;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? CODEX_DOCTOR_RPC_TIMEOUT_MS;
+  const accountReadTimeoutMs = options.accountReadTimeoutMs ?? CODEX_DOCTOR_ACCOUNT_READ_TIMEOUT_MS;
+  const rateLimitsTimeoutMs = options.rateLimitsTimeoutMs ?? CODEX_DOCTOR_RATE_LIMITS_TIMEOUT_MS;
   const modelPageTimeoutMs = options.modelPageTimeoutMs ?? CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS;
   const maxModelPages = options.maxModelPages ?? CODEX_MODEL_LIST_MAX_PAGES;
 
@@ -915,7 +923,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     // `account/read` REQUIRES `params: {}` on the wire (amended §A3.7 —
     // schema-mandated, live-verified); the rateLimits read below goes with NO
     // params key at all. Deliberately not unified.
-    const accountResult = await client.request<{ account?: unknown; requiresOpenaiAuth?: unknown }>("account/read", {}, { timeoutMs: rpcTimeoutMs });
+    const accountResult = await client.request<{ account?: unknown; requiresOpenaiAuth?: unknown }>("account/read", {}, { timeoutMs: accountReadTimeoutMs });
     const account = projectCodexAccount(accountResult.account);
     const requiresOpenaiAuth = typeof accountResult.requiresOpenaiAuth === "boolean" ? accountResult.requiresOpenaiAuth : undefined;
     // Status automat rows 5-8 (cut §4.2): ANY account variant ⇒ ready (row 5);
@@ -925,16 +933,17 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     if (account === null && requiresOpenaiAuth !== false) {
       return { status: "signed_out", version, ...(requiresOpenaiAuth !== undefined ? { requiresOpenaiAuth } : {}) };
     }
-    const models = await collectModels(client, { pageTimeoutMs: modelPageTimeoutMs, maxPages: maxModelPages });
     // Quotas are ADVISORY (cut §6.1 pull side): visible in Settings without a
-    // single session, but a failing read never degrades a ready verdict.
-    let rateLimits: CodexRateLimits | undefined;
-    try {
-      const rateLimitsResult = await client.request<unknown>("account/rateLimits/read", undefined, { timeoutMs: rpcTimeoutMs });
-      rateLimits = projectCodexRateLimits(rateLimitsResult, new Date().toISOString());
-    } catch {
-      // Tolerated: an older server without the method, or a transient failure.
-    }
+    // single session, but a failing read never degrades a ready verdict. The
+    // read starts now and runs concurrently with the model list so a slow
+    // quota never delays the verdict; the no-op catch keeps a rejection that
+    // lands while models are still pending (or after they throw) handled.
+    const rateLimitsRequest = client
+      .request<unknown>("account/rateLimits/read", undefined, { timeoutMs: rateLimitsTimeoutMs })
+      .then((result): CodexRateLimits | undefined => projectCodexRateLimits(result, new Date().toISOString()))
+      .catch((): undefined => undefined);
+    const models = await collectModels(client, { pageTimeoutMs: modelPageTimeoutMs, maxPages: maxModelPages });
+    const rateLimits = await rateLimitsRequest;
     return {
       status: "ready",
       version,

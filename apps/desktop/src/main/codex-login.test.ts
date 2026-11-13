@@ -82,7 +82,7 @@ describe("runCodexLogin", () => {
     expect(outcome).toMatchObject({ ok: false, reason: "failed" });
     // the transport error is no longer swallowed — it is the
     // breadcrumb that says WHY the handshake died.
-    expect(outcome.ok === false && outcome.detail).toContain("timed out");
+    expect(outcome.ok === false && outcome.detail).toContain("did not answer in time");
   });
 });
 

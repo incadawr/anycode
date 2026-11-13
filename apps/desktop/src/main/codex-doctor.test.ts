@@ -408,6 +408,65 @@ describe("runCodexDoctor", () => {
     expect(report.rateLimits).toBeUndefined();
   });
 
+  it("accepts an account/read slower than the local rpc bound while inside the account-read bound", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--account-read-delay=400"]),
+      rpcTimeoutMs: 200,
+      accountReadTimeoutMs: 3_000,
+    });
+    expect(report.status).toBe("ready");
+  });
+
+  it("accepts a model/list page slower than the local rpc bound while inside the page bound", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--model-list-delay=400"]),
+      rpcTimeoutMs: 200,
+      modelPageTimeoutMs: 3_000,
+    });
+    expect(report.status).toBe("ready");
+    expect(report.models?.length).toBe(2);
+  });
+
+  it("stays ready without rateLimits when the quota read never answers, and does not wait out its bound", async () => {
+    const started = Date.now();
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--rate-limits-delay=-1"]),
+      rateLimitsTimeoutMs: 600,
+    });
+    expect(report.status).toBe("ready");
+    expect(report.rateLimits).toBeUndefined();
+    expect(report.error).toBeUndefined();
+    // The quota read ran concurrently with the model list: the run ends at the
+    // quota bound at the latest, not at models + quota.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("starts the quota read before the model list finishes (concurrent, not sequential)", async () => {
+    const started = Date.now();
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--model-list-delay=500", "--rate-limits-delay=500"]),
+    });
+    expect(report.status).toBe("ready");
+    expect(report.rateLimits).toBeDefined();
+    // two model pages x 500ms = 1000ms; a sequential quota read would add 500ms more.
+    expect(Date.now() - started).toBeLessThan(1_000 + 450 + 1_000);
+  });
+
+  it("reports a readable error naming account/read when it never answers", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--account-read-delay=-1"]),
+      accountReadTimeoutMs: 300,
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toMatch(/did not answer in time/i);
+    expect(report.error).toContain("account/read");
+  });
+
   it("reports update_required for a version outside the supported range, without spawning app-server at all", async () => {
     const report = await runCodexDoctor("/fake/codex", { trust: TRUSTED, spawnImpl: fakeSpawn(["--bad-version"]) });
     expect(report).toEqual({ status: "update_required", version: "0.99.0", supportedRange: BUNDLED_SUPPORTED_RANGE });

@@ -450,7 +450,7 @@ async function getTabState(ctx, step, tabId) {
 // anything else), so retrying it is side-effect-free. Any OTHER failure is
 // treated as a real, non-transient failure and reported immediately — only
 // the exact known not-ready shape is retried.
-const CODEX_DOCTOR_WATCHDOG_MS = 20_000; // mirrors apps/desktop/src/shared/codex-timeouts.ts
+const CODEX_DOCTOR_WATCHDOG_MS = 135_000; // mirrors apps/desktop/src/shared/codex-timeouts.ts
 const CODEX_READY_POLL_TIMEOUT_MS = CODEX_DOCTOR_WATCHDOG_MS + 10_000;
 const CODEX_READY_POLL_INTERVAL_MS = 500;
 const CODEX_NOT_READY_MESSAGE = "Configure a provider (API key + model) before opening a tab.";
