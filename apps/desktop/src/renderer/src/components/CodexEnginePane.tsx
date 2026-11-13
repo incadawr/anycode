@@ -345,16 +345,16 @@ export function pickBinaryFailureMessage(reason: "cancelled" | "invalid"): strin
   return reason === "invalid" ? "That file isn't a valid, executable Codex binary." : null;
 }
 
-/**
- * a failed sign-in carries main's own non-secret `detail` (which
- * branch refused and why). When it is there, SHOW it — the generic "Try again"
- * line told the user nothing and made every distinct failure look identical.
- */
 /** Pending-state label for a running sign-in, matching the flow that was started. */
 export function signInPendingLabel(mode: CodexLoginMode | null | undefined): string {
   return mode === "browser" ? "Waiting for browser sign-in…" : "Waiting for code confirmation…";
 }
 
+/**
+ * a failed sign-in carries main's own non-secret `detail` (which
+ * branch refused and why). When it is there, SHOW it — the generic "Try again"
+ * line told the user nothing and made every distinct failure look identical.
+ */
 export function loginFailureMessage(
   reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed",
   detail?: string,
@@ -661,18 +661,23 @@ function CodexProfileRow(props: CodexProfileRowProps) {
           {line}
         </div>
       ))}
+      {props.signingIn && props.deviceCode && (
+        <div className="codex-profile-device" role="status">
+          <div>
+            Open <span className="codex-profile-device-url">{props.deviceCode.verificationUrl}</span> and enter this code:
+          </div>
+          <code className="codex-profile-device-code">{props.deviceCode.userCode}</code>
+          <div className="settings-field-row">
+            <Button size="sm" type="button" onClick={props.onOpenDevicePage}>Open page</Button>
+            <Button size="sm" type="button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.verificationUrl, "link")}>Copy link</Button>
+            <Button size="sm" type="button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.userCode, "code")}>Copy code</Button>
+          </div>
+        </div>
+      )}
       <div className="settings-field-row">
         {props.signingIn ? (
           <>
             <span className="settings-oauth-pending">{signInPendingLabel(props.signingInMode)}</span>
-            {props.deviceCode && <div role="status">
-              Open {props.deviceCode.verificationUrl} and enter <code>{props.deviceCode.userCode}</code> there.
-              <span className="settings-field-row">
-                <Button size="sm" type="button" onClick={props.onOpenDevicePage}>Open page</Button>
-                <Button size="sm" type="button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.verificationUrl, "link")}>Copy link</Button>
-                <Button size="sm" type="button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.userCode, "code")}>Copy code</Button>
-              </span>
-            </div>}
             <Button size="sm" type="button" onClick={props.onCancelSignIn}>
               Cancel
             </Button>

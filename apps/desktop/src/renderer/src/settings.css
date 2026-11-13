@@ -3296,6 +3296,30 @@
 
 .codex-profile-row .settings-field-row {
   flex-basis: 100%;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.codex-profile-device {
+  flex-basis: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.codex-profile-device-url {
+  overflow-wrap: anywhere;
+}
+
+.codex-profile-device-code {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  user-select: all;
 }
 
 /* ── Codex rollout-import dialog (cut §8.8): reuses .mcp-form-dialog/.mcp-dialog-* chrome + .settings-mcp-list/.settings-mcp-row rows verbatim; these are the wizard-specific additions only. ── */
