@@ -54,12 +54,14 @@ function alive(pid: number): boolean {
   }
 }
 
+/** Waits for a pid file that holds a whole pid: the writer creates the file before it writes, and an empty read would become pid 0 (the whole process group). */
 async function waitForFile(path: string, timeoutMs = 5_000): Promise<void> {
   const end = Date.now() + timeoutMs;
-  while (!existsSync(path) && Date.now() < end) {
+  const ready = () => existsSync(path) && /^[1-9]\d*$/.test(readFileSync(path, "utf8").trim());
+  while (!ready() && Date.now() < end) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  if (!existsSync(path)) throw new Error(`timed out waiting for ${path}`);
+  if (!ready()) throw new Error(`timed out waiting for ${path}`);
 }
 
 /** Survivors at the END of the settle window — the only honest way to count a process tree that is being reaped. */
