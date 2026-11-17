@@ -36,6 +36,8 @@ const NOTIFICATION_STATUS: Record<string, SubagentEndStatus> = {
 
 interface TrackedTask {
   toolCallId: string;
+  /** The task outlived the owner turn that started it: its events go to the detached sink from then on. */
+  detached: boolean;
   /** Distinct child `message.id`s seen: one per model response, however many frames it spans. */
   responses: Set<string>;
   /** Child tool_use ids already reported as activity. */
@@ -65,10 +67,33 @@ export class ClaudeSubagentTasks {
   /** Live agent tasks keyed by the CLI's `task_id`; removed when the task settles. */
   private readonly tasks = new Map<string, TrackedTask>();
 
-  /** Feeds one frame; returns the subagent_* events it implies (usually none). Never throws on an unexpected shape. */
+  /**
+   * @param detach receives the events of a task that outlived its owner turn
+   * (`detachLive`), wherever its frames arrive — between turns or inside a
+   * later owner turn, which must not adopt another turn's card.
+   */
+  constructor(private readonly detach: (event: AgentEvent) => void = () => {}) {}
+
+  /**
+   * Feeds one frame; returns the subagent_* events it implies for the current
+   * owner turn (usually none). Events of a detached task go to the detach sink
+   * instead. Never throws on an unexpected shape.
+   */
   onFrame(frame: ClaudeStreamMessage): AgentEvent[] {
+    const { task, events } = this.translate(frame);
+    if (task?.detached !== true) return events;
+    for (const event of events) this.detach(event);
+    return [];
+  }
+
+  /** The owner turn ended: every task still running now reports through the detach sink. */
+  detachLive(): void {
+    for (const task of this.tasks.values()) task.detached = true;
+  }
+
+  private translate(frame: ClaudeStreamMessage): { task?: TrackedTask; events: AgentEvent[] } {
     if (typeof frame.parent_tool_use_id === "string") return this.onChildFrame(frame.parent_tool_use_id, frame);
-    if (frame.type !== "system") return [];
+    if (frame.type !== "system") return { events: [] };
     const fields = frame as Record<string, unknown>;
     switch (fields.subtype) {
       case "task_started":
@@ -79,16 +104,21 @@ export class ClaudeSubagentTasks {
         return this.onNotification(fields);
       default:
         // task_updated / background_tasks_changed restate what the frames
-        // above already carry.
-        return [];
+        // around them carry. A terminal task_updated is always followed by
+        // the task_notification that carries the final usage.
+        return { events: [] };
     }
   }
 
-  /** A child's assistant frame: counts its model response and turns each new tool_use into an activity row. */
-  private onChildFrame(toolCallId: string, frame: ClaudeStreamMessage): AgentEvent[] {
-    if (frame.type !== "assistant") return [];
+  /**
+   * A child's assistant frame: counts its model response and turns each new
+   * tool_use into an activity row. A frame for a task not started yet is
+   * dropped: on the wire task_started always precedes the child's frames.
+   */
+  private onChildFrame(toolCallId: string, frame: ClaudeStreamMessage): { task?: TrackedTask; events: AgentEvent[] } {
+    if (frame.type !== "assistant") return { events: [] };
     const task = [...this.tasks.values()].find(candidate => candidate.toolCallId === toolCallId);
-    if (task === undefined) return [];
+    if (task === undefined) return { events: [] };
     const message = record(frame.message);
     const id = text(message?.id);
     if (id !== undefined) task.responses.add(id);
@@ -101,61 +131,74 @@ export class ClaudeSubagentTasks {
       task.toolUses.add(callId);
       events.push({ type: "subagent_activity", toolCallId, toolName: name, summary: summarizeChildToolCall(name, block.input) });
     }
-    return events;
+    return { task, events };
   }
 
-  private onStarted(fields: Record<string, unknown>): AgentEvent[] {
+  private onStarted(fields: Record<string, unknown>): { task?: TrackedTask; events: AgentEvent[] } {
     const taskId = text(fields.task_id);
     const toolCallId = text(fields.tool_use_id);
     const taskType = text(fields.task_type);
-    if (taskId === undefined || toolCallId === undefined) return [];
-    if (taskType !== undefined && taskType !== "local_agent") return [];
-    this.tasks.set(taskId, { toolCallId, responses: new Set(), toolUses: new Set(), toolCalls: 0 });
-    return [{
-      type: "subagent_start",
-      toolCallId,
-      agentType: text(fields.subagent_type) ?? "agent",
-      description: text(fields.description) ?? "",
-    }];
+    if (taskId === undefined || toolCallId === undefined) return { events: [] };
+    if (taskType !== undefined && taskType !== "local_agent") return { events: [] };
+    const task: TrackedTask = { toolCallId, detached: false, responses: new Set(), toolUses: new Set(), toolCalls: 0 };
+    this.tasks.set(taskId, task);
+    return {
+      task,
+      events: [{
+        type: "subagent_start",
+        toolCallId,
+        agentType: text(fields.subagent_type) ?? "agent",
+        description: text(fields.description) ?? "",
+      }],
+    };
   }
 
-  private onProgress(fields: Record<string, unknown>): AgentEvent[] {
-    const task = this.taskFor(fields);
-    if (task === undefined) return [];
+  private onProgress(fields: Record<string, unknown>): { task?: TrackedTask; events: AgentEvent[] } {
+    const found = this.taskFor(fields);
+    if (found === undefined) return { events: [] };
+    const { task } = found;
     task.toolCalls = count(record(fields.usage)?.tool_uses) ?? task.toolCalls;
     // `description` ("Reading src/a.ts") is prose that already carries a verb;
     // the activity rows come from the child's own tool_use blocks instead.
     const lastTool = text(fields.last_tool_name);
-    return [{
-      type: "subagent_progress",
-      toolCallId: task.toolCallId,
-      turns: this.turns(task),
-      toolCalls: task.toolCalls,
-      ...(lastTool !== undefined ? { lastTool } : {}),
-    }];
+    return {
+      task,
+      events: [{
+        type: "subagent_progress",
+        toolCallId: task.toolCallId,
+        turns: this.turns(task),
+        toolCalls: task.toolCalls,
+        ...(lastTool !== undefined ? { lastTool } : {}),
+      }],
+    };
   }
 
-  private onNotification(fields: Record<string, unknown>): AgentEvent[] {
-    const task = this.taskFor(fields);
-    if (task === undefined) return [];
-    this.tasks.delete(text(fields.task_id)!);
+  private onNotification(fields: Record<string, unknown>): { task?: TrackedTask; events: AgentEvent[] } {
+    const found = this.taskFor(fields);
+    if (found === undefined) return { events: [] };
+    const { taskId, task } = found;
+    this.tasks.delete(taskId);
     const usage = record(fields.usage);
     task.toolCalls = count(usage?.tool_uses) ?? task.toolCalls;
-    return [{
-      type: "subagent_end",
-      toolCallId: task.toolCallId,
-      status: NOTIFICATION_STATUS[text(fields.status) ?? ""] ?? "error",
-      turns: this.turns(task),
-      toolCalls: task.toolCalls,
-      // -1 is the existing "duration unknown" marker (the card hides the time).
-      durationMs: count(usage?.duration_ms) ?? -1,
-    }];
+    return {
+      task,
+      events: [{
+        type: "subagent_end",
+        toolCallId: task.toolCallId,
+        status: NOTIFICATION_STATUS[text(fields.status) ?? ""] ?? "error",
+        turns: this.turns(task),
+        toolCalls: task.toolCalls,
+        // -1 is the existing "duration unknown" marker (the card hides the time).
+        durationMs: count(usage?.duration_ms) ?? -1,
+      }],
+    };
   }
 
   /**
    * Settles every live task as cancelled — for when the CLI process that ran
-   * them is gone (transport replaced), so no task_notification will ever come
-   * and the cards would otherwise stay running forever.
+   * them is gone (it exited, the transport was replaced, the engine was
+   * disposed), so no task_notification will ever come and the cards would
+   * otherwise stay running forever.
    */
   abandonAll(): AgentEvent[] {
     const events: AgentEvent[] = [...this.tasks.values()].map(task => ({
@@ -170,9 +213,11 @@ export class ClaudeSubagentTasks {
     return events;
   }
 
-  private taskFor(fields: Record<string, unknown>): TrackedTask | undefined {
+  private taskFor(fields: Record<string, unknown>): { taskId: string; task: TrackedTask } | undefined {
     const taskId = text(fields.task_id);
-    return taskId === undefined ? undefined : this.tasks.get(taskId);
+    if (taskId === undefined) return undefined;
+    const task = this.tasks.get(taskId);
+    return task === undefined ? undefined : { taskId, task };
   }
 
   /** A tool call implies at least one model response, even when its frame has not arrived yet. */

@@ -3257,4 +3257,68 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
     expect(events.some(isForeignNotice)).toBe(false);
     await engine.dispose("session-close");
   });
+
+  it("an agent that outlived its turn still reports through the detached sink when it finishes during a later owner turn", async () => {
+    const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = (event) => detached.push(event);
+    await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+
+    // The agent's frames interleave with the second owner turn's own frames.
+    const [ownerAssistant, ownerResult] = ownerFrames("two");
+    for (const frame of [ownerAssistant!, ...idleAgentFrames, ownerResult!]) transport.enqueue(frame);
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    expect(events.filter((event) => event.type.startsWith("subagent_"))).toEqual([]);
+    expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
+    expect(detached.at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed" });
+    await engine.dispose("session-close");
+  });
+
+  describe("a running agent's card settles as cancelled when the CLI that ran it is gone", () => {
+    const cancelled = { type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "cancelled" };
+
+    async function launched(): Promise<{ transport: FakeTransport; engine: ClaudeEngine; detached: AgentEvent[] }> {
+      const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+      const engine = engineWith(transport);
+      const detached: AgentEvent[] = [];
+      engine.onDetachedEvent = (event) => detached.push(event);
+      await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+      return { transport, engine, detached };
+    }
+
+    it("the CLI exits while idle", async () => {
+      const { transport, engine, detached } = await launched();
+      await transport.close();
+      await vi.waitFor(() => expect(detached).toContainEqual(expect.objectContaining(cancelled)));
+      await engine.dispose("session-close");
+    });
+
+    it("the CLI exits during a later owner turn", async () => {
+      const { transport, engine, detached } = await launched();
+      const turn = collect(engine.runTurn("second", { signal: new AbortController().signal }));
+      await vi.waitFor(() => expect(transport.sent).toHaveLength(2));
+      await transport.close();
+      const events = await turn;
+      expect(events.some((event) => event.type === "error")).toBe(true);
+      expect(detached).toContainEqual(expect.objectContaining(cancelled));
+      await engine.dispose("session-close");
+    });
+
+    it("the engine is disposed", async () => {
+      const { engine, detached } = await launched();
+      await engine.dispose("session-close");
+      expect(detached).toContainEqual(expect.objectContaining(cancelled));
+    });
+
+    it("settles each agent once, and a closing session that throws cannot break disposal", async () => {
+      const { transport, engine, detached } = await launched();
+      await transport.close();
+      await vi.waitFor(() => expect(detached).toContainEqual(expect.objectContaining(cancelled)));
+      engine.onDetachedEvent = () => { throw new Error("session closed"); };
+      await expect(engine.dispose("session-close")).resolves.toBeUndefined();
+      expect(detached.filter((event) => event.type === "subagent_end")).toHaveLength(1);
+    });
+  });
 });

@@ -1032,7 +1032,7 @@ export class ClaudeEngine implements SessionEngine {
    * turn-scoped: a background agent starts inside one turn and reports the
    * rest of its life while the engine is idle.
    */
-  private readonly subagentTasks = new ClaudeSubagentTasks();
+  private readonly subagentTasks = new ClaudeSubagentTasks((event) => this.emitDetached(event));
   /**
    * Receives the subagent_* events of the CLI's own agents that arrive with
    * no owner turn to carry them (a `run_in_background` agent working after
@@ -1040,6 +1040,19 @@ export class ClaudeEngine implements SessionEngine {
    * subagent channel; unbound, those events are dropped.
    */
   onDetachedEvent?: (event: AgentEvent) => void;
+
+  private emitDetached(event: AgentEvent): void {
+    try {
+      this.onDetachedEvent?.(event);
+    } catch {
+      // A closing session must never fail the engine's own cleanup.
+    }
+  }
+
+  /** The CLI's own agents die with its process: settle their cards instead of leaving them running. */
+  private settleOrphanedSubagents(): void {
+    for (const event of this.subagentTasks.abandonAll()) this.emitDetached(event);
+  }
 
   constructor(
     private client: ClaudeTransport,
@@ -1215,8 +1228,7 @@ export class ClaudeEngine implements SessionEngine {
     this.stopIdleReader();
     this.frameConsumed();
     this.approvals?.denyAll("Claude transport is restarting", "turn_cancelled");
-    // The CLI's own agents die with its process; settle their cards now.
-    for (const event of this.subagentTasks.abandonAll()) this.onDetachedEvent?.(event);
+    this.settleOrphanedSubagents();
     const factory = this.transportFactory!;
     const abort = this.replacementAbort = new AbortController();
     const current = () => !this.disposed && !abort.signal.aborted && generation === this.transportGeneration;
@@ -1948,12 +1960,16 @@ export class ClaudeEngine implements SessionEngine {
       this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
       // A turn that lost its transport releases the child.
       void this.client.close().catch(() => {});
+      this.settleOrphanedSubagents();
       yield { type: "error", error: this.terminalError, safe: engineDeathSafe(this.terminalError) };
       reportNotSent();
       this.stoppedErrorReported = this.terminalError instanceof ClaudeStoppedError;
       yield* this.terminalEvents(turn, this.terminalError, false);
     } finally {
       this.turnActive = false;
+      // An agent still running now (run_in_background) belongs to no later
+      // turn: whatever it reports from here on rides the detached channel.
+      this.subagentTasks.detachLive();
       if (!inputDispatched) reportNotSent();
       cancelSettle();
       abort.dispose();
@@ -2172,6 +2188,7 @@ export class ClaudeEngine implements SessionEngine {
       this.terminalError = terminalError;
       this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
       void this.client.close().catch(() => {});
+      this.settleOrphanedSubagents();
       ok = false;
       error = terminalError.message;
     } finally {
@@ -2196,6 +2213,7 @@ export class ClaudeEngine implements SessionEngine {
     this.transportGeneration += 1;
     this.replacementAbort?.abort(new ClaudeTransportAbortError("claude_transport_retired"));
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
+    this.settleOrphanedSubagents();
     // epoch bump + wake stops the idle reader; the disposal wait
     // settles a waiting owner turn, which terminalizes cancelled.
     this.stopIdleReader();
@@ -2730,7 +2748,7 @@ export class ClaudeEngine implements SessionEngine {
         // agent keeps working after its parent turn's result. They must never
         // open a foreign turn — the next owner send would then wait for a
         // result the agent never produces.
-        for (const event of this.subagentTasks.onFrame(frame)) this.onDetachedEvent?.(event);
+        for (const event of this.subagentTasks.onFrame(frame)) this.emitDetached(event);
         return;
       }
       if (frame.type === "result") {
@@ -2776,7 +2794,10 @@ export class ClaudeEngine implements SessionEngine {
       const epoch = ++this.idleEpoch;
       const wake = new Promise<null>((resolve) => { this.idleWake = () => resolve(null); });
       void Promise.race([this.takeFrame().then((value) => value, (error: unknown) => {
-        if (epoch === this.idleEpoch) this.idleFailure = error instanceof Error ? error : new Error("Claude transport failed");
+        if (epoch === this.idleEpoch) {
+          this.idleFailure = error instanceof Error ? error : new Error("Claude transport failed");
+          this.settleOrphanedSubagents();
+        }
         return null;
       }), wake])
         .then((value) => {
@@ -2792,6 +2813,7 @@ export class ClaudeEngine implements SessionEngine {
           }
           if (value.done) {
             this.idleFailure = this.client.terminalFailure ?? new Error("Claude exited while idle");
+            this.settleOrphanedSubagents();
             this.idleReading = false;
             return;
           }
