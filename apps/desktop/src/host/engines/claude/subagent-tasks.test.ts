@@ -184,6 +184,20 @@ describe("ClaudeSubagentTasks — edge cases", () => {
     expect(tasks.abandonAll()).toEqual([]);
     expect(tasks.onFrame(system("task_notification", { task_id: "a2", status: "completed" }))).toEqual([]);
   });
+
+  it("after detachLive a running task reports only to the detach sink; a task started later stays with its turn", () => {
+    const detached: AgentEvent[] = [];
+    const tasks = new ClaudeSubagentTasks((event) => detached.push(event));
+    tasks.onFrame(system("task_started", { task_id: "a1", tool_use_id: "toolu_a" }));
+    tasks.detachLive();
+    expect(tasks.onFrame(system("task_progress", { task_id: "a1", usage: { tool_uses: 1 } }))).toEqual([]);
+    expect(tasks.onFrame(system("task_started", { task_id: "a2", tool_use_id: "toolu_b" }))).toHaveLength(1);
+    expect(tasks.onFrame(system("task_notification", { task_id: "a1", status: "completed" }))).toEqual([]);
+    expect(detached).toEqual([
+      { type: "subagent_progress", toolCallId: "toolu_a", turns: 1, toolCalls: 1 },
+      { type: "subagent_end", toolCallId: "toolu_a", status: "completed", turns: 1, toolCalls: 1, durationMs: -1 },
+    ]);
+  });
 });
 
 describe("isClaudeSubagentFrame", () => {
