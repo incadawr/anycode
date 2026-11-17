@@ -1309,6 +1309,17 @@ export function statusLabel(
     }
     return "Dispatched";
   }
+  if (block.status === "success" && block.subagent != null) {
+    // A call that returned while the agent it started keeps running: the Claude
+    // CLI's own async Agent launch, or a SendMessage that resumed an agent.
+    if (block.subagent.final === null) {
+      return "Dispatched";
+    }
+    // A non-Agent card (SendMessage) has no other place to say how the agent ended.
+    if (block.toolName !== "Agent") {
+      return SUBAGENT_FINAL_LABELS[block.subagent.final.status];
+    }
+  }
   if (block.toolName === "Agent") {
     if (block.status === "proposed") {
       return "Queued";
@@ -2192,7 +2203,9 @@ export function ToolCallHeaderRow({
         {childAction !== undefined && !headerBadgeActionable && (
           <ChildBadge badge={childAction.badge} onOpen={undefined} />
         )}
-        {isAgent && !expanded && block.subagent && block.subagent.final === null && (
+        {/* Any card can carry a running agent: the Claude CLI reports an agent
+            resumed by SendMessage on the SendMessage card. */}
+        {!expanded && block.subagent && block.subagent.final === null && (
           <span className="subagent-collapsed-progress">
             <Spinner className="icon-spin" />
             {formatSubagentCounters(block.subagent)}
@@ -2354,6 +2367,16 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
             />
           ) : (
             <>
+              {/* A non-Agent card that carries an agent's run (a SendMessage
+                  that resumed it) shows the same sub-status and activity rows. */}
+              {block.subagent && (
+                <SubagentStatus
+                  subagent={block.subagent}
+                  parentModel={parentIdentity.model}
+                  parentEngine={parentIdentity.engine}
+                />
+              )}
+              {block.subagent && <ActivityFeed subagent={block.subagent} />}
               {parsedTodos !== null ? (
                 <TodoChecklist todos={parsedTodos} />
               ) : (

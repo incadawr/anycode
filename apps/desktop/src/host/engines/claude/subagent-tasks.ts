@@ -35,7 +35,17 @@ const NOTIFICATION_STATUS: Record<string, SubagentEndStatus> = {
 };
 
 interface TrackedTask {
+  /** The call whose card shows this run: the Agent call, or the SendMessage call that resumed the agent. */
   toolCallId: string;
+  /** The Agent call that first started the agent: the child's own frames name it as their parent on every run. */
+  agentCall: string;
+  /** The CLI's tool_uses count is cumulative across runs of one agent; this run's card counts only its own. */
+  baseToolUses: number;
+  /**
+   * Host time a resumed run started at. The CLI's duration_ms counts from the
+   * agent's first start, idle time included, so a resumed run is timed here.
+   */
+  resumedAt?: number;
   /** The task outlived the owner turn that started it: its events go to the detached sink from then on. */
   detached: boolean;
   /** Distinct child `message.id`s seen: one per model response, however many frames it spans. */
@@ -66,6 +76,12 @@ export function isClaudeSubagentFrame(frame: ClaudeStreamMessage): boolean {
 export class ClaudeSubagentTasks {
   /** Live agent tasks keyed by the CLI's `task_id`; removed when the task settles. */
   private readonly tasks = new Map<string, TrackedTask>();
+  /**
+   * Every agent task seen, kept after it settles: SendMessage can resume a
+   * finished agent under the same task_id, and its new run still needs the
+   * original Agent call (the child frames' parent) and the cumulative count.
+   */
+  private readonly history = new Map<string, { agentCall: string; toolUses: number }>();
 
   /**
    * @param detach receives the events of a task that outlived its owner turn
@@ -117,7 +133,7 @@ export class ClaudeSubagentTasks {
    */
   private onChildFrame(toolCallId: string, frame: ClaudeStreamMessage): { task?: TrackedTask; events: AgentEvent[] } {
     if (frame.type !== "assistant") return { events: [] };
-    const task = [...this.tasks.values()].find(candidate => candidate.toolCallId === toolCallId);
+    const task = [...this.tasks.values()].find(candidate => candidate.agentCall === toolCallId);
     if (task === undefined) return { events: [] };
     const message = record(frame.message);
     const id = text(message?.id);
@@ -129,7 +145,7 @@ export class ClaudeSubagentTasks {
       const callId = text(block?.id);
       if (block?.type !== "tool_use" || name === undefined || callId === undefined || task.toolUses.has(callId)) continue;
       task.toolUses.add(callId);
-      events.push({ type: "subagent_activity", toolCallId, toolName: name, summary: summarizeChildToolCall(name, block.input) });
+      events.push({ type: "subagent_activity", toolCallId: task.toolCallId, toolName: name, summary: summarizeChildToolCall(name, block.input) });
     }
     return { task, events };
   }
@@ -140,11 +156,33 @@ export class ClaudeSubagentTasks {
     const taskType = text(fields.task_type);
     if (taskId === undefined || toolCallId === undefined) return { events: [] };
     if (taskType !== undefined && taskType !== "local_agent") return { events: [] };
-    const task: TrackedTask = { toolCallId, detached: false, responses: new Set(), toolUses: new Set(), toolCalls: 0 };
+    // A task_started for a task already running moves it to the new call; the
+    // old card settles here, since no notification will ever name it again.
+    const events: AgentEvent[] = [];
+    const running = this.tasks.get(taskId);
+    if (running !== undefined) {
+      const end = this.endEvent(running, "completed", -1);
+      if (running.detached) this.detach(end);
+      else events.push(end);
+    }
+    const seen = this.history.get(taskId);
+    const agentCall = seen?.agentCall ?? toolCallId;
+    const baseToolUses = seen?.toolUses ?? 0;
+    this.history.set(taskId, { agentCall, toolUses: baseToolUses });
+    const task: TrackedTask = {
+      toolCallId,
+      agentCall,
+      baseToolUses,
+      ...(seen === undefined ? {} : { resumedAt: Date.now() }),
+      detached: false,
+      responses: new Set(),
+      toolUses: new Set(),
+      toolCalls: 0,
+    };
     this.tasks.set(taskId, task);
     return {
       task,
-      events: [{
+      events: [...events, {
         type: "subagent_start",
         toolCallId,
         agentType: text(fields.subagent_type) ?? "agent",
@@ -157,7 +195,7 @@ export class ClaudeSubagentTasks {
     const found = this.taskFor(fields);
     if (found === undefined) return { events: [] };
     const { task } = found;
-    task.toolCalls = count(record(fields.usage)?.tool_uses) ?? task.toolCalls;
+    task.toolCalls = this.ownToolCalls(task, record(fields.usage)?.tool_uses);
     // `description` ("Reading src/a.ts") is prose that already carries a verb;
     // the activity rows come from the child's own tool_use blocks instead.
     const lastTool = text(fields.last_tool_name);
@@ -179,19 +217,27 @@ export class ClaudeSubagentTasks {
     const { taskId, task } = found;
     this.tasks.delete(taskId);
     const usage = record(fields.usage);
-    task.toolCalls = count(usage?.tool_uses) ?? task.toolCalls;
+    task.toolCalls = this.ownToolCalls(task, usage?.tool_uses);
+    this.history.set(taskId, { agentCall: task.agentCall, toolUses: task.baseToolUses + task.toolCalls });
     return {
       task,
-      events: [{
-        type: "subagent_end",
-        toolCallId: task.toolCallId,
-        status: NOTIFICATION_STATUS[text(fields.status) ?? ""] ?? "error",
-        turns: this.turns(task),
-        toolCalls: task.toolCalls,
-        // -1 is the existing "duration unknown" marker (the card hides the time).
-        durationMs: count(usage?.duration_ms) ?? -1,
-      }],
+      // -1 is the existing "duration unknown" marker (the card hides the time).
+      events: [this.endEvent(
+        task,
+        NOTIFICATION_STATUS[text(fields.status) ?? ""] ?? "error",
+        task.resumedAt === undefined ? count(usage?.duration_ms) ?? -1 : Date.now() - task.resumedAt,
+      )],
     };
+  }
+
+  private endEvent(task: TrackedTask, status: SubagentEndStatus, durationMs: number): AgentEvent {
+    return { type: "subagent_end", toolCallId: task.toolCallId, status, turns: this.turns(task), toolCalls: task.toolCalls, durationMs };
+  }
+
+  /** This run's own tool calls out of the CLI's cumulative count; an absent count keeps the last one. */
+  private ownToolCalls(task: TrackedTask, cumulative: unknown): number {
+    const total = count(cumulative);
+    return total === undefined ? task.toolCalls : Math.max(0, total - task.baseToolUses);
   }
 
   /**
@@ -201,14 +247,7 @@ export class ClaudeSubagentTasks {
    * otherwise stay running forever.
    */
   abandonAll(): AgentEvent[] {
-    const events: AgentEvent[] = [...this.tasks.values()].map(task => ({
-      type: "subagent_end",
-      toolCallId: task.toolCallId,
-      status: "cancelled",
-      turns: this.turns(task),
-      toolCalls: task.toolCalls,
-      durationMs: -1,
-    }));
+    const events = [...this.tasks.values()].map(task => this.endEvent(task, "cancelled", -1));
     this.tasks.clear();
     return events;
   }
