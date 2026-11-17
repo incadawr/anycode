@@ -882,22 +882,24 @@ describe("— browser tools through the engine door (C8/C9/C10/C12/C14)", () => 
   });
 });
 
-it("settles the CLI's own running agents as cancelled when the transport is replaced", async () => {
-  const fake = fakeSpawn();
-  const { engine, sessionRef } = await startClaudeEngine(baseOptions(fake.spawnImpl));
-  try {
-    const detached: AgentEvent[] = [];
-    engine.onDetachedEvent = event => detached.push(event);
-    fake.streams[0]!.emit("data", Buffer.from(JSON.stringify({ type: "system", subtype: "task_started", task_id: "a1", tool_use_id: "toolu_bg", task_type: "local_agent", description: "Scan docs" }) + "\n"));
-    await vi.waitFor(() => expect(detached).toHaveLength(1));
-    await engine.replaceTransport({ resume: sessionRef });
-    expect(detached).toEqual([
-      { type: "subagent_start", toolCallId: "toolu_bg", agentType: "agent", description: "Scan docs" },
-      { type: "subagent_end", toolCallId: "toolu_bg", status: "cancelled", turns: 0, toolCalls: 0, durationMs: -1 },
-    ]);
-  } finally {
-    await engine.dispose("session-close");
-  }
+describe("the CLI's own agents across a transport replacement", () => {
+  it("settles the CLI's own running agents as cancelled when the transport is replaced", async () => {
+    const fake = fakeSpawn();
+    const { engine, sessionRef } = await startClaudeEngine(baseOptions(fake.spawnImpl));
+    try {
+      const detached: AgentEvent[] = [];
+      engine.onDetachedEvent = event => detached.push(event);
+      fake.streams[0]!.emit("data", Buffer.from(JSON.stringify({ type: "system", subtype: "task_started", task_id: "a1", tool_use_id: "toolu_bg", task_type: "local_agent", description: "Scan docs" }) + "\n"));
+      await vi.waitFor(() => expect(detached).toHaveLength(1));
+      await engine.replaceTransport({ resume: sessionRef });
+      expect(detached).toEqual([
+        { type: "subagent_start", toolCallId: "toolu_bg", agentType: "agent", description: "Scan docs" },
+        { type: "subagent_end", toolCallId: "toolu_bg", status: "cancelled", turns: 0, toolCalls: 0, durationMs: -1 },
+      ]);
+    } finally {
+      await engine.dispose("session-close");
+    }
+  });
 });
 
 function forwardResolver(dir: string, paths: string[]) {
