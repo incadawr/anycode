@@ -2973,6 +2973,16 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusLabel({ toolName: "Bash", status: "success", input: { run_in_background: true } })).toBe("Success");
   });
 
+  it("a Claude CLI background Agent reads its child's outcome once the child ends, so a folded card is not stuck on Dispatched", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: true } });
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("Error");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
+    // An AnyCode-routed detached child keeps its badge: its live state rides the child badge.
+    const routed = mkAgentBlock({ status: "success", input: { prompt: "p", detach: true } });
+    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Dispatched");
+  });
+
   it("labels a durable background admission without tier or detach as Dispatched", () => {
     const block = mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p" }, subagentDispatched: true });
     expect(statusLabel(block)).toBe("Dispatched");
