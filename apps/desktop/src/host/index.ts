@@ -1060,6 +1060,11 @@ function forwardClaudeDetachedEvent(engine: SessionEngine, event: AgentEvent): v
   if (session.ownsRuntime(engine) || event.type === "subagent_end") session.emitDetachedSubagentEvent(event);
 }
 
+/** A turn the Claude CLI started on its own becomes a session turn when the session runs on that engine and is idle. */
+function adoptClaudeTurn(engine: SessionEngine): boolean {
+  return session !== null && session.ownsRuntime(engine) && session.adoptEngineTurn();
+}
+
 const hostDiagnosticSink = createReplayDiagnosticSink(
   message => process.parentPort.postMessage(message),
   event => session?.emitAgentEvent(event),
@@ -1504,6 +1509,7 @@ function hostSwitchFactory(
         runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
         bindClaudeUsage(raw, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null, runtime.identity!.model);
         raw.onDetachedEvent = event => forwardClaudeDetachedEvent(runtime.engine, event);
+        raw.onUnsolicitedTurn = () => adoptClaudeTurn(runtime.engine);
       }, cleanup: () => { routing.cleanup(); } };
     },
   });
@@ -2613,6 +2619,8 @@ async function bootClaudeSession(
   // The CLI's own background agents report after the parent turn settled;
   // their subagent_* events reach the card through the detached channel.
   claudeEngine.onDetachedEvent = event => forwardClaudeDetachedEvent(booted.engine, event);
+  // The CLI's report turn after such an agent is shown as a turn of the session.
+  claudeEngine.onUnsolicitedTurn = () => adoptClaudeTurn(booted.engine);
 
   // Identity facts, known the moment the transport connected. The POSTURE
   // (model/preset) is deliberately NOT here: it is written only from the

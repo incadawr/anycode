@@ -3302,4 +3302,115 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
       expect(detached.filter((event) => event.type === "subagent_end")).toHaveLength(1);
     });
   });
+
+  describe("the CLI's report turn becomes a session turn when the session adopts it", () => {
+    const REPORT_TEXT = "The background agent finished";
+
+    async function launched(): Promise<{ transport: FakeTransport; engine: ClaudeEngine }> {
+      const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+      const engine = engineWith(transport);
+      engine.onDetachedEvent = () => {};
+      await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+      return { transport, engine };
+    }
+
+    it("translates the report turn as a turn without writing to the CLI, and the next prompt is not held", async () => {
+      const { transport, engine } = await launched();
+      let adopted: Promise<AgentEvent[]> | undefined;
+      engine.onUnsolicitedTurn = () => {
+        adopted = collect(engine.adoptTurn({ signal: new AbortController().signal }));
+        return true;
+      };
+      for (const frame of [...idleAgentFrames, ...reportTurn]) transport.push(frame);
+      await vi.waitFor(() => expect(adopted).toBeDefined());
+      const events = await adopted!;
+
+      expect(events[0]).toMatchObject({ type: "turn_start" });
+      expect(JSON.stringify(events)).toContain(REPORT_TEXT);
+      expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+      expect(events.some(isForeignNotice)).toBe(false);
+      expect(transport.sent).toEqual(["launch it"]);
+
+      for (const frame of ownerFrames("two")) transport.enqueue(frame);
+      const next = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+      expect(next.some(isForeignNotice)).toBe(false);
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT two");
+      expect(JSON.stringify(next)).not.toContain(REPORT_TEXT);
+      expect(transport.sent).toEqual(["launch it", "second"]);
+      await engine.dispose("session-close");
+    });
+
+    it("picks up the frames that arrive after the adoption started", async () => {
+      const { transport, engine } = await launched();
+      let adopted: Promise<AgentEvent[]> | undefined;
+      engine.onUnsolicitedTurn = () => {
+        adopted = collect(engine.adoptTurn({ signal: new AbortController().signal }));
+        return true;
+      };
+      const reportResult = reportTurn.at(-1)!;
+      for (const frame of [...idleAgentFrames, ...reportTurn.slice(0, -1)]) transport.push(frame);
+      await vi.waitFor(() => expect(adopted).toBeDefined());
+      await new Promise((resolve) => setImmediate(resolve));
+      transport.push(reportResult);
+      const events = await adopted!;
+      expect(JSON.stringify(events)).toContain(REPORT_TEXT);
+      expect(events.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "completed", turns: 1 }]);
+      await engine.dispose("session-close");
+    });
+
+    it("a declined offer leaves the turn foreign: kept out of the transcript, with the notice", async () => {
+      const { transport, engine } = await launched();
+      let offers = 0;
+      engine.onUnsolicitedTurn = () => { offers += 1; return false; };
+      for (const frame of [...idleAgentFrames, ...reportTurn]) transport.push(frame);
+      for (const frame of ownerFrames("two")) transport.enqueue(frame);
+      await vi.waitFor(() => expect(offers).toBe(1));
+      const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+      expect(events.filter(isForeignNotice)).toHaveLength(1);
+      expect(JSON.stringify(events)).not.toContain(REPORT_TEXT);
+      expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
+      await engine.dispose("session-close");
+    });
+
+    it("an accepted offer that never starts gives way to the next owner prompt", async () => {
+      const { transport, engine } = await launched();
+      let offers = 0;
+      engine.onUnsolicitedTurn = () => { offers += 1; return true; };
+      for (const frame of [...idleAgentFrames, ...reportTurn]) transport.push(frame);
+      for (const frame of ownerFrames("two")) transport.enqueue(frame);
+      await vi.waitFor(() => expect(offers).toBe(1));
+      const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      expect(events.filter(isForeignNotice)).toHaveLength(1);
+      expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
+      expect(transport.sent).toEqual(["launch it", "second"]);
+
+      // The offer is spent: a late adoption finds nothing to run.
+      const late = await collect(engine.adoptTurn({ signal: new AbortController().signal }));
+      expect(types(late)).toEqual(["turn_start", "turn_end", "loop_end"]);
+      await engine.dispose("session-close");
+    });
+
+    it("Stop during an adopted turn interrupts the CLI's turn", async () => {
+      const { transport, engine } = await launched();
+      const controller = new AbortController();
+      let adopted: Promise<AgentEvent[]> | undefined;
+      engine.onUnsolicitedTurn = () => {
+        adopted = collect(engine.adoptTurn({ signal: controller.signal }));
+        return true;
+      };
+      for (const frame of [...idleAgentFrames, ...reportTurn.slice(0, -1)]) transport.push(frame);
+      await vi.waitFor(() => expect(adopted).toBeDefined());
+      await new Promise((resolve) => setImmediate(resolve));
+      controller.abort();
+      await vi.waitFor(() => expect(transport.interrupts).toBe(1));
+      transport.push(foreignResultFrame("stopped", { terminalReason: "aborted_streaming" }));
+      const events = await adopted!;
+      expect(events.find((event) => event.type === "loop_end")).toMatchObject({ reason: "cancelled" });
+      expect(transport.sent).toEqual(["launch it"]);
+      await engine.dispose("session-close");
+    });
+  });
 });

@@ -209,6 +209,8 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
   compactNow?: (options: { signal: AbortSignal }) => AsyncIterable<AgentEvent>;
   /** Same own-property delegation: the restart action must reach the real engine through this wrapper. */
   restartStopped?: () => Promise<boolean>;
+  /** Same own-property delegation; an adopted turn is recorded like any other, without a user item. */
+  adoptTurn?: (options: RunTurnOptions) => AsyncIterable<AgentEvent>;
 
   constructor(
     private readonly engine: ClaudeShadowTranscriptHost,
@@ -226,6 +228,10 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     const innerRestart = this.engine.restartStopped;
     if (innerRestart !== undefined) {
       this.restartStopped = () => innerRestart.call(this.engine);
+    }
+    const innerAdopt = this.engine.adoptTurn;
+    if (innerAdopt !== undefined) {
+      this.adoptTurn = (options) => this.record(null, options, (tracked) => innerAdopt.call(this.engine, tracked));
     }
   }
 
@@ -262,12 +268,21 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     return projectClaudeHistory(await this.sink.list(this.sessionRef));
   }
 
-  async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
+  runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
+    return this.record(input, options, (tracked) => this.engine.runTurn(input, tracked));
+  }
+
+  /** Tees a turn's events to the caller, then records the turn; `input` null = no user item (an adopted turn). */
+  private async *record(
+    input: string | null,
+    options: RunTurnOptions,
+    start: (options: RunTurnOptions) => AsyncIterable<AgentEvent>,
+  ): AsyncIterable<AgentEvent> {
     const turn = this.nextTurnOrdinal++;
     const events: AgentEvent[] = [];
     let accepted = options.onInputDispatched === undefined;
     try {
-      for await (const event of this.engine.runTurn(input, { ...options, onInputAccepted: (nativeId) => { options.onInputAccepted?.(nativeId); accepted = true; } })) {
+      for await (const event of start({ ...options, onInputAccepted: (nativeId) => { options.onInputAccepted?.(nativeId); accepted = true; } })) {
         events.push(event);
         yield event;
       }
@@ -279,7 +294,9 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
       // snapshot rather than raw wire values.
       try {
         if (!accepted) return;
-        const projected = projectClaudeTurn(input, events, this.now, turn).map((item) => options.turnId ? { ...item, turnId: options.turnId } : item);
+        const items = projectClaudeTurn(input ?? "", events, this.now, turn);
+        // projectClaudeTurn's first item is the user input.
+        const projected = (input === null ? items.slice(1) : items).map((item) => options.turnId ? { ...item, turnId: options.turnId } : item);
         this.sink.record(
           this.sessionRef,
           projected.map((data, index) => ({ turnOrdinal: turn, positionInTurn: index, itemId: `${turn}:${index}`, data })),

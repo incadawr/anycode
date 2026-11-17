@@ -113,6 +113,12 @@ export interface SessionEngine {
   runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent>;
   /** Continue a terminal-control turn after rehost without a synthetic user frame. */
   continueTurn?(options: RunTurnOptions): AsyncIterable<AgentEvent>;
+  /**
+   * Run, as a turn, one the engine's runtime started on its own (the Claude
+   * CLI reporting a finished background agent). Offered through the engine's
+   * own callback; the session calls this only after accepting the offer.
+   */
+  adoptTurn?(options: RunTurnOptions): AsyncIterable<AgentEvent>;
   /** Owned transport only. Acknowledgement does not prove model application. */
   steeringStatus?(): { supported: boolean; ready: boolean; nativeTurnId?: string };
   steer?(input: string): Promise<{ turnId: string }>;

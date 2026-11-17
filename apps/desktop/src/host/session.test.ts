@@ -2544,6 +2544,89 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     expect(ordinaryRuns).toBe(0);
   });
 
+  describe("a turn the engine's runtime started on its own (adoptEngineTurn)", () => {
+    function gate(): { promise: Promise<void>; open: () => void } {
+      let open!: () => void;
+      const promise = new Promise<void>((resolve) => { open = resolve; });
+      return { promise, open };
+    }
+
+    it("runs it as a turn of the session, without a user input", async () => {
+      const inputs: string[] = [];
+      let adoptions = 0;
+      const engine = buildFakeEngine({
+        id: "claude",
+        async *runTurn(input: string): AsyncIterable<AgentEvent> { inputs.push(input); },
+        async *adoptTurn(): AsyncIterable<AgentEvent> {
+          adoptions += 1;
+          yield { type: "text_delta", id: "t1", text: "agent finished" };
+          yield { type: "loop_end", reason: "completed", turns: 1 };
+        },
+      });
+      const { port, session } = buildTestSession({ engine });
+      port.send({ type: "ui_ready" });
+
+      expect(session.adoptEngineTurn()).toBe(true);
+      await vi.waitFor(() => expect(adoptions).toBe(1));
+      await vi.waitFor(() => expect((session as unknown as { busy: boolean }).busy).toBe(false));
+      expect(port.received.some((m) => (m as { type?: unknown }).type === "turn_started")).toBe(true);
+      expect(JSON.stringify(port.received)).toContain("agent finished");
+      expect(inputs).toEqual([]);
+    });
+
+    it("is refused while a turn runs, and without engine support", async () => {
+      const release = gate();
+      let adoptions = 0;
+      const engine = buildFakeEngine({
+        id: "claude",
+        async *runTurn(): AsyncIterable<AgentEvent> {
+          await release.promise;
+          yield { type: "loop_end", reason: "completed", turns: 1 };
+        },
+        async *adoptTurn(): AsyncIterable<AgentEvent> { adoptions += 1; },
+      });
+      const { port, session } = buildTestSession({ engine });
+      port.send({ type: "ui_ready" });
+      port.send({ type: "user_message", requestId: "r1", text: "hello" });
+      await vi.waitFor(() => expect((session as unknown as { busy: boolean }).busy).toBe(true));
+      expect(session.adoptEngineTurn()).toBe(false);
+      release.open();
+      await vi.waitFor(() => expect((session as unknown as { busy: boolean }).busy).toBe(false));
+      expect(adoptions).toBe(0);
+
+      const plain = buildTestSession({ engine: buildFakeEngine({ id: "claude" }) });
+      plain.port.send({ type: "ui_ready" });
+      expect(plain.session.adoptEngineTurn()).toBe(false);
+    });
+
+    it("a message sent during the adopted turn waits for it, then runs as the next turn", async () => {
+      const release = gate();
+      const order: string[] = [];
+      const engine = buildFakeEngine({
+        id: "claude",
+        async *runTurn(input: string): AsyncIterable<AgentEvent> {
+          order.push(`run:${input}`);
+          yield { type: "loop_end", reason: "completed", turns: 1 };
+        },
+        async *adoptTurn(): AsyncIterable<AgentEvent> {
+          order.push("adopt:start");
+          await release.promise;
+          order.push("adopt:end");
+          yield { type: "loop_end", reason: "completed", turns: 1 };
+        },
+      });
+      const { port, session } = buildTestSession({ engine });
+      port.send({ type: "ui_ready" });
+      expect(session.adoptEngineTurn()).toBe(true);
+      await vi.waitFor(() => expect(order).toEqual(["adopt:start"]));
+      port.send({ type: "user_message", requestId: "r1", text: "next" });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(order).toEqual(["adopt:start"]);
+      release.open();
+      await vi.waitFor(() => expect(order).toEqual(["adopt:start", "adopt:end", "run:next"]));
+    });
+  });
+
   it("(Q1-a, CUT-S2 §10.12.1) ui_ready arriving after shutdown() has already resolved never starts the pending continuation on the disposed engine", async () => {
     let continuationRuns = 0;
     const engine = buildFakeEngine({

@@ -5248,7 +5248,19 @@ export class Session {
    * tell "started, own `currentTurn` now covers it" apart from "refused, this
    * queued item is fully spent and produced nothing to wait on."
    */
-  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system", ownsAdmission = false): boolean {
+  /**
+   * Takes a turn the engine's runtime started on its own (the Claude CLI's
+   * report after a background agent) as a turn of this session, so its text,
+   * tool calls and agents reach the transcript and new input queues behind it.
+   * Refused (false) unless the root session is idle and the engine can adopt.
+   */
+  adoptEngineTurn(): boolean {
+    if (this.engine.adoptTurn === undefined || this.child !== undefined || this.busy || this.currentTurn !== null
+      || this.shuttingDown || this.relocating || this.agentInbox.length > 0) return false;
+    return this.acceptUserMessage(randomUUID(), "", undefined, "system", false, true);
+  }
+
+  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system", ownsAdmission = false, adopt = false): boolean {
     if (this.postureBlocked(!ownsAdmission)) return false;
     // record the RAW human turn for the ask-zone classifier's
     // engine-session coverage (classifying-broker.ts). Only genuinely human
@@ -5296,7 +5308,7 @@ export class Session {
     // exactly once per session — the flag is set on the first attempt. A
     // child session skips this unconditionally (CUT-S2 §5.14): it has no
     // name, on neither its programmatic initial turn nor a later steer one.
-    if (this.child === undefined) {
+    if (this.child === undefined && !adopt) {
       this.maybeDeriveTitle(text);
     }
     // Background-task completion notices (slice 6.DP-2, mirror of
@@ -5323,7 +5335,7 @@ export class Session {
     // reminder replaces the plan reminder entirely (never both) — an
     // orchestrate parent sits in plan mode, but its discipline is delegation,
     // not planning.
-    if (this.engine.capabilities.supportsCorePermissions && this.engine.mode() === "plan") {
+    if (!adopt && this.engine.capabilities.supportsCorePermissions && this.engine.mode() === "plan") {
       turnInput = this.orchestrate
         ? withOrchestrateReminder(turnInput)
         : withPlanModeReminder(turnInput);
@@ -5334,7 +5346,7 @@ export class Session {
     // health HERE — strictly before busy=true — and switches to the first
     // healthy fallback when the primary is down, surfacing an engine_notice
     // line. The check runs ONLY in this idle accept path.
-    if (this.orchestrate) {
+    if (this.orchestrate && !adopt) {
       const route = this.orchestratorRouteCheck?.();
       if (route !== undefined) {
         const notice = typeof route === "string" ? route : route.notice;
@@ -5349,8 +5361,9 @@ export class Session {
         });
       }
     }
-    const carriesWorktreeExitNotice = this.worktreeExitNoticePending;
-    if (this.engine.capabilities.supportsTasks && this.tasks) {
+    // An adopted turn sends nothing, so it can carry no notice.
+    const carriesWorktreeExitNotice = !adopt && this.worktreeExitNoticePending;
+    if (!adopt && this.engine.capabilities.supportsTasks && this.tasks) {
       const notices = this.tasks.drainNotices();
       if (notices.length > 0) {
         turnInput = withBackgroundTaskNotices(turnInput, notices);
@@ -5358,7 +5371,7 @@ export class Session {
     }
     if (this.peerTurnObserver && this.agentDeliveries.has(requestId)) this.messageTurns.set(requestId, { hostTurnId: turnId });
     this.busy = true;
-    const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice, origin, pendingTurnIdHolder).finally(
+    const turn: Promise<void> = this.runTurn(requestId, adopt ? undefined : turnInput, attachments, carriesWorktreeExitNotice, origin, pendingTurnIdHolder, adopt).finally(
       async () => {
         // clear the pending prompt at this turn's terminal via the
         // REAL exact-owner guard (`clearPendingPromptIfOwner` — extracted
@@ -6114,6 +6127,7 @@ export class Session {
     carriesWorktreeExitNotice = false,
     origin?: "system",
     pendingTurnIdHolder?: { turnId: string; originalText: string },
+    adopt = false,
   ): Promise<void> {
     // phase-1 defect 3: the outer turn UUID is minted by
     // `acceptUserMessage` at ADMISSION (captured there into pendingPrompt,
@@ -6268,7 +6282,8 @@ export class Session {
         turnId,
         ...deliveryHooks,
       };
-      const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
+      const stream = adopt ? this.engine.adoptTurn?.(options)
+        : text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
         throw new Error("active engine cannot continue a relocated turn");
       }

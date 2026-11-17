@@ -304,6 +304,31 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
   // request. These tests pin the delegation through a STRUCTURAL host
   // interface (`ClaudeShadowTranscriptHost`) — never `instanceof` — so the
   // wrapper stays a decorator over anything engine-shaped.
+  describe("adoptTurn delegation", () => {
+    it("forwards an adopted turn and records it without a user item, absent when the host cannot adopt", async () => {
+      const recorded: HistoryItem[] = [];
+      const sink: ClaudeShadowTranscriptPort = { record: (_ref, items) => recorded.push(...items.map((i) => i.data as HistoryItem)), list: async () => [] };
+      const engine = fakeEngine([], { model: null, permissionMode: null }) as SessionEngine;
+      expect(new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", []).adoptTurn).toBeUndefined();
+      const report: AgentEvent[] = [
+        { type: "turn_start", turn: 2 },
+        { type: "text_start", id: "m2:0" },
+        { type: "text_delta", id: "m2:0", text: "agent done" },
+        { type: "text_end", id: "m2:0" },
+        { type: "turn_end", turn: 2, finishReason: "stop" },
+        { type: "loop_end", reason: "completed", turns: 1 },
+      ];
+      engine.adoptTurn = async function* (this: unknown): AsyncIterable<AgentEvent> {
+        expect(this).toBe(engine);
+        yield* report;
+      };
+      const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", [], 0, tick());
+
+      expect(await drain(wrapped.adoptTurn!({ ...fakeOptions(), turnId: "host-turn" }))).toEqual(report);
+      expect(recorded).toEqual([expect.objectContaining({ turnId: "host-turn", message: { role: "assistant", content: [{ type: "text", text: "agent done" }] } })]);
+    });
+  });
+
   describe("restartStopped delegation", () => {
     it("exposes the restart action of the wrapped engine and stays absent when the host has none", async () => {
       const sink: ClaudeShadowTranscriptPort = { record: () => {}, list: async () => [] };

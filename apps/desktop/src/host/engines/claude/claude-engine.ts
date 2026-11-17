@@ -207,6 +207,14 @@ function warning(message: string): AgentEvent {
   return { type: "engine_notice", level: "warning", message };
 }
 
+const FOREIGN_TURN_NOTICE: AgentEvent = {
+  type: "engine_notice", level: "info",
+  message: "Claude started a turn on its own (likely a cross-session notice); its output is kept out of this transcript.",
+};
+
+/** An offered unsolicited turn whose adoption never starts falls back to foreign-turn handling past this many frames. */
+const ADOPTION_BACKLOG_LIMIT = 10_000;
+
 /**
  * defensively parses a `system/init.mcp_servers[]` array into plain
  * names. Each entry may be `{name, status, source, …}` or a bare string
@@ -1031,6 +1039,53 @@ export class ClaudeEngine implements SessionEngine {
    * subagent channel; unbound, those events are dropped.
    */
   onDetachedEvent?: (event: AgentEvent) => void;
+  /**
+   * Asked when the CLI starts a turn on its own while no owner turn runs —
+   * typically its report after a `run_in_background` agent finished. `true`
+   * means the session takes that turn as one of its own and will drive it
+   * through `adoptTurn`; `false` (or unbound) keeps it out of the transcript.
+   */
+  onUnsolicitedTurn?: () => boolean;
+  /**
+   * The frames of an unsolicited turn offered to the session, kept until
+   * `adoptTurn` replays them through a translator. `null` = no offer pending.
+   */
+  private adoptionBacklog: ClaudeStreamMessage[] | null = null;
+
+  private offerAdoption(): void {
+    if (this.adoptionBacklog === null || this.disposed) return;
+    let taken = false;
+    try {
+      taken = this.onUnsolicitedTurn?.() === true;
+    } catch {
+      taken = false;
+    }
+    if (!taken) this.releaseAdoption();
+  }
+
+  /**
+   * Gives up a pending offer: the turn becomes a plain foreign turn again (its
+   * notice is queued and the frames buffered so far are absorbed, a buffered
+   * `result` closing it).
+   */
+  private releaseAdoption(): void {
+    const backlog = this.adoptionBacklog;
+    if (backlog === null) return;
+    this.adoptionBacklog = null;
+    this.queueNotice(FOREIGN_TURN_NOTICE);
+    // backlog[0] opened the foreign turn and has been classified already.
+    for (const frame of backlog.slice(1)) this.absorbIdleFrame(frame);
+  }
+
+  /**
+   * Drives the unsolicited turn the session accepted through `onUnsolicitedTurn`
+   * as a normal turn: its frames — those buffered since it began and the rest
+   * as they arrive — go through the turn translator. Nothing is written to the
+   * CLI. With no turn to adopt it ends at once.
+   */
+  adoptTurn(options: RunTurnOptions): AsyncIterable<AgentEvent> {
+    return this.runTurn("", options, true);
+  }
 
   private emitDetached(event: AgentEvent): void {
     try {
@@ -1211,6 +1266,8 @@ export class ClaudeEngine implements SessionEngine {
     this.frameConsumed();
     this.approvals?.denyAll("Claude transport is restarting", "turn_cancelled");
     this.settleOrphanedSubagents();
+    // A turn of the retired process can no longer be adopted.
+    this.adoptionBacklog = null;
     const factory = this.transportFactory!;
     const abort = this.replacementAbort = new AbortController();
     const current = () => !this.disposed && !abort.signal.aborted && generation === this.transportGeneration;
@@ -1447,6 +1504,7 @@ export class ClaudeEngine implements SessionEngine {
     if (!(this.terminalError instanceof ClaudeStoppedError) || this.terminalError.phase !== "while idle"
       || this.disposed || this.turnActive || this.replacement || this.orchestrationState !== "off") return false;
     this.foreignTurn = null;
+    this.adoptionBacklog = null;
     this.idleFailure = this.terminalError;
     this.terminalError = null;
     this.stoppedErrorReported = false;
@@ -1474,7 +1532,19 @@ export class ClaudeEngine implements SessionEngine {
     }
   }
 
-  async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
+  async *runTurn(input: string, options: RunTurnOptions, adopt = false): AsyncIterable<AgentEvent> {
+    if (!adopt) {
+      // An owner input outranks an offer the session never took up.
+      this.releaseAdoption();
+    } else if (this.adoptionBacklog === null || this.disposed || this.terminalError !== null
+      || this.replacement !== null || this.orchestrationState !== "off") {
+      this.releaseAdoption();
+      const turn = ++this.turnNumber;
+      yield { type: "turn_start", turn };
+      yield { type: "turn_end", turn, finishReason: "other" };
+      yield { type: "loop_end", reason: "cancelled", turns: turn };
+      return;
+    }
     let inputDispatched = false;
     let notSentReported = false;
     const reportNotSent = (): void => {
@@ -1628,6 +1698,8 @@ export class ClaudeEngine implements SessionEngine {
           for (const ev of queued) yield ev;
           continue barrier;
         }
+        // An adopted turn is the CLI's own: nothing to send, nothing to wait for.
+        if (adopt) break barrier;
         // (b) Wait out a STILL-RUNNING foreign turn. NO TIMER, NO
         //     AUTO-INTERRUPT: normal unsolicited work may run arbitrarily
         //     long. While waiting, the OWNER is the single reader: every
@@ -1783,8 +1855,20 @@ export class ClaudeEngine implements SessionEngine {
         return; // finally still runs: turnActive=false, reader restart guard, etc.
       }
 
+      // The adopted turn's frames that arrived before this turn owned the
+      // stream are translated first, in order; the foreign turn is now ours.
+      const replay: ClaudeStreamMessage[] = [];
+      if (adopt) {
+        replay.push(...(this.adoptionBacklog ?? []));
+        this.adoptionBacklog = null;
+        const open = this.foreignTurn;
+        this.foreignTurn = null;
+        open?.done.resolve();
+      }
+
       while (!terminal) {
-        const raced = await Promise.race([
+        const replayed = replay.shift();
+        const raced = replayed !== undefined ? { kind: "notification" as const, value: { done: false as const, value: replayed } } : await Promise.race([
           this.takeFrame().then(
             (value) => ({ kind: "notification" as const, value }),
             (error: unknown) => ({ kind: "rejected" as const, error }),
@@ -1869,7 +1953,8 @@ export class ClaudeEngine implements SessionEngine {
         }
         // the slot's frame is consumed by THIS loop iteration; the
         // next iteration's takeFrame() re-parks. Exactly one read in flight.
-        this.frameConsumed();
+        // A replayed frame was consumed when it was buffered.
+        if (replayed === undefined) this.frameConsumed();
         // at user/tool-result and assistant boundaries, kick off a
         // throttled, non-overlapping mid-turn context refresh. Never awaited
         // here — the completion rides the race above.
@@ -2012,6 +2097,7 @@ export class ClaudeEngine implements SessionEngine {
       yield { type: "compaction_end", ok: false, preTokens: 0, durationMs: 0, error: "manual compaction unavailable in this session" };
       return;
     }
+    this.releaseAdoption();
     this.stopIdleReader();
     this.turnActive = true;
     yield { type: "compaction_start", trigger: "manual" };
@@ -2192,6 +2278,7 @@ export class ClaudeEngine implements SessionEngine {
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.disposed = true;
+    this.adoptionBacklog = null;
     this.transportGeneration += 1;
     this.replacementAbort?.abort(new ClaudeTransportAbortError("claude_transport_retired"));
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
@@ -2710,6 +2797,13 @@ export class ClaudeEngine implements SessionEngine {
    *  turn's translator. */
   private absorbIdleFrame(frame: ClaudeStreamMessage): void {
     try {
+      if (this.adoptionBacklog !== null) {
+        // An unsolicited turn is on offer: its frames belong to the turn the
+        // session is about to adopt, not to idle classification.
+        this.adoptionBacklog.push(frame);
+        if (this.adoptionBacklog.length > ADOPTION_BACKLOG_LIMIT) this.releaseAdoption();
+        return;
+      }
       if (frame.type === "system" && (frame as { subtype?: string }).subtype === "init") {
         // Live posture is state, not transcript: reconcile even mid-foreign-turn.
         this.onSystemInit(frame as unknown as ClaudeSystemInitMessage);
@@ -2750,10 +2844,14 @@ export class ClaudeEngine implements SessionEngine {
         let settle: () => void = () => {};
         const promise = new Promise<void>((resolve) => { settle = resolve; });
         this.foreignTurn = { done: { promise, resolve: settle } };
-        this.queueNotice({
-          type: "engine_notice", level: "info",
-          message: "Claude started a turn on its own (likely a cross-session notice); its output is kept out of this transcript.",
-        });
+        if (this.onUnsolicitedTurn !== undefined) {
+          // Offer the turn to the session. The offer runs outside this
+          // reader's callback; until it is answered the frames are kept.
+          this.adoptionBacklog = [frame];
+          queueMicrotask(() => this.offerAdoption());
+        } else {
+          this.queueNotice(FOREIGN_TURN_NOTICE);
+        }
       }
       // Everything else — including frames while a foreign turn is already
       // open — is absorbed silently. rate_limit_event quota state is NOT
