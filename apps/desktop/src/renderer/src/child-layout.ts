@@ -78,11 +78,16 @@
 import { create } from "zustand";
 import type { SubagentSubStatus, ToolCallBlock, TranscriptBlock } from "./store.js";
 
-/** Background admission is distinct from the child's eventual completion. */
+/**
+ * Background admission is distinct from the child's eventual completion.
+ * `run_in_background` is the Claude CLI's own Agent-tool flag: its tool_result
+ * only acknowledges the launch; the child reports later on the detached channel.
+ */
 export function isBackgroundAgent(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
   Partial<Pick<ToolCallBlock, "subagentDispatched">>): boolean {
+  const input = block.input as { detach?: unknown; run_in_background?: unknown } | null;
   return block.toolName === "Agent" &&
-    (block.subagentDispatched === true || (block.input as { detach?: unknown } | null)?.detach === true);
+    (block.subagentDispatched === true || input?.detach === true || input?.run_in_background === true);
 }
 
 // ── layout view + reducer set ──

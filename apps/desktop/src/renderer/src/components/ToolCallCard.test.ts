@@ -2957,6 +2957,14 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusLabel({ toolName: "Bash", status: "success", input: { detach: true } })).toBe("Success");
   });
 
+  it("a Claude CLI Agent call with run_in_background reads Dispatched once launched, its child still running", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: true } });
+    expect(statusLabel(block)).toBe("Dispatched");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel(mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: false } }))).toBe("Success");
+    expect(statusLabel({ toolName: "Bash", status: "success", input: { run_in_background: true } })).toBe("Success");
+  });
+
   it("labels a durable background admission without tier or detach as Dispatched", () => {
     const block = mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p" }, subagentDispatched: true });
     expect(statusLabel(block)).toBe("Dispatched");
