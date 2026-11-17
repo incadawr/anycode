@@ -18,9 +18,9 @@ import {
 } from "./tab-status-store.js";
 import type { DesktopState, TurnState } from "./store.js";
 
-/** Shorthand for a CoarseStatus tuple: `coarse(turn, needsApproval, live)`. */
-function coarse(turn: TurnState["status"], needsApproval: boolean, live: boolean): CoarseStatus {
-  return { turn, needsApproval, live };
+/** Shorthand for a CoarseStatus tuple: `coarse(turn, needsApproval, live, agentsRunning?)`. */
+function coarse(turn: TurnState["status"], needsApproval: boolean, live: boolean, agentsRunning = false): CoarseStatus {
+  return { turn, needsApproval, live, agentsRunning };
 }
 
 /** Builds a deriveCoarse input (a slice of DesktopState) from primitives. `waitingSubagents` defaults to empty (regression: an ordinary tab with no children). */
@@ -29,8 +29,36 @@ function deriveInput(
   connection: DesktopState["connection"],
   permission: DesktopState["permission"],
   waitingSubagents: ReadonlySet<string> = new Set(),
-): Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents"> {
-  return { turn: { status: turn, turnId: null, requestId: null }, connection, permission, waitingSubagents };
+  transcript: DesktopState["transcript"] = [],
+): Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "transcript"> {
+  return { turn: { status: turn, turnId: null, requestId: null }, connection, permission, waitingSubagents, transcript };
+}
+
+/** An Agent tool_call block whose subagent is still running (`final: null`) or settled. */
+function agentBlock(toolCallId: string, settled: boolean): DesktopState["transcript"][number] {
+  return {
+    kind: "tool_call",
+    id: toolCallId,
+    toolCallId,
+    toolName: "Agent",
+    input: {},
+    status: "success",
+    modelText: null,
+    snapshots: { before: null, after: null },
+    subagent: {
+      agentType: "general-purpose",
+      description: "",
+      model: null,
+      engine: "claude",
+      turns: 1,
+      toolCalls: 0,
+      lastTool: null,
+      activity: [],
+      activityDropped: 0,
+      final: settled ? { status: "completed", durationMs: 1 } : null,
+    },
+    workflow: null,
+  } as DesktopState["transcript"][number];
 }
 
 /** A stand-in non-null permission request — deriveCoarse only checks `!== null`. */
@@ -204,6 +232,32 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
   });
 });
 
+describe("tab-status-store — agents that outlive their turn keep the row running", () => {
+  it("a background agent still running after the turn ended keeps the row running", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("running", false, true), false);
+    store.getState().applyCoarse("t1", coarse("idle", false, true, /* agentsRunning */ true), true);
+
+    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: false, attention: false });
+  });
+
+  it("the row completes (attention when unseen) once the last agent settles", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("running", false, true), false);
+    store.getState().applyCoarse("t1", coarse("idle", false, true, true), true);
+    store.getState().applyCoarse("t1", coarse("idle", false, true, false), /* background */ true);
+
+    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: true });
+  });
+
+  it("a dead host never shows running agents", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, /* live */ false, true), true);
+
+    expect(store.getState().statuses.get("t1")?.running).toBe(false);
+  });
+});
+
 describe("tab-status-store — pure projections", () => {
   it("15. isTurnCompletion: only running→idle is a completion", () => {
     expect(isTurnCompletion("running", "idle")).toBe(true);
@@ -217,6 +271,7 @@ describe("tab-status-store — pure projections", () => {
       turn: "running",
       needsApproval: true,
       live: true,
+      agentsRunning: false,
     });
     expect(deriveCoarse(deriveInput("running", "host_exited", null)).live).toBe(false);
     expect(deriveCoarse(deriveInput("idle", "awaiting_host_ready", null)).live).toBe(false);
@@ -234,6 +289,22 @@ describe("tab-status-store — pure projections", () => {
   it("16d. S1 regression: a tab with no children (deriveInput's default empty Set) keeps the pre-existing own-permission-only projection", () => {
     expect(deriveCoarse(deriveInput("idle", "ready", SOME_PERMISSION)).needsApproval).toBe(true);
     expect(deriveCoarse(deriveInput("idle", "ready", null)).needsApproval).toBe(false);
+  });
+
+  it("16e. deriveCoarse.agentsRunning: true while an Agent card's subagent has not settled, also with the turn idle", () => {
+    expect(deriveCoarse(deriveInput("idle", "ready", null, new Set(), [agentBlock("a", false)])).agentsRunning).toBe(true);
+    expect(deriveCoarse(deriveInput("idle", "ready", null, new Set(), [agentBlock("a", true), agentBlock("b", false)])).agentsRunning).toBe(true);
+    expect(deriveCoarse(deriveInput("idle", "ready", null, new Set(), [agentBlock("a", true)])).agentsRunning).toBe(false);
+    expect(deriveCoarse(deriveInput("idle", "ready", null)).agentsRunning).toBe(false);
+  });
+
+  it("16f. deriveCoarse.agentsRunning is computed once per transcript array (a setState that keeps the transcript reuses it)", () => {
+    const transcript = [agentBlock("a", false)];
+    expect(deriveCoarse(deriveInput("idle", "ready", null, new Set(), transcript)).agentsRunning).toBe(true);
+    // Mutating in place is never done by the store; it proves the cached value is reused.
+    (transcript[0] as { subagent: { final: unknown } }).subagent.final = { status: "completed", durationMs: 1 };
+    expect(deriveCoarse(deriveInput("idle", "ready", null, new Set(), transcript)).agentsRunning).toBe(true);
+    expect(deriveCoarse(deriveInput("idle", "ready", null, new Set(), [...transcript])).agentsRunning).toBe(false);
   });
 
   it("17. rowStatusKind: precedence host-exited > permission > running > attention > null", () => {

@@ -55,6 +55,13 @@ export interface CoarseStatus {
   turn: TurnState["status"];
   needsApproval: boolean;
   live: boolean;
+  /**
+   * An Agent card's subagent has not settled yet. A background agent (Claude
+   * CLI `run_in_background`, a detached session child) outlives the turn that
+   * launched it, so the turn alone would drop the row's spinner while work is
+   * still going on. Absent = false.
+   */
+  agentsRunning?: boolean;
 }
 
 /**
@@ -80,13 +87,34 @@ export function isTurnCompletion(prev: TurnState["status"], next: TurnState["sta
  * stream deltas, so it must stay O(1).
  */
 export function deriveCoarse(
-  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents">,
+  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "transcript">,
 ): CoarseStatus {
   return {
     turn: state.turn.status,
     needsApproval: state.permission !== null || state.waitingSubagents.size > 0,
     live: state.connection === "ready",
+    agentsRunning: hasRunningSubagent(state.transcript),
   };
+}
+
+/**
+ * Per-transcript-array cache for `hasRunningSubagent`. The store replaces the
+ * transcript array on every change and never mutates it in place, so the
+ * array identity is a sound key: a setState that leaves the transcript alone
+ * (context usage, connection, queue) costs one WeakMap lookup, and only a
+ * real transcript change pays the scan.
+ */
+const runningSubagentCache = new WeakMap<readonly unknown[], boolean>();
+
+/** True while any tool_call card carries a subagent whose `final` is still unset — the same test the card's own spinner uses. */
+function hasRunningSubagent(transcript: DesktopState["transcript"]): boolean {
+  const cached = runningSubagentCache.get(transcript);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const running = transcript.some((block) => block.kind === "tool_call" && block.subagent !== null && block.subagent.final === null);
+  runningSubagentCache.set(transcript, running);
+  return running;
 }
 
 /** The one indicator kind an open sidebar row shows (slice-R10-cut §2.4 precedence). */
@@ -133,7 +161,9 @@ export interface TabStatusState {
    * four boolean compares.
    *
    * Transition semantics:
-   *  - running       = next.live && next.turn === "running"
+   *  - running       = next.live && (next.turn === "running" || next.agentsRunning)
+   *    (a background agent that outlives its turn keeps the row working; its
+   *    settle is then the completion edge below)
    *  - needsApproval = next.live && next.needsApproval
    *  - completion    = stored.running && next.live && isTurnCompletion(...)
    *    (the `next.live` gate suppresses host-exit / respawn-reset edges)
@@ -162,10 +192,10 @@ export function createTabStatusStore() {
 
     applyCoarse(tabId, next, background): void {
       const prev = get().statuses.get(tabId);
-      const running = next.live && next.turn === "running";
+      const running = next.live && (next.turn === "running" || next.agentsRunning === true);
       const needsApproval = next.live && next.needsApproval;
       const completed =
-        prev !== undefined && next.live && isTurnCompletion(prev.running ? "running" : "idle", next.turn);
+        prev !== undefined && next.live && isTurnCompletion(prev.running ? "running" : "idle", running ? "running" : next.turn);
       const attention = running ? false : completed ? background : (prev?.attention ?? false);
       if (
         prev !== undefined &&
