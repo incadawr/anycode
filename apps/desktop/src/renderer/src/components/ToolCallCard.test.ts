@@ -1664,6 +1664,14 @@ describe("agentResultText", () => {
   it("returns null when modelText hasn't arrived yet even if settled (defensive — no tool_result race)", () => {
     expect(agentResultText({ toolName: "Agent", status: "success", modelText: null })).toBeNull();
   });
+
+  it("hides the Claude CLI's launch acknowledgement for a run_in_background Agent (model-facing metadata, not a result)", () => {
+    const launched = "Async agent launched successfully. (This tool result is internal metadata …)\nagentId: a1";
+    expect(agentResultText({ toolName: "Agent", status: "success", modelText: launched, input: { prompt: "p", run_in_background: true } })).toBeNull();
+    // A launch that failed still explains why.
+    expect(agentResultText({ toolName: "Agent", status: "error", modelText: "Agent type not found", input: { prompt: "p", run_in_background: true } })).toBe("Agent type not found");
+    expect(agentResultText({ toolName: "Agent", status: "success", modelText: "## Findings", input: { prompt: "p" } })).toBe("## Findings");
+  });
 });
 
 describe("promptStripText", () => {

@@ -1519,11 +1519,21 @@ export function activityRows(subagent: SubagentSubStatus): ActivityRowView[] {
  * `status: "error"` card needs no separate error field: same slot, same
  * text, rendered the same way as a successful result.
  */
-export function agentResultText(block: Pick<ToolCallBlock, "toolName" | "status" | "modelText">): string | null {
+export function agentResultText(
+  block: Pick<ToolCallBlock, "toolName" | "status" | "modelText"> & Partial<Pick<ToolCallBlock, "input">>,
+): string | null {
   if (block.toolName !== "Agent") {
     return null;
   }
   if (block.status === "proposed" || block.status === "running") {
+    return null;
+  }
+  // The Claude CLI answers a run_in_background Agent call at once with a
+  // launch acknowledgement written for the model (agent id, output file,
+  // "do not mention"); the child's real result arrives later in the CLI's own
+  // report turn. A successful launch therefore has no result to show here;
+  // the activity feed and sub-status carry the live state.
+  if (block.status === "success" && (block.input as { run_in_background?: unknown } | null | undefined)?.run_in_background === true) {
     return null;
   }
   return block.modelText;
