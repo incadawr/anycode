@@ -50,6 +50,7 @@ import { claudeOrchestrationAvailability, prepareClaudeOrchestrationSpawn, asser
 import { ClaudeApprovalBridge } from "./approval-bridge.js";
 import { ClaudeClient, ClaudeClientError, type ClaudeClientOptions, type ClaudeSpawnArgsOptions } from "./claude-client.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
+import { ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
@@ -1026,6 +1027,19 @@ export class ClaudeEngine implements SessionEngine {
   private bridgePending: { promise: Promise<AgentEvent | null>; settled: boolean; event: AgentEvent | null } | null = null;
   /** the parked slot's waiter — at most one; woken by `pushBridgeEvent`/`dispose`. */
   private bridgeWaiters: { resolve: (event: AgentEvent | null) => void }[] = [];
+  /**
+   * The CLI's own subagents (its native Agent tool). Engine-lifetime, not
+   * turn-scoped: a background agent starts inside one turn and reports the
+   * rest of its life while the engine is idle.
+   */
+  private readonly subagentTasks = new ClaudeSubagentTasks();
+  /**
+   * Receives the subagent_* events of the CLI's own agents that arrive with
+   * no owner turn to carry them (a `run_in_background` agent working after
+   * its parent turn's `result`). The host binds it to the session's detached
+   * subagent channel; unbound, those events are dropped.
+   */
+  onDetachedEvent?: (event: AgentEvent) => void;
 
   constructor(
     private client: ClaudeTransport,
@@ -1201,6 +1215,8 @@ export class ClaudeEngine implements SessionEngine {
     this.stopIdleReader();
     this.frameConsumed();
     this.approvals?.denyAll("Claude transport is restarting", "turn_cancelled");
+    // The CLI's own agents die with its process; settle their cards now.
+    for (const event of this.subagentTasks.abandonAll()) this.onDetachedEvent?.(event);
     const factory = this.transportFactory!;
     const abort = this.replacementAbort = new AbortController();
     const current = () => !this.disposed && !abort.signal.aborted && generation === this.transportGeneration;
@@ -1514,6 +1530,7 @@ export class ClaudeEngine implements SessionEngine {
       onInit: (init) => this.onSystemInit(init),
       onResult: (result) => this.onResult(result, true),
       ...(this.takePresentation !== undefined ? { takePresentation: this.takePresentation } : {}),
+      subagents: this.subagentTasks,
     });
     this.interruptSent = false;
     // Reserve stream ownership before the first yield or await, so a paused
@@ -2705,6 +2722,15 @@ export class ClaudeEngine implements SessionEngine {
         if (this.mcpStatusNotices.length > 0) {
           for (const notice of this.mcpStatusNotices.splice(0)) this.queueNotice(notice);
         }
+        return;
+      }
+      if (isClaudeSubagentFrame(frame)) {
+        // A subagent's own frames and the CLI's task_* lifecycle belong to an
+        // agent the CLI is still running, not to a turn: a `run_in_background`
+        // agent keeps working after its parent turn's result. They must never
+        // open a foreign turn — the next owner send would then wait for a
+        // result the agent never produces.
+        for (const event of this.subagentTasks.onFrame(frame)) this.onDetachedEvent?.(event);
         return;
       }
       if (frame.type === "result") {

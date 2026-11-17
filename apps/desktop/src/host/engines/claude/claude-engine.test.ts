@@ -3167,3 +3167,94 @@ describe("Claude command catalog admission", () => {
     await child.dispose("session-close");
   });
 });
+
+/**
+ * The CLI's own background agents (w0-19, a live capture in stream-json input
+ * mode — the mode the engine drives). The parent turn's `result` arrives
+ * first; the agent's own frames and its task_* lifecycle arrive AFTER it,
+ * while the engine is idle; then the CLI runs a turn of its own to report.
+ */
+describe("ClaudeEngine — the CLI's own background agents", () => {
+  // A bare fixture: every line IS a stdout frame (no dir/raw envelope).
+  const capture = readFileSync(join(FIXTURES_DIR, "w0-19-background-agent.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as ClaudeStreamMessage);
+  const firstResult = capture.findIndex((frame) => frame.type === "result");
+  const reportInit = capture.findIndex((frame, index) => index > firstResult && frame.type === "system" && (frame as { subtype?: string }).subtype === "init");
+  const parentTurn = capture.slice(0, firstResult + 1);
+  const idleAgentFrames = capture.slice(firstResult + 1, reportInit);
+  const reportTurn = capture.slice(reportInit);
+  const isForeignNotice = (event: AgentEvent): boolean =>
+    event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own");
+
+  it("the capture splits as described: parent turn, idle agent frames, the CLI's report turn", () => {
+    expect(firstResult).toBeGreaterThan(0);
+    expect(reportInit).toBeGreaterThan(firstResult);
+    expect(idleAgentFrames.some((frame) => frame.type === "assistant")).toBe(true);
+    expect(reportTurn.at(-1)?.type).toBe("result");
+  });
+
+  it("starts the agent's card inside the parent turn", async () => {
+    const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const events = await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+    const call = events.find((event) => event.type === "tool_call" && event.toolCall.name === "Agent") as Extract<AgentEvent, { type: "tool_call" }>;
+    expect(events).toContainEqual({ type: "subagent_start", toolCallId: call.toolCall.id, agentType: "general-purpose", description: "Summarize anycode docs" });
+    await engine.dispose("session-close");
+  });
+
+  it("delivers the agent's progress between turns to the detached sink, and the child's frames never open a foreign turn", async () => {
+    const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = (event) => detached.push(event);
+    await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+
+    for (const frame of idleAgentFrames) transport.push(frame);
+    // No result ever follows the child's frames, and none is needed: the next
+    // owner turn must not wait for one.
+    for (const frame of ownerFrames("two")) transport.enqueue(frame);
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    expect(events.some(isForeignNotice)).toBe(false);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
+    expect(transport.sent.at(-1)).toBe("second");
+    expect(types(detached)).toEqual([
+      "subagent_activity", "subagent_progress",
+      "subagent_activity", "subagent_progress",
+      "subagent_activity", "subagent_progress",
+      "subagent_end",
+    ]);
+    expect(detached[0]).toEqual({ type: "subagent_activity", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", toolName: "Read", summary: "/workspace/README.md" });
+    expect(detached.at(-1)).toMatchObject({ toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed", toolCalls: 3, durationMs: 4010 });
+    await engine.dispose("session-close");
+  });
+
+  it("the CLI's own report turn after the agent finishes is still absorbed as a foreign turn", async () => {
+    const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    engine.onDetachedEvent = () => {};
+    await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+
+    for (const frame of [...idleAgentFrames, ...reportTurn]) transport.push(frame);
+    for (const frame of ownerFrames("two")) transport.enqueue(frame);
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    expect(events.filter(isForeignNotice)).toHaveLength(1);
+    expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
+    await engine.dispose("session-close");
+  });
+
+  it("without a detached sink the idle agent frames are absorbed silently (no throw, no foreign turn)", async () => {
+    const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+    for (const frame of idleAgentFrames) transport.push(frame);
+    for (const frame of ownerFrames("two")) transport.enqueue(frame);
+    const events = await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+    expect(events.some(isForeignNotice)).toBe(false);
+    await engine.dispose("session-close");
+  });
+});
