@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeResultMessage, ClaudeStreamMessage, ClaudeSystemInitMessage } from "./protocol.js";
+import { ClaudeSubagentTasks } from "./subagent-tasks.js";
 
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
 
@@ -288,6 +289,43 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
     expect((errors[0]!.error as Error).message).toContain("not signed in");
     // Exactly one terminal error, and the turn still closes properly.
     expect(ofType(events, "loop_end")).toHaveLength(1);
+  });
+});
+
+describe("ClaudeTurnTranslator — the CLI's own subagents (w0-20 foreground Agent)", () => {
+  function translateWithSubagents(file: string): AgentEvent[] {
+    const translator = new ClaudeTurnTranslator({ turn: 1, subagents: new ClaudeSubagentTasks() });
+    return streamFrames(file).flatMap((frame) => translator.onMessage(frame));
+  }
+
+  it("projects the agent's lifecycle onto its own Agent card, between the card's tool_call and its tool_result", () => {
+    const events = translateWithSubagents("w0-20-foreground-agent.jsonl");
+    const agentCall = ofType(events, "tool_call").find((event) => event.toolCall.name === "Agent");
+    expect(agentCall).toBeDefined();
+    const id = agentCall!.toolCall.id;
+    const lifecycle = events.filter((event) => event.type.startsWith("subagent_"));
+    expect(lifecycle.map((event) => event.type)).toEqual([
+      "subagent_start",
+      "subagent_progress", "subagent_activity",
+      "subagent_progress", "subagent_activity",
+      "subagent_end",
+    ]);
+    for (const event of lifecycle) expect(event).toMatchObject({ toolCallId: id });
+    const at = (type: string): number => events.findIndex((event) => event.type === type);
+    const resultAt = events.findIndex((event) => event.type === "tool_result" && event.outcome.toolCallId === id);
+    expect(events.indexOf(agentCall!)).toBeLessThan(at("subagent_start"));
+    expect(at("subagent_end")).toBeLessThan(resultAt);
+  });
+
+  it("still folds the child's own tool calls away: only the Agent card is a tool card", () => {
+    const events = translateWithSubagents("w0-20-foreground-agent.jsonl");
+    expect(ofType(events, "tool_call").map((event) => event.toolCall.name)).toEqual(["Agent"]);
+    expect(ofType(events, "loop_end")).toHaveLength(1);
+  });
+
+  it("without a subagent tracker the lifecycle frames stay inert (unchanged behaviour)", () => {
+    const events = translate("w0-20-foreground-agent.jsonl");
+    expect(events.filter((event) => event.type.startsWith("subagent_"))).toEqual([]);
   });
 });
 

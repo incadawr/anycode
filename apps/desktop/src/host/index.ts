@@ -1489,6 +1489,7 @@ function hostSwitchFactory(
         routing.configure(runtime);
         runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
         bindClaudeUsage(raw, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null, runtime.identity!.model);
+        raw.onDetachedEvent = event => { if (session?.ownsRuntime(runtime.engine)) session.emitDetachedSubagentEvent(event); };
       }, cleanup: () => { routing.cleanup(); } };
     },
   });
@@ -2595,6 +2596,9 @@ async function bootClaudeSession(
   // from here on, a bridged agent call's subagent_* events surface inside the
   // CLI's live turn (claude-engine.ts's bridge-event race).
   pushBridgeEvent = (event: AgentEvent) => claudeEngine.pushBridgeEvent(event);
+  // The CLI's own background agents report after the parent turn settled;
+  // their subagent_* events reach the card through the detached channel.
+  claudeEngine.onDetachedEvent = event => { if (session?.ownsRuntime(booted.engine)) session.emitDetachedSubagentEvent(event); };
 
   // Identity facts, known the moment the transport connected. The POSTURE
   // (model/preset) is deliberately NOT here: it is written only from the

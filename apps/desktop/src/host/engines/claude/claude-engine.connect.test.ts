@@ -1,4 +1,4 @@
-import { orchestrationDeveloperBlock } from "@anycode/core";
+import { orchestrationDeveloperBlock, type AgentEvent } from "@anycode/core";
 /**
  * cut §1.5 D2: `resumeClaudeEngine` must spawn `--resume <ref>` (never
  * `--session-id`, which would start a brand-new native session under a
@@ -880,6 +880,24 @@ describe("— browser tools through the engine door (C8/C9/C10/C12/C14)", () => 
       await driveCall(door.bridge, toolsCall(6 + index, "browser_navigate", args, `toolu_h${index}`));
     }
   });
+});
+
+it("settles the CLI's own running agents as cancelled when the transport is replaced", async () => {
+  const fake = fakeSpawn();
+  const { engine, sessionRef } = await startClaudeEngine(baseOptions(fake.spawnImpl));
+  try {
+    const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = event => detached.push(event);
+    fake.streams[0]!.emit("data", Buffer.from(JSON.stringify({ type: "system", subtype: "task_started", task_id: "a1", tool_use_id: "toolu_bg", task_type: "local_agent", description: "Scan docs" }) + "\n"));
+    await vi.waitFor(() => expect(detached).toHaveLength(1));
+    await engine.replaceTransport({ resume: sessionRef });
+    expect(detached).toEqual([
+      { type: "subagent_start", toolCallId: "toolu_bg", agentType: "agent", description: "Scan docs" },
+      { type: "subagent_end", toolCallId: "toolu_bg", status: "cancelled", turns: 0, toolCalls: 0, durationMs: -1 },
+    ]);
+  } finally {
+    await engine.dispose("session-close");
+  }
 });
 
 function forwardResolver(dir: string, paths: string[]) {
