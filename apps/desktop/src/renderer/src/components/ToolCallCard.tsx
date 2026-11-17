@@ -1301,6 +1301,12 @@ export function statusLabel(
     Partial<Pick<ToolCallBlock, "subagent" | "subagentDispatched">>,
 ): string {
   if (block.status === "success" && isBackgroundAgent(block)) {
+    // The Claude CLI's own background agent has no child badge to carry its
+    // state, so once it ends the badge says how (a folded card shows nothing else).
+    const final = block.subagent?.final;
+    if (final != null && (block.input as { run_in_background?: unknown } | null)?.run_in_background === true) {
+      return SUBAGENT_FINAL_LABELS[final.status];
+    }
     return "Dispatched";
   }
   if (block.toolName === "Agent") {
