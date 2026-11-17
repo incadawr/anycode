@@ -260,7 +260,9 @@ export function groupTranscriptBlocks(blocks: TranscriptBlock[]): RenderItem[] {
   };
 
   for (const block of blocks) {
-    if (block.kind === "tool_call" && isTerminalStatus(block.status)) {
+    // A settled call can still front live work: a background Agent returns at
+    // once while its subagent keeps running, so it stays visible until it ends.
+    if (block.kind === "tool_call" && isTerminalStatus(block.status) && !(block.subagent !== null && block.subagent.final === null)) {
       // Adjacent terminal tool_call — extend the current run (any toolName).
       // Only one buffer can be non-empty at a time, so this preserves order.
       if (agentBuffer.length > 0) flush();

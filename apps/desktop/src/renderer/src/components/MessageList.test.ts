@@ -714,6 +714,25 @@ describe("groupTranscriptBlocks (any adjacent terminal tool calls stack)", () =>
     ]);
   });
 
+  it("does NOT stack a settled Agent call whose background subagent is still running, until it ends", () => {
+    const live: NonNullable<ToolCallBlock["subagent"]> = {
+      agentType: "code-writer", description: "Implement Task 6b", model: null, engine: null,
+      turns: 3, toolCalls: 3, lastTool: "Edit", activity: [], activityDropped: 0, final: null,
+    };
+    const write = mkToolCall({ id: "w", toolName: "Write" });
+    const agent = mkToolCall({ id: "ag", toolName: "Agent", input: { run_in_background: true }, subagent: live });
+    const bash = mkToolCall({ id: "b" });
+    expect(groupTranscriptBlocks([write, agent, bash])).toEqual([
+      { kind: "single", block: write },
+      { kind: "single", block: agent },
+      { kind: "single", block: bash },
+    ]);
+    const ended = { ...agent, subagent: { ...live, final: { status: "completed" as const, durationMs: 1000 } } };
+    expect(groupTranscriptBlocks([write, ended, bash])).toEqual([
+      { kind: "tool_stack", blocks: [write, ended, bash], status: "success" },
+    ]);
+  });
+
   it("aggregates a mixed-status stack as mixed with an honest failed count", () => {
     const a = mkToolCall({ id: "a", status: "success" });
     const b = mkToolCall({ id: "b", status: "error" });
