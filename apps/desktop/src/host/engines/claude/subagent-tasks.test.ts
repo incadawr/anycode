@@ -6,7 +6,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import type { ClaudeStreamMessage } from "./protocol.js";
 import { ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
@@ -196,6 +196,65 @@ describe("ClaudeSubagentTasks — edge cases", () => {
     expect(detached).toEqual([
       { type: "subagent_progress", toolCallId: "toolu_a", turns: 1, toolCalls: 1 },
       { type: "subagent_end", toolCallId: "toolu_a", status: "completed", turns: 1, toolCalls: 1, durationMs: -1 },
+    ]);
+  });
+});
+
+describe("ClaudeSubagentTasks — an agent resumed by SendMessage", () => {
+  // Wire shape captured from claude 2.1.325: the resumed run reuses the task_id,
+  // its task_* frames carry the SendMessage call's tool_use_id, and the child's
+  // own frames still name the original Agent call as their parent.
+  const AGENT_CALL = "toolu_agent";
+  const SEND_CALL = "toolu_send";
+  const child = (id: string, blocks: unknown[]): ClaudeStreamMessage =>
+    ({ type: "assistant", parent_tool_use_id: AGENT_CALL, message: { id, model: "m", content: blocks } }) as ClaudeStreamMessage;
+
+  function firstRun(tasks: ClaudeSubagentTasks): void {
+    tasks.onFrame(system("task_started", { task_id: "t1", tool_use_id: AGENT_CALL, task_type: "local_agent", subagent_type: "general-purpose", description: "Read README" }));
+    tasks.onFrame(child("msg_1", [{ type: "tool_use", id: "toolu_r1", name: "Read", input: { file_path: "/w/README.md" } }]));
+    tasks.onFrame(system("task_progress", { task_id: "t1", tool_use_id: AGENT_CALL, usage: { tool_uses: 1 } }));
+    tasks.onFrame(child("msg_2", [{ type: "text", text: "done" }]));
+    tasks.onFrame(system("task_notification", { task_id: "t1", tool_use_id: AGENT_CALL, status: "completed", usage: { tool_uses: 1, duration_ms: 900 } }));
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports the resumed run on the SendMessage call, with the child's own tool calls as its activity", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const tasks = new ClaudeSubagentTasks();
+    firstRun(tasks);
+    vi.setSystemTime(20_000);
+    const events = [
+      system("task_started", { task_id: "t1", tool_use_id: SEND_CALL, task_type: "local_agent", subagent_type: "general-purpose", description: "Read README" }),
+      child("msg_3", [{ type: "tool_use", id: "toolu_r2", name: "Read", input: { file_path: "/w/AGENTS.md" } }]),
+      system("task_progress", { task_id: "t1", tool_use_id: SEND_CALL, usage: { tool_uses: 2 }, last_tool_name: "Read" }),
+      child("msg_4", [{ type: "text", text: "done" }]),
+    ].flatMap((frame) => tasks.onFrame(frame));
+    vi.setSystemTime(20_800);
+    // The CLI's duration_ms runs from the agent's FIRST start (idle time included):
+    // the resumed run's own duration is measured from its task_started.
+    events.push(...tasks.onFrame(system("task_notification", { task_id: "t1", tool_use_id: SEND_CALL, status: "completed", usage: { tool_uses: 2, duration_ms: 10_700 } })));
+
+    expect(events).toEqual([
+      { type: "subagent_start", toolCallId: SEND_CALL, agentType: "general-purpose", description: "Read README" },
+      { type: "subagent_activity", toolCallId: SEND_CALL, toolName: "Read", summary: "/w/AGENTS.md" },
+      { type: "subagent_progress", toolCallId: SEND_CALL, turns: 1, toolCalls: 1, lastTool: "Read" },
+      { type: "subagent_end", toolCallId: SEND_CALL, status: "completed", turns: 2, toolCalls: 1, durationMs: 800 },
+    ]);
+  });
+
+  it("an agent resumed while its first run is still tracked (no notification yet) moves to the new call", () => {
+    const tasks = new ClaudeSubagentTasks();
+    tasks.onFrame(system("task_started", { task_id: "t1", tool_use_id: AGENT_CALL }));
+    expect(tasks.onFrame(system("task_started", { task_id: "t1", tool_use_id: SEND_CALL }))).toEqual([
+      { type: "subagent_end", toolCallId: AGENT_CALL, status: "completed", turns: 0, toolCalls: 0, durationMs: -1 },
+      { type: "subagent_start", toolCallId: SEND_CALL, agentType: "agent", description: "" },
+    ]);
+    expect(tasks.onFrame(child("msg_5", [{ type: "tool_use", id: "toolu_r3", name: "Read", input: {} }]))).toEqual([
+      { type: "subagent_activity", toolCallId: SEND_CALL, toolName: "Read", summary: "" },
     ]);
   });
 });

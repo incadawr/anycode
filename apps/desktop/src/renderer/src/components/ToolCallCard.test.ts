@@ -2006,6 +2006,40 @@ describe("ToolCallCard (SSR component render) — generic non-Agent path stays u
     expect(html).not.toContain("subagent-stall-note");
     expect(html).not.toContain("stalled ·");
   });
+
+  // The Claude CLI resumes a finished agent through SendMessage: the resumed
+  // run reports on the SendMessage card, which is not an Agent card.
+  const sendMessage = (overrides: Partial<ToolCallBlock> = {}): ToolCallBlock =>
+    mkAgentBlock({
+      toolName: "SendMessage",
+      input: { to: "aa87d21", message: "Now also read AGENTS.md." },
+      status: "success",
+      modelText: '{"success":true,"message":"Resuming agent aa87d21"}',
+      ...overrides,
+    });
+
+  it("a collapsed SendMessage card whose resumed agent runs shows the live progress row", () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block: sendMessage({ subagent: mkSubagent({ final: null }) }) }));
+    expect(html).toContain("subagent-collapsed-progress");
+    const settled = renderToStaticMarkup(
+      createElement(ToolCallCard, { block: sendMessage({ subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) }) }),
+    );
+    expect(settled).not.toContain("subagent-collapsed-progress");
+    expect(renderToStaticMarkup(createElement(ToolCallCard, { block: sendMessage() }))).not.toContain("subagent-collapsed-progress");
+  });
+
+  it("an expanded non-Agent card with a subagent shows its sub-status and activity rows", () => {
+    const block = sendMessage({
+      status: "running",
+      subagent: mkSubagent({ final: null, activity: [{ toolName: "Read", summary: "AGENTS.md" }] }),
+    });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(html).toContain("tool-call-subagent");
+    expect(html).toContain("subagent-activity-feed");
+    expect(html).toContain("AGENTS.md");
+    const plain = renderToStaticMarkup(createElement(ToolCallCard, { block: sendMessage({ status: "running" }) }));
+    expect(plain).not.toContain("tool-call-subagent");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2981,6 +3015,22 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     // An AnyCode-routed detached child keeps its badge: its live state rides the child badge.
     const routed = mkAgentBlock({ status: "success", input: { prompt: "p", detach: true } });
     expect(statusLabel({ ...routed, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Dispatched");
+  });
+
+  it("a SendMessage that resumed an agent reads Dispatched while it runs and its outcome once it ends", () => {
+    const block = mkAgentBlock({ toolName: "SendMessage", status: "success", input: { to: "a1", message: "m" } });
+    expect(statusLabel(block)).toBe("Success");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("Error");
+    expect(statusLabel({ ...block, status: "error", subagent: mkSubagent({ final: null }) })).toBe("Error");
+  });
+
+  it("an Agent call the CLI ran in the background without run_in_background reads Dispatched while its agent runs", () => {
+    // The CLI may launch an agent asynchronously on its own ("Async agent launched").
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p" } });
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Success");
   });
 
   it("labels a durable background admission without tier or detach as Dispatched", () => {
