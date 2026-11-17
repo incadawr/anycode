@@ -3967,7 +3967,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         event.type !== "preview_console" &&
         event.type !== "compaction_start" &&
         event.type !== "compaction_end" &&
-        !(turnId === "detached-subagent" && (event.type === "subagent_start" || event.type === "subagent_progress" || event.type === "subagent_end")) &&
+        !(turnId === "detached-subagent" && (event.type === "subagent_start" || event.type === "subagent_progress" || event.type === "subagent_activity" || event.type === "subagent_end")) &&
         !isEngineSwitchNotice &&
         !(event.type === "engine_notice" && turnId === "claude-restart") &&
         !isMaintenanceEvent
