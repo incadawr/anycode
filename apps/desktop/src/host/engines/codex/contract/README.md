@@ -328,8 +328,21 @@ drift-checked against the pinned schema by contract-drift.test.ts only; it does
 not gate the runtime request. Executable compact fixtures are synthetic protocol
 evidence, not captures of live backend compaction.
 
-## 0.170.0 candidate verification
+## 0.170.0 verification (candidate)
 
-Published schema comparison in the plan found identical consumed methods and approval
-decisions; optional `AgentMessageDisplay.moderation` changed shape and is not
-consumed. Binary contract verification and live GUI smoke remain pending.
+On macOS arm64, real 0.169.0 and 0.170.0 binaries generated contracts;
+layer 2 passed 39/39 tests on each. The extracted methods and approval decision
+enums are identical, and layer 2 confirms URL image input and inline image
+result remain expressible. The 0.144.x pinned contract remains unchanged.
+
+The 0.169 to 0.170 diff replaces `AgentMessageDisplay`'s object with a
+`mode: show | hide | block` union (version 1) and adds `AnswerAnnotation`,
+`AnswerReplacement`, `BlockReason`, `HelplineSubject`, and `TrustedContacts`.
+These are reachable through optional agent-message `moderation`; the adapter
+does not read these fields. History projection uses agent-message text and the
+live translator tracks its item ID. This is a schema compatibility observation,
+not verification of moderation presentation semantics.
+
+0.170.0 is a candidate: live GUI smoke and the owner-run seatbelt probe remain
+pending, and 0.169.0 remains recommended. Evidence is recorded in the local
+`working-docs/plans-1811/gh93-evidence/` directory.
