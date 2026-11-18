@@ -28,7 +28,7 @@ import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { useStore } from "zustand";
 import { startConnectionManager } from "./port.js";
 import { startTabBootstrap } from "./tab-bootstrap.js";
-import { isBranchLocked, useTabsStore } from "./tabs-store.js";
+import { displayTaskTitle, isBranchLocked, useTabsStore } from "./tabs-store.js";
 import { tabRegistry, type DesktopStoreApi } from "./tab-registry.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "./tab-context.js";
 import { replayStore, childVisible } from "./replay.js";
@@ -1077,7 +1077,7 @@ function ChildSessionPane({
   onToast,
 }: ChildSessionPaneProps) {
   const masterTitle =
-    useTabsStore((state) => state.tabs.find((tab) => tab.tabId === parentTabId)?.title) ?? "Untitled task";
+    useTabsStore((state) => displayTaskTitle(state.tabs.find((tab) => tab.tabId === parentTabId))) ?? "Untitled task";
   const card = useTabStore((state) => {
     const block = state.transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === spawnToolCallId);
     return block && block.kind === "tool_call" ? block.subagent : null;
@@ -1169,7 +1169,7 @@ const CHILD_HISTORY_LOADING = { kind: "loading" as const };
  */
 function ChildHistoryPane({ permissionForwarder, parentTabId, parentSessionId, spawnToolCallId, sidebarCollapsed, onToggleSidebar }: ChildHistoryPaneProps) {
   const masterTitle =
-    useTabsStore((state) => state.tabs.find((tab) => tab.tabId === parentTabId)?.title) ?? "Untitled task";
+    useTabsStore((state) => displayTaskTitle(state.tabs.find((tab) => tab.tabId === parentTabId))) ?? "Untitled task";
   const card = useTabStore((state) => {
     const block = state.transcript.find((entry) => entry.kind === "tool_call" && entry.toolCallId === spawnToolCallId);
     return block && block.kind === "tool_call" ? block.subagent : null;

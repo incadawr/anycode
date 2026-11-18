@@ -15,7 +15,7 @@ import type { KeyboardEvent } from "react";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { isEngineId } from "../../../shared/engines.js";
 import type { TabInfo } from "../tabs-store.js";
-import { useTabsStore } from "../tabs-store.js";
+import { displayTaskTitle, useTabsStore } from "../tabs-store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { rowStatusKind, useTabStatusStore, type RowStatusKind } from "../tab-status-store.js";
@@ -239,7 +239,7 @@ export function buildSidebarGroups(
       .map((t) => ({
         kind: "open" as const,
         key: t.tabId,
-        title: t.userTitle ?? t.title ?? UNTITLED,
+        title: displayTaskTitle(t) ?? UNTITLED,
         baseTitle: t.title, userTitle: t.userTitle,
         age: null,
         hostExited: t.hostExited,

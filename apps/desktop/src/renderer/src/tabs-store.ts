@@ -19,6 +19,11 @@ import type { EngineModelChoice } from "../../shared/protocol.js";
 import type { QueuedPromptImage } from "./store.js";
 
 /** One open tab's shell-level metadata (design §4.3: "id, workspace, sessionId?, title?, host-exited flag"). */
+/** User overrides affect desktop presentation while host titles remain independent. */
+export function displayTaskTitle(tab: Pick<TabInfo, "title" | "userTitle"> | undefined): string | undefined {
+  return tab?.userTitle ?? tab?.title;
+}
+
 export interface TabInfo {
   tabId: string;
   workspace: string;
