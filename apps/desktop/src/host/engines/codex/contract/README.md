@@ -346,3 +346,8 @@ not verification of moderation presentation semantics.
 0.170.0 is a candidate: live GUI smoke and the owner-run seatbelt probe remain
 pending, and 0.169.0 remains recommended. Evidence is recorded in the local
 `working-docs/plans-1811/gh93-evidence/` directory.
+
+Install smoke for the recommended 0.169.0 initially failed (1 failed, 1 skipped);
+an independent review rerun passed (1 passed, 1 skipped, approximately 63 s).
+The initial failure cause was not established. Candidate status in the manifest
+is not shown in the runtime UI; this is a non-blocking observation.
