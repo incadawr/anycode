@@ -12,7 +12,7 @@
  */
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { usePendingResumes } from "../pending-resumes.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -49,6 +49,7 @@ it("arrow navigation skips the disabled Opening… placeholder: ArrowDown from A
         createElement(Sidebar, {
           tabs: [],
           activeTabId: null,
+          onRenameRequest: noop,
           onSelectTab: noop,
           onCloseTab: noop,
           onTabCreated: noop,
@@ -83,4 +84,29 @@ it("arrow navigation skips the disabled Opening… placeholder: ArrowDown from A
     await act(async () => root.unmount());
     container.remove();
   }
+});
+
+it("renames open rows by double click and history rows by F2 without resuming", async () => {
+  const rename = vi.fn(); const createTab = vi.fn();
+  (window as unknown as { anycode: unknown }).anycode = { listSessions: async () => [session("history")], createTab };
+  const store = useTabsStore.getState(); store.addTab({ tabId: "t", workspace: "/w" });
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  const noop = () => {};
+  try {
+    await act(async () => root.render(createElement(Sidebar, { tabs: useTabsStore.getState().tabs, activeTabId: "t", onRenameRequest: rename, onSelectTab: noop, onCloseTab: noop, onTabCreated: noop, onFocusTab: noop, onOpenSettings: noop, collapsed: false, onToggleCollapsed: noop })));
+    const open = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    const history = container.querySelector<HTMLButtonElement>(".sidebar-row-resumable")!;
+    await act(async () => open.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    await act(async () => history.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true, cancelable: true })));
+    const menuButton = container.querySelector<HTMLButtonElement>('[aria-label="Actions for history"]')!;
+    await act(async () => menuButton.click());
+    const renameItem = container.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
+    expect(renameItem.textContent).toBe("Rename…");
+    await act(async () => renameItem.click());
+    expect(rename.mock.calls.map(call => call[0].kind)).toEqual(["open", "resumable", "resumable"]);
+    expect(createTab).not.toHaveBeenCalled();
+    createTab.mockResolvedValue({ ok: false, reason: "cancelled" });
+    await act(async () => history.click());
+    expect(createTab).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });

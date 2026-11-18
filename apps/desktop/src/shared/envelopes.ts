@@ -41,6 +41,7 @@ export const HOST_EXITED_ENVELOPE_TYPE = "anycode:host-exited" as const;
 
 /** Page envelope carried alongside the transferred MessagePort. */
 export interface PortEnvelope {
+  titles?: import("./tabs.js").TabTitleSnapshot;
   hostFailure?: import("./host-failure.js").HostFailure;
   type: typeof PORT_ENVELOPE_TYPE;
   /** Routing key: which tab this port belongs to (§3.1). */

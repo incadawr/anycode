@@ -28,13 +28,10 @@ import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { highlight } from "./highlight.js";
 import { formatTabHint, KEYMAP, matchKeymap, type ActionId, type KeyBinding } from "../keymap.js";
 
-/** Display fallback for a titleless session — mirrors Sidebar's private `UNTITLED` (Sidebar.tsx:19); reversed to recover the raw (undefined) title for resume forwarding. */
-const UNTITLED = "Untitled task";
-
-export type PaletteMode = "actions" | "sessions";
+export type PaletteMode = "actions" | "sessions" | "rename";
 
 export interface PaletteAction {
-  id: ActionId;
+  id: ActionId | "session.rename";
   label: string;
   /** Preformatted binding hint (App runs formatBinding) — null renders no hint. */
   hint: string | null;
@@ -52,6 +49,7 @@ export interface CommandPaletteProps {
   /** Effective keymap for the palette's own ⌘K-close/⌘P-sessions combos (F20 overrides). Defaults to the built-in KEYMAP. */
   keymapTable?: readonly KeyBinding[];
   onSwitchMode(mode: PaletteMode): void;
+  onRenameTask(row: SidebarRow): void;
   onSelectTab(tabId: string): void;
   onResumeSession(sessionId: string, title: string | undefined): void;
   onClose(): void;
@@ -108,9 +106,8 @@ function makeSessionRow(row: SidebarRow, workspaceLabel: string, ranges: readonl
   return {
     kind: "session",
     sessionId: row.sessionId!,
-    // Recover the raw (possibly undefined) title so resume forwarding never
-    // persists the "Untitled task" display fallback (Sidebar.tsx:249's rule).
-    title: displayTitle === UNTITLED ? undefined : displayTitle,
+    // Resume forwards the host title, not the displayed user override.
+    title: row.baseTitle,
     displayTitle,
     workspaceLabel,
     age: row.age ?? "",
@@ -262,6 +259,7 @@ export function CommandPalette({
   keymapTable = KEYMAP,
   onSwitchMode,
   onSelectTab,
+  onRenameTask,
   onResumeSession,
   onClose,
 }: CommandPaletteProps) {
@@ -350,6 +348,12 @@ export function CommandPalette({
       requestAnimationFrame(() => row.action.run());
       return;
     }
+    if (mode === "rename") {
+      if (row.kind === "session" && row.opening) return;
+      const target = groups.flatMap(group => group.rows).find(item => row.kind === "tab" ? item.tabId === row.tabId : item.sessionId === row.sessionId);
+      if (!target) return;
+      onClose(); requestAnimationFrame(() => onRenameTask(target)); return;
+    }
     if (row.kind === "tab") {
       onClose();
       const { tabId } = row;
@@ -430,7 +434,7 @@ export function CommandPalette({
       onKeyDown={onDialogKeyDown}
     >
       <div className="command-palette-input-row">
-        {mode === "sessions" && <span className="command-palette-mode-badge">Tasks</span>}
+        {mode !== "actions" && <span className="command-palette-mode-badge">Tasks</span>}
         <input
           ref={inputRef}
           className="command-palette-input"

@@ -57,7 +57,7 @@ describe("runtime segment schema", () => {
     await store.saveCheckpoint({id:"owned",sessionId:"checkpoint-owned",commitHash:"hash",createdAt:1,reason:"auto",label:"owned watermark",historyJson:JSON.stringify(await store.loadHistory("checkpoint-owned"))});
     await store.close();
     const raw = new DatabaseSync(path);
-    raw.exec("DELETE FROM schema_migrations WHERE version=35; DROP INDEX idx_runtime_transcript_turn; DROP INDEX idx_runtime_transcript_native_turn");
+    raw.exec("DELETE FROM schema_migrations WHERE version>=35; DROP INDEX idx_runtime_transcript_turn; DROP INDEX idx_runtime_transcript_native_turn");
     raw.close();
     const upgraded = new SqlitePersistenceAdapter(path);
     await upgraded.getRootSession("s");
@@ -73,7 +73,7 @@ describe("runtime segment schema", () => {
     const store = new SqlitePersistenceAdapter(path);
     store.ensureRuntimeSession("s"); await store.close();
     const raw = new DatabaseSync(path);
-    raw.exec("DELETE FROM schema_migrations WHERE version=35; DROP INDEX idx_runtime_transcript_turn; DROP INDEX idx_runtime_transcript_native_turn; CREATE TRIGGER upgrade_fault BEFORE DELETE ON runtime_transcript BEGIN SELECT RAISE(ABORT,'upgrade fault'); END");
+    raw.exec("DELETE FROM schema_migrations WHERE version>=35; DROP INDEX idx_runtime_transcript_turn; DROP INDEX idx_runtime_transcript_native_turn; CREATE TRIGGER upgrade_fault BEFORE DELETE ON runtime_transcript BEGIN SELECT RAISE(ABORT,'upgrade fault'); END");
     const failed = new SqlitePersistenceAdapter(path);
     await expect(failed.getRootSession("s")).rejects.toThrow("upgrade fault");
     expect(raw.prepare("SELECT 1 FROM schema_migrations WHERE version=35").get()).toBeUndefined();

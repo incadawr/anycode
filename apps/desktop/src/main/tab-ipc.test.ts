@@ -3127,3 +3127,27 @@ it("checks persisted workspace when a damaged receipt cannot identify its sessio
   expect(manager.managedContinuationRefusal).toHaveBeenCalledWith("tied", "/managed-checkout");
   expect(createTab).not.toHaveBeenCalled();
 });
+
+describe("handleSessionRename", () => {
+  it("validates names and addresses only published root tabs", async () => {
+    const { handleSessionRename } = await import("./tab-ipc.js");
+    const write = vi.fn(() => true);
+    const deps = { manager: { listTabs: () => [
+      { tabId: "t", sessionId: "s", state: "running" },
+      { tabId: "closed", sessionId: "c", state: "closing" },
+      { tabId: "child", sessionId: "x", state: "running", childOf: {} },
+    ] }, setSessionUserTitle: write } as unknown as TabIpcDeps;
+    expect(handleSessionRename(deps, { kind: "tab", tabId: "t", title: "  Имя  " })).toEqual({ ok: true, sessionId: "s", tabId: "t", userTitle: "Имя" });
+    expect(write).toHaveBeenCalledWith("s", "Имя", true);
+    expect(handleSessionRename(deps, { kind: "tab", tabId: "t", title: " " })).toMatchObject({ ok: true, userTitle: null });
+    expect(handleSessionRename(deps, { kind: "tab", tabId: "closed", title: "x" })).toEqual({ ok: false, reason: "not_found" });
+    expect(handleSessionRename(deps, { kind: "tab", tabId: "child", title: "x" })).toEqual({ ok: false, reason: "not_found" });
+    expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: "x".repeat(161) })).toEqual({ ok: false, reason: "invalid" });
+    expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: "x\ny" })).toEqual({ ok: false, reason: "invalid" });
+    for (const separator of ["\u2028", "\u2029"]) {
+      expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: `x${separator}y` })).toEqual({ ok: false, reason: "invalid" });
+    }
+    write.mockImplementation(() => { throw new Error("db"); });
+    expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: "x" })).toEqual({ ok: false, reason: "write_failed" });
+  });
+});

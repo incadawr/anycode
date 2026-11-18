@@ -15,7 +15,7 @@ import type { KeyboardEvent } from "react";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { isEngineId } from "../../../shared/engines.js";
 import type { TabInfo } from "../tabs-store.js";
-import { useTabsStore } from "../tabs-store.js";
+import { displayTaskTitle, useTabsStore } from "../tabs-store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { rowStatusKind, useTabStatusStore, type RowStatusKind } from "../tab-status-store.js";
@@ -106,6 +106,8 @@ export interface SidebarRow {
   /** tabId for open rows, sessionId for resumable rows — React key + interaction target. */
   key: string;
   title: string;
+  baseTitle?: string;
+  userTitle?: string | null;
   /** Compact age ("22h") for resumable rows; `null` on open rows (liveness ≻ age). */
   age: string | null;
   /** Open rows only — drives the danger dot. */
@@ -237,7 +239,8 @@ export function buildSidebarGroups(
       .map((t) => ({
         kind: "open" as const,
         key: t.tabId,
-        title: t.title ?? UNTITLED,
+        title: displayTaskTitle(t) ?? UNTITLED,
+        baseTitle: t.title, userTitle: t.userTitle,
         age: null,
         hostExited: t.hostExited,
         tabId: t.tabId,
@@ -260,7 +263,8 @@ export function buildSidebarGroups(
       .map((s) => ({
         kind: "resumable" as const,
         key: s.id,
-        title: s.title ?? UNTITLED,
+        title: s.userTitle ?? s.title ?? UNTITLED,
+        baseTitle: s.title, userTitle: s.userTitle,
         age: formatAge(s.updatedAt, now),
         sessionId: s.id,
         ...(s.worktree !== undefined ? { worktree: s.worktree } : {}),
@@ -458,7 +462,14 @@ export class SessionIndexController {
     await this.load(full);
   }
 
-  async load(full: boolean): Promise<void> {
+  rename(sessionId: string, userTitle: string | null, full: boolean): void {
+    ++this.latestReq;
+    if (this.sessions) this.sessions = this.sessions.map(s => s.id === sessionId ? { ...s, userTitle: userTitle ?? undefined } : s);
+    this.onChange?.();
+    void this.load(full, true);
+  }
+
+  async load(full: boolean, preserveOnError = false): Promise<void> {
     const reqId = ++this.latestReq;
     try {
       const list = full ? await this.fetchList() : await this.fetchList(SIDEBAR_SESSIONS_LIMIT + 1);
@@ -473,8 +484,7 @@ export class SessionIndexController {
       if (reqId !== this.latestReq) {
         return;
       }
-      this.sessions = null;
-      this.hasMore = false;
+      if (!preserveOnError) { this.sessions = null; this.hasMore = false; }
       this.error = true;
       this.lastKey = null; // retry on the next sync
     }
@@ -659,6 +669,11 @@ function useSessionIndex(tabs: readonly TabInfo[], full: boolean): {
   useEffect(() => {
     void controller.sync(tabs, full);
   }, [tabs, controller, full]);
+  useEffect(() => {
+    const listener = (event: Event) => { const detail = (event as CustomEvent<{ sessionId: string; userTitle: string | null }>).detail; controller.rename(detail.sessionId, detail.userTitle, full); };
+    window.addEventListener("anycode-session-renamed", listener);
+    return () => window.removeEventListener("anycode-session-renamed", listener);
+  }, [controller, full]);
   const refetch = useCallback(async () => {
     await controller.load(full);
   }, [controller, full]);
@@ -668,6 +683,7 @@ function useSessionIndex(tabs: readonly TabInfo[], full: boolean): {
 export interface SidebarProps {
   tabs: TabInfo[];
   activeTabId: string | null;
+  onRenameRequest(row: SidebarRow): void;
   onSelectTab(tabId: string): void;
   onCloseTab(tabId: string): void;
   onTabCreated(r: { tabId: string; workspace: string; title?: string }): void;
@@ -681,6 +697,7 @@ export function Sidebar({
   tabs,
   activeTabId,
   onSelectTab,
+  onRenameRequest,
   onCloseTab,
   onTabCreated,
   onFocusTab,
@@ -688,6 +705,20 @@ export function Sidebar({
   collapsed,
   onToggleCollapsed,
 }: SidebarProps) {
+  const [rowMenu, setRowMenu] = useState<{ row: SidebarRow; top: number; left: number; trigger: HTMLButtonElement } | null>(null);
+  const rowMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!rowMenu) return;
+    rowMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const outside = (e: MouseEvent) => { if (!rowMenuRef.current?.contains(e.target as Node) && e.target !== rowMenu.trigger) setRowMenu(null); };
+    const key = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setRowMenu(null); rowMenu.trigger.focus(); } };
+    document.addEventListener("pointerdown", outside); document.addEventListener("keydown", key, true);
+    return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", key, true); };
+  }, [rowMenu]);
+  const showRowMenu = (row: SidebarRow, trigger: HTMLButtonElement) => {
+    const rect = trigger.getBoundingClientRect();
+    setRowMenu({ row, trigger, top: Math.min(rect.bottom, window.innerHeight - 48), left: clampMenuLeft(rect.left, 180, window.innerWidth) });
+  };
   const [query, setQuery] = useState("");
   const [showAllTasks, setShowAllTasks] = useState(false); // not persisted — the cap is the default view every launch
   const full = query !== "" || showAllTasks;
@@ -1052,6 +1083,9 @@ export function Sidebar({
 
   const { opening, arming } = pendingResumeRowSets(pendingResumes);
   const visibleGroups = applyHiddenProjects(buildSidebarGroups(tabs, sessions, undefined, opening, arming), hiddenWorkspaces);
+  useEffect(() => {
+    if (rowMenu && !visibleGroups.some(group => group.rows.some(row => row.kind === rowMenu.row.kind && row.key === rowMenu.row.key && !row.opening))) setRowMenu(null);
+  }, [rowMenu, tabs, sessions, opening, arming, hiddenWorkspaces]);
   const filtering = query !== "";
   const filtered = filterSidebarGroups(visibleGroups, query);
   // "Remove project" is disabled while the open menu's project still has a live
@@ -1274,6 +1308,8 @@ export function Sidebar({
                           aria-current={row.tabId === activeTabId ? "true" : undefined}
                           aria-label={statusKind !== null ? `${row.title}, ${ROW_STATUS_LABEL[statusKind]}` : undefined}
                           onClick={() => onSelectTab(row.tabId!)}
+                          onDoubleClick={() => onRenameRequest(row)}
+                          onKeyDown={event => { if (event.key === "F2") { event.preventDefault(); onRenameRequest(row); } }}
                         >
                           <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
                           {row.openedByAgent === true && <span className="sidebar-row-agent" title="Opened by an agent">agent</span>}
@@ -1289,6 +1325,7 @@ export function Sidebar({
                           )}
                           <RowStatusIndicator kind={statusKind} />
                         </button>
+                        <button type="button" className="sidebar-row-menu-button" aria-label={`Actions for ${row.title}`} aria-haspopup="menu" onClick={e => showRowMenu(row, e.currentTarget)}><Ellipsis /></button>
                         <button
                           type="button"
                           className="sidebar-row-close"
@@ -1309,6 +1346,7 @@ export function Sidebar({
                         disabled={row.opening === true}
                         aria-busy={row.opening === true || undefined}
                         onClick={() => void resumeSession(row.sessionId!)}
+                        onKeyDown={event => { if (event.key === "F2") { event.preventDefault(); onRenameRequest(row); } }}
                       >
                         <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
                         {row.engineId !== undefined && <Cube className="sidebar-row-engine" aria-label={`Engine: ${row.engineId}`} />}
@@ -1330,6 +1368,7 @@ export function Sidebar({
                           row.age && <span className="sidebar-row-age">{row.age}</span>
                         )}
                       </button>
+                      {row.opening !== true && <button type="button" className="sidebar-row-menu-button" aria-label={`Actions for ${row.title}`} aria-haspopup="menu" onClick={e => showRowMenu(row, e.currentTarget)}><Ellipsis /></button>}
                       {/* hard-delete affordance. Same hover-reveal +
                           disabled-inert pattern as the open row's close (×):
                           while the project has ANY live tab, main would refuse
@@ -1429,6 +1468,7 @@ export function Sidebar({
         </button>
       </div>
 
+      {rowMenu && <div ref={rowMenuRef} role="menu" className="sidebar-project-menu" style={{ position: "fixed", top: rowMenu.top, left: rowMenu.left, zIndex: 100 }}><button type="button" role="menuitem" className="sidebar-project-menu-item" onClick={() => { const row = rowMenu.row; rowMenu.trigger.focus(); setRowMenu(null); onRenameRequest(row); }}>Rename…</button></div>}
       {menuFor && (
         <div
           ref={menuRef}

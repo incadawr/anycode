@@ -65,7 +65,9 @@ const BASELINE: Record<string, number> = {
   "components/SessionHeader.tsx": 6,
   "components/SessionsApiPane.tsx": 1,
   "components/SettingsScreen.tsx": 22,
-  "components/Sidebar.tsx": 21,
+  "components/Sidebar.tsx": 25,
+  // Task rename uses a native modal and the existing sidebar menu pattern.
+  "components/TaskRenameDialog.tsx": 5,
   "components/SkillsPane.tsx": 9,
   "components/StartScreen.tsx": 20,
   "components/SubagentsPane.tsx": 9,

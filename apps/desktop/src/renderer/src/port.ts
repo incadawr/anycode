@@ -92,6 +92,7 @@ export function connectTerminal(port: MessagePort): TerminalConnection {
 
 /** Tab metadata carried on the port envelope (Phase-2 §3.1). */
 export interface HostPortMeta {
+  titles?: PortEnvelope["titles"];
   tabId: string;
   workspace: string;
   missingWorkspace?: boolean;
@@ -182,6 +183,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         providerId?: unknown;
         child?: unknown;
         openedByAgent?: unknown;
+        titles?: PortEnvelope["titles"];
         agentTitle?: unknown;
         childWorktree?: unknown;
       };
@@ -208,6 +210,7 @@ export function onHostPort(cb: (port: MessagePort, meta: HostPortMeta) => void):
         ...(pinnedConnection !== undefined ? { pinnedConnection } : {}),
         ...(child !== undefined ? { child } : {}),
         ...(childWorktree ? { childWorktree } : {}),
+        ...(envelope.titles ? { titles: envelope.titles } : {}),
         ...(typeof envelope.agentTitle === "string" ? { agentTitle: envelope.agentTitle } : {}),
         ...(envelope.openedByAgent === true ? { openedByAgent: true as const } : {}),
       });
@@ -297,6 +300,7 @@ export interface ConnectionRegistry {
     openedByAgent?: boolean,
     agentTitle?: string,
     childWorktree?: PortEnvelope["childWorktree"],
+    titles?: PortEnvelope["titles"],
   ): boolean;
   /**
    * Flips the given tab's connection/banner state to host-exited; a no-op for
@@ -334,7 +338,7 @@ export function startConnectionManager(registry: ConnectionRegistry): () => void
       console.warn("[port] dropping port envelope with no tabId", meta);
       return;
     }
-    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent, meta.agentTitle, meta.childWorktree);
+    const attached = registry.registerPort(meta.tabId, meta.workspace, port, meta.pinnedConnection, meta.child, meta.openedByAgent, meta.agentTitle, meta.childWorktree, meta.titles);
     // GitHub #6: main delivers this tab's port without ever starting a host —
     // its workspace folder is gone. Mark the tab exited with that path so the
     // surface shows an error naming the folder instead of sitting in

@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Rename tasks in the sidebar and command palette, with an option to restore automatic titles.
+
 ## [0.0.102] - 2026-11-14
 
 ### Changed

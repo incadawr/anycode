@@ -24,10 +24,14 @@ import type { ReasoningEffort } from "@anycode/core";
  * nothing above is changed.
  */
 
+export const SESSION_RENAME_CHANNEL = "anycode:session-rename";
+export type SessionRenameRequest = { kind: "tab"; tabId: string; title: string } | { kind: "session"; sessionId: string; title: string };
+export type SessionRenameResult = { ok: true; sessionId: string; tabId?: string; userTitle: string | null } | { ok: false; reason: "invalid" | "not_found" | "write_failed" };
+export interface TabTitleSnapshot { title: string | null; userTitle: string | null }
 export const TAB_BOOTSTRAP_CHANNEL = "anycode:tab-bootstrap";
 export const TAB_SELECT_CHANNEL = "anycode:tab-select";
 export interface TabBootstrap {
-  tabs: Array<{ tabId: string; workspace: string }>;
+  tabs: Array<{ tabId: string; workspace: string; titles?: TabTitleSnapshot }>;
   activeTabId: string | null;
 }
 
@@ -324,6 +328,7 @@ export interface SessionSummary {
   createdAt: number;
   updatedAt: number;
   title?: string;
+  userTitle?: string;
   openInTabId?: string; // session already bound to a live tab (main's annotation)
   /**
    * The engine the session was created under (projected from persistence

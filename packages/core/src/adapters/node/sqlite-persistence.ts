@@ -527,6 +527,12 @@ const MIGRATIONS: readonly Migration[] = [
         AND r.selected_json=json_object('model',sessions.model,'mode',sessions.mode) AND r.applied_json=r.selected_json)`,
     `DELETE FROM runtime_segments WHERE segment_id='legacy' AND session_id IN (SELECT id FROM sessions WHERE runtime_revision=0 AND active_runtime_segment IS NULL)`,
   ] },
+  { version: 36, statements: [
+    `CREATE TABLE IF NOT EXISTS session_user_titles (session_id TEXT PRIMARY KEY, user_title TEXT NOT NULL)`,
+    `CREATE TRIGGER IF NOT EXISTS delete_session_user_title AFTER DELETE ON sessions BEGIN
+      DELETE FROM session_user_titles WHERE session_id = OLD.id;
+    END`,
+  ] },
 ];
 
 /**
@@ -648,8 +654,18 @@ function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction
     if (migration.version <= current) {
       continue;
     }
-    if (!outerTransaction) db.exec("BEGIN");
+    if (!outerTransaction) db.exec("BEGIN IMMEDIATE");
     try {
+      // Another connection may have migrated since the initial version read.
+      // Recheck while holding the write lock before applying this migration.
+      const locked = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
+      if (strictSessionSchema && locked.version > supported) {
+        throw new Error(`Database schema ${locked.version} is newer than supported schema ${supported}; update AnyCode before opening sessions.`);
+      }
+      if (migration.version <= locked.version) {
+        if (!outerTransaction) db.exec("COMMIT");
+        continue;
+      }
       if (migration.version === 35) {
         db.exec("CREATE TEMP TABLE runtime_backfill_checkpoint_owners (session_id TEXT PRIMARY KEY)");
         // Some historical partial schemas legitimately contain no checkpoints.
@@ -682,6 +698,7 @@ interface SessionRow {
   created_at: number;
   updated_at: number;
   title: string | null;
+  user_title?: string | null;
   engine_id: string | null;
   external_session_ref: string | null;
   project_root: string | null;
@@ -790,6 +807,7 @@ function rowToSessionMeta(row: SessionRow): SessionMeta {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     title: row.title ?? undefined,
+    ...(row.user_title != null ? { userTitle: row.user_title } : {}),
     // Preserve strict legacy projections for ordinary sessions. Consumers use
     // `projectRoot ?? workspace` as the semantic project identity.
     ...(projectRoot !== row.workspace || worktree !== undefined ? { projectRoot } : {}),
@@ -1443,7 +1461,11 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       ) {
         return { ok: false as const, reason: "source_changed" as const };
       }
-      return { ok: true as const, session: this.createSessionInDb(db, meta) };
+      const session = this.createSessionInDb(db, meta);
+      db.prepare(`INSERT INTO session_user_titles (session_id, user_title)
+        SELECT ?, user_title FROM session_user_titles WHERE session_id = ?`).run(meta.id, sourceId);
+      const userTitle = db.prepare("SELECT user_title FROM session_user_titles WHERE session_id = ?").get(meta.id) as { user_title: string } | undefined;
+      return { ok: true as const, session: userTitle ? { ...session, userTitle: userTitle.user_title } : session };
     }, "immediate");
   }
 
@@ -1563,7 +1585,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     let sql: string;
     if (opts?.perWorkspaceLimit !== undefined) {
       sql = `SELECT * FROM (
-        SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity,
+        SELECT s.*, (SELECT user_title FROM session_user_titles WHERE session_id = s.id) AS user_title, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity,
           ROW_NUMBER() OVER (PARTITION BY COALESCE(s.project_root, s.workspace) ORDER BY ${SESSION_LAST_ACTIVITY_SQL} DESC) AS rn
         FROM sessions s WHERE s.parent_session_id IS NULL`;
       if (opts.workspace !== undefined) {
@@ -1578,7 +1600,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
         params.push(opts.limit);
       }
     } else {
-      sql = `SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity FROM sessions s WHERE s.parent_session_id IS NULL`;
+      sql = `SELECT s.*, (SELECT user_title FROM session_user_titles WHERE session_id = s.id) AS user_title, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity FROM sessions s WHERE s.parent_session_id IS NULL`;
       if (opts?.workspace !== undefined) {
         sql += " AND s.workspace = ?";
         params.push(opts.workspace);
@@ -1595,10 +1617,31 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   async getRootSession(id: string): Promise<SessionMeta | null> {
     const db = this.open();
-    const row = db.prepare("SELECT * FROM sessions WHERE id = ? AND parent_session_id IS NULL").get(id) as
+    const row = db.prepare("SELECT s.*, (SELECT user_title FROM session_user_titles WHERE session_id = s.id) AS user_title FROM sessions s WHERE s.id = ? AND s.parent_session_id IS NULL").get(id) as
       | SessionRow
       | undefined;
     return row ? rowToSessionMeta(row) : null;
+  }
+
+  readSessionTitles(sessionId: string): { title: string | null; userTitle: string | null } {
+    const row = this.open().prepare(`SELECT
+      (SELECT title FROM sessions WHERE id = ? AND parent_session_id IS NULL) AS title,
+      (SELECT user_title FROM session_user_titles WHERE session_id = ?) AS user_title`).get(sessionId, sessionId) as { title: string | null; user_title: string | null };
+    return { title: row.title, userTitle: row.user_title };
+  }
+
+  setSessionUserTitle(sessionId: string, title: string | null, allowUnmaterialized: boolean): boolean {
+    return this.transaction((db) => {
+      const row = db.prepare("SELECT parent_session_id FROM sessions WHERE id = ?").get(sessionId) as { parent_session_id: string | null } | undefined;
+      if (row ? row.parent_session_id !== null : !allowUnmaterialized) return false;
+      if (title === null) db.prepare("DELETE FROM session_user_titles WHERE session_id = ?").run(sessionId);
+      else db.prepare("INSERT INTO session_user_titles (session_id, user_title) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET user_title = excluded.user_title").run(sessionId, title);
+      return true;
+    }, "immediate");
+  }
+
+  clearUnmaterializedSessionUserTitle(sessionId: string): void {
+    this.open().prepare("DELETE FROM session_user_titles WHERE session_id = ? AND NOT EXISTS (SELECT 1 FROM sessions WHERE id = ?)").run(sessionId, sessionId);
   }
 
   /** A consistent read snapshot, not a lease against subsequent writers. */

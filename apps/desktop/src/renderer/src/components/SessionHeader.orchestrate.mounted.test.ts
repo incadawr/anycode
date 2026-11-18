@@ -72,3 +72,21 @@ describe("SessionHeader — orchestrate badge", () => {
     }
   });
 });
+
+it("shows the user title and restores the latest base title on reset", async () => {
+  stubBridge();
+  useTabsStore.getState().addTab({ tabId: "rename-tab", workspace: "/workspace" });
+  useTabsStore.getState().setTitle("rename-tab", "Base title");
+  const store = createDesktopStore();
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "rename-tab", store } }, createElement(SessionHeader, { sidebarCollapsed: false, onToggleSidebar: () => {}, onToast: () => {} }))));
+    expect(container.textContent).toContain("Base title");
+    await act(async () => useTabsStore.getState().setUserTitle("rename-tab", "User title"));
+    expect(container.textContent).toContain("User title");
+    await act(async () => { useTabsStore.getState().setTitle("rename-tab", "Updated base"); useTabsStore.getState().setUserTitle("rename-tab", null); });
+    expect(container.textContent).toContain("Updated base");
+    expect(container.textContent).not.toContain("User title");
+  } finally { await act(async () => root.unmount()); }
+});

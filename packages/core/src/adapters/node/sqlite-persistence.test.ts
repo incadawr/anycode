@@ -50,6 +50,82 @@ describe("SqlitePersistenceAdapter", () => {
     }
   });
 
+  it("rechecks the migration version after another adapter wins the write lock", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-migration-race-"));
+    const path = join(tmpDir, "test.sqlite");
+    const setup = new SqlitePersistenceAdapter(path);
+    await setup.createSession({ id: "s", workspace: "/w", model: "m", mode: "build" });
+    await setup.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("DELETE FROM schema_migrations WHERE version = 36");
+    raw.close();
+
+    const first = new SqlitePersistenceAdapter(path);
+    const second = new SqlitePersistenceAdapter(path);
+    const originalExec = DatabaseSync.prototype.exec;
+    let competitor: Promise<SessionMeta | null> | undefined;
+    let injected = false;
+    const spy = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql === "BEGIN IMMEDIATE" && !injected) {
+        injected = true;
+        competitor = second.getRootSession("s");
+      }
+      return originalExec.call(this, sql);
+    });
+    try {
+      expect(await first.getRootSession("s")).toMatchObject({ id: "s" });
+      expect(injected).toBe(true);
+      expect(await competitor).toMatchObject({ id: "s" });
+      const verify = new DatabaseSync(path, { readOnly: true });
+      try { expect(verify.prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 36").get()).toMatchObject({ n: 1 }); }
+      finally { verify.close(); }
+    } finally {
+      spy.mockRestore();
+      await first.close();
+      await second.close();
+    }
+  });
+
+  it("persists independent user titles before and after session creation", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-user-title-"));
+    const path = join(tmpDir, "test.sqlite");
+    const adapter = new SqlitePersistenceAdapter(path);
+    expect(adapter.setSessionUserTitle("s1", "Custom", true)).toBe(true);
+    expect(adapter.setSessionUserTitle("missing", "No", false)).toBe(false);
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build", title: "Base" });
+    const before = await adapter.getRootSession("s1");
+    expect(before).toMatchObject({ title: "Base", userTitle: "Custom" });
+    expect((await adapter.listRootSessions({ perWorkspaceLimit: 5 }))[0]).toMatchObject({ userTitle: "Custom" });
+    expect((await adapter.listRootSessions())[0]).toMatchObject({ userTitle: "Custom" });
+    adapter.clearUnmaterializedSessionUserTitle("s1");
+    await adapter.close();
+    const reopened = new SqlitePersistenceAdapter(path);
+    expect(reopened.readSessionTitles("s1")).toEqual({ title: "Base", userTitle: "Custom" });
+    expect(reopened.setSessionUserTitle("s1", null, false)).toBe(true);
+    expect(await reopened.getRootSession("s1")).toMatchObject({ title: "Base", updatedAt: before?.updatedAt });
+    await reopened.close();
+  });
+
+  it("isolates user titles across connections and cleans them on delete", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-user-title-cleanup-"));
+    const path = join(tmpDir, "test.sqlite");
+    const a = new SqlitePersistenceAdapter(path); const b = new SqlitePersistenceAdapter(path);
+    await a.createSession({ id: "root", workspace: "/w", model: "m", mode: "build", title: "Original" });
+    await a.createSession({ id: "child", workspace: "/w", model: "m", mode: "build", parentSessionId: "root", spawnToolCallId: "call" });
+    expect(a.setSessionUserTitle("child", "Denied", true)).toBe(false);
+    expect(a.setSessionUserTitle("root", "User", false)).toBe(true);
+    await b.touchSession("root", { title: "New base" });
+    expect(a.readSessionTitles("root")).toEqual({ title: "New base", userTitle: "User" });
+    await a.deleteSession("root");
+    expect(b.readSessionTitles("root").userTitle).toBeNull();
+    expect(a.setSessionUserTitle("pending", "Temporary", true)).toBe(true);
+    a.clearUnmaterializedSessionUserTitle("pending");
+    expect(a.readSessionTitles("pending").userTitle).toBeNull();
+    await a.close(); await b.close();
+    const strict = new SqlitePersistenceAdapter(path, { strictSessionSchema: true });
+    expect(await strict.getRootSession("root")).toBeNull(); await strict.close();
+  });
+
   it("quarantines the adapter when rollback fails instead of accepting a lost write", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-rollback-quarantine-"));
     const dbPath = join(tmpDir,"test.sqlite");
@@ -925,7 +1001,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -996,7 +1072,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -1049,7 +1125,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -1127,7 +1203,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36]);
     migrated.close();
   });
 
@@ -1182,7 +1258,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1529,7 +1605,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36]);
     migrated.close();
   });
 
@@ -3539,12 +3615,17 @@ describe("SqlitePersistenceAdapter — session delete", () => {
   it.each(["codex", "claude"] as const)("atomically registers a successor only for the unchanged %s source", async (engine) => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     await seedFullSession(adapter, "source", "original-ref", engine);
+    expect(adapter.setSessionUserTitle("source", "Custom task", false)).toBe(true);
     const successor = {id:"successor",workspace:"/w",model:"m",mode:"build" as const,engineId:engine,externalSessionRef:"original-ref"};
     expect(await adapter.createSessionFromSource("missing", successor)).toEqual({ ok: false, reason: "source_missing" });
     expect(await adapter.createSessionFromSource("source", {...successor,externalSessionRef:"changed-ref"})).toEqual({ ok: false, reason: "source_changed" });
     expect(await adapter.createSessionFromSource("source", {...successor,engineId:engine === "codex" ? "claude" : "codex"})).toEqual({ ok: false, reason: "source_changed" });
     const made = await adapter.createSessionFromSource("source", successor);
     expect(made.ok && made.session.id).toBe("successor");
+    expect(made.ok && made.session.userTitle).toBe("Custom task");
+    expect((await adapter.getRootSession("successor"))?.userTitle).toBe("Custom task");
+    expect(adapter.setSessionUserTitle("source", null, false)).toBe(true);
+    expect((await adapter.getRootSession("successor"))?.userTitle).toBe("Custom task");
     const first = await adapter.deleteSession("source");
     expect(engine === "codex" ? first.counts.codexThreadItems : first.counts.claudeTranscriptItems).toBe(0);
     const last = await adapter.deleteSession("successor");

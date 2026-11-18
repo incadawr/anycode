@@ -10094,3 +10094,18 @@ describe("network activity", () => {
     expect(validateActivitySnapshot({ state: "running" }, "idle")).toBeUndefined();
   });
 });
+
+describe("user title snapshots", () => {
+  it("delivers snapshots on ports and cleans only after final close", async () => {
+    const { fork, hosts } = dyingForkRig(); const { window, posted } = windowRig();
+    const cleanup = vi.fn(); const read = vi.fn(() => ({ title: "Base", userTitle: "User" }));
+    const manager = new TabHostManager({ fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => window, env: () => ({}), logger: silentLogger, readSessionTitles: read, clearUnmaterializedSessionUserTitle: cleanup });
+    const result = manager.createTab({ workspace: "/ws", sessionId: "s", resume: false });
+    if (!result.ok) throw new Error("failed to create tab");
+    manager.deliverTabPort(result.tab);
+    expect(posted.some(p => (p.payload as { titles?: unknown }).titles && JSON.stringify((p.payload as { titles: unknown }).titles) === JSON.stringify({ title: "Base", userTitle: "User" }))).toBe(true);
+    await flush();
+    expect(hosts.length).toBeGreaterThan(1); expect(cleanup).not.toHaveBeenCalled();
+    await manager.closeTab(result.tab.tabId); expect(cleanup).toHaveBeenCalledWith("s");
+  });
+});

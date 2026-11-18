@@ -71,8 +71,9 @@ describe("main tab-close notification", () => {
       const stop = startConnectionManager(registry);
       const port = {} as MessagePort;
       const childWorktree = { id: "allocation", path: "/ws", branch: "topic", baseRef: "main", ownedByAnyCode: false, parentSessionId: "parent" };
-      for (const cb of listeners) cb({ data: { type: "anycode:port", tabId: "tab", workspace: "/ws", openedByAgent: true, agentTitle: "worker-1", childWorktree }, ports: [port] });
-      expect(registry.registerPort).toHaveBeenCalledWith("tab", "/ws", port, undefined, undefined, true, "worker-1", childWorktree);
+      const titles = { title: "base", userTitle: "custom" };
+      for (const cb of listeners) cb({ data: { type: "anycode:port", tabId: "tab", workspace: "/ws", openedByAgent: true, agentTitle: "worker-1", childWorktree, titles }, ports: [port] });
+      expect(registry.registerPort).toHaveBeenCalledWith("tab", "/ws", port, undefined, undefined, true, "worker-1", childWorktree, titles);
       for (const cb of listeners) cb({ data: { type: "anycode:tab-closed", tabId: "tab" }, ports: [] });
       expect(registry.disposeTab).toHaveBeenCalledWith("tab");
       expect(registry.markHostExited).not.toHaveBeenCalled();

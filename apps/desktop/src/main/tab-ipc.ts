@@ -19,6 +19,7 @@ import { guardedIpcHandle, guardedIpcOn } from "./ipc-guard.js";
 import { z } from "zod";
 import type { HistoryItem, PersistencePort, SessionMeta } from "@anycode/core";
 import {
+  SESSION_RENAME_CHANNEL,
   ENGINES_LIST_CHANNEL,
   SESSIONS_LIST_CHANNEL,
   SESSIONS_DELETE_OLDER_CHANNEL,
@@ -31,6 +32,7 @@ import {
   WORKSPACE_PICK_CHANNEL,
 } from "../shared/tabs.js";
 import type {
+  SessionRenameRequest, SessionRenameResult, TabTitleSnapshot,
   AvailableEngines,
   CloseTabResult,
   CreateTabRequest,
@@ -104,6 +106,8 @@ export type ResolveCodexProfileResult =
 export interface TabIpcDeps {
   providerReadiness?(connectionId?: string): Promise<import("../shared/settings.js").ProviderReadiness>;
   manager: TabHostManager;
+  readSessionTitles?(id: string): TabTitleSnapshot;
+  setSessionUserTitle?(id: string, title: string | null, allowUnmaterialized: boolean): boolean;
   /**
    * part C: awaited before a tab is created so the MCP secret
    * hand-off for the workspace is current when spawnTabHost reads it. Optional.
@@ -612,6 +616,7 @@ export function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSu
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     ...(meta.title !== undefined ? { title: meta.title } : {}),
+    ...(meta.userTitle !== undefined ? { userTitle: meta.userTitle } : {}),
     ...(openInTabId !== undefined ? { openInTabId } : {}),
     // carry the session's engine to the renderer so a resume `not_ready`
     // toast can read the engine-correct copy (Sidebar -> handleCreateTabResult).
@@ -1066,7 +1071,28 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
  * validates its request; a malformed payload is rejected with the safe
  * negative result of that channel rather than throwing across the bridge.
  */
+const renameSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("tab"), tabId: z.string().min(1).max(128), title: z.string() }),
+  z.strictObject({ kind: z.literal("session"), sessionId: z.string().min(1).max(128), title: z.string() }),
+]);
+export function handleSessionRename(deps: TabIpcDeps, request: SessionRenameRequest): SessionRenameResult {
+  const title = request.title.trim();
+  if (title.length > 160 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(title)) return { ok: false, reason: "invalid" };
+  const tabs = deps.manager.listTabs().filter(tab => !tab.childOf && tab.state !== "closing");
+  const tab = request.kind === "tab" ? tabs.find(t => t.tabId === request.tabId) : tabs.find(t => t.sessionId === request.sessionId);
+  if (request.kind === "tab" && !tab) return { ok: false, reason: "not_found" };
+  const sessionId = request.kind === "tab" ? tab!.sessionId : request.sessionId;
+  try {
+    if (!deps.setSessionUserTitle?.(sessionId, title || null, request.kind === "tab")) return { ok: false, reason: "not_found" };
+    return { ok: true, sessionId, ...(tab ? { tabId: tab.tabId } : {}), userTitle: title || null };
+  } catch { return { ok: false, reason: "write_failed" }; }
+}
+
 export function registerTabIpc(deps: TabIpcDeps): void {
+  guardedIpcHandle(SESSION_RENAME_CHANNEL, (_event, raw: unknown): SessionRenameResult => {
+    const parsed = renameSchema.safeParse(raw);
+    return parsed.success ? handleSessionRename(deps, parsed.data) : { ok: false, reason: "invalid" };
+  });
   let selectedTabId: string | null = null;
   guardedIpcOn(TAB_SELECT_CHANNEL, (_event, raw: unknown) => {
     if (typeof raw === "string" && deps.manager.listTabs().some((tab) => tab.tabId === raw && !tab.childOf)) {
@@ -1074,7 +1100,9 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     }
   });
   guardedIpcHandle(TAB_BOOTSTRAP_CHANNEL, () => {
-    const tabs = deps.manager.listTabs().filter((tab) => !tab.childOf).map(({ tabId, workspace }) => ({ tabId, workspace }));
+    const tabs = deps.manager.listTabs().filter((tab) => !tab.childOf).map(({ tabId, workspace, sessionId }) => {
+      try { return { tabId, workspace, titles: deps.readSessionTitles?.(sessionId) }; } catch { return { tabId, workspace }; }
+    });
     return { tabs, activeTabId: tabs.some((tab) => tab.tabId === selectedTabId) ? selectedTabId : null };
   });
   guardedIpcHandle(TAB_CREATE_CHANNEL, async (_event, raw: unknown): Promise<CreateTabResult> => {

@@ -61,6 +61,7 @@ export interface SessionMeta {
   createdAt: number;
   updatedAt: number;
   title?: string;
+  userTitle?: string;
   /** Opaque, host-selected engine identity; absent preserves historical core sessions. */
   engineId?: string;
   /** Opaque native-session reference owned by an external engine; never credentials/config JSON. */

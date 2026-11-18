@@ -31,7 +31,7 @@ import { ChildWorktreeControl } from "./ChildWorktreeControl.js";
  */
 import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabStore } from "../tab-context.js";
-import { useTabsStore } from "../tabs-store.js";
+import { displayTaskTitle, useTabsStore } from "../tabs-store.js";
 import { Collapse, Dot, Globe, Orchestrate, TaskList, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { SessionExtensionsMenu } from "./SessionExtensionsMenu.js";
@@ -124,7 +124,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const tab = useTabsStore((state) => state.tabs.find((t) => t.tabId === tabId));
   const terminalOpen = tab?.terminalOpen ?? false;
   const tasksPanelOpen = tab?.tasksPanelOpen ?? false;
-  const title = tab?.title ?? (workspace ? basename(workspace) : "—");
+  const title = displayTaskTitle(tab) ?? (workspace ? basename(workspace) : "—");
   const openedByAgent = tab?.openedByAgent === true;
   const orchestrateActive = useTabStore((state) => state.orchestrateActive);
   const orchestrationPosture = useTabStore((state) => state.orchestration.posture);

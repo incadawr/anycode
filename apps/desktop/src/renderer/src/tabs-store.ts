@@ -19,6 +19,11 @@ import type { EngineModelChoice } from "../../shared/protocol.js";
 import type { QueuedPromptImage } from "./store.js";
 
 /** One open tab's shell-level metadata (design §4.3: "id, workspace, sessionId?, title?, host-exited flag"). */
+/** User overrides affect desktop presentation while host titles remain independent. */
+export function displayTaskTitle(tab: Pick<TabInfo, "title" | "userTitle"> | undefined): string | undefined {
+  return tab?.userTitle ?? tab?.title;
+}
+
 export interface TabInfo {
   tabId: string;
   workspace: string;
@@ -37,6 +42,7 @@ export interface TabInfo {
    * `setTitle` is provided now so that wiring has somewhere to land.
    */
   title?: string;
+  userTitle?: string | null;
   /**
    * Mirrors this tab's own store `connection === "host_exited"` for the
    * TabBar's banner dot. The full connection lifecycle (awaiting_port /
@@ -240,6 +246,8 @@ export interface TabsState {
     identity: { workspace: string; projectRoot?: string; worktree?: WorktreeProjection },
   ): void;
   setTitle(tabId: string, title: string): void;
+  seedTabTitles(tabId: string, titles: { title: string | null; userTitle: string | null }): void;
+  setUserTitle(tabId: string, title: string | null): void;
   setHostExited(tabId: string, exited: boolean): void;
   /** Flips the tab's terminal-panel visibility flag (tab-registry.ts's `openTerminal` sets it true; the panel-close affordance sets it false directly — closing never has a connection side-effect). */
   setTerminalOpen(tabId: string, open: boolean): void;
@@ -396,7 +404,7 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
     },
 
     applyBootstrap(snapshot, revision): void {
-      for (const tab of snapshot.tabs) get().addTab(tab);
+      for (const tab of snapshot.tabs) { get().addTab(tab); if (tab.titles) get().seedTabTitles(tab.tabId, tab.titles); }
       if (get().selectionRevision !== revision) return;
       const target = snapshot.tabs.find((tab) => tab.tabId === snapshot.activeTabId) ?? snapshot.tabs[0];
       if (target && get().tabs.some((tab) => tab.tabId === target.tabId)) {
@@ -514,6 +522,12 @@ export function createTabsStore(storage: StorageLike | null = defaultStorage()) 
       }));
     },
 
+    seedTabTitles(tabId, titles): void {
+      set(state => ({ tabs: state.tabs.map(t => t.tabId === tabId ? { ...t, title: t.title ?? titles.title ?? undefined, userTitle: t.userTitle === undefined ? titles.userTitle : t.userTitle } : t) }));
+    },
+    setUserTitle(tabId, userTitle): void {
+      set(state => ({ tabs: state.tabs.map(t => t.tabId === tabId ? { ...t, userTitle } : t) }));
+    },
     setTitle(tabId, title): void {
       set((state) => ({
         tabs: state.tabs.map((t) => (t.tabId === tabId ? { ...t, title } : t)),

@@ -157,7 +157,7 @@ export const SESSION_HANDLE_PLACEHOLDER = "Agent name";
 /** The row's visible secondary line; the full explanation is the row's help tooltip. */
 export const SESSION_HANDLE_DETAIL = "Shown in the session list for agents";
 /** The full explanation behind the row's help button: what the name is for. */
-export const SESSION_HANDLE_HINT = "A short name external agents see in their session list to find this session, e.g. build-bot. Leave empty to show only the session id.";
+export const SESSION_HANDLE_HINT = "A short name external agents see in their session list to find this session, e.g. build-bot. Leave empty to show only the session id. Changing the handle here doesn’t rename the task.";
 
 /** The inline error under the handle field (plain text). `null` = nothing to show. */
 export function handleErrorText(reason: Extract<CommunicationHandleResult, { ok: false }>["reason"] | undefined): string | null {
