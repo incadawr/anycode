@@ -160,7 +160,7 @@ describe("buildPaletteRows — sessions mode", () => {
       label: "w",
       rows: [
         { kind: "resumable", key: "s1", title: "Untitled task", age: "1d", sessionId: "s1" },
-        { kind: "resumable", key: "s2", title: "Real Title", age: "2d", sessionId: "s2" },
+        { kind: "resumable", key: "s2", title: "Real Title", baseTitle: "Real Title", age: "2d", sessionId: "s2" },
       ],
     };
     const rows = buildPaletteRows({

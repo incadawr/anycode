@@ -9488,3 +9488,9 @@ dialog.role-picker-dialog {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+.sidebar-row-menu-button { position: absolute; right: calc(var(--sp-1) + 22px); display: inline-flex; align-items: center; justify-content: center; padding: 2px; background: transparent; border: 0; border-radius: var(--r-xs); color: var(--text-3); opacity: 0; cursor: pointer; }
+.sidebar-row-wrap:hover .sidebar-row-menu-button, .sidebar-row-menu-button:focus-visible { opacity: 1; }
+.sidebar-row-menu-button:focus-visible { outline: 2px solid var(--border-strong); }
+.sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-open { padding-right: calc(var(--sp-2) + 42px); }
+.sidebar-row-wrap:has(> .sidebar-row-menu-button) .sidebar-row-resumable { padding-right: 44px; }

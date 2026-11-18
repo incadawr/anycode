@@ -999,3 +999,23 @@ describe("disabled \"Remove project from list\" explains itself without hover", 
     expect(css).toMatch(/\.sidebar-project-menu-item-note\s*\{[^}]*flex-basis:\s*100%/);
   });
 });
+
+describe("user title projection", () => {
+  it("searches user titles while preserving the base title for resume", () => {
+    const groups = buildSidebarGroups([tab({ tabId: "t", workspace: "/w", title: "Old", userTitle: "Open custom" })], [session({ id: "s", workspace: "/w", title: "Untitled task", userTitle: "History custom" })]);
+    expect(groups[0]!.rows[0]).toMatchObject({ title: "Open custom", baseTitle: "Old" });
+    expect(groups[0]!.rows[1]).toMatchObject({ title: "History custom", baseTitle: "Untitled task" });
+    expect(filterSidebarGroups(groups, "History custom")[0]!.rows[0]!.row.sessionId).toBe("s");
+  });
+  it("patches immediately and rejects an older index response", async () => {
+    let resolveOld!: (sessions: readonly SessionSummary[]) => void;
+    const old = new Promise<readonly SessionSummary[]>(resolve => { resolveOld = resolve; });
+    const current = session({ id: "s", workspace: "/w", title: "Base" });
+    const fetch = vi.fn().mockResolvedValueOnce([current]).mockReturnValueOnce(old).mockResolvedValueOnce([{ ...current, userTitle: "New" }]);
+    const index = new SessionIndexController(fetch); await index.load(true);
+    const pending = index.load(true); index.rename("s", "New", true);
+    expect(index.sessions?.[0]?.userTitle).toBe("New");
+    resolveOld([current]); await pending; await Promise.resolve();
+    expect(index.sessions?.[0]?.userTitle).toBe("New");
+  });
+});

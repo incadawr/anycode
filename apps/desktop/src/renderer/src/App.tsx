@@ -37,6 +37,8 @@ import { applyThemePreference } from "./theme.js";
 import type { SettingsSnapshot } from "../../shared/settings.js";
 import type { DesktopPlatform, WindowState } from "../../shared/window.js";
 import { bindingFor, formatBinding, matchKeymap, resolveKeymap, type ActionId } from "./keymap.js";
+import { TaskRenameDialog } from "./components/TaskRenameDialog.js";
+import type { SidebarRow } from "./components/Sidebar.js";
 import { CommandPalette, type PaletteAction, type PaletteMode } from "./components/CommandPalette.js";
 import { handleCreateTabResult } from "./components/SessionPicker.js";
 import { resumeWithMarker } from "./pending-resumes.js";
@@ -1354,6 +1356,7 @@ function AppContent({ settingsOpen, setSettingsOpen }: { settingsOpen: boolean; 
     }
     wasWelcomeVisible.current = welcomeVisible;
   }, [welcomeVisible, settingsSnapshot?.providerReady, hasExternalEngine, tabs.length]);
+  const [renameRow, setRenameRow] = useState<SidebarRow | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<PaletteMode>("actions");
   // D8: App's own overlay wiring — the command palette and Settings dialog
@@ -1679,7 +1682,8 @@ function AppContent({ settingsOpen, setSettingsOpen }: { settingsOpen: boolean; 
     useTabsStore.getState().addTab({ tabId, workspace });
     useTabsStore.getState().setActiveTab(tabId);
     if (title !== undefined) {
-      useTabsStore.getState().setTitle(tabId, title);
+      const tab = useTabsStore.getState().tabs.find(t => t.tabId === tabId);
+      if (tab?.title === undefined) useTabsStore.getState().setTitle(tabId, title);
     }
   }
 
@@ -1811,7 +1815,18 @@ function AppContent({ settingsOpen, setSettingsOpen }: { settingsOpen: boolean; 
     return binding ? formatBinding(binding, platform) : null;
   };
   const emptyAffordance = emptyPaneSidebarAffordance(collapsed, hintFor("sidebar.toggle"));
+  async function saveTaskName(title: string): Promise<boolean> {
+    if (!renameRow) return false;
+    const request = renameRow.kind === "open" ? { kind: "tab" as const, tabId: renameRow.tabId!, title } : { kind: "session" as const, sessionId: renameRow.sessionId!, title };
+    const result = await window.anycode.renameSession(request);
+    if (!result.ok) return false;
+    const tab = result.tabId ?? useTabsStore.getState().tabs.find(t => t.sessionId === result.sessionId)?.tabId;
+    if (tab) useTabsStore.getState().setUserTitle(tab, result.userTitle);
+    window.dispatchEvent(new CustomEvent("anycode-session-renamed", { detail: result }));
+    setRenameRow(null); return true;
+  }
   const paletteActions: PaletteAction[] = [
+    { id: "session.rename", label: "Rename task…", hint: null, enabled: true, keepOpen: true, run: () => setPaletteMode("rename") },
     {
       id: "session.new",
       label: "New Task",
@@ -1879,6 +1894,7 @@ function AppContent({ settingsOpen, setSettingsOpen }: { settingsOpen: boolean; 
     <main key="shell" className={`app${collapsed ? " app-sidebar-collapsed" : ""}`}>
       <Sidebar
         tabs={tabs}
+        onRenameRequest={setRenameRow}
         activeTabId={activeTabId}
         onSelectTab={(tabId) => useTabsStore.getState().setActiveTab(tabId)}
         onCloseTab={handleCloseTab}
@@ -1934,6 +1950,8 @@ function AppContent({ settingsOpen, setSettingsOpen }: { settingsOpen: boolean; 
         }}
       />
 
+      {renameRow && <TaskRenameDialog row={renameRow} onSave={saveTaskName} onCancel={() => setRenameRow(null)} />}
+
       {paletteOpen && (
         <CommandPalette
           mode={paletteMode}
@@ -1942,6 +1960,7 @@ function AppContent({ settingsOpen, setSettingsOpen }: { settingsOpen: boolean; 
           platform={platform}
           keymapTable={effectiveKeymap}
           onSwitchMode={setPaletteMode}
+          onRenameTask={setRenameRow}
           onSelectTab={(tabId) => useTabsStore.getState().setActiveTab(tabId)}
           onResumeSession={runResumeSession}
           onClose={() => setPaletteOpen(false)}
