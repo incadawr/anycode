@@ -1,3 +1,4 @@
+import type { ClaudeCommandRow } from "../../shared/claude-commands.js";
 /**
  * Composer slash-command menu — pure logic (design slice-P7.23-cut.md §2/§4.1-4.3).
  *
@@ -175,7 +176,8 @@ export interface SlashMenuItem {
   name: string;
   description: string;
   icon?: SlashIconId;
-  section: "commands" | "skills";
+  section: "commands" | "skills" | "project" | "personal";
+  argumentHint?: string;
   sourceLabel?: string;
   disabled: boolean;
   /** `[start, end)` highlight ranges over `name` only; empty when nothing in the name matched. */
@@ -585,14 +587,14 @@ function isTokenChar(ch: string | undefined): boolean {
  * end must be empty (EOF) or start with whitespace/newline — text glued
  * directly onto the token with no separator (e.g. `/mode.txt`) closes it.
  */
-export function slashQueryAt(text: string, caret: number): { start: number; query: string } | null {
+export function slashQueryAt(text: string, caret: number, claude = false): { start: number; query: string } | null {
   if (!Number.isInteger(caret) || caret < 0 || caret > text.length) {
     return null;
   }
 
   // Walk back from caret through token chars to find the token's start.
   let i = caret;
-  while (i > 0 && isTokenChar(text[i - 1])) {
+  while (i > 0 && (isTokenChar(text[i - 1]) || (claude && text[i - 1] === ":"))) {
     i--;
   }
   if (i === 0 || text[i - 1] !== "/") {
@@ -605,7 +607,7 @@ export function slashQueryAt(text: string, caret: number): { start: number; quer
 
   // Forward scan for the token's true end (caret may sit before it).
   let end = start + 1;
-  while (end < text.length && isTokenChar(text[end])) {
+  while (end < text.length && (isTokenChar(text[end]) || (claude && text[end] === ":"))) {
     end++;
   }
 
@@ -683,7 +685,8 @@ export function filterSlashItems(
   commands: SlashCommand[],
   skills: SlashSkill[],
   query: string,
-  ctx: SlashMenuCtx
+  ctx: SlashMenuCtx,
+  claudeCommands: readonly ClaudeCommandRow[] = [],
 ): SlashMenuItem[] {
   const isEmpty = query.length === 0;
   const lowerQuery = query.toLowerCase();
@@ -761,7 +764,18 @@ export function filterSlashItems(
   });
   skillRows.sort((a, b) => (a.rank !== b.rank ? a.rank - b.rank : a.name.localeCompare(b.name)));
 
-  return [...commandRows.map((row) => row.item), ...skillRows.map((row) => row.item)];
+  const reserved = new Set(commands.map(command => command.id));
+  const nativeRows = claudeCommands.filter(row => !reserved.has(row.name)).flatMap(row => {
+    const match = isEmpty ? null : matchName(row.name, query);
+    if (!isEmpty && !match && !row.description.toLowerCase().includes(lowerQuery)) return [];
+    const item: SlashMenuItem = { id: `claude:${row.scope}:${row.name}`, name: row.name,
+      description: row.description, section: row.scope, disabled: false,
+      ranges: match?.ranges ?? [], intent: { kind: "insert", text: `/${row.name}` },
+      ...(row.argumentHint ? { argumentHint: row.argumentHint } : {}) };
+    return [{ item, rank: isEmpty ? 0 : match?.rank ?? 4 }];
+  });
+  nativeRows.sort((a, b) => (a.item.section === b.item.section ? a.rank - b.rank || a.item.name.localeCompare(b.item.name) : a.item.section === "project" ? -1 : 1));
+  return [...commandRows.map((row) => row.item), ...skillRows.map((row) => row.item), ...nativeRows.map(row => row.item)];
 }
 
 // ─────────────────────────────────────────────────────────────────────────

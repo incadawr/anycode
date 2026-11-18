@@ -378,9 +378,9 @@ export function insertDraftText(current: string, insert: string): { text: string
  * caret-truncated query, so a mid-token caret still removes the full run of
  * token chars. Exported for unit testing.
  */
-export function slashTokenEnd(text: string, start: number): number {
+export function slashTokenEnd(text: string, start: number, claude = false): number {
   let end = start + 1;
-  while (end < text.length && /[A-Za-z0-9_-]/.test(text[end]!)) {
+  while (end < text.length && (/[A-Za-z0-9_-]/.test(text[end]!) || (claude && text[end] === ":"))) {
     end++;
   }
   return end;
@@ -1369,6 +1369,7 @@ export function Composer() {
   const [slashSkills, setSlashSkills] = useState<SlashSkill[]>([]);
   const lastSlashQueryRef = useRef<string | null>(null);
   const lastSlashItemsKeyRef = useRef("");
+  const lastSlashItemIdsRef = useRef<string[]>([]);
   const slashTabId = useContext(TabContext)?.tabId;
   const projectRoot = useTabsStore((state) => {
     const tab = state.tabs.find((item) => item.tabId === slashTabId);
@@ -1468,6 +1469,8 @@ export function Composer() {
   const usageAudit = useTabStore((state) => state.usageAudit);
   const quota = useTabStore((state) => state.quota);
   const engine = useTabStore((state) => state.engine);
+  const claudeCommandsResult = useTabStore((state) => state.claudeCommands);
+  const claudeRequestRef = useRef<string | null>(null);
   // which Codex account THIS tab runs on, for the context
   // popover's account line. Main owns the answer (tab's own resolved profile +
   // registry label); the renderer only asks. The ACCOUNT cannot change under a
@@ -1579,12 +1582,22 @@ export function Composer() {
   const isBareCommand = resolveBareSlashSubmit(
     reconstitutePasteMarkers(text, pasteBlocks), slashCtx, attachedImages.length, childSurface,
   ).kind !== "text";
-  const slashQuery = slashQueryAt(text, caret);
+  const isClaude = engine?.id === "claude" && !childSurface && orchestration.posture === "off" && !switchPending;
+  const slashQuery = slashQueryAt(text, caret, isClaude);
+  const claudeRows = isClaude && claudeCommandsResult?.requestId === claudeRequestRef.current ? claudeCommandsResult.rows : [];
   const slashItems =
     slashQuery !== null
-      ? filterSlashItems(SLASH_COMMANDS, skillsSupported ? slashSkills : [], slashQuery.query, slashCtx)
+      ? filterSlashItems(SLASH_COMMANDS, skillsSupported ? slashSkills : [], slashQuery.query, slashCtx, claudeRows)
       : [];
   const slashOpen = slashQuery !== null && !slashDismissed && slashItems.length > 0;
+
+  useEffect(() => {
+    if (!isClaude || !slashQuery || slashDismissed || !ready) { claudeRequestRef.current = null; return; }
+    const requestId = crypto.randomUUID();
+    claudeRequestRef.current = requestId;
+    sendToHost({ type: "claude_commands_request", requestId });
+    return () => { if (claudeRequestRef.current === requestId) claudeRequestRef.current = null; };
+  }, [isClaude, slashQuery !== null, slashDismissed, ready, sessionWorkspace, sendToHost]);
 
   // Skills fetch (cut §3, gated by skillsSupported per §2(f)): once
   // per closed→open transition, cached in state for the open's lifetime
@@ -1634,9 +1647,10 @@ export function Composer() {
   const slashItemsKey = slashItems.map((item) => item.id).join("\0");
   if (slashItemsKey !== lastSlashItemsKeyRef.current) {
     lastSlashItemsKeyRef.current = slashItemsKey;
-    if (slashSelIndex !== 0) {
-      setSlashSelIndex(0);
-    }
+    const selectedId = lastSlashItemIdsRef.current[slashSelIndex];
+    const nextIndex = slashItems.findIndex(item => item.id === selectedId && !item.disabled);
+    lastSlashItemIdsRef.current = slashItems.map(item => item.id);
+    if (slashSelIndex !== Math.max(0, nextIndex)) setSlashSelIndex(Math.max(0, nextIndex));
   }
 
   function syncCaret(el: HTMLTextAreaElement): void {
@@ -1932,14 +1946,21 @@ export function Composer() {
         return;
       }
     }
-    const tokenEnd = slashTokenEnd(text, slashQuery.start);
+    const tokenEnd = slashTokenEnd(text, slashQuery.start, isClaude);
     const isInsert = intent.kind === "insert";
-    const replacement = intent.kind === "insert" ? intent.text : "";
+    const isClaudeRow = item.section === "project" || item.section === "personal";
+    const following = text[tokenEnd];
+    const replacement = intent.kind === "insert" ? intent.text + (isClaudeRow && (following === undefined) ? " " : "") : "";
     const nextText = text.slice(0, slashQuery.start) + replacement + text.slice(tokenEnd);
     if (intent.kind === "orchestrate_submit" && unresolvedOrchestration(tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId)) return;
     setText(nextText);
-    setCaret(slashQuery.start + replacement.length);
-    pendingCaretRef.current = slashQuery.start + replacement.length;
+    const nextCaret = slashQuery.start + replacement.length + (isClaudeRow && (following === " " || following === "\t") ? 1 : 0);
+    setCaret(nextCaret);
+    pendingCaretRef.current = nextCaret;
+    if (isClaudeRow) {
+      lastSlashQueryRef.current = slashQueryAt(nextText, nextCaret, true)?.query ?? null;
+      setSlashDismissed(true);
+    }
     if (isInsert) {
       textareaRef.current?.focus();
     }

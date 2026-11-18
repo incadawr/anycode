@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Claude session slash menus suggest custom commands from enabled `.claude/commands` sources.
+
 ## [0.0.102] - 2026-11-14
 
 ### Changed

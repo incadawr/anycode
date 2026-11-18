@@ -89,6 +89,7 @@ export function SlashMenu({ items, selectedIndex, onSelect, onHover }: SlashMenu
   // instance exists.
   useOverlayFlag(true);
   let skillsHeaderRendered = false;
+  let lastSection = "commands";
 
   return (
     <div className="slash-menu" role="listbox" id="slash-menu-list" aria-label="Slash commands">
@@ -97,9 +98,13 @@ export function SlashMenu({ items, selectedIndex, onSelect, onHover }: SlashMenu
         if (showSkillsHeader) {
           skillsHeaderRendered = true;
         }
+        const group = item.section === "project" ? "Project" : item.section === "personal" ? "Personal" : null;
+        const showGroup = group !== null && item.section !== lastSection;
+        lastSection = item.section;
         const Icon = SLASH_ICONS[item.icon ?? "skill"];
         return (
           <Fragment key={`${item.section}:${item.id}`}>
+            {showGroup && <div className="slash-menu-section" role="presentation">{group}</div>}
             {showSkillsHeader && (
               <div className="slash-menu-section" role="presentation">
                 Skills
@@ -122,7 +127,7 @@ export function SlashMenu({ items, selectedIndex, onSelect, onHover }: SlashMenu
                 <Icon />
               </span>
               <span className="slash-menu-row-body">
-                <span className="slash-menu-row-name">{renderHighlightedName(item.name, item.ranges)}</span>
+                <span className="slash-menu-row-name">{renderHighlightedName(item.name, item.ranges)}{item.argumentHint && <span> {item.argumentHint}</span>}</span>
                 <span className="slash-menu-row-desc">{item.description}</span>
               </span>
               {item.sourceLabel !== undefined && <span className="slash-menu-row-source">{item.sourceLabel}</span>}
