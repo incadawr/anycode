@@ -142,6 +142,7 @@ export interface TabRegistry {
     openedByAgent?: boolean,
     agentTitle?: string,
     childWorktree?: PortEnvelope["childWorktree"],
+    titles?: PortEnvelope["titles"],
   ): boolean;
   /**
    * Flips the tab's own store into `host_exited` and mirrors that onto the
@@ -705,7 +706,7 @@ export function createTabRegistry(
   }
 
   return {
-    registerPort(tabId, workspace, port, pinnedConnection, child, openedByAgent, agentTitle, childWorktree): boolean {
+    registerPort(tabId, workspace, port, pinnedConnection, child, openedByAgent, agentTitle, childWorktree, titles): boolean {
       if (!tabId || closedTabIds.has(tabId)) {
         return false;
       }
@@ -822,6 +823,7 @@ export function createTabRegistry(
           entry.unsubscribeQueue = entry.store.subscribe(maybeDrain);
         }
       }
+      if (kind === "root" && titles) tabsStore.getState().seedTabTitles(tabId, titles);
       // W10-FIX F2: record the tab's pinned connection (stable for the tab's life;
       // re-delivered on every respawn, so re-applying it is a harmless no-op).
       if (pinnedConnection !== undefined) {

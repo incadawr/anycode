@@ -667,3 +667,15 @@ describe("tabs-store hidden workspaces", () => {
     expect(store.getState().hiddenWorkspaces).toEqual(["/ws/hidden"]);
   });
 });
+
+describe("user title snapshots", () => {
+  it("preserves a confirmed reset and a newer host title against stale snapshots", () => {
+    const store = createTabsStore();
+    store.getState().addTab({ tabId: "t", workspace: "/w" });
+    store.getState().seedTabTitles("t", { title: "base", userTitle: "custom" });
+    store.getState().setTitle("t", "new base");
+    store.getState().setUserTitle("t", null);
+    store.getState().seedTabTitles("t", { title: "stale", userTitle: "custom" });
+    expect(store.getState().tabs[0]).toMatchObject({ title: "new base", userTitle: null });
+  });
+});
