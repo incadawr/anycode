@@ -92,6 +92,8 @@ describe("Claude command completion", () => {
       const request = send.mock.calls.map(call => call[1]).find(message => message.type === "claude_commands_request");
       expect(request?.type).toBe("claude_commands_request");
       if (!request || request.type !== "claude_commands_request") throw new Error("no request");
+      await act(async () => store.getState().applyHostMessage({ type: "claude_commands_result", requestId: "stale", rows: [{ name: "stale", scope: "project", description: "Old" }] }));
+      expect(container.textContent).not.toContain("stale");
       await act(async () => store.getState().applyHostMessage({ type: "claude_commands_result", requestId: request.requestId, rows: [{ name: "ci:inspect", scope: "project", description: "Inspect", argumentHint: "target" }] }));
       expect(container.textContent).toContain("Project");
       expect(container.textContent).toContain("target");

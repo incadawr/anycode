@@ -1,6 +1,6 @@
 import path from "node:path";
 import os from "node:os";
-import { createClaudeCommandCatalog } from "./command-catalog.js";
+import { claudeCommandRoots, createClaudeCommandCatalog } from "./command-catalog.js";
 import { resolveClaudeConfigDir } from "../../../shared/claude-config-dir.js";
 import { buildClaudeChildEnv, resolveClaudeSettingSources } from "./claude-client.js";
 import { checkedNativeBase, claudeMcpDigest, recoveryNativeBase, type NativeRecovery } from "../../native-base.js";
@@ -829,13 +829,10 @@ async function connectClaudeEngine(
       binding.close,
       options.orchestrationRestricted,
     );
-    const sources = resolveClaudeSettingSources(options.projectTrusted).split(",");
+    const sources = resolveClaudeSettingSources(options.projectTrusted);
     const childEnv = buildClaudeChildEnv(options.sourceEnv, options.profileDir);
-    const config = resolveClaudeConfigDir(options.profileDir) ?? path.join(childEnv.HOME ?? os.homedir(), ".claude");
-    engine.commandCatalog = createClaudeCommandCatalog({
-      ...(sources.includes("project") ? { project: path.join(options.cwd, ".claude", "commands") } : {}),
-      ...(sources.includes("user") ? { personal: path.join(config, "commands") } : {}),
-    });
+    const config = resolveClaudeConfigDir(options.profileDir) ?? path.join(childEnv.HOME ?? childEnv.USERPROFILE ?? os.homedir(), ".claude");
+    engine.commandCatalog = createClaudeCommandCatalog(claudeCommandRoots(options.cwd, config, sources));
     engine.nativeMaterialized = resuming;
     // A resumed session's preset is only the persisted row until its first init.
     engine.presetProvisional = resuming;

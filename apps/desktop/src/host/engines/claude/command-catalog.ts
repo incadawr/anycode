@@ -68,6 +68,15 @@ export async function scanClaudeCommandRoot(root: string, scope: ClaudeCommandRo
   return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Resolve only sources actually enabled for the spawned Claude session. */
+export function claudeCommandRoots(cwd: string, configDir: string, settingSources: string): { project?: string; personal?: string } {
+  const sources = new Set(settingSources.split(","));
+  return {
+    ...(sources.has("project") ? { project: path.join(cwd, ".claude", "commands") } : {}),
+    ...(sources.has("user") ? { personal: path.join(configDir, "commands") } : {}),
+  };
+}
+
 /** Cache is owned by one runtime; invalidation also retires in-flight scans. */
 export function createClaudeCommandCatalog(roots: { project?: string; personal?: string }) {
   let generation = 0;
