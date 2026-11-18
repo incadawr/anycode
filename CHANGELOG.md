@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Allow Codex CLI 0.170 as a candidate; live verification is pending and 0.169.0 remains recommended.
+
 ## [0.0.102] - 2026-11-14
 
 ### Changed

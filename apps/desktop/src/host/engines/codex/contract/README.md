@@ -35,10 +35,10 @@ protocol AnyCode's Codex adapter is built against.
 
 ## Supported version ceiling
 
-`<0.170.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.171.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.170.0 is accepted by version
+closed range, so any codex-cli build below 0.171.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -327,3 +327,9 @@ contract pin below (`thread/compact/start` under `methods.clientRequests`) is
 drift-checked against the pinned schema by contract-drift.test.ts only; it does
 not gate the runtime request. Executable compact fixtures are synthetic protocol
 evidence, not captures of live backend compaction.
+
+## 0.170.0 candidate verification
+
+Published schema comparison in the plan found identical consumed methods and approval
+decisions; optional `AgentMessageDisplay.moderation` changed shape and is not
+consumed. Binary contract verification and live GUI smoke remain pending.
