@@ -70,7 +70,8 @@ describe("resolveHostCodexVersionPolicy", () => {
     // Byte-for-byte the predicate: a bare ceiling, no floor.
     expect(policy.allows(version("0.154.0"))).toBe(true);
     expect(policy.allows(version("0.169.0"))).toBe(true);
-    expect(policy.allows(version("0.170.0"))).toBe(false);
+    expect(policy.allows(version("0.170.0"))).toBe(true);
+    expect(policy.allows(version("0.171.0"))).toBe(false);
     expect(policy.allows(version("1.0.0"))).toBe(false);
     expect(policy.allows(version("0.100.0"))).toBe(true);
     // The strict compiled fallback never soft-allows and never warns.

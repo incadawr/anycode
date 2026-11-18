@@ -7,10 +7,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.103] - 2026-11-18
+
 ### Added
 
 - Rename tasks in the sidebar and command palette, with an option to restore automatic titles.
 - Claude session slash menus suggest custom commands from enabled `.claude/commands` sources.
+
+### Changed
+
+- Codex CLI 0.170 is supported (supported range is now `>=0.144.0 <0.171.0`), and AnyCode now recommends installing 0.170.0.
+
+### Fixed
+
+- Starting AnyCode while another AnyCode window or the CLI upgrades the same database no longer fails on launch.
 
 ## [0.0.102] - 2026-11-14
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
+import { BUNDLED_CODEX_MANIFEST } from "../shared/codex-support.js";
 import type { TrustedBinaryConsent } from "../shared/settings.js";
 import type { CodexBinaryFs } from "./codex-binary.js";
 import { CODEX_DOCTOR_TTL_MS, codexDoctorSourceEnv, createCodexOnboardingController, type CodexIpcDeps, type CodexOnboardingSnapshot } from "./codex-ipc.js";
@@ -1540,16 +1541,18 @@ describe("spawn-freshness integration — real refusal refresh + active policy j
     const { setActiveCodexVersionPolicy, activeCodexVersionPolicy, codexVersionVerdict, createCodexManifestRefusalRefresh } = manifestModule;
     const cacheFile = join(mk(join(tmpdir(), "anycode-freshness-")), "manifest.json");
     try {
+      const bundledAt = Date.parse(BUNDLED_CODEX_MANIFEST.updatedAt);
+      const dayMs = 24 * 3600_000;
       const oldManifest: import("../shared/codex-support.js").CodexSupportManifest = {
         schemaVersion: "anycode.codex-support.v1",
-        updatedAt: "2026-07-16T00:00:00Z",
+        updatedAt: new Date(bundledAt + dayMs).toISOString(),
         supported: [{ range: ">=0.160.0 <0.162.0", status: "tested" }],
         recommended: "0.161.0",
         minimum: "0.160.0",
       };
       const widenedManifest: import("../shared/codex-support.js").CodexSupportManifest = {
         ...oldManifest,
-        updatedAt: "2026-07-17T00:00:00Z",
+        updatedAt: new Date(bundledAt + 2 * dayMs).toISOString(),
         supported: [{ range: ">=0.144.0 <0.164.0", status: "tested" }],
         recommended: "0.161.0",
       };

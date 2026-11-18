@@ -27,7 +27,7 @@ afterEach(() => resetActiveCodexVersionPolicy());
 function validManifest(overrides: Partial<CodexSupportManifest> = {}): CodexSupportManifest {
   return {
     schemaVersion: "anycode.codex-support.v1",
-    updatedAt: "2026-07-16T00:00:00Z",
+    updatedAt: "2099-07-16T00:00:00Z",
     supported: [{ range: ">=0.144.0 <0.146.0", status: "tested" }],
     recommended: "0.145.1",
     minimum: "0.144.0",
@@ -245,6 +245,42 @@ describe("refreshCodexManifest (network + ETag cache, cut §7.1)", () => {
     }) as typeof fetch;
     return { calls, fetchImpl };
   }
+
+  it("refreshes a fresh but older cache and uses bundled on 304", async () => {
+    const cacheFile = join(scratchDir, "older-fresh.json");
+    const old = validManifest({ updatedAt: "2026-01-01T00:00:00Z" });
+    writeFileSync(cacheFile, JSON.stringify({ fetchedAt: new Date(T0).toISOString(), etag: '"old"', manifest: old }));
+    const { calls, fetchImpl } = fetchReturning(304);
+    expect(await refreshCodexManifest({ cacheFile, fetchImpl, now: () => T0 })).toEqual({ manifest: BUNDLED_CODEX_MANIFEST, source: "bundled" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers["if-none-match"]).toBe('"old"');
+  });
+
+  it("uses a newer fresh cached policy without a network request", async () => {
+    const cacheFile = join(scratchDir, "newer-fresh.json");
+    const newer = validManifest();
+    writeFileSync(cacheFile, JSON.stringify({ fetchedAt: new Date(T0).toISOString(), manifest: newer }));
+    const { calls, fetchImpl } = fetchReturning(500);
+    expect(await refreshCodexManifest({ cacheFile, fetchImpl, now: () => T0 })).toEqual({ manifest: newer, source: "cache" });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("uses bundled when offline with an expired older cache", async () => {
+    const cacheFile = join(scratchDir, "older-offline.json");
+    writeFileSync(cacheFile, JSON.stringify({ fetchedAt: new Date(T0 - 7 * 3600_000).toISOString(), manifest: validManifest({ updatedAt: "2026-01-01T00:00:00Z" }) }));
+    const fetchImpl = vi.fn(async () => { throw new Error("offline"); }) as unknown as typeof fetch;
+    expect(await refreshCodexManifest({ cacheFile, fetchImpl, now: () => T0 })).toEqual({ manifest: BUNDLED_CODEX_MANIFEST, source: "bundled" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a newer remote policy and rejects an older remote policy", async () => {
+    const cacheFile = join(scratchDir, "remote-policy.json");
+    const newer = validManifest();
+    const first = fetchReturning(200, JSON.stringify(newer));
+    expect(await refreshCodexManifest({ cacheFile, fetchImpl: first.fetchImpl, now: () => T0 })).toEqual({ manifest: newer, source: "network" });
+    const second = fetchReturning(200, JSON.stringify(validManifest({ updatedAt: "2026-01-01T00:00:00Z" })));
+    expect(await refreshCodexManifest({ cacheFile, fetchImpl: second.fetchImpl, now: () => T0, force: true })).toEqual({ manifest: newer, source: "cache" });
+  });
 
   it("caches a valid network manifest with its ETag and returns it as source network", async () => {
     const cacheFile = join(scratchDir, "manifest-ok.json");

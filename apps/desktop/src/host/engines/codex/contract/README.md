@@ -35,10 +35,10 @@ protocol AnyCode's Codex adapter is built against.
 
 ## Supported version ceiling
 
-`<0.170.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.171.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.170.0 is accepted by version
+closed range, so any codex-cli build below 0.171.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -264,7 +264,7 @@ but NOT inside `$PRIV` itself, and NOT under `/tmp` or the ambient
 `exclude_slash_tmp=true`, and a bare `mktemp -d` on macOS resolves under
 `/var/folders/.../T` (the ambient TMPDIR) with `/tmp` itself a symlink to
 `/private/tmp` — a workspace parked in any of those puts the WRITES THE
-PROBE EXPECTS TO SUCCEED (checks 2 and 3 write into `$WS`) inside a path
+PROBE WRITES (checks 2 and 3 write into `$WS`) inside a path
 the exclusions are designed to refuse, so a CORRECT build would fail the
 probe. The explicit template above keeps `$WS` home-relative, leaving the
 private dir as the ONLY tmp-family path inside the sandbox — exactly what
@@ -294,8 +294,9 @@ app-server spawn env. (`cd` rather than `codex sandbox -C`: codex-cli
     inside the private dir. This is the exact "can't create temp file for
     here document" failure the rework fixes.
  3. `git -C "$WS" add -A && git -C "$WS" -c user.email=p@p -c user.name=p
-    commit -m probe` — expect ok (objects land in `$WS/.git`; nothing tmp
-    outside the private dir).
+    commit -m probe` — the former expectation of success is outdated: on
+    0.169.0 and 0.170.0 `.git` was read-only and `index.lock` creation was
+    refused. Record the result without weakening the sandbox flags.
  4. `node -e 'require("fs").writeFileSync(require("os").tmpdir()+"/a","1")'`
     — expect ok, with `$PRIV/a` on disk afterwards (`os.tmpdir()` resolved to
     the private dir via TMPDIR).
@@ -327,3 +328,31 @@ contract pin below (`thread/compact/start` under `methods.clientRequests`) is
 drift-checked against the pinned schema by contract-drift.test.ts only; it does
 not gate the runtime request. Executable compact fixtures are synthetic protocol
 evidence, not captures of live backend compaction.
+
+## 0.170.0 verification (2026-11-18)
+
+On macOS arm64, real 0.169.0 and 0.170.0 binaries generated contracts;
+layer 2 passed 39/39 tests on each. The extracted methods and approval decision
+enums are identical, and layer 2 confirms URL image input and inline image
+result remain expressible. The 0.144.x pinned contract remains unchanged.
+
+The 0.169 to 0.170 diff replaces `AgentMessageDisplay`'s object with a
+`mode: show | hide | block` union (version 1) and adds `AnswerAnnotation`,
+`AnswerReplacement`, `BlockReason`, `HelplineSubject`, and `TrustedContacts`.
+These are reachable through optional agent-message `moderation`; the adapter
+does not read these fields. History projection uses agent-message text and the
+live translator tracks its item ID. This is a schema compatibility observation,
+not verification of moderation presentation semantics.
+
+Live GUI smoke passed 10/10 on 0.170.0, including Allow/Deny, Stop,
+restart/resume and both zero-orphan checks. Runs 1–5 failed at the trust gate
+because the binary was in world-writable `/private/tmp`; the 0.169.0 control
+failed likewise. The seatbelt probe refused `/tmp`, allowed the heredoc and
+private Node TMPDIR write; git commit failed on `.git/index.lock` with the same
+result on 0.169.0. The former check 3 success expectation is outdated for these
+versions; no sandbox flags were weakened. Evidence is in the local
+`working-docs/plans-1811/gh93-evidence/` directory.
+
+Install smoke for the recommended 0.169.0 initially failed (1 failed, 1 skipped);
+an independent review rerun passed (1 passed, 1 skipped, approximately 63 s).
+The initial failure cause was not established.
