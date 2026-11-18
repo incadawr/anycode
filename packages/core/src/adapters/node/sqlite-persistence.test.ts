@@ -70,6 +70,26 @@ describe("SqlitePersistenceAdapter", () => {
     await reopened.close();
   });
 
+  it("isolates user titles across connections and cleans them on delete", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-user-title-cleanup-"));
+    const path = join(tmpDir, "test.sqlite");
+    const a = new SqlitePersistenceAdapter(path); const b = new SqlitePersistenceAdapter(path);
+    await a.createSession({ id: "root", workspace: "/w", model: "m", mode: "build", title: "Original" });
+    await a.createSession({ id: "child", workspace: "/w", model: "m", mode: "build", parentSessionId: "root", spawnToolCallId: "call" });
+    expect(a.setSessionUserTitle("child", "Denied", true)).toBe(false);
+    expect(a.setSessionUserTitle("root", "User", false)).toBe(true);
+    await b.touchSession("root", { title: "New base" });
+    expect(a.readSessionTitles("root")).toEqual({ title: "New base", userTitle: "User" });
+    await a.deleteSession("root");
+    expect(b.readSessionTitles("root").userTitle).toBeNull();
+    expect(a.setSessionUserTitle("pending", "Temporary", true)).toBe(true);
+    a.clearUnmaterializedSessionUserTitle("pending");
+    expect(a.readSessionTitles("pending").userTitle).toBeNull();
+    await a.close(); await b.close();
+    const strict = new SqlitePersistenceAdapter(path, { strictSessionSchema: true });
+    expect(await strict.getRootSession("root")).toBeNull(); await strict.close();
+  });
+
   it("quarantines the adapter when rollback fails instead of accepting a lost write", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-rollback-quarantine-"));
     const dbPath = join(tmpDir,"test.sqlite");
