@@ -28,9 +28,6 @@ import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { highlight } from "./highlight.js";
 import { formatTabHint, KEYMAP, matchKeymap, type ActionId, type KeyBinding } from "../keymap.js";
 
-/** Display fallback for a titleless session — mirrors Sidebar's private `UNTITLED` (Sidebar.tsx:19); reversed to recover the raw (undefined) title for resume forwarding. */
-const UNTITLED = "Untitled task";
-
 export type PaletteMode = "actions" | "sessions" | "rename";
 
 export interface PaletteAction {
@@ -109,8 +106,7 @@ function makeSessionRow(row: SidebarRow, workspaceLabel: string, ranges: readonl
   return {
     kind: "session",
     sessionId: row.sessionId!,
-    // Recover the raw (possibly undefined) title so resume forwarding never
-    // persists the "Untitled task" display fallback (Sidebar.tsx:249's rule).
+    // Resume forwards the host title, not the displayed user override.
     title: row.baseTitle,
     displayTitle,
     workspaceLabel,
