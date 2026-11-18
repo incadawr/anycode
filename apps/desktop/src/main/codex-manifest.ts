@@ -233,8 +233,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * Refreshes the policy manifest from the raw URL. NEVER throws and never
  * returns garbage: every failure path (offline, non-200, oversized body,
  * unparsable JSON, validation refusal) resolves to the best known truth —
- * a previously cached VALID manifest if one exists, else BUNDLED. A fresh
- * (< 6h) valid cache short-circuits without any network I/O unless `force`.
+ * the newest valid policy between cache and bundled. A fresh (< 6h) cache
+ * short-circuits only when its policy is at least as recent as bundled.
  */
 export async function refreshCodexManifest(options: CodexManifestRefreshOptions): Promise<CodexManifestRefreshResult> {
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -242,15 +242,21 @@ export async function refreshCodexManifest(options: CodexManifestRefreshOptions)
   const now = options.now ?? Date.now;
   const cached = readManifestCache(options.cacheFile);
 
-  if (!options.force && cached !== null) {
-    const age = now() - Date.parse(cached.fetchedAt);
+  const atLeastBundled = (manifest: CodexSupportManifest): boolean => {
+    const updated = Date.parse(manifest.updatedAt);
+    return Number.isFinite(updated) && updated >= Date.parse(BUNDLED_CODEX_MANIFEST.updatedAt);
+  };
+  const usableCache = cached !== null && atLeastBundled(cached.manifest) ? cached : null;
+
+  if (!options.force && usableCache !== null) {
+    const age = now() - Date.parse(usableCache.fetchedAt);
     if (Number.isFinite(age) && age >= 0 && age < CODEX_MANIFEST_REFRESH_INTERVAL_MS) {
-      return { manifest: cached.manifest, source: "cache" };
+      return { manifest: usableCache.manifest, source: "cache" };
     }
   }
 
   const fallback = (): CodexManifestRefreshResult =>
-    cached !== null ? { manifest: cached.manifest, source: "cache" } : { manifest: BUNDLED_CODEX_MANIFEST, source: "bundled" };
+    usableCache !== null ? { manifest: usableCache.manifest, source: "cache" } : { manifest: BUNDLED_CODEX_MANIFEST, source: "bundled" };
 
   try {
     const controller = new AbortController();
@@ -268,7 +274,7 @@ export async function refreshCodexManifest(options: CodexManifestRefreshOptions)
             signal: controller.signal,
           });
           if (response.status === 304 && cached !== null) {
-            return { manifest: cached.manifest, source: "cache" };
+            return fallback();
           }
           if (response.status !== 200) return fallback();
           const body = await response.text();
@@ -277,7 +283,7 @@ export async function refreshCodexManifest(options: CodexManifestRefreshOptions)
           if (controller.signal.aborted) return fallback();
           if (Buffer.byteLength(body, "utf8") > CODEX_MANIFEST_MAX_BYTES) return fallback();
           const manifest = validateCodexManifest(JSON.parse(body));
-          if (manifest === null) return fallback();
+          if (manifest === null || !atLeastBundled(manifest)) return fallback();
           const etag = response.headers.get("etag");
           const cachePayload: ManifestCacheFile = {
             fetchedAt: new Date(now()).toISOString(),
