@@ -60,7 +60,11 @@ export async function scanClaudeCommandRoot(root: string, scope: ClaudeCommandRo
       }
     }
   }
-  try { await walk(root, []); } catch { return []; }
+  try {
+    const parent = await lstat(path.dirname(root));
+    if (!parent.isDirectory() || parent.isSymbolicLink()) return [];
+    await walk(root, []);
+  } catch { return []; }
   return rows.sort((a, b) => a.name.localeCompare(b.name));
 }
 
