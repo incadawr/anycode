@@ -50,6 +50,42 @@ describe("SqlitePersistenceAdapter", () => {
     }
   });
 
+  it("rechecks the migration version after another adapter wins the write lock", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-migration-race-"));
+    const path = join(tmpDir, "test.sqlite");
+    const setup = new SqlitePersistenceAdapter(path);
+    await setup.createSession({ id: "s", workspace: "/w", model: "m", mode: "build" });
+    await setup.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("DELETE FROM schema_migrations WHERE version = 36");
+    raw.close();
+
+    const first = new SqlitePersistenceAdapter(path);
+    const second = new SqlitePersistenceAdapter(path);
+    const originalExec = DatabaseSync.prototype.exec;
+    let competitor: Promise<SessionMeta | null> | undefined;
+    let injected = false;
+    const spy = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql === "BEGIN IMMEDIATE" && !injected) {
+        injected = true;
+        competitor = second.getRootSession("s");
+      }
+      return originalExec.call(this, sql);
+    });
+    try {
+      expect(await first.getRootSession("s")).toMatchObject({ id: "s" });
+      expect(injected).toBe(true);
+      expect(await competitor).toMatchObject({ id: "s" });
+      const verify = new DatabaseSync(path, { readOnly: true });
+      try { expect(verify.prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE version = 36").get()).toMatchObject({ n: 1 }); }
+      finally { verify.close(); }
+    } finally {
+      spy.mockRestore();
+      await first.close();
+      await second.close();
+    }
+  });
+
   it("persists independent user titles before and after session creation", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-user-title-"));
     const path = join(tmpDir, "test.sqlite");

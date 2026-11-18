@@ -654,8 +654,18 @@ function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction
     if (migration.version <= current) {
       continue;
     }
-    if (!outerTransaction) db.exec("BEGIN");
+    if (!outerTransaction) db.exec("BEGIN IMMEDIATE");
     try {
+      // Another connection may have migrated since the initial version read.
+      // Recheck while holding the write lock before applying this migration.
+      const locked = db.prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations").get() as { version: number };
+      if (strictSessionSchema && locked.version > supported) {
+        throw new Error(`Database schema ${locked.version} is newer than supported schema ${supported}; update AnyCode before opening sessions.`);
+      }
+      if (migration.version <= locked.version) {
+        if (!outerTransaction) db.exec("COMMIT");
+        continue;
+      }
       if (migration.version === 35) {
         db.exec("CREATE TEMP TABLE runtime_backfill_checkpoint_owners (session_id TEXT PRIMARY KEY)");
         // Some historical partial schemas legitimately contain no checkpoints.
