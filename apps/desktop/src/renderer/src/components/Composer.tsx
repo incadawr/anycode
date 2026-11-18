@@ -1636,23 +1636,24 @@ export function Composer() {
   // Render-time state adjustment (React-sanctioned "reset state when a
   // derived value changes" pattern — avoids the one-frame flicker a
   // useEffect-based reset would cause): `dismissed` clears the instant the
-  // query text changes or the trigger deactivates (cut §4.3), and the
-  // roving selection resets to 0 the instant the filtered item identity
-  // changes, both BEFORE this render commits rather than one render later.
+  // query text changes or the trigger deactivates (cut §4.3). A changed query
+  // resets selection; a list update with the same query keeps the selected
+  // item when it is still available. Both adjustments happen before commit.
   const slashQueryText = slashQuery?.query ?? null;
-  if (slashQueryText !== lastSlashQueryRef.current) {
+  const slashQueryChanged = slashQueryText !== lastSlashQueryRef.current;
+  if (slashQueryChanged) {
     lastSlashQueryRef.current = slashQueryText;
     if (slashDismissed) {
       setSlashDismissed(false);
     }
   }
   const slashItemsKey = slashItems.map((item) => item.id).join("\0");
-  if (slashItemsKey !== lastSlashItemsKeyRef.current) {
+  if (slashQueryChanged || slashItemsKey !== lastSlashItemsKeyRef.current) {
     lastSlashItemsKeyRef.current = slashItemsKey;
     const selectedId = lastSlashItemIdsRef.current[slashSelIndex];
-    const nextIndex = slashItems.findIndex(item => item.id === selectedId && !item.disabled);
+    const nextIndex = slashQueryChanged ? 0 : Math.max(0, slashItems.findIndex(item => item.id === selectedId && !item.disabled));
     lastSlashItemIdsRef.current = slashItems.map(item => item.id);
-    if (slashSelIndex !== Math.max(0, nextIndex)) setSlashSelIndex(Math.max(0, nextIndex));
+    if (slashSelIndex !== nextIndex) setSlashSelIndex(nextIndex);
   }
 
   function syncCaret(el: HTMLTextAreaElement): void {

@@ -71,6 +71,65 @@ afterEach(() => {
 
 
 describe("Claude command completion", () => {
+  it("selects Mode when the query changes from slash to mo", async () => {
+    vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore();
+    const ready = coreReady("build");
+    if (ready.type !== "host_ready" || !ready.engine) throw new Error("fixture");
+    ready.engine.id = "claude";
+    store.getState().applyHostMessage(ready);
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      const type = async (value: string) => act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, value);
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        textarea.setSelectionRange(value.length, value.length);
+        textarea.dispatchEvent(new Event("keyup", { bubbles: true }));
+      });
+      await type("/");
+      expect(container.querySelector('[role="option"][aria-selected="true"] .slash-menu-row-name')?.textContent).toBe("Plan mode");
+      await type("/mo");
+      expect(container.querySelector('[role="option"][aria-selected="true"] .slash-menu-row-name')?.textContent).toBe("Mode");
+    } finally { await act(async () => root.unmount()); }
+  });
+  it("preserves the selected command when a catalog update changes its index", async () => {
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore();
+    const ready = coreReady("build");
+    if (ready.type !== "host_ready" || !ready.engine) throw new Error("fixture");
+    ready.engine.id = "claude";
+    store.getState().applyHostMessage(ready);
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "/");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        textarea.setSelectionRange(1, 1);
+        textarea.dispatchEvent(new Event("keyup", { bubbles: true }));
+      });
+      const request = send.mock.calls.map(call => call[1]).find(message => message.type === "claude_commands_request");
+      if (!request || request.type !== "claude_commands_request") throw new Error("no request");
+      const personal = { name: "personal-cmd", scope: "personal" as const, description: "Personal" };
+      await act(async () => store.getState().applyHostMessage({ type: "claude_commands_result", requestId: request.requestId, rows: [personal] }));
+      const row = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(el => el.textContent?.includes("personal-cmd"));
+      expect(row).toBeDefined();
+      await act(async () => row!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+      const selected = () => container.querySelector('[role="option"][aria-selected="true"] .slash-menu-row-name')?.textContent;
+      expect(selected()).toBe("personal-cmd");
+      const oldIndex = textarea.getAttribute("aria-activedescendant");
+      await act(async () => store.getState().applyHostMessage({ type: "claude_commands_result", requestId: request.requestId, rows: [
+        { name: "project-cmd", scope: "project", description: "Project" }, personal,
+      ] }));
+      expect(selected()).toBe("personal-cmd");
+      expect(textarea.getAttribute("aria-activedescendant")).not.toBe(oldIndex);
+    } finally { await act(async () => root.unmount()); }
+  });
   it("requests a catalog for a namespace with no static match and inserts without sending", async () => {
     const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
     const store = createDesktopStore();
