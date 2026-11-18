@@ -842,6 +842,7 @@ describe("Claude command suggestions", () => {
       { name: "other", scope: "personal", description: "Other" },
     ]);
     expect(rows.filter(row => row.section === "project").map(row => row.name)).toEqual(["ci:inspect"]);
+    expect(filterSlashItems(SLASH_COMMANDS, [], "mode", ctx({ supportsCorePermissions: false }), [{ name: "mode", scope: "project", description: "reserved" }]).filter(row => row.section === "project")).toEqual([]);
     expect(rows.at(-1)?.section).toBe("personal");
     expect(rows.find(row => row.name === "ci:inspect")?.intent).toEqual({ kind: "insert", text: "/ci:inspect" });
     expect(filterSlashItems(SLASH_COMMANDS, [], "ci:", ctx(), [{ name: "ci:inspect", scope: "project", description: "Inspect" }]).at(-1)?.name).toBe("ci:inspect");
