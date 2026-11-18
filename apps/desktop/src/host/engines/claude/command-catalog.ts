@@ -16,9 +16,9 @@ export function readClaudeCommandFrontmatter(text: string): { description: strin
     if (!match) continue;
     let value = match[2]!;
     if (value.startsWith('"') || value.startsWith("'")) {
-      if (value.length < 2 || value.at(-1) !== value[0]) return fallback;
+      if (value.length < 2 || value.at(-1) !== value[0]) { fields.delete(match[1]!); continue; }
       value = value.slice(1, -1);
-    } else if (/^[|>{}\[\]&*!]/.test(value)) return fallback;
+    } else if (/^[|>{}\[\]&*!]/.test(value)) { fields.delete(match[1]!); continue; }
     fields.set(match[1]!, value.replace(/[\x00-\x1f\x7f]+/g, " ").replace(/\s+/g, " ").trim());
   }
   const description = fields.get("description")?.slice(0, 320) || fallback.description;

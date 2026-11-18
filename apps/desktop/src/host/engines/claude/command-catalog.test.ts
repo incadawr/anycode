@@ -10,9 +10,21 @@ async function root() { const dir = await mkdtemp(path.join(tmpdir(), "commands-
 
 describe("Claude command catalog", () => {
   it("parses bounded frontmatter without exposing body", () => {
-    expect(readClaudeCommandFrontmatter('\uFEFF---\r\ndescription: "Inspect changes"\r\nargument-hint: [bad]\r\n---\r\nsecret')).toEqual({ description: "Custom command", hidden: false });
+    expect(readClaudeCommandFrontmatter('\uFEFF---\r\ndescription: "Inspect changes"\r\nargument-hint: [bad]\r\n---\r\nsecret')).toEqual({ description: "Inspect changes", hidden: false });
     expect(readClaudeCommandFrontmatter("---\r\ndescription: 'Inspect changes'\r\nargument-hint: target\r\n---\r\nsecret")).toEqual({ description: "Inspect changes", argumentHint: "target", hidden: false });
     expect(readClaudeCommandFrontmatter("---\nuser-invocable: false\n---\nsecret").hidden).toBe(true);
+  });
+  it("keeps hidden commands hidden with multiline metadata in either order", async () => {
+    const dir = await root();
+    await writeFile(path.join(dir, "before.md"), "---\ndescription: |\n  private description\nuser-invocable: false\n---\nbody");
+    await writeFile(path.join(dir, "after.md"), "---\nuser-invocable: false\ndescription: >\n  private description\n---\nbody");
+    await writeFile(path.join(dir, "hint.md"), "---\nargument-hint: |\n  private hint\nuser-invocable: false\n---\nbody");
+    await writeFile(path.join(dir, "visible.md"), "---\ndescription: |\n  multiline description\nargument-hint: target\n---\nbody");
+    await writeFile(path.join(dir, "hint-visible.md"), "---\ndescription: Useful\nargument-hint: >\n  multiline hint\n---\nbody");
+    expect(await scanClaudeCommandRoot(dir, "project")).toEqual([
+      { name: "hint-visible", scope: "project", description: "Useful" },
+      { name: "visible", scope: "project", description: "Custom command", argumentHint: "target" },
+    ]);
   });
   it("discovers nested markdown, skips hidden, links and SKILL.md", async () => {
     const dir = await root();
