@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Rename tasks in the sidebar and command palette, with an option to restore automatic titles.
+- Claude session slash menus suggest custom commands from enabled `.claude/commands` sources.
 
 ## [0.0.102] - 2026-11-14
 

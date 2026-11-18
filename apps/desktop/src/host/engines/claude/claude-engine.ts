@@ -1,3 +1,8 @@
+import path from "node:path";
+import os from "node:os";
+import { claudeCommandRoots, createClaudeCommandCatalog } from "./command-catalog.js";
+import { resolveClaudeConfigDir } from "../../../shared/claude-config-dir.js";
+import { buildClaudeChildEnv, resolveClaudeSettingSources } from "./claude-client.js";
 import { checkedNativeBase, claudeMcpDigest, recoveryNativeBase, type NativeRecovery } from "../../native-base.js";
 import type { RuntimeNativeBase } from "@anycode/core";
 /**
@@ -824,6 +829,10 @@ async function connectClaudeEngine(
       binding.close,
       options.orchestrationRestricted,
     );
+    const sources = resolveClaudeSettingSources(options.projectTrusted);
+    const childEnv = buildClaudeChildEnv(options.sourceEnv, options.profileDir);
+    const config = resolveClaudeConfigDir(options.profileDir) ?? path.join(childEnv.HOME ?? childEnv.USERPROFILE ?? os.homedir(), ".claude");
+    engine.commandCatalog = createClaudeCommandCatalog(claudeCommandRoots(options.cwd, config, sources));
     engine.nativeMaterialized = resuming;
     // A resumed session's preset is only the persisted row until its first init.
     engine.presetProvisional = resuming;
@@ -1048,6 +1057,14 @@ export class ClaudeEngine implements SessionEngine {
     this.runIdleReader();
   }
 
+  commandCatalog?: ReturnType<typeof createClaudeCommandCatalog>;
+  async listClaudeCommands() {
+    if (!this.settings?.slashPassthrough || this.disposed || this.terminalError || this.replacement || this.orchestrationState !== "off" || this.orchestrationRestricted?.()) return [];
+    const generation = this.transportGeneration;
+    const rows = await this.commandCatalog?.list() ?? [];
+    return generation === this.transportGeneration && !this.disposed && !this.terminalError && !this.replacement && this.orchestrationState === "off" && !this.orchestrationRestricted?.() ? rows : [];
+  }
+
   orchestrationPolicy?: OrchestrationPolicy;
   private orchestrationPosture: ClaudeOrchestrationPosture = "off";
   /**
@@ -1179,6 +1196,7 @@ export class ClaudeEngine implements SessionEngine {
       throw new Error("Claude transport is not ready for replacement");
     }
     if ((spawn.sessionId ?? spawn.resume) !== this.sessionRef || (spawn.sessionId !== undefined && spawn.resume !== undefined)) throw new Error("Claude native identity changed");
+    this.commandCatalog?.invalidate();
     const generation = ++this.transportGeneration;
     this.stopIdleReader();
     this.frameConsumed();

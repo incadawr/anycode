@@ -1,3 +1,4 @@
+import type { ClaudeCommandRow } from "./claude-commands.js";
 import type { AgentDelivery, AgentDisplayCard } from "./communication.js";
 /**
  * Wire protocol between the sandboxed renderer and the host utilityProcess
@@ -545,6 +546,7 @@ export type UiToHostMessage =
   // only — a foreign engine's host never answers (the renderer's list stays
   // null, same posture as an unsupported context_breakdown).
   | { type: "usage_audit_request" }
+  | { type: "claude_commands_request"; requestId: string }
   // Payloadless manual conversation compaction, served between turns.
   // Session visibly refuses busy, child, and unsupported engine requests.
   | { type: "compact_request" }
@@ -610,6 +612,7 @@ export interface EngineSwitchProjection {
 }
 
 export type HostToUiMessage =
+  | { type: "claude_commands_result"; requestId: string; rows: ClaudeCommandRow[] }
   | { type: "todo_reminder_snapshot"; state: { count: number; threshold: number } | null }
   // Phase-2 §3.3: `sessionId` added (host knows it at boot); renderer binds the
   // tab to its session (badge, picker annotation). Additive on the wire.
@@ -1548,6 +1551,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   lspRestartRequestSchema,
   contextBreakdownRequestSchema,
   usageAuditRequestSchema,
+  z.object({ type: z.literal("claude_commands_request"), requestId: z.string().min(1).max(128) }).strict(),
   compactRequestSchema,
   z.object({ type: z.literal("claude_restart_request") }).strict(),
   taskListRequestSchema,

@@ -1,3 +1,4 @@
+import type { ClaudeCommandRow } from "../../shared/claude-commands.js";
 import { type AgentDisplayCard, agentMessageText } from "../../shared/communication.js";
 import type { AgentDelivery } from "../../shared/communication.js";
 /**
@@ -1519,6 +1520,7 @@ export interface DesktopState {
    * null until the first response arrives / after reset. Part of the session
    * slice so a respawn clears it. The popover renders a skeleton while null.
    */
+  claudeCommands: { requestId: string; rows: ClaudeCommandRow[] } | null;
   contextBreakdown: WireContextBreakdown | null;
   /**
    * Session-wide accumulated token totals (slice P7.17 · F12 W3): summed
@@ -1896,6 +1898,7 @@ interface SessionSlice {
   modelTurns: number;
   git: GitSlice;
   envStatus: WireEnvStatus | null;
+  claudeCommands: { requestId: string; rows: ClaudeCommandRow[] } | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
   /** durable audit slice; see `DesktopState.usageAudit`'s own doc. */
@@ -1978,6 +1981,7 @@ function initialSessionSlice(): SessionSlice {
     modelTurns: 0,
     git: initialGitSlice(),
     envStatus: null,
+    claudeCommands: null,
     contextBreakdown: null,
     sessionTokens: null,
     usageAudit: { lastStep: null, totals: null, totalSteps: 0, list: null },
@@ -6479,6 +6483,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               recentBackgroundChildren: [...state.recentBackgroundChildren, ...state.backgroundChildren.filter((child) => !message.children.some((item) => item.childSessionId === child.childSessionId))].slice(-20),
             }));
             return;
+          case "claude_commands_result":
+            if (get().claudeCommands?.requestId === message.requestId) set({ claudeCommands: { requestId: message.requestId, rows: message.rows } });
+            return;
           case "usage_audit":
             // the durable audit list, served ONLY in
             // response to a usage_audit_request (newest-first, last 50). The
@@ -6525,6 +6532,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }));
             return;
           case "engine_switched": {
+            set({ claudeCommands: null });
             const state = get();
             const pending = state.pendingEngineSwitch;
             if (state.engineSwitch && (!pending || pending.requestId !== message.requestId || pending.generation !== message.generation)) return;

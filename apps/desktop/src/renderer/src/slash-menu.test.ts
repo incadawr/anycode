@@ -827,3 +827,24 @@ describe("Codex slash compaction", () => {
     expect(resolveBareSlashSubmit("/compact", ctx({ ...codex, idle: false }), 0, false)).toMatchObject({ reason: "Cannot compact while this session is busy. Try again after this turn." });
   });
 });
+
+
+describe("Claude command suggestions", () => {
+  it("accepts namespaces only for Claude and rejects paths", () => {
+    expect(slashQueryAt("/ci:linux arg", 9, true)).toEqual({ start: 0, query: "ci:linux" });
+    expect(slashQueryAt("/ci:linux", 9)).toBeNull();
+    expect(slashQueryAt("/usr/bin", 8, true)).toBeNull();
+  });
+  it("groups and ranks commands, and excludes reserved AnyCode IDs", () => {
+    const rows = filterSlashItems(SLASH_COMMANDS, [], "", ctx(), [
+      { name: "mode", scope: "project", description: "reserved" },
+      { name: "ci:inspect", scope: "project", description: "Inspect", argumentHint: "target" },
+      { name: "other", scope: "personal", description: "Other" },
+    ]);
+    expect(rows.filter(row => row.section === "project").map(row => row.name)).toEqual(["ci:inspect"]);
+    expect(filterSlashItems(SLASH_COMMANDS, [], "mode", ctx({ supportsCorePermissions: false }), [{ name: "mode", scope: "project", description: "reserved" }]).filter(row => row.section === "project")).toEqual([]);
+    expect(rows.at(-1)?.section).toBe("personal");
+    expect(rows.find(row => row.name === "ci:inspect")?.intent).toEqual({ kind: "insert", text: "/ci:inspect" });
+    expect(filterSlashItems(SLASH_COMMANDS, [], "ci:", ctx(), [{ name: "ci:inspect", scope: "project", description: "Inspect" }]).at(-1)?.name).toBe("ci:inspect");
+  });
+});

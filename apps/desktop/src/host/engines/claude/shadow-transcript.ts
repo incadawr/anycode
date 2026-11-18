@@ -1,3 +1,4 @@
+import type { ClaudeCommandRow } from "../../../shared/claude-commands.js";
 import { projectClaudeHistory } from "./history-projection.js";
 /**
  * Host-owned fire-and-forget sink of a Claude turn's already-translated
@@ -34,6 +35,7 @@ import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../sessi
  * tests use a plain fake), and `ClaudeEngine` is not imported here at all.
  */
 export interface ClaudeShadowTranscriptHost extends SessionEngine {
+  listClaudeCommands?(): Promise<ClaudeCommandRow[]>;
   compactNow?(options: { signal: AbortSignal }): AsyncIterable<AgentEvent>;
 }
 
@@ -209,6 +211,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
   compactNow?: (options: { signal: AbortSignal }) => AsyncIterable<AgentEvent>;
   /** Same own-property delegation: the restart action must reach the real engine through this wrapper. */
   restartStopped?: () => Promise<boolean>;
+  listClaudeCommands?: () => Promise<ClaudeCommandRow[]>;
 
   constructor(
     private readonly engine: ClaudeShadowTranscriptHost,
@@ -223,6 +226,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     if (innerCompact !== undefined) {
       this.compactNow = (options) => innerCompact.call(this.engine, options);
     }
+    if (this.engine.listClaudeCommands) this.listClaudeCommands = () => this.engine.listClaudeCommands!();
     const innerRestart = this.engine.restartStopped;
     if (innerRestart !== undefined) {
       this.restartStopped = () => innerRestart.call(this.engine);

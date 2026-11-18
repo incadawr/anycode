@@ -3761,6 +3761,17 @@ export class Session {
         this.lsp?.restart?.();
         this.pushLspStatus();
         break;
+      case "claude_commands_request": {
+        const engine = this.engine;
+        const generation = this.boundGeneration;
+        const list = (engine as typeof engine & { listClaudeCommands?: () => Promise<import("../shared/claude-commands.js").ClaudeCommandRow[]> }).listClaudeCommands;
+        if (engine.id !== "claude" || this.relocating || this.postureBlocked() || !list) break;
+        void list.call(engine).then(rows => {
+          if (!this.shuttingDown && !this.relocating && !this.postureBlocked() && this.engine === engine && this.boundGeneration === generation)
+            this.outbound.sendDirect({ type: "claude_commands_result", requestId: message.requestId, rows });
+        }).catch(() => {});
+        break;
+      }
       case "usage_audit_request":
         this.pushUsageAudit();
         break;

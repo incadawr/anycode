@@ -3148,3 +3148,22 @@ describe("orchestration preset guard", () => {
     await engine.dispose("session-close");
   });
 });
+
+describe("Claude command catalog admission", () => {
+  it("rejects child and restricted sessions, including a posture change during a scan", async () => {
+    let restricted = false;
+    let release!: (rows: { name: string; scope: "project"; description: string }[]) => void;
+    const pending = new Promise<{ name: string; scope: "project"; description: string }[]>(resolve => { release = resolve; });
+    const engine = engineWith(new FakeTransport(), { restricted: () => restricted });
+    engine.commandCatalog = { list: () => pending, invalidate: () => {} };
+    const read = engine.listClaudeCommands();
+    restricted = true;
+    release([{ name: "test", scope: "project", description: "Test" }]);
+    expect(await read).toEqual([]);
+    await engine.dispose("session-close");
+    const child = engineWith(new FakeTransport(), { slashPassthrough: false });
+    child.commandCatalog = { list: async () => [{ name: "test", scope: "project", description: "Test" }], invalidate: () => {} };
+    expect(await child.listClaudeCommands()).toEqual([]);
+    await child.dispose("session-close");
+  });
+});
