@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Allow Codex CLI 0.170 as a candidate; live verification is pending and 0.169.0 remains recommended.
+- Codex CLI 0.170 is supported and AnyCode now recommends installing 0.170.0.
 
 ## [0.0.102] - 2026-11-14
 

@@ -45,7 +45,7 @@ export function parseCodexVersion(output: string): CodexVersion | null {
  * 0.165.0 through 0.168.0 passed the real-contract check (live smoke
  * pending for 0.165.0 through 0.167.0, not run for 0.168.0), and 0.169.0
  * passed it too with a live GUI smoke of 5/10, then 10/10 twice (see the README);
- * 0.170.0 is a candidate pending live smoke and binary contract verification. A
+ * 0.170.0 passed the real contract and live GUI smoke 10/10 on 2026-11-18. A
  * build old enough to actually lack the consumed wire shapes fails on its own
  * later — an unparseable/missing response at whichever call first needs the
  * missing shape — rather than being preemptively refused here by version
