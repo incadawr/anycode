@@ -423,6 +423,7 @@ declare global {
       childWorktrees(request: ChildWorktreeRequest): Promise<ChildWorktreeView>;
       getPathForFile: (file: File) => string;
       homeDirectory(): Promise<string>;
+      renameSession(request: import("../../shared/tabs.js").SessionRenameRequest): Promise<import("../../shared/tabs.js").SessionRenameResult>;
       tabBootstrap(): Promise<import("../../shared/tabs.js").TabBootstrap>;
       selectTab(tabId: string): void;
       createTab(request: CreateTabRequest): Promise<CreateTabResult>;

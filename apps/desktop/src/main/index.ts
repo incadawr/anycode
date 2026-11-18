@@ -2788,6 +2788,8 @@ void app.whenReady().then(async () => {
   const childWorktreeRunId = randomUUID();
   const childWorktrees = new ChildWorktreeResources({ userData: app.getPath("userData"), appRunId: childWorktreeRunId });
   manager = new TabHostManager({
+    readSessionTitles: id => persistence!.readSessionTitles(id),
+    clearUnmaterializedSessionUserTitle: id => persistence!.clearUnmaterializedSessionUserTitle(id),
     childWorktrees,
     onFileActivity: fileActivity?.accept,
     onFileActivityLifecycle: fileActivity?.sync,
@@ -3166,6 +3168,8 @@ void app.whenReady().then(async () => {
   const tabIpcDeps: TabIpcDeps = {
     manager,
     persistence,
+    readSessionTitles: id => persistence!.readSessionTitles(id),
+    setSessionUserTitle: (id, title, allow) => persistence!.setSessionUserTitle(id, title, allow),
     dialog,
     // part C: prime the MCP secret hand-off before the tab is created.
     primeMcpSecrets: (workspace) => mcpSecretCache.prime(workspace),

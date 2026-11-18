@@ -745,6 +745,8 @@ export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean
 }
 
 export interface TabHostManagerDeps {
+  readSessionTitles?(id: string): import("../shared/tabs.js").TabTitleSnapshot;
+  clearUnmaterializedSessionUserTitle?(id: string): void;
   shouldRefreshRuntimeIdentity?: (sessionId: string) => boolean;
   refreshRuntimeIdentity?: (sessionId: string) => Promise<{identity: Pick<TabHost,"engine" | "engineModel" | "enginePreset" | "modelOverride" | "connectionId" | "codexProfile">;release?: () => void} | undefined>;
   hostOutputUsable?: (stream: NodeJS.WriteStream) => boolean;
@@ -4462,11 +4464,17 @@ export class TabHostManager {
     // A prepared tab was never announced: there is nothing for the renderer to
     // close and no publication hook to unwind.
     if (unpublished) return;
+    if (!tab.childOf) this.cleanupUserTitle(tab.sessionId);
     this.deps.onTabClosed?.(tab.tabId);
     const win = this.deps.getWindow();
     if (win !== null && !win.isDestroyed()) {
       win.webContents.send(TAB_CLOSED_ENVELOPE_TYPE, { tabId: tab.tabId });
     }
+  }
+
+  private cleanupUserTitle(id: string): void {
+    try { this.deps.clearUnmaterializedSessionUserTitle?.(id); }
+    catch (error) { this.logger.warn(`[main] user title cleanup failed: ${String(error)}`); }
   }
 
   private notifyHostExited(tabId: string): void {
@@ -4520,11 +4528,15 @@ export class TabHostManager {
     // targeting a dead one. This is NOT the session-stream (protocol.ts untouched).
     const pin =
       tab.connectionId !== undefined ? this.deps.describeConnection?.(tab.connectionId) : undefined;
+    let titles: import("../shared/tabs.js").TabTitleSnapshot | undefined;
+    try { if (!tab.childOf) titles = this.deps.readSessionTitles?.(tab.sessionId); }
+    catch (error) { this.logger.warn(`[main] user title read failed: ${String(error)}`); }
     win.webContents.postMessage(
       PORT_ENVELOPE_TYPE,
       {
         tabId: tab.tabId,
         workspace: tab.workspace,
+        ...(titles ? { titles } : {}),
         ...(tab.childWorktree ? { childWorktree: {
           id: tab.childWorktree.id, path: tab.childWorktree.path, branch: tab.childWorktree.branch,
           baseRef: tab.childWorktree.baseSha, ownedByAnyCode: false,
@@ -4723,6 +4735,7 @@ export class TabHostManager {
     this.managedSessions.delete(tab.sessionId);
     // Preview windows belong to the TAB, not the host proc — a respawn must
     // never close them, but a real close (here) must always destroy them.
+    this.cleanupUserTitle(tab.sessionId);
     this.deps.onTabClosed?.(tabId);
     return { ok: true };
   }
@@ -4747,6 +4760,7 @@ export class TabHostManager {
       if (tab.childWorktree && run) run.state = "cancelling";
       await this.shutdownTabHost(tab);
       if (tab.childWorktree) await this.settleManagedWorktree(tab.childWorktree, tab);
+      if (!tab.childOf && !this.unpublishedTabs.has(tab.tabId)) this.cleanupUserTitle(tab.sessionId);
       const id = tab.childOf?.requestId;
       if (id) this.finalizeChildRun(id, { status: "cancelled", finalText: CHILD_CANCELLED_MESSAGE,
         truncated: false, turns: 0, toolCalls: 0, durationMs: 0 });

@@ -271,6 +271,7 @@ import {
   SESSION_DELETE_CHANNEL,
   TAB_CLOSE_CHANNEL,
   TAB_CREATE_CHANNEL,
+  SESSION_RENAME_CHANNEL,
   TAB_BOOTSTRAP_CHANNEL,
   TAB_SELECT_CHANNEL,
   TAB_REBIND_CHANNEL,
@@ -704,6 +705,7 @@ ipcRenderer.on(
       child?: PortEnvelope["child"];
       // relayed untouched (root tabs a Sessions API agent opened).
       openedByAgent?: PortEnvelope["openedByAgent"];
+      titles?: PortEnvelope["titles"];
       agentTitle?: string;
       childWorktree?: PortEnvelope["childWorktree"];
       missingWorkspace?: boolean;
@@ -730,6 +732,7 @@ ipcRenderer.on(
         // facade §5.3/§0.4 forbid.
         ...(payload.child !== undefined ? { child: payload.child } : {}),
         ...(payload.childWorktree !== undefined ? { childWorktree: payload.childWorktree } : {}),
+        ...(payload.titles !== undefined ? { titles: payload.titles } : {}),
         ...(payload.agentTitle !== undefined ? { agentTitle: payload.agentTitle } : {}),
         ...(payload.openedByAgent === true ? { openedByAgent: true as const } : {}),
       },
@@ -794,6 +797,7 @@ contextBridge.exposeInMainWorld("anycode", {
     save: (request: DiagnosticsExportRequest): Promise<DiagnosticsSaveResult> =>
       ipcRenderer.invoke(DIAGNOSTICS_SAVE_CHANNEL, request) as Promise<DiagnosticsSaveResult>,
   },
+  renameSession: (request: import("../shared/tabs.js").SessionRenameRequest): Promise<import("../shared/tabs.js").SessionRenameResult> => ipcRenderer.invoke(SESSION_RENAME_CHANNEL, request),
   tabBootstrap: (): Promise<TabBootstrap> => ipcRenderer.invoke(TAB_BOOTSTRAP_CHANNEL) as Promise<TabBootstrap>,
   selectTab: (tabId: string): void => ipcRenderer.send(TAB_SELECT_CHANNEL, tabId),
   createTab: (req: CreateTabRequest): Promise<CreateTabResult> =>
