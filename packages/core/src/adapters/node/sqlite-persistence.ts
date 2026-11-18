@@ -1461,7 +1461,11 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       ) {
         return { ok: false as const, reason: "source_changed" as const };
       }
-      return { ok: true as const, session: this.createSessionInDb(db, meta) };
+      const session = this.createSessionInDb(db, meta);
+      db.prepare(`INSERT INTO session_user_titles (session_id, user_title)
+        SELECT ?, user_title FROM session_user_titles WHERE session_id = ?`).run(meta.id, sourceId);
+      const userTitle = db.prepare("SELECT user_title FROM session_user_titles WHERE session_id = ?").get(meta.id) as { user_title: string } | undefined;
+      return { ok: true as const, session: userTitle ? { ...session, userTitle: userTitle.user_title } : session };
     }, "immediate");
   }
 

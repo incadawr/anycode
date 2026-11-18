@@ -3615,12 +3615,17 @@ describe("SqlitePersistenceAdapter — session delete", () => {
   it.each(["codex", "claude"] as const)("atomically registers a successor only for the unchanged %s source", async (engine) => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     await seedFullSession(adapter, "source", "original-ref", engine);
+    expect(adapter.setSessionUserTitle("source", "Custom task", false)).toBe(true);
     const successor = {id:"successor",workspace:"/w",model:"m",mode:"build" as const,engineId:engine,externalSessionRef:"original-ref"};
     expect(await adapter.createSessionFromSource("missing", successor)).toEqual({ ok: false, reason: "source_missing" });
     expect(await adapter.createSessionFromSource("source", {...successor,externalSessionRef:"changed-ref"})).toEqual({ ok: false, reason: "source_changed" });
     expect(await adapter.createSessionFromSource("source", {...successor,engineId:engine === "codex" ? "claude" : "codex"})).toEqual({ ok: false, reason: "source_changed" });
     const made = await adapter.createSessionFromSource("source", successor);
     expect(made.ok && made.session.id).toBe("successor");
+    expect(made.ok && made.session.userTitle).toBe("Custom task");
+    expect((await adapter.getRootSession("successor"))?.userTitle).toBe("Custom task");
+    expect(adapter.setSessionUserTitle("source", null, false)).toBe(true);
+    expect((await adapter.getRootSession("successor"))?.userTitle).toBe("Custom task");
     const first = await adapter.deleteSession("source");
     expect(engine === "codex" ? first.counts.codexThreadItems : first.counts.claudeTranscriptItems).toBe(0);
     const last = await adapter.deleteSession("successor");
