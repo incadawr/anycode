@@ -105,5 +105,8 @@ it("renames open rows by double click and history rows by F2 without resuming", 
     await act(async () => renameItem.click());
     expect(rename.mock.calls.map(call => call[0].kind)).toEqual(["open", "resumable", "resumable"]);
     expect(createTab).not.toHaveBeenCalled();
+    createTab.mockResolvedValue({ ok: false, reason: "cancelled" });
+    await act(async () => history.click());
+    expect(createTab).toHaveBeenCalledOnce();
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
