@@ -3144,6 +3144,9 @@ describe("handleSessionRename", () => {
     expect(handleSessionRename(deps, { kind: "tab", tabId: "child", title: "x" })).toEqual({ ok: false, reason: "not_found" });
     expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: "x".repeat(161) })).toEqual({ ok: false, reason: "invalid" });
     expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: "x\ny" })).toEqual({ ok: false, reason: "invalid" });
+    for (const separator of ["\u2028", "\u2029"]) {
+      expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: `x${separator}y` })).toEqual({ ok: false, reason: "invalid" });
+    }
     write.mockImplementation(() => { throw new Error("db"); });
     expect(handleSessionRename(deps, { kind: "session", sessionId: "s", title: "x" })).toEqual({ ok: false, reason: "write_failed" });
   });

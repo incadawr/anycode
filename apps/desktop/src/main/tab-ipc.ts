@@ -1077,7 +1077,7 @@ const renameSchema = z.discriminatedUnion("kind", [
 ]);
 export function handleSessionRename(deps: TabIpcDeps, request: SessionRenameRequest): SessionRenameResult {
   const title = request.title.trim();
-  if (title.length > 160 || /[\x00-\x1f\x7f-\x9f]/.test(title)) return { ok: false, reason: "invalid" };
+  if (title.length > 160 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(title)) return { ok: false, reason: "invalid" };
   const tabs = deps.manager.listTabs().filter(tab => !tab.childOf && tab.state !== "closing");
   const tab = request.kind === "tab" ? tabs.find(t => t.tabId === request.tabId) : tabs.find(t => t.sessionId === request.sessionId);
   if (request.kind === "tab" && !tab) return { ok: false, reason: "not_found" };
