@@ -1595,9 +1595,11 @@ export function Composer() {
     if (!isClaude || !slashQuery || slashDismissed || !ready) { claudeRequestRef.current = null; return; }
     const requestId = crypto.randomUUID();
     claudeRequestRef.current = requestId;
+    tabStore.setState({ claudeCommands: { requestId, rows: [] } });
     sendToHost({ type: "claude_commands_request", requestId });
-    return () => { if (claudeRequestRef.current === requestId) claudeRequestRef.current = null; };
-  }, [isClaude, slashQuery !== null, slashDismissed, ready, sessionWorkspace, sendToHost]);
+    const timeout = setTimeout(() => { if (claudeRequestRef.current === requestId && tabStore.getState().claudeCommands?.requestId === requestId && tabStore.getState().claudeCommands?.rows.length === 0) claudeRequestRef.current = null; }, 5000);
+    return () => { clearTimeout(timeout); if (claudeRequestRef.current === requestId) claudeRequestRef.current = null; };
+  }, [isClaude, slashQuery !== null, slashDismissed, ready, sessionWorkspace, orchestration.protocol?.connectionId, sendToHost]);
 
   // Skills fetch (cut §3, gated by skillsSupported per §2(f)): once
   // per closed→open transition, cached in state for the open's lifetime

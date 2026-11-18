@@ -6484,7 +6484,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }));
             return;
           case "claude_commands_result":
-            set({ claudeCommands: { requestId: message.requestId, rows: message.rows } });
+            if (get().claudeCommands?.requestId === message.requestId) set({ claudeCommands: { requestId: message.requestId, rows: message.rows } });
             return;
           case "usage_audit":
             // the durable audit list, served ONLY in
