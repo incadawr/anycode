@@ -1,12 +1,7 @@
 import { lstat, open, readdir } from "node:fs/promises";
 import path from "node:path";
 
-export interface ClaudeCommandRow {
-  name: string;
-  scope: "project" | "personal";
-  description: string;
-  argumentHint?: string;
-}
+import type { ClaudeCommandRow } from "../../../shared/claude-commands.js";
 
 /** Parse only the small, single-line frontmatter subset used by the menu. */
 export function readClaudeCommandFrontmatter(text: string): { description: string; argumentHint?: string; hidden: boolean } {

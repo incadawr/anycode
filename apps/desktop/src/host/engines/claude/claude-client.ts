@@ -209,6 +209,10 @@ export const CLAUDE_AGENT_BRIDGE_PROMPT =
  * of the SAME single flag value — never a second flag — and only when the
  * caller supplied it, which is exactly when the bridge is announced.
  */
+export function resolveClaudeSettingSources(projectTrusted?: boolean): string {
+  return projectTrusted === false ? "user" : "project,local";
+}
+
 export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] {
   const overlay = options.orchestrationSpawn === undefined ? undefined : claudeOrchestrationSpawnOptions(options.orchestrationSpawn);
   if (overlay) options = { ...options, permissionModeFlag: overlay.permissionModeFlag, enableSlashPassthrough: false, mcpConfigPath: undefined,
@@ -231,7 +235,7 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
     // `local` are both workspace files, so the untrusted spawn admits `user`
     // only (value verified against the pinned 2.1.296 binary — see
     // ClaudeSpawnArgsOptions.projectTrusted).
-    overlay ? overlay.settingSources : options.projectTrusted === false ? "user" : "project,local",
+    overlay ? overlay.settingSources : resolveClaudeSettingSources(options.projectTrusted),
     ...(overlay ? ["--tools", overlay.tools, "--settings", overlay.settings, "--mcp-config", overlay.mcpConfig] : []),
     ...(options.mcpConfigPath !== undefined ? ["--mcp-config", options.mcpConfigPath] : []),
     "--strict-mcp-config",
