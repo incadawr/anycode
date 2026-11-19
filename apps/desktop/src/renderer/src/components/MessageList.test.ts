@@ -757,7 +757,7 @@ describe("groupTranscriptBlocks (any adjacent terminal tool calls stack)", () =>
 
   it("does NOT stack a settled Agent call whose background subagent is still running, until it ends", () => {
     const live: NonNullable<ToolCallBlock["subagent"]> = {
-      agentType: "code-writer", description: "Implement Task 6b", model: null, engine: null,
+      agentType: "code-writer", description: "Implement the parser", model: null, engine: null,
       turns: 3, toolCalls: 3, lastTool: "Edit", activity: [], activityDropped: 0, final: null,
     };
     const write = mkToolCall({ id: "w", toolName: "Write" });
