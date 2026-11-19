@@ -237,6 +237,16 @@ describe("ClaudeSubagentTasks — edge cases", () => {
     expect(detached).toMatchObject([{ type: "subagent_end", toolCallId: "toolu_fg", status: "cancelled" }]);
   });
 
+  it("an agent resumed after abandonAll counts its tools from the last cumulative count", () => {
+    const tasks = new ClaudeSubagentTasks();
+    tasks.onFrame(system("task_started", { task_id: "t", tool_use_id: "toolu_a" }));
+    tasks.onFrame(system("task_progress", { task_id: "t", usage: { tool_uses: 3 } }));
+    tasks.abandonAll();
+    tasks.onFrame(system("task_started", { task_id: "t", tool_use_id: "toolu_send" }));
+    expect(tasks.onFrame(system("task_notification", { task_id: "t", status: "completed", usage: { tool_uses: 5 } }))).toMatchObject([
+      { type: "subagent_end", toolCallId: "toolu_send", toolCalls: 2 },
+    ]);
+  });
 });
 
 describe("ClaudeSubagentTasks — an agent resumed by SendMessage", () => {

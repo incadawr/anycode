@@ -286,8 +286,11 @@ export class ClaudeSubagentTasks {
    * otherwise stay running forever.
    */
   abandonAll(): AgentEvent[] {
-    const events = [...this.tasks.values()].map(task => this.endEvent(task, "cancelled", -1));
-    this.tasks.clear();
+    const events: AgentEvent[] = [];
+    for (const [taskId, task] of this.tasks) {
+      events.push(this.endEvent(task, "cancelled", -1));
+      this.settle(taskId, task);
+    }
     return events;
   }
 
