@@ -1740,6 +1740,9 @@ export class ClaudeEngine implements SessionEngine {
               this.absorbIdleFrame(why.value.value);
             }
             this.foreignTurn = null;
+            // Every way out but "done" leaves the CLI closed or gone: its
+            // agents can no longer report, so their cards settle here.
+            if (stopped !== "done") this.settleOrphanedSubagents();
             if (stopped === "settle-timeout") {
               const settledError = new Error(
                 `Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms; the session was closed. Start a new session to continue.`,
@@ -1857,6 +1860,7 @@ export class ClaudeEngine implements SessionEngine {
             );
             this.terminalError = settledError;
             void this.client.close().catch(() => {});
+            this.settleOrphanedSubagents();
             yield {
               type: "engine_notice",
               level: "info",
@@ -1879,6 +1883,7 @@ export class ClaudeEngine implements SessionEngine {
           // Transport closed under a pending Stop (e.g. Stop then tab close):
           // that is the cancellation the user asked for, not an engine error.
           if (abortObserved) {
+            this.settleOrphanedSubagents();
             reportNotSent();
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return;
