@@ -2158,6 +2158,12 @@ export class ClaudeEngine implements SessionEngine {
         }
         this.frameConsumed();
         const frame = raced.value.value;
+        if (isClaudeSubagentFrame(frame)) {
+          // An agent the CLI keeps running (run_in_background) reports during
+          // the summarization turn too; no turn carries its card here.
+          for (const event of this.subagentTasks.onFrame(frame)) this.emitDetached(event);
+          continue;
+        }
         if (frame.type === "system") {
           continue; // init re-emit or status ping — state, not compaction outcome
         }

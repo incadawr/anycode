@@ -3276,6 +3276,24 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
     await engine.dispose("session-close");
   });
 
+  it("an agent that reports during a manual /compact still reaches the detached sink", async () => {
+    const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = (event) => detached.push(event);
+    await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+
+    for (const frame of [...idleAgentFrames, resultFrame157("completed")]) transport.enqueue(frame);
+    const events = await collect(engine.compactNow({ signal: new AbortController().signal }));
+
+    expect(events.find((event) => event.type === "compaction_end")).toMatchObject({ ok: true });
+    expect(events.filter((event) => event.type.startsWith("subagent_"))).toEqual([]);
+    expect(types(detached)).toContain("subagent_progress");
+    expect(types(detached)).toContain("subagent_activity");
+    expect(detached.at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed" });
+    await engine.dispose("session-close");
+  });
+
   describe("a running agent's card settles as cancelled when the CLI that ran it is gone", () => {
     const cancelled = { type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "cancelled" };
 
