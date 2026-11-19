@@ -198,6 +198,23 @@ describe("ClaudeSubagentTasks — edge cases", () => {
       { type: "subagent_end", toolCallId: "toolu_a", status: "completed", turns: 1, toolCalls: 1, durationMs: -1 },
     ]);
   });
+
+  it("detachLive settles a foreground agent its turn left running as cancelled; a background one stays live", () => {
+    const detached: AgentEvent[] = [];
+    const tasks = new ClaudeSubagentTasks((event) => detached.push(event));
+    tasks.onFrame(system("task_started", { task_id: "fg", tool_use_id: "toolu_fg", is_backgrounded: false }));
+    tasks.onFrame(system("task_progress", { task_id: "fg", usage: { tool_uses: 2 } }));
+    tasks.onFrame(system("task_started", { task_id: "bg", tool_use_id: "toolu_bg", is_backgrounded: true }));
+    tasks.detachLive();
+    expect(detached).toEqual([
+      { type: "subagent_end", toolCallId: "toolu_fg", status: "cancelled", turns: 1, toolCalls: 2, durationMs: -1 },
+    ]);
+    // The interrupted agent's late notification is not reported again.
+    expect(tasks.onFrame(system("task_notification", { task_id: "fg", status: "stopped" }))).toEqual([]);
+    expect(tasks.onFrame(system("task_notification", { task_id: "bg", status: "completed" }))).toEqual([]);
+    expect(detached.at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_bg", status: "completed" });
+    expect(detached).toHaveLength(2);
+  });
 });
 
 describe("ClaudeSubagentTasks — an agent resumed by SendMessage", () => {

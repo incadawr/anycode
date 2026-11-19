@@ -46,6 +46,11 @@ interface TrackedTask {
    * agent's first start, idle time included, so a resumed run is timed here.
    */
   resumedAt?: number;
+  /**
+   * The CLI's `is_backgrounded`: the agent keeps running after its parent
+   * turn. Absent counts as backgrounded, so an older CLI keeps the card live.
+   */
+  backgrounded: boolean;
   /** The task outlived the owner turn that started it: its events go to the detached sink from then on. */
   detached: boolean;
   /** Distinct child `message.id`s seen: one per model response, however many frames it spans. */
@@ -102,9 +107,25 @@ export class ClaudeSubagentTasks {
     return [];
   }
 
-  /** The owner turn ended: every task still running now reports through the detach sink. */
+  /**
+   * The owner turn ended. A background task still running reports through
+   * the detach sink from now on. A foreground task still running was cut off
+   * with its turn (a Stop): it settles as cancelled here, since its card
+   * would otherwise read as dispatched to the background.
+   */
   detachLive(): void {
-    for (const task of this.tasks.values()) task.detached = true;
+    for (const [taskId, task] of this.tasks) {
+      task.detached = true;
+      if (task.backgrounded) continue;
+      this.settle(taskId, task);
+      this.detach(this.endEvent(task, "cancelled", -1));
+    }
+  }
+
+  /** Forgets a live task, keeping what a SendMessage resume of it needs. */
+  private settle(taskId: string, task: TrackedTask): void {
+    this.tasks.delete(taskId);
+    this.history.set(taskId, { agentCall: task.agentCall, toolUses: task.baseToolUses + task.toolCalls });
   }
 
   private translate(frame: ClaudeStreamMessage): { task?: TrackedTask; events: AgentEvent[] } {
@@ -174,6 +195,7 @@ export class ClaudeSubagentTasks {
       agentCall,
       baseToolUses,
       ...(seen === undefined ? {} : { resumedAt: Date.now() }),
+      backgrounded: fields.is_backgrounded !== false,
       detached: false,
       responses: new Set(),
       toolUses: new Set(),
@@ -215,10 +237,9 @@ export class ClaudeSubagentTasks {
     const found = this.taskFor(fields);
     if (found === undefined) return { events: [] };
     const { taskId, task } = found;
-    this.tasks.delete(taskId);
     const usage = record(fields.usage);
     task.toolCalls = this.ownToolCalls(task, usage?.tool_uses);
-    this.history.set(taskId, { agentCall: task.agentCall, toolUses: task.baseToolUses + task.toolCalls });
+    this.settle(taskId, task);
     return {
       task,
       // -1 is the existing "duration unknown" marker (the card hides the time).

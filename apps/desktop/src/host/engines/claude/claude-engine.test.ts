@@ -3276,6 +3276,29 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
     await engine.dispose("session-close");
   });
 
+  it("a foreground agent cut off by a Stop settles as cancelled with its turn", async () => {
+    // w0-20 up to the agent's second progress: the Stop lands before its notification.
+    const foreground = readFileSync(join(FIXTURES_DIR, "w0-20-foreground-agent.jsonl"), "utf8")
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line) as ClaudeStreamMessage);
+    const transport = new FakeTransport({ frames: [...foreground.slice(0, 9), resultFrame157("aborted_streaming")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = (event) => detached.push(event);
+    const controller = new AbortController();
+    const events: AgentEvent[] = [];
+    for await (const event of engine.runTurn("run it", { signal: controller.signal })) {
+      events.push(event);
+      if (event.type === "subagent_progress") controller.abort();
+    }
+    expect(events.find((event) => event.type === "loop_end")).toMatchObject({ reason: "cancelled" });
+    expect(detached).toEqual([
+      expect.objectContaining({ type: "subagent_end", toolCallId: "toolu_01RDu83vHyAmThJmAAheTCUb", status: "cancelled" }),
+    ]);
+    await engine.dispose("session-close");
+  });
+
   it("an agent that reports during a manual /compact still reaches the detached sink", async () => {
     const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const engine = engineWith(transport);
