@@ -263,6 +263,28 @@ describe("ClaudeSubagentTasks — an agent resumed by SendMessage", () => {
     ]);
   });
 
+  it("matches a run's frames by run_id: the previous run's late frames never touch the resumed run, which counts from the last cumulative count", () => {
+    const tasks = new ClaudeSubagentTasks();
+    tasks.onFrame(system("task_started", { task_id: "t1", run_id: "r1", tool_use_id: AGENT_CALL }));
+    tasks.onFrame(system("task_progress", { task_id: "t1", run_id: "r1", tool_use_id: AGENT_CALL, usage: { tool_uses: 3 } }));
+    tasks.onFrame(system("task_started", { task_id: "t1", run_id: "r2", tool_use_id: SEND_CALL }));
+    expect(tasks.onFrame(system("task_progress", { task_id: "t1", run_id: "r1", tool_use_id: AGENT_CALL, usage: { tool_uses: 3 } }))).toEqual([]);
+    expect(tasks.onFrame(system("task_notification", { task_id: "t1", run_id: "r1", tool_use_id: AGENT_CALL, status: "completed", usage: { tool_uses: 3 } }))).toEqual([]);
+    expect(tasks.onFrame(system("task_notification", { task_id: "t1", run_id: "r2", tool_use_id: SEND_CALL, status: "completed", usage: { tool_uses: 4 } }))).toEqual([
+      { type: "subagent_end", toolCallId: SEND_CALL, status: "completed", turns: 1, toolCalls: 1, durationMs: expect.any(Number) },
+    ]);
+  });
+
+  it("without a run_id a run's frames are matched by their tool_use_id", () => {
+    const tasks = new ClaudeSubagentTasks();
+    tasks.onFrame(system("task_started", { task_id: "t1", tool_use_id: AGENT_CALL }));
+    tasks.onFrame(system("task_started", { task_id: "t1", tool_use_id: SEND_CALL }));
+    expect(tasks.onFrame(system("task_notification", { task_id: "t1", tool_use_id: AGENT_CALL, status: "completed" }))).toEqual([]);
+    expect(tasks.onFrame(system("task_notification", { task_id: "t1", tool_use_id: SEND_CALL, status: "completed" }))).toMatchObject([
+      { type: "subagent_end", toolCallId: SEND_CALL, status: "completed" },
+    ]);
+  });
+
   it("an agent resumed while its first run is still tracked (no notification yet) moves to the new call", () => {
     const tasks = new ClaudeSubagentTasks();
     tasks.onFrame(system("task_started", { task_id: "t1", tool_use_id: AGENT_CALL }));

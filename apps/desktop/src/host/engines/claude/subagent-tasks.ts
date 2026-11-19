@@ -37,6 +37,12 @@ const NOTIFICATION_STATUS: Record<string, SubagentEndStatus> = {
 interface TrackedTask {
   /** The call whose card shows this run: the Agent call, or the SendMessage call that resumed the agent. */
   toolCallId: string;
+  /**
+   * The CLI's `run_id`: one per run of the agent, while the task_id stays the
+   * same across SendMessage resumes. A late frame of an earlier run must not
+   * land on the current one.
+   */
+  runId?: string;
   /** The Agent call that first started the agent: the child's own frames name it as their parent on every run. */
   agentCall: string;
   /** The CLI's tool_uses count is cumulative across runs of one agent; this run's card counts only its own. */
@@ -185,13 +191,17 @@ export class ClaudeSubagentTasks {
       const end = this.endEvent(running, "completed", -1);
       if (running.detached) this.detach(end);
       else events.push(end);
+      // The new run counts from the last cumulative count the old one saw.
+      this.settle(taskId, running);
     }
     const seen = this.history.get(taskId);
+    const runId = text(fields.run_id);
     const agentCall = seen?.agentCall ?? toolCallId;
     const baseToolUses = seen?.toolUses ?? 0;
     this.history.set(taskId, { agentCall, toolUses: baseToolUses });
     const task: TrackedTask = {
       toolCallId,
+      ...(runId === undefined ? {} : { runId }),
       agentCall,
       baseToolUses,
       ...(seen === undefined ? {} : { resumedAt: Date.now() }),
@@ -273,11 +283,20 @@ export class ClaudeSubagentTasks {
     return events;
   }
 
+  /**
+   * The live run a lifecycle frame belongs to: same task_id, and the same
+   * run_id when both carry one, else the same tool_use_id when the frame
+   * names one. A frame of an earlier run of the task matches nothing.
+   */
   private taskFor(fields: Record<string, unknown>): { taskId: string; task: TrackedTask } | undefined {
     const taskId = text(fields.task_id);
     if (taskId === undefined) return undefined;
     const task = this.tasks.get(taskId);
-    return task === undefined ? undefined : { taskId, task };
+    if (task === undefined) return undefined;
+    const runId = text(fields.run_id);
+    if (runId !== undefined && task.runId !== undefined) return runId === task.runId ? { taskId, task } : undefined;
+    const toolCallId = text(fields.tool_use_id);
+    return toolCallId === undefined || toolCallId === task.toolCallId ? { taskId, task } : undefined;
   }
 
   /** A tool call implies at least one model response, even when its frame has not arrived yet. */
