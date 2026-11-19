@@ -3048,6 +3048,17 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusTone(truncated)).toBe("error");
   });
 
+  it("an Agent call a Stop cut off (the CLI errors the call, the agent settles cancelled) reads Cancelled, not Error", () => {
+    const block = mkAgentBlock({ status: "error", input: { prompt: "p", run_in_background: false } });
+    const stopped = { ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) };
+    expect(statusLabel(stopped)).toBe("Cancelled");
+    expect(statusTone(stopped)).toBe("cancelled");
+    // A call that failed with its agent still reads Error.
+    const failed = { ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) };
+    expect(statusLabel(failed)).toBe("Error");
+    expect(statusTone(failed)).toBe("error");
+  });
+
   it("a SendMessage that resumed an agent reads Dispatched while it runs and its outcome once it ends", () => {
     const block = mkAgentBlock({ toolName: "SendMessage", status: "success", input: { to: "a1", message: "m" } });
     expect(statusLabel(block)).toBe("Success");

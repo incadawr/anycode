@@ -1317,6 +1317,9 @@ export function statusLabel(
       return "Dispatched";
     }
   }
+  if (settledStatus(block) === "cancelled" && block.status === "error") {
+    return SUBAGENT_FINAL_LABELS.cancelled;
+  }
   if (block.toolName === "Agent") {
     if (block.status === "proposed") {
       return "Queued";

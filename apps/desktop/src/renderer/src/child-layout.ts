@@ -82,11 +82,16 @@ import type { SubagentSubStatus, ToolCallBlock, ToolCallCardStatus, TranscriptBl
  * How a settled call actually ended. A call that succeeded only by starting
  * an agent (an Agent launch, a SendMessage resume) ends the way its agent
  * did, once the agent has settled. An agent whose last turn was cut by the
- * output limit failed, as `childBadgeKind` has it.
+ * output limit failed, as `childBadgeKind` has it; a call cut off with its
+ * agent by a Stop was cancelled.
  */
 export function settledStatus(block: Pick<ToolCallBlock, "status"> & Partial<Pick<ToolCallBlock, "subagent">>): ToolCallCardStatus {
   const final = block.subagent?.final;
-  if (block.status !== "success" || final == null) return block.status;
+  if (final == null) return block.status;
+  // A Stop errors the call that was waiting on a foreground agent, and the
+  // agent settles cancelled: the call was cancelled, it did not fail.
+  if (block.status === "error" && final.status === "cancelled") return "cancelled";
+  if (block.status !== "success") return block.status;
   if (final.finalTurnFinishReason === "length") return "error";
   return final.status === "completed" ? "success" : final.status;
 }
