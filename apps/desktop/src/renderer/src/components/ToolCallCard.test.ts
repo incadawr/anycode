@@ -3041,6 +3041,13 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(html).not.toContain("tool-call-status-success");
   });
 
+  it("an agent whose last turn hit the output limit reads Truncated with the error tint, as its counters line does", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p" } });
+    const truncated = { ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1, finalTurnFinishReason: "length" } }) };
+    expect(statusLabel(truncated)).toBe("Truncated");
+    expect(statusTone(truncated)).toBe("error");
+  });
+
   it("a SendMessage that resumed an agent reads Dispatched while it runs and its outcome once it ends", () => {
     const block = mkAgentBlock({ toolName: "SendMessage", status: "success", input: { to: "a1", message: "m" } });
     expect(statusLabel(block)).toBe("Success");

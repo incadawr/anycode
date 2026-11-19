@@ -81,11 +81,13 @@ import type { SubagentSubStatus, ToolCallBlock, ToolCallCardStatus, TranscriptBl
 /**
  * How a settled call actually ended. A call that succeeded only by starting
  * an agent (an Agent launch, a SendMessage resume) ends the way its agent
- * did, once the agent has settled.
+ * did, once the agent has settled. An agent whose last turn was cut by the
+ * output limit failed, as `childBadgeKind` has it.
  */
 export function settledStatus(block: Pick<ToolCallBlock, "status"> & Partial<Pick<ToolCallBlock, "subagent">>): ToolCallCardStatus {
   const final = block.subagent?.final;
   if (block.status !== "success" || final == null) return block.status;
+  if (final.finalTurnFinishReason === "length") return "error";
   return final.status === "completed" ? "success" : final.status;
 }
 

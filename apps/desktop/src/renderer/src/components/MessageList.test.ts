@@ -651,6 +651,12 @@ describe("a stacked call whose agent did not complete", () => {
     expect(stackBadgeText([mkToolCall(), agent({ status: "cancelled", durationMs: -1 })])).toBe("1 failed");
   });
 
+  it("an agent cut off by the output limit counts as failed", () => {
+    const stack = [mkToolCall(), agent({ status: "completed", durationMs: 1, finalTurnFinishReason: "length" })];
+    expect(aggregateStackStatus(stack)).toBe("mixed");
+    expect(stackBadgeText(stack)).toBe("1 failed");
+  });
+
   it("an agent that completed keeps the stack a success", () => {
     const stack = [mkToolCall(), agent({ status: "completed", durationMs: 1 })];
     expect(aggregateStackStatus(stack)).toBe("success");

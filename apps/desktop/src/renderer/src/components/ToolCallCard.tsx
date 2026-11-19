@@ -1308,7 +1308,7 @@ export function statusLabel(
     // card shows nothing else, and the call's own success only meant "started".
     const final = block.subagent?.final;
     if (final != null) {
-      return SUBAGENT_FINAL_LABELS[final.status];
+      return final.finalTurnFinishReason === "length" ? "Truncated" : SUBAGENT_FINAL_LABELS[final.status];
     }
     // A call that returned while the agent it started keeps running: a
     // background launch, the Claude CLI's own async Agent launch, or a
