@@ -38,6 +38,7 @@ import {
   isClickableChildBadge,
   moreLinesLabel,
   statusLabel,
+  statusTone,
   childActionBadge,
   layoutWorkflowMap,
   orderStepsByDependency,
@@ -3001,7 +3002,6 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
 
   it("a Claude CLI Agent call with run_in_background reads Dispatched once launched, its child still running", () => {
     const block = mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: true } });
-    expect(statusLabel(block)).toBe("Dispatched");
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
     expect(statusLabel(mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: false } }))).toBe("Success");
     expect(statusLabel({ toolName: "Bash", status: "success", input: { run_in_background: true } })).toBe("Success");
@@ -3012,9 +3012,33 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("Error");
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
-    // An AnyCode-routed detached child keeps its badge: its live state rides the child badge.
+    // An AnyCode-routed detached child reads its outcome the same way once it ends.
     const routed = mkAgentBlock({ status: "success", input: { prompt: "p", detach: true } });
-    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Dispatched");
+    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("Error");
+  });
+
+  it("a Claude CLI background Agent restored from history with no outcome reads Unknown, not Dispatched", () => {
+    // Its subagent telemetry lived only in the host process that ran it; after a restart nothing says how it ended.
+    const block = mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p", run_in_background: true } });
+    expect(statusLabel(block)).toBe("Unknown");
+    expect(statusTone(block)).toBe("unknown");
+  });
+
+  it("the badge tint follows the agent's outcome, not the call's own success", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p" } });
+    expect(statusTone(block)).toBe("success");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: null }) })).toBe("success");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("success");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("error");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("cancelled");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "max_turns", durationMs: 1 } }) })).toBe("max_turns");
+    expect(statusTone({ ...block, status: "denied" })).toBe("denied");
+    const failed = { ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) };
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block: failed }));
+    expect(html).toContain("tool-call-status-error");
+    expect(html).not.toContain("tool-call-status-success");
   });
 
   it("a SendMessage that resumed an agent reads Dispatched while it runs and its outcome once it ends", () => {
@@ -3030,7 +3054,8 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     // The CLI may launch an agent asynchronously on its own ("Async agent launched").
     const block = mkAgentBlock({ status: "success", input: { prompt: "p" } });
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
-    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Success");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
   });
 
   it("labels a durable background admission without tier or detach as Dispatched", () => {

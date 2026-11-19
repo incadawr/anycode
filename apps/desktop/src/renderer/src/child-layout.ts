@@ -76,7 +76,18 @@
  * and writes nothing but the `ChildLayoutView` it is handed.
  */
 import { create } from "zustand";
-import type { SubagentSubStatus, ToolCallBlock, TranscriptBlock } from "./store.js";
+import type { SubagentSubStatus, ToolCallBlock, ToolCallCardStatus, TranscriptBlock } from "./store.js";
+
+/**
+ * How a settled call actually ended. A call that succeeded only by starting
+ * an agent (an Agent launch, a SendMessage resume) ends the way its agent
+ * did, once the agent has settled.
+ */
+export function settledStatus(block: Pick<ToolCallBlock, "status"> & Partial<Pick<ToolCallBlock, "subagent">>): ToolCallCardStatus {
+  const final = block.subagent?.final;
+  if (block.status !== "success" || final == null) return block.status;
+  return final.status === "completed" ? "success" : final.status;
+}
 
 /**
  * Background admission is distinct from the child's eventual completion.

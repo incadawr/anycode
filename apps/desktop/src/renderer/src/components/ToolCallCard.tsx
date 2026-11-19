@@ -40,7 +40,7 @@ import { useStore } from "zustand";
 import { focusExistingPreview } from "../dock/dock-store.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
-import { childBadgeKind, childLayoutStore, isBackgroundAgent, type ChildBadgeKind } from "../child-layout.js";
+import { childBadgeKind, childLayoutStore, isBackgroundAgent, settledStatus, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
 import { Button } from "../ui/index.js";
 import { DiffView } from "./DiffView.js";
@@ -1300,24 +1300,21 @@ export function statusLabel(
   block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
     Partial<Pick<ToolCallBlock, "subagent" | "subagentDispatched">>,
 ): string {
-  if (block.status === "success" && isBackgroundAgent(block)) {
-    // The Claude CLI's own background agent has no child badge to carry its
-    // state, so once it ends the badge says how (a folded card shows nothing else).
+  if (block.status === "success") {
+    if (isOutcomeLost(block)) {
+      return "Unknown";
+    }
+    // Once the agent a call started has ended, the badge says how: a folded
+    // card shows nothing else, and the call's own success only meant "started".
     const final = block.subagent?.final;
-    if (final != null && (block.input as { run_in_background?: unknown } | null)?.run_in_background === true) {
+    if (final != null) {
       return SUBAGENT_FINAL_LABELS[final.status];
     }
-    return "Dispatched";
-  }
-  if (block.status === "success" && block.subagent != null) {
-    // A call that returned while the agent it started keeps running: the Claude
-    // CLI's own async Agent launch, or a SendMessage that resumed an agent.
-    if (block.subagent.final === null) {
+    // A call that returned while the agent it started keeps running: a
+    // background launch, the Claude CLI's own async Agent launch, or a
+    // SendMessage that resumed an agent.
+    if (block.subagent != null || isBackgroundAgent(block)) {
       return "Dispatched";
-    }
-    // A non-Agent card (SendMessage) has no other place to say how the agent ended.
-    if (block.toolName !== "Agent") {
-      return SUBAGENT_FINAL_LABELS[block.subagent.final.status];
     }
   }
   if (block.toolName === "Agent") {
@@ -1329,6 +1326,25 @@ export function statusLabel(
     }
   }
   return STATUS_LABELS[block.status];
+}
+
+/**
+ * A Claude CLI background agent shown from history after a restart: its
+ * subagent telemetry lived only in the host process that ran it, and the
+ * agent died with that process, so nothing says how it ended. (Live, the
+ * CLI's task_started always precedes the launch acknowledgement, so a
+ * settled launch with no telemetry is never a live one.)
+ */
+function isOutcomeLost(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>): boolean {
+  return block.status === "success" && block.toolName === "Agent" && block.subagent == null &&
+    (block.input as { run_in_background?: unknown } | null)?.run_in_background === true;
+}
+
+/** The badge's tint (the `tool-call-status-*` suffix): how the call actually ended, `unknown` when that was lost. */
+export function statusTone(
+  block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>,
+): ToolCallBlock["status"] | "unknown" {
+  return isOutcomeLost(block) ? "unknown" : settledStatus(block);
 }
 
 /**
@@ -2326,7 +2342,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
     // state" discipline as MessageList's own `data-tab-id` (automation.ts's
     // `realTranscriptDom`).
     <div
-      className={`tool-call-card tool-call-status-${block.status}${enter ? " message-enter" : ""}`}
+      className={`tool-call-card tool-call-status-${statusTone(block)}${enter ? " message-enter" : ""}`}
       data-tool-call-id={block.toolCallId}
     >
       {/* the toggle gains a row wrapper because an actionable child

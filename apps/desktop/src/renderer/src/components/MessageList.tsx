@@ -54,6 +54,7 @@ import { ToolCallStack } from "./ToolCallStack.js";
 import { WorkingRow, formatElapsed } from "./WorkingRow.js";
 import { Button } from "../ui/index.js";
 import { formatBlockTime } from "../block-time.js";
+import { settledStatus } from "../child-layout.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
 /** ≥ this many new blocks in one render = bulk (hydration/replay), not a live append. */
@@ -129,16 +130,19 @@ export function isTerminalStatus(status: ToolCallCardStatus): boolean {
   return status !== "proposed" && status !== "running";
 }
 
-/** Aggregate of a stack: `success` iff every member settled `success`; otherwise `mixed`. */
+/**
+ * Aggregate of a stack: `success` iff every member settled `success`; otherwise `mixed`.
+ * A call that succeeded by starting an agent settles the way its agent ended (`settledStatus`).
+ */
 export type ToolStackStatus = "success" | "mixed";
 
 export function aggregateStackStatus(blocks: ToolCallBlock[]): ToolStackStatus {
-  return blocks.every((block) => block.status === "success") ? "success" : "mixed";
+  return blocks.every((block) => settledStatus(block) === "success") ? "success" : "mixed";
 }
 
 /** Collapsed-stack badge copy — honest per-status, no invented totals. `success` only if none failed; a fully-failed stack reports `Failed`; a mix reports the failed count. */
 export function stackBadgeText(blocks: ToolCallBlock[]): string {
-  const failed = blocks.filter((block) => block.status !== "success").length;
+  const failed = blocks.filter((block) => settledStatus(block) !== "success").length;
   if (failed === 0) {
     return "Success";
   }
