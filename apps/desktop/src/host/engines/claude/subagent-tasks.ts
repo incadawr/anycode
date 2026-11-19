@@ -55,6 +55,7 @@ interface TrackedTask {
   /**
    * The CLI's `is_backgrounded`: the agent keeps running after its parent
    * turn. Absent counts as backgrounded, so an older CLI keeps the card live.
+   * A later `task_updated` patch can move a foreground agent to the background.
    */
   backgrounded: boolean;
   /** The task outlived the owner turn that started it: its events go to the detached sink from then on. */
@@ -145,10 +146,17 @@ export class ClaudeSubagentTasks {
         return this.onProgress(fields);
       case "task_notification":
         return this.onNotification(fields);
+      case "task_updated": {
+        // A foreground agent moved to the background keeps running past its
+        // turn. The rest of the patch restates what the frames around it
+        // carry: a terminal one is always followed by the task_notification
+        // that carries the final usage.
+        const found = this.taskFor(fields);
+        if (found !== undefined && record(fields.patch)?.is_backgrounded === true) found.task.backgrounded = true;
+        return { events: [] };
+      }
       default:
-        // task_updated / background_tasks_changed restate what the frames
-        // around them carry. A terminal task_updated is always followed by
-        // the task_notification that carries the final usage.
+        // background_tasks_changed restates what the frames around it carry.
         return { events: [] };
     }
   }

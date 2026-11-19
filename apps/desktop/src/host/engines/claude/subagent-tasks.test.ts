@@ -215,6 +215,28 @@ describe("ClaudeSubagentTasks — edge cases", () => {
     expect(detached.at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_bg", status: "completed" });
     expect(detached).toHaveLength(2);
   });
+
+  it("a foreground agent the CLI later moves to the background (task_updated) stays live past its turn", () => {
+    const detached: AgentEvent[] = [];
+    const tasks = new ClaudeSubagentTasks((event) => detached.push(event));
+    tasks.onFrame(system("task_started", { task_id: "t", run_id: "r", tool_use_id: "toolu_fg", is_backgrounded: false }));
+    // Wire shape: task_updated names the task and run, never the tool call.
+    expect(tasks.onFrame(system("task_updated", { task_id: "t", run_id: "r", patch: { is_backgrounded: true } }))).toEqual([]);
+    tasks.detachLive();
+    expect(detached).toEqual([]);
+    tasks.onFrame(system("task_notification", { task_id: "t", run_id: "r", status: "completed" }));
+    expect(detached).toMatchObject([{ type: "subagent_end", toolCallId: "toolu_fg", status: "completed" }]);
+  });
+
+  it("a task_updated of an earlier run does not background the current one", () => {
+    const detached: AgentEvent[] = [];
+    const tasks = new ClaudeSubagentTasks((event) => detached.push(event));
+    tasks.onFrame(system("task_started", { task_id: "t", run_id: "r2", tool_use_id: "toolu_fg", is_backgrounded: false }));
+    tasks.onFrame(system("task_updated", { task_id: "t", run_id: "r1", patch: { is_backgrounded: true } }));
+    tasks.detachLive();
+    expect(detached).toMatchObject([{ type: "subagent_end", toolCallId: "toolu_fg", status: "cancelled" }]);
+  });
+
 });
 
 describe("ClaudeSubagentTasks — an agent resumed by SendMessage", () => {
