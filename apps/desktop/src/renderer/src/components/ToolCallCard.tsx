@@ -40,7 +40,7 @@ import { useStore } from "zustand";
 import { focusExistingPreview } from "../dock/dock-store.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
-import { childBadgeKind, childLayoutStore, isBackgroundAgent, settledStatus, type ChildBadgeKind } from "../child-layout.js";
+import { childBadgeKind, childLayoutStore, isBackgroundAgent, isOutcomeLost, settledStatus, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
 import { Button } from "../ui/index.js";
 import { DiffView } from "./DiffView.js";
@@ -1326,18 +1326,6 @@ export function statusLabel(
     }
   }
   return STATUS_LABELS[block.status];
-}
-
-/**
- * A Claude CLI background agent shown from history after a restart: its
- * subagent telemetry lived only in the host process that ran it, and the
- * agent died with that process, so nothing says how it ended. (Live, the
- * CLI's task_started always precedes the launch acknowledgement, so a
- * settled launch with no telemetry is never a live one.)
- */
-function isOutcomeLost(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>): boolean {
-  return block.status === "success" && block.toolName === "Agent" && block.subagent == null &&
-    (block.input as { run_in_background?: unknown } | null)?.run_in_background === true;
 }
 
 /** The badge's tint (the `tool-call-status-*` suffix): how the call actually ended, `unknown` when that was lost. */

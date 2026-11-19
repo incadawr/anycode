@@ -54,7 +54,7 @@ import { ToolCallStack } from "./ToolCallStack.js";
 import { WorkingRow, formatElapsed } from "./WorkingRow.js";
 import { Button } from "../ui/index.js";
 import { formatBlockTime } from "../block-time.js";
-import { settledStatus } from "../child-layout.js";
+import { isOutcomeLost, settledStatus } from "../child-layout.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
 /** ≥ this many new blocks in one render = bulk (hydration/replay), not a live append. */
@@ -132,24 +132,29 @@ export function isTerminalStatus(status: ToolCallCardStatus): boolean {
 
 /**
  * Aggregate of a stack: `success` iff every member settled `success`; otherwise `mixed`.
- * A call that succeeded by starting an agent settles the way its agent ended (`settledStatus`).
+ * A call that succeeded by starting an agent settles the way its agent ended
+ * (`settledStatus`); one whose outcome was lost (`isOutcomeLost`) is no success.
  */
 export type ToolStackStatus = "success" | "mixed";
 
-export function aggregateStackStatus(blocks: ToolCallBlock[]): ToolStackStatus {
-  return blocks.every((block) => settledStatus(block) === "success") ? "success" : "mixed";
+/** How many members failed, and how many have an outcome nobody knows. */
+function stackOutcomes(blocks: ToolCallBlock[]): { failed: number; unknown: number } {
+  const unknown = blocks.filter(isOutcomeLost).length;
+  return { failed: blocks.filter((block) => settledStatus(block) !== "success").length, unknown };
 }
 
-/** Collapsed-stack badge copy — honest per-status, no invented totals. `success` only if none failed; a fully-failed stack reports `Failed`; a mix reports the failed count. */
+export function aggregateStackStatus(blocks: ToolCallBlock[]): ToolStackStatus {
+  const { failed, unknown } = stackOutcomes(blocks);
+  return failed === 0 && unknown === 0 ? "success" : "mixed";
+}
+
+/** Collapsed-stack badge copy — honest per-status, no invented totals. `success` only if none failed and no outcome was lost; a fully-failed stack reports `Failed`; a mix reports the failed count, else the unknown count. */
 export function stackBadgeText(blocks: ToolCallBlock[]): string {
-  const failed = blocks.filter((block) => settledStatus(block) !== "success").length;
-  if (failed === 0) {
-    return "Success";
+  const { failed, unknown } = stackOutcomes(blocks);
+  if (failed > 0) {
+    return failed === blocks.length ? "Failed" : `${failed} failed`;
   }
-  if (failed === blocks.length) {
-    return "Failed";
-  }
-  return `${failed} failed`;
+  return unknown > 0 ? `${unknown} unknown` : "Success";
 }
 
 /** Count label for the collapsed stack header: "2 calls" / "3 calls". (A stack always has ≥2 members; the singular form exists only for completeness/defense.) */
@@ -185,9 +190,13 @@ export function stackHeaderLabel(blocks: ToolCallBlock[]): string {
   return extra > 0 ? `${head.join(", ")} +${extra}` : head.join(", ");
 }
 
-/** CSS class suffix for the stack's aggregate badge — mirrors the single-card `.tool-call-status-*` tint family. */
+/** CSS class suffix for the stack's aggregate badge — mirrors the single-card `.tool-call-status-*` tint family (`unknown` like a card whose outcome was lost). */
 export function stackStatusClass(blocks: ToolCallBlock[]): string {
-  return aggregateStackStatus(blocks) === "success" ? "tool-call-status-success" : "tool-call-status-error";
+  const { failed, unknown } = stackOutcomes(blocks);
+  if (failed > 0) {
+    return "tool-call-status-error";
+  }
+  return unknown > 0 ? "tool-call-status-unknown" : "tool-call-status-success";
 }
 
 /**

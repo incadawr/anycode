@@ -92,6 +92,18 @@ export function settledStatus(block: Pick<ToolCallBlock, "status"> & Partial<Pic
 }
 
 /**
+ * A Claude CLI background agent shown from history after a restart: its
+ * subagent telemetry lived only in the host process that ran it, and the
+ * agent died with that process, so nothing says how it ended. (Live, the
+ * CLI's task_started always precedes the launch acknowledgement, so a
+ * settled launch with no telemetry is never a live one.)
+ */
+export function isOutcomeLost(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>): boolean {
+  return block.status === "success" && block.toolName === "Agent" && block.subagent == null &&
+    (block.input as { run_in_background?: unknown } | null)?.run_in_background === true;
+}
+
+/**
  * Background admission is distinct from the child's eventual completion.
  * `run_in_background` is the Claude CLI's own Agent-tool flag: its tool_result
  * only acknowledges the launch; the child reports later on the detached channel.

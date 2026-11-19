@@ -657,6 +657,18 @@ describe("a stacked call whose agent did not complete", () => {
     expect(stackBadgeText(stack)).toBe("1 failed");
   });
 
+  it("a background agent whose outcome was lost keeps the stack from reading Success", () => {
+    const lost = mkToolCall({ toolName: "Agent", input: { prompt: "p", run_in_background: true }, subagent: null });
+    const stack = [mkToolCall(), lost];
+    expect(aggregateStackStatus(stack)).toBe("mixed");
+    expect(stackBadgeText(stack)).toBe("1 unknown");
+    expect(stackStatusClass(stack)).toBe("tool-call-status-unknown");
+    // A failure outranks the unknown.
+    const failed = [mkToolCall({ status: "error" }), lost];
+    expect(stackBadgeText(failed)).toBe("1 failed");
+    expect(stackStatusClass(failed)).toBe("tool-call-status-error");
+  });
+
   it("an agent that completed keeps the stack a success", () => {
     const stack = [mkToolCall(), agent({ status: "completed", durationMs: 1 })];
     expect(aggregateStackStatus(stack)).toBe("success");
