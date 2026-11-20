@@ -3928,7 +3928,7 @@ describe("desktop store — persisted subagent card (slice S1 W5, CUT-S1 §3 W5)
     expect(block).toMatchObject({ status: "success", subagent: null });
   });
 
-  it("4. two parallel Agent tool_calls in the same assistant item each hydrate their OWN snapshot, strictly by toolCallId", () => {
+  it.each([false, true])("parallel Agent calls each restore their own snapshot (separate assistant items: %s)", split => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
@@ -3973,6 +3973,10 @@ describe("desktop store — persisted subagent card (slice S1 W5, CUT-S1 §3 W5)
         },
       },
     ];
+    if (split && items[0]?.message.role === "assistant") {
+      const second = items[0].message.content.splice(1);
+      items.splice(1, 0, { id: "second-call", createdAt: 1, message: { role: "assistant", content: second } });
+    }
     store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", items, truncated: false });
 
     const b1 = requireSubagent(findByToolCallId(store, "call-1"));
@@ -9647,6 +9651,7 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
     expect(block?.kind === "tool_call" && block.subagent).toBeNull();
     expect(block?.kind === "tool_call" && block.status).toBe("success");
     expect(block?.kind === "tool_call" && block.subagentDispatched).toBe(true);
+    expect(block?.kind === "tool_call" && block.subagentOutcomeUnknown).toBe(true);
   });
 });
 

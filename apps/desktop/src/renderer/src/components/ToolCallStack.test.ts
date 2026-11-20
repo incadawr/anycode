@@ -96,7 +96,7 @@ describe("ToolCallStack (SSR component render, collapsed default)", () => {
 
   it("maps an all-success stack to the success badge tint", () => {
     const html = renderStack([mkToolCall({ id: "a", status: "success" }), mkToolCall({ id: "b", status: "success" })]);
-    expect(html).toContain("tool-call-status-success");
+    expect(html).toContain('class="tool-call-stack-toggle tool-call-status-success"');
     expect(html).toContain(">Success<");
   });
 

@@ -85,6 +85,8 @@ export interface SubagentCardSnapshotV1 {
 /** Envelope on a tool result. Extensible: other presentation kinds (e.g. workflow cards) add sibling keys later. */
 export interface ToolResultPresentation {
   subagent?: SubagentCardSnapshotV1;
+  /** Native agent launch recorded before its terminal event. */
+  subagentOutcomePending?: true;
   /**
    * GitHub #17 slice D: this Agent call DISPATCHED a child that
    * keeps running in the background — an admission/handoff, not a finished

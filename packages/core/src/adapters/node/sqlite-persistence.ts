@@ -2567,17 +2567,23 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   // (mirrors the codex_thread_items precedent immediately above).
 
   /**
-   * First-write-wins, whole-row (no `DO UPDATE SET`): unlike the codex log,
-   * each row here is a COMPLETE, already-projected HistoryItem written once
-   * after its turn finishes — there is no partial/enrichable payload to merge,
-   * so a duplicate fire-and-forget write (same `item_id`) is simply ignored.
+   * Mirror rows are first-write-wins. A background launch can acquire its
+   * terminal card later; enrich only that field on the same call, once.
    */
   async recordClaudeTranscriptItem(sessionRef: string, item: ClaudeTranscriptItem): Promise<void> {
     const db = this.open();
     db.prepare(
-      `INSERT OR IGNORE INTO claude_transcript_items
+      `INSERT INTO claude_transcript_items
          (session_ref, turn_ordinal, position_in_turn, item_id, data, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(session_ref, item_id) DO UPDATE SET data=json_set(
+         claude_transcript_items.data, '$.message.content[0].presentation.subagent',
+         json_extract(excluded.data, '$.message.content[0].presentation.subagent'))
+       WHERE json_extract(claude_transcript_items.data,'$.message.content[0].presentation.subagentOutcomePending')=1
+         AND json_extract(claude_transcript_items.data,'$.message.content[0].presentation.subagent') IS NULL
+         AND json_extract(excluded.data,'$.message.content[0].presentation.subagent.kind')='subagent'
+         AND json_extract(claude_transcript_items.data,'$.message.content[0].toolCallId')
+             =json_extract(excluded.data,'$.message.content[0].toolCallId')`,
     ).run(sessionRef, item.turnOrdinal, item.positionInTurn, item.itemId, JSON.stringify(item.data), Date.now());
   }
 

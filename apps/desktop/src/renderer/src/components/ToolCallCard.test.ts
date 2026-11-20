@@ -3076,6 +3076,12 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
   });
 
+  it("shows Unknown when a restored agent launch has no recorded outcome", () => {
+    const block = mkAgentBlock({ status: "success", subagentOutcomeUnknown: true, subagent: null, input: {} });
+    expect(statusLabel(block)).toBe("Unknown");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
+  });
+
   it("labels a durable background admission without tier or detach as Dispatched", () => {
     const block = mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p" }, subagentDispatched: true });
     expect(statusLabel(block)).toBe("Dispatched");

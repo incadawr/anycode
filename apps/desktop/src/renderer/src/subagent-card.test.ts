@@ -60,6 +60,12 @@ describe("decodeSubagentCardSnapshot — valid payload", () => {
     expect(decodeSubagentCardSnapshot(VALID_SNAPSHOT, CTX)).toEqual(VALID_SNAPSHOT);
   });
 
+  it("preserves the native CLI's unknown duration on a resumed agent call", () => {
+    const snapshot = { ...VALID_SNAPSHOT, final: { status: "cancelled", durationMs: -1 } };
+    expect(decodeSubagentCardSnapshot(snapshot, { ...CTX, toolName: "SendMessage" })).toEqual(snapshot);
+    expect(decodeSubagentCardSnapshot(snapshot, { ...CTX, toolName: "Bash" })).toBeNull();
+  });
+
   it("accepts a session target whose spawnToolCallId matches the paired tool call (S2 shape, decode is forward-compatible even though S1 never writes it)", () => {
     const withSessionTarget: SubagentCardSnapshotV1 = {
       ...VALID_SNAPSHOT,
@@ -176,7 +182,7 @@ describe("decodeSubagentCardSnapshot — malformed payloads never throw and deco
     ],
     ["activity.dropped is negative", { ...VALID_SNAPSHOT, activity: { ...VALID_SNAPSHOT.activity, dropped: -3 } }],
     ["final.status is an invalid enum value", { ...VALID_SNAPSHOT, final: { status: "ok", durationMs: 1 } }],
-    ["final.durationMs is negative", { ...VALID_SNAPSHOT, final: { status: "completed", durationMs: -1 } }],
+    ["final.durationMs is below the unknown-duration sentinel", { ...VALID_SNAPSHOT, final: { status: "completed", durationMs: -2 } }],
     ["final.durationMs is NaN", { ...VALID_SNAPSHOT, final: { status: "completed", durationMs: Number.NaN } }],
   ];
 

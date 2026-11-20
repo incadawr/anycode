@@ -505,6 +505,7 @@ export type TranscriptBlock =
       subagent: SubagentSubStatus | null;
       /** Reconstructed from the durable background admission presentation. */
       subagentDispatched?: true;
+      subagentOutcomeUnknown?: true;
       /** Null until a `workflow_start` for this toolCallId arrives (only ever set for the Workflow tool). */
       workflow: WorkflowSubStatus | null;
     }
@@ -2072,11 +2073,8 @@ const defaultScheduler: FrameScheduler = {
 //   - `assistant` message -> one block per part, in part order: a `text` part
 //     becomes `assistant_text`; a `tool_call` part becomes a `tool_call`
 //     block, paired with the `ToolResultPart` of the matching `toolCallId`
-//     from the run of `tool`-role items immediately following this item
-//     (packages/core/src/loop/agent-loop.ts appends exactly one `tool`-role
-//     HistoryItem per outcome, in proposal order, right after the assistant
-//     item and before the next user/assistant message — same invariant
-//     `ConversationHistory.unansweredToolCallIds()` relies on). No match
+//     later in the same turn. Parallel native calls may each occupy their
+//     own assistant item before either result arrives. No match
 //     (truncation cut the pairing tool-message, or history is a defective
 //     resume snapshot) -> status stays "proposed", modelText stays null.
 //     `snapshots` is always `{before: null, after: null}` — diffs are never
@@ -2092,7 +2090,25 @@ const defaultScheduler: FrameScheduler = {
 export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
 
-  for (const [index, item] of items.entries()) {
+  const awaiting = new Map<string, AssistantPart>();
+  const results = new Map<AssistantPart, ToolResultPart>();
+  let previousTurn: string | undefined;
+  for (const item of items) {
+    const message = item.message;
+    if (message.role === "user" || (item.turnId !== undefined && item.turnId !== previousTurn)) awaiting.clear();
+    previousTurn = item.turnId;
+    if (message.role === "assistant") {
+      for (const part of message.content) if (part.type === "tool_call") awaiting.set(part.toolCallId, part);
+    } else if (message.role === "tool") {
+      for (const result of message.content) {
+        const call = awaiting.get(result.toolCallId);
+        if (call) results.set(call, result);
+        awaiting.delete(result.toolCallId);
+      }
+    }
+  }
+
+  for (const item of items) {
     const message = item.message;
     if (item.kind === "turn_error") {
       if (item.error) blocks.push({ kind: "error", id: `${item.id}:0`, error: item.error });
@@ -2150,17 +2166,6 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
     }
 
     // message.role === "assistant"
-    const results = new Map<string, ToolResultPart>();
-    for (let j = index + 1; j < items.length; j += 1) {
-      const next = items[j];
-      if (!next || next.message.role !== "tool") {
-        break;
-      }
-      for (const part of next.message.content) {
-        results.set(part.toolCallId, part);
-      }
-    }
-
     message.content.forEach((part: AssistantPart, partIdx: number) => {
       const id = `${item.id}:${partIdx}`;
       if (part.type === "text") {
@@ -2172,7 +2177,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         if (part.text !== "") blocks.push({ kind: "reasoning", id, text: part.text, collapsed: true });
         return;
       }
-      const result = results.get(part.toolCallId);
+      const result = results.get(part);
       // Persisted subagent card (slice S1, CUT-S1 §3 W5 point 1):
       // the paired tool_result's `presentation.subagent` is the durable
       // terminal snapshot a settled Agent call wrote (core W1-W3) — decode
@@ -2199,6 +2204,9 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         modelText: result ? stripReminderBlocks(result.text) : null,
         snapshots: { before: null, after: null },
         subagent: snap !== null ? projectSubagentCard(snap) : null,
+        ...(snap === null && (result?.presentation?.subagentOutcomePending === true ||
+          isSubagentHandoff(result?.presentation?.subagentHandoff, part.toolCallId, part.toolName))
+          ? { subagentOutcomeUnknown: true as const } : {}),
         ...(isSubagentHandoff(result?.presentation?.subagentHandoff, part.toolCallId, part.toolName)
           ? { subagentDispatched: true as const } : {}),
         workflow: workflowSnap !== null ? projectWorkflowCard(workflowSnap) : null,

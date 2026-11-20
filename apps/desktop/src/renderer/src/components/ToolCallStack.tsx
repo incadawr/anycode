@@ -75,7 +75,7 @@ export function ToolCallStack({
     >
       <button
         type="button"
-        className="tool-call-stack-toggle"
+        className={`tool-call-stack-toggle ${statusClass}`}
         aria-expanded={expanded}
         aria-controls={bodyId}
         onClick={() => setExpanded((value) => !value)}
@@ -85,7 +85,7 @@ export function ToolCallStack({
         </span>
         <span className="tool-call-stack-name">{headerLabel}</span>
         <span className="tool-call-stack-count">{stackLabel(blocks.length)}</span>
-        <span className={`tool-call-status-badge ${statusClass}`}>{badgeText}</span>
+        <span className="tool-call-status-badge">{badgeText}</span>
       </button>
       {/* Collapsed anchors: keep `[data-block-id]` count honest for
           automation's rewind proof and `jumpToBlock`, without polluting the

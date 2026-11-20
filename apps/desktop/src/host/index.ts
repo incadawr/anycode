@@ -1501,9 +1501,13 @@ function hostSwitchFactory(
         adopted = runtime;
         raw = runtime.engine as ClaudeEngine;
         routing.configure(runtime);
-        runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
+        const shadow = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
+        runtime.engine = shadow;
         bindClaudeUsage(raw, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null, runtime.identity!.model);
-        raw.onDetachedEvent = event => forwardClaudeDetachedEvent(runtime.engine, event);
+        raw.onDetachedEvent = event => {
+          shadow.observeSubagent(event);
+          forwardClaudeDetachedEvent(shadow, event);
+        };
       }, cleanup: () => { routing.cleanup(); } };
     },
   });
@@ -2610,9 +2614,6 @@ async function bootClaudeSession(
   // from here on, a bridged agent call's subagent_* events surface inside the
   // CLI's live turn (claude-engine.ts's bridge-event race).
   pushBridgeEvent = (event: AgentEvent) => claudeEngine.pushBridgeEvent(event);
-  // The CLI's own background agents report after the parent turn settled;
-  // their subagent_* events reach the card through the detached channel.
-  claudeEngine.onDetachedEvent = event => forwardClaudeDetachedEvent(booted.engine, event);
 
   // Identity facts, known the moment the transport connected. The POSTURE
   // (model/preset) is deliberately NOT here: it is written only from the
@@ -2772,6 +2773,10 @@ async function bootClaudeSession(
   );
 
   const booted = await plugin.boot({ claudeEngine: shadowEngine });
+  claudeEngine.onDetachedEvent = event => {
+    shadowEngine.observeSubagent(event);
+    forwardClaudeDetachedEvent(booted.engine, event);
+  };
   // `fs` built ABOVE (slice S4 — needed early for the agent-profile
   // catalog scan, before `connected` exists) and reused here verbatim.
 

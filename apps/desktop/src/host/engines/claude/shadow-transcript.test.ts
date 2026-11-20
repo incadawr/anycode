@@ -198,6 +198,40 @@ async function drain(iterable: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 }
 
 describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
+  it.each(["foreground", "detached"] as const)("restores a %s agent's actual outcome and activity", async mode => {
+    const toolCallId = "agent-call";
+    const start: AgentEvent = { type: "subagent_start", toolCallId, agentType: "Explore", description: "Read docs" };
+    const activity: AgentEvent = { type: "subagent_activity", toolCallId, toolName: "Read", summary: "README.md" };
+    const terminal: AgentEvent = { type: "subagent_end", toolCallId, status: "cancelled", turns: 1, toolCalls: 1, durationMs: -1 };
+    // An initially foreground call may have moved to the background.
+    const events: AgentEvent[] = [
+      { type: "tool_call", toolCall: { id: toolCallId, name: "Agent", input: {} } },
+      start, ...(mode === "foreground" ? [activity, terminal] : []),
+      { type: "tool_result", outcome: { toolCallId, toolName: "Agent", status: "success", modelText: "ack", durationMs: 1 } },
+    ];
+    const store = new SqlitePersistenceAdapter(":memory:");
+    try {
+      const shadow = new ClaudeShadowTranscriptEngine(fakeEngine([events], { model: null, permissionMode: null }),
+        new SqliteClaudeShadowTranscript(store), "session", []);
+      await drain(shadow.runTurn("read", fakeOptions()));
+      const restore = async () => {
+        const row = (await shadow.readTranscript()).find(item => item.message.role === "tool");
+        if (row?.message.role !== "tool") throw new Error("Missing tool result");
+        return row.message.content[0]?.presentation;
+      };
+      if (mode === "detached") {
+        expect(await restore()).toEqual({ subagentOutcomePending: true });
+        shadow.observeSubagent(activity);
+        shadow.observeSubagent(terminal);
+      }
+      const card = await restore();
+      expect(card?.subagent?.final).toMatchObject({ status: "cancelled", durationMs: -1 });
+      expect(card?.subagent?.activity.entries).toEqual([{ toolName: "Read", summary: "README.md" }]);
+    } finally {
+      await store.close();
+    }
+  });
+
   it("forwards every event unchanged and records the projected turn fire-and-forget", async () => {
     const turn1: AgentEvent[] = [
       { type: "turn_start", turn: 1 },

@@ -103,8 +103,10 @@ export function settledStatus(block: Pick<ToolCallBlock, "status"> & Partial<Pic
  * CLI's task_started always precedes the launch acknowledgement, so a
  * settled launch with no telemetry is never a live one.)
  */
-export function isOutcomeLost(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>): boolean {
-  return block.status === "success" && block.toolName === "Agent" && block.subagent == null &&
+export function isOutcomeLost(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent" | "subagentOutcomeUnknown">>): boolean {
+  if (block.status !== "success" || block.subagent != null) return false;
+  if (block.subagentOutcomeUnknown) return true;
+  return block.toolName === "Agent" &&
     (block.input as { run_in_background?: unknown } | null)?.run_in_background === true;
 }
 

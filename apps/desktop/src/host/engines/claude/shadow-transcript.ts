@@ -1,3 +1,4 @@
+import { createSubagentCardAccumulator, reduceSubagentCardEvent, finalizeSubagentCard, type SubagentCardAccumulator } from "@anycode/core";
 import type { ClaudeCommandRow } from "../../../shared/claude-commands.js";
 import { projectClaudeHistory } from "./history-projection.js";
 /**
@@ -59,7 +60,7 @@ export class SqliteClaudeShadowTranscript implements ClaudeShadowTranscriptPort 
       this.pending.set(key,{ref:sessionRef,item});
       this.tail = this.tail.then(async () => {
         await this.persistence.recordClaudeTranscriptItem(sessionRef,item);
-        this.pending.delete(key);
+        if (this.pending.get(key)?.item === item) this.pending.delete(key);
       }).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[claude] shadow transcript write failed for session ${sessionRef} item ${item.itemId}: ${message}`);
@@ -73,7 +74,7 @@ export class SqliteClaudeShadowTranscript implements ClaudeShadowTranscriptPort 
     // mistake an acknowledged error window for a complete mirror.
     for (const [key,{ref,item}] of this.pending) {
       await this.persistence.recordClaudeTranscriptItem(ref,item);
-      this.pending.delete(key);
+      if (this.pending.get(key)?.item === item) this.pending.delete(key);
     }
   }
 
@@ -157,6 +158,7 @@ export function projectClaudeTurn(
               toolName: event.outcome.toolName,
               text: event.outcome.modelText,
               status: event.outcome.status,
+              ...(event.outcome.result?.presentation ? { presentation: event.outcome.result.presentation } : {}),
             }],
           },
         });
@@ -183,6 +185,47 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
   readonly id = "claude" as const;
   private nextTurnOrdinal: number;
   private projectionFailure: unknown;
+  // A native background task can finish on either side of its launch turn's
+  // commit. Keep the bounded activity accumulator until both halves arrive.
+  private readonly cards = new Map<string, {
+    activity: SubagentCardAccumulator;
+    result?: ClaudeTranscriptItem & { data: HistoryItem };
+  }>();
+
+  observeSubagent(event: AgentEvent): void {
+    if (event.type !== "subagent_start" && event.type !== "subagent_activity" &&
+        event.type !== "subagent_progress" && event.type !== "subagent_end") return;
+    const card = this.cards.get(event.toolCallId) ??
+      (event.type === "subagent_start" ? { activity: createSubagentCardAccumulator(), result: undefined } : undefined);
+    if (!card) return;
+    card.activity = reduceSubagentCardEvent(card.activity, event.type === "subagent_start" ? { ...event, engine: event.engine ?? "claude" } : event);
+    this.cards.set(event.toolCallId, card);
+    if (card.result && event.type === "subagent_end") {
+      this.attachSubagent(card.result);
+      this.sink.record(this.sessionRef, [card.result]);
+    }
+  }
+
+  private attachSubagent(row: ClaudeTranscriptItem & { data: HistoryItem }): void {
+    const message = row.data.message;
+    if (message.role !== "tool") return;
+    const part = message.content[0];
+    if (!part) return;
+    const card = this.cards.get(part.toolCallId);
+    if (!card) return;
+    if (part.presentation?.subagent || !["Agent", "Task", "SendMessage"].includes(part.toolName)) {
+      this.cards.delete(part.toolCallId);
+      return;
+    }
+    if (!card.activity.end) {
+      card.result = row;
+      part.presentation = { ...part.presentation, subagentOutcomePending: true };
+      return;
+    }
+    const snapshot = finalizeSubagentCard(card.activity, card.activity.end);
+    if (snapshot) part.presentation = { ...part.presentation, subagent: snapshot };
+    this.cards.delete(part.toolCallId);
+  }
 
   /**
    * cross-review F1: own-property delegation, installed in the
@@ -272,6 +315,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     let accepted = options.onInputDispatched === undefined;
     try {
       for await (const event of this.engine.runTurn(input, { ...options, onInputAccepted: (nativeId) => { options.onInputAccepted?.(nativeId); accepted = true; } })) {
+        this.observeSubagent(event);
         events.push(event);
         yield event;
       }
@@ -284,13 +328,17 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
       try {
         if (!accepted) return;
         const projected = projectClaudeTurn(input, events, this.now, turn).map((item) => options.turnId ? { ...item, turnId: options.turnId } : item);
-        this.sink.record(
-          this.sessionRef,
-          projected.map((data, index) => ({ turnOrdinal: turn, positionInTurn: index, itemId: `${turn}:${index}`, data })),
-        );
+        const rows = projected.map((data, index) => ({ turnOrdinal: turn, positionInTurn: index, itemId: `${turn}:${index}`, data }));
+        for (const row of rows) this.attachSubagent(row);
+        this.sink.record(this.sessionRef, rows);
       } catch (error) {
         this.projectionFailure = error;
         console.error(`[claude] shadow transcript projection failed for turn ${turn}: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        // An interrupted tool can end the turn without producing a result row.
+        for (const event of events) {
+          if (event.type === "subagent_start" && !this.cards.get(event.toolCallId)?.result) this.cards.delete(event.toolCallId);
+        }
       }
     }
   }

@@ -193,12 +193,12 @@ function decodeActivity(raw: unknown): SubagentCardSnapshotV1["activity"] | null
   return { entries, dropped: raw.dropped + extraDropped };
 }
 
-function decodeFinal(raw: unknown): SubagentCardSnapshotV1["final"] | null {
+function decodeFinal(raw: unknown, nativeInline: boolean): SubagentCardSnapshotV1["final"] | null {
   if (!isPlainObject(raw)) {
     return null;
   }
   if (typeof raw.status !== "string" || !FINAL_STATUSES.has(raw.status as SubagentCardFinalStatus)) return null;
-  if (typeof raw.durationMs !== "number" || !Number.isFinite(raw.durationMs) || raw.durationMs < 0) return null;
+  if (typeof raw.durationMs !== "number" || !Number.isFinite(raw.durationMs) || (raw.durationMs < 0 && !(nativeInline && raw.durationMs === -1))) return null;
   // responseModel is a best-effort provenance field, not a structural
   // requirement of a legal `final`: a malformed or wrong-typed value is
   // treated as absent rather than rejecting the whole snapshot (fail-soft,
@@ -233,8 +233,10 @@ export function decodeSubagentCardSnapshot(
   ctx: { toolCallId: string; toolName: string },
 ): SubagentCardSnapshotV1 | null {
   try {
-    if (ctx.toolName !== "Agent") return null;
     if (!isPlainObject(value)) return null;
+    const nativeInline = isPlainObject(value.target) && value.target.kind === "inline" &&
+      isPlainObject(value.identity) && value.identity.engine === "claude";
+    if (ctx.toolName !== "Agent" && !(nativeInline && (ctx.toolName === "Task" || ctx.toolName === "SendMessage"))) return null;
     if (value.kind !== "subagent") return null;
     if (value.version !== 1) return null;
     if (value.attention !== undefined && value.attention !== "waiting_permission") return null;
@@ -249,7 +251,7 @@ export function decodeSubagentCardSnapshot(
     if (activity === null) return null;
     // REQUIRED (CUT-S1 §0.4): a persisted snapshot without a terminal status
     // is a contradiction — `finalizeSubagentCard` (core) never writes one.
-    const final = decodeFinal(value.final);
+    const final = decodeFinal(value.final, nativeInline);
     if (final === null) return null;
 
     return {
