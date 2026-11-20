@@ -76,13 +76,48 @@
  * and writes nothing but the `ChildLayoutView` it is handed.
  */
 import { create } from "zustand";
-import type { SubagentSubStatus, ToolCallBlock, TranscriptBlock } from "./store.js";
+import type { SubagentSubStatus, ToolCallBlock, ToolCallCardStatus, TranscriptBlock } from "./store.js";
 
-/** Background admission is distinct from the child's eventual completion. */
+/**
+ * How a settled call actually ended. A call that succeeded only by starting
+ * an agent (an Agent launch, a SendMessage resume) ends the way its agent
+ * did, once the agent has settled. An agent whose last turn was cut by the
+ * output limit failed, as `childBadgeKind` has it; a call cut off with its
+ * agent by a Stop was cancelled.
+ */
+export function settledStatus(block: Pick<ToolCallBlock, "status"> & Partial<Pick<ToolCallBlock, "subagent">>): ToolCallCardStatus {
+  const final = block.subagent?.final;
+  if (final == null) return block.status;
+  // A Stop errors the call that was waiting on a foreground agent, and the
+  // agent settles cancelled: the call was cancelled, it did not fail.
+  if (block.status === "error" && final.status === "cancelled") return "cancelled";
+  if (block.status !== "success") return block.status;
+  if (final.finalTurnFinishReason === "length") return "error";
+  return final.status === "completed" ? "success" : final.status;
+}
+
+/**
+ * A Claude CLI background agent shown from history after a restart: its
+ * subagent telemetry lived only in the host process that ran it, and the
+ * agent died with that process, so nothing says how it ended. (Live, the
+ * CLI's task_started always precedes the launch acknowledgement, so a
+ * settled launch with no telemetry is never a live one.)
+ */
+export function isOutcomeLost(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>): boolean {
+  return block.status === "success" && block.toolName === "Agent" && block.subagent == null &&
+    (block.input as { run_in_background?: unknown } | null)?.run_in_background === true;
+}
+
+/**
+ * Background admission is distinct from the child's eventual completion.
+ * `run_in_background` is the Claude CLI's own Agent-tool flag: its tool_result
+ * only acknowledges the launch; the child reports later on the detached channel.
+ */
 export function isBackgroundAgent(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
   Partial<Pick<ToolCallBlock, "subagentDispatched">>): boolean {
+  const input = block.input as { detach?: unknown; run_in_background?: unknown } | null;
   return block.toolName === "Agent" &&
-    (block.subagentDispatched === true || (block.input as { detach?: unknown } | null)?.detach === true);
+    (block.subagentDispatched === true || input?.detach === true || input?.run_in_background === true);
 }
 
 // ── layout view + reducer set ──

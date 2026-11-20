@@ -38,6 +38,7 @@ import {
   isClickableChildBadge,
   moreLinesLabel,
   statusLabel,
+  statusTone,
   childActionBadge,
   layoutWorkflowMap,
   orderStepsByDependency,
@@ -1664,6 +1665,14 @@ describe("agentResultText", () => {
   it("returns null when modelText hasn't arrived yet even if settled (defensive — no tool_result race)", () => {
     expect(agentResultText({ toolName: "Agent", status: "success", modelText: null })).toBeNull();
   });
+
+  it("hides the Claude CLI's launch acknowledgement for a run_in_background Agent (model-facing metadata, not a result)", () => {
+    const launched = "Async agent launched successfully. (This tool result is internal metadata …)\nagentId: a1";
+    expect(agentResultText({ toolName: "Agent", status: "success", modelText: launched, input: { prompt: "p", run_in_background: true } })).toBeNull();
+    // A launch that failed still explains why.
+    expect(agentResultText({ toolName: "Agent", status: "error", modelText: "Agent type not found", input: { prompt: "p", run_in_background: true } })).toBe("Agent type not found");
+    expect(agentResultText({ toolName: "Agent", status: "success", modelText: "## Findings", input: { prompt: "p" } })).toBe("## Findings");
+  });
 });
 
 describe("promptStripText", () => {
@@ -1997,6 +2006,40 @@ describe("ToolCallCard (SSR component render) — generic non-Agent path stays u
     expect(html).toContain("subagent-collapsed-progress");
     expect(html).not.toContain("subagent-stall-note");
     expect(html).not.toContain("stalled ·");
+  });
+
+  // The Claude CLI resumes a finished agent through SendMessage: the resumed
+  // run reports on the SendMessage card, which is not an Agent card.
+  const sendMessage = (overrides: Partial<ToolCallBlock> = {}): ToolCallBlock =>
+    mkAgentBlock({
+      toolName: "SendMessage",
+      input: { to: "aa87d21", message: "Now also read AGENTS.md." },
+      status: "success",
+      modelText: '{"success":true,"message":"Resuming agent aa87d21"}',
+      ...overrides,
+    });
+
+  it("a collapsed SendMessage card whose resumed agent runs shows the live progress row", () => {
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block: sendMessage({ subagent: mkSubagent({ final: null }) }) }));
+    expect(html).toContain("subagent-collapsed-progress");
+    const settled = renderToStaticMarkup(
+      createElement(ToolCallCard, { block: sendMessage({ subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) }) }),
+    );
+    expect(settled).not.toContain("subagent-collapsed-progress");
+    expect(renderToStaticMarkup(createElement(ToolCallCard, { block: sendMessage() }))).not.toContain("subagent-collapsed-progress");
+  });
+
+  it("an expanded non-Agent card with a subagent shows its sub-status and activity rows", () => {
+    const block = sendMessage({
+      status: "running",
+      subagent: mkSubagent({ final: null, activity: [{ toolName: "Read", summary: "AGENTS.md" }] }),
+    });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(html).toContain("tool-call-subagent");
+    expect(html).toContain("subagent-activity-feed");
+    expect(html).toContain("AGENTS.md");
+    const plain = renderToStaticMarkup(createElement(ToolCallCard, { block: sendMessage({ status: "running" }) }));
+    expect(plain).not.toContain("tool-call-subagent");
   });
 });
 
@@ -2955,6 +2998,82 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusLabel(mkAgentBlock({ status: "success" }))).toBe("Success");
     expect(statusLabel(mkAgentBlock({ status: "error", input: { prompt: "p", detach: true } }))).toBe("Error");
     expect(statusLabel({ toolName: "Bash", status: "success", input: { detach: true } })).toBe("Success");
+  });
+
+  it("a Claude CLI Agent call with run_in_background reads Dispatched once launched, its child still running", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: true } });
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel(mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: false } }))).toBe("Success");
+    expect(statusLabel({ toolName: "Bash", status: "success", input: { run_in_background: true } })).toBe("Success");
+  });
+
+  it("a Claude CLI background Agent reads its child's outcome once the child ends, so a folded card is not stuck on Dispatched", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p", run_in_background: true } });
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("Error");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
+    // An AnyCode-routed detached child reads its outcome the same way once it ends.
+    const routed = mkAgentBlock({ status: "success", input: { prompt: "p", detach: true } });
+    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...routed, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("Error");
+  });
+
+  it("a Claude CLI background Agent restored from history with no outcome reads Unknown, not Dispatched", () => {
+    // Its subagent telemetry lived only in the host process that ran it; after a restart nothing says how it ended.
+    const block = mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p", run_in_background: true } });
+    expect(statusLabel(block)).toBe("Unknown");
+    expect(statusTone(block)).toBe("unknown");
+  });
+
+  it("the badge tint follows the agent's outcome, not the call's own success", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p" } });
+    expect(statusTone(block)).toBe("success");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: null }) })).toBe("success");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("success");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("error");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("cancelled");
+    expect(statusTone({ ...block, subagent: mkSubagent({ final: { status: "max_turns", durationMs: 1 } }) })).toBe("max_turns");
+    expect(statusTone({ ...block, status: "denied" })).toBe("denied");
+    const failed = { ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) };
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block: failed }));
+    expect(html).toContain("tool-call-status-error");
+    expect(html).not.toContain("tool-call-status-success");
+  });
+
+  it("an agent whose last turn hit the output limit reads Truncated with the error tint, as its counters line does", () => {
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p" } });
+    const truncated = { ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1, finalTurnFinishReason: "length" } }) };
+    expect(statusLabel(truncated)).toBe("Truncated");
+    expect(statusTone(truncated)).toBe("error");
+  });
+
+  it("an Agent call a Stop cut off (the CLI errors the call, the agent settles cancelled) reads Cancelled, not Error", () => {
+    const block = mkAgentBlock({ status: "error", input: { prompt: "p", run_in_background: false } });
+    const stopped = { ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) };
+    expect(statusLabel(stopped)).toBe("Cancelled");
+    expect(statusTone(stopped)).toBe("cancelled");
+    // A call that failed with its agent still reads Error.
+    const failed = { ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) };
+    expect(statusLabel(failed)).toBe("Error");
+    expect(statusTone(failed)).toBe("error");
+  });
+
+  it("a SendMessage that resumed an agent reads Dispatched while it runs and its outcome once it ends", () => {
+    const block = mkAgentBlock({ toolName: "SendMessage", status: "success", input: { to: "a1", message: "m" } });
+    expect(statusLabel(block)).toBe("Success");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "error", durationMs: 1 } }) })).toBe("Error");
+    expect(statusLabel({ ...block, status: "error", subagent: mkSubagent({ final: null }) })).toBe("Error");
+  });
+
+  it("an Agent call the CLI ran in the background without run_in_background reads Dispatched while its agent runs", () => {
+    // The CLI may launch an agent asynchronously on its own ("Async agent launched").
+    const block = mkAgentBlock({ status: "success", input: { prompt: "p" } });
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "completed", durationMs: 1 } }) })).toBe("Completed");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
   });
 
   it("labels a durable background admission without tier or detach as Dispatched", () => {

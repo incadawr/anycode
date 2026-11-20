@@ -2440,6 +2440,16 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
     expect(findByToolCallId(store, "call-a")).toMatchObject({ subagent: { turns: 1, toolCalls: 1, final: { status: "completed", durationMs: 10 } } });
   });
 
+  it("applies a detached agent's activity rows after the parent turn (the Claude CLI's own background agents)", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    beginAgentToolCall(store, "turn-1", "call-a");
+    const send = (event: any) => store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event });
+    send({ type: "subagent_start", toolCallId: "call-a", agentType: "general-purpose", description: "scan" });
+    send({ type: "subagent_activity", toolCallId: "call-a", toolName: "Read", summary: "/workspace/README.md" });
+    expect(findByToolCallId(store, "call-a")).toMatchObject({ subagent: { activity: [{ toolName: "Read", summary: "/workspace/README.md" }], final: null } });
+  });
+
   it("start seeds the sub-status (spinner state, final null), progress×N refreshes counters, end fills the terminal status — keyed by toolCallId", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

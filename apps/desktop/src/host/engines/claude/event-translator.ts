@@ -25,6 +25,7 @@ import type {
   TerminalReason,
 } from "./protocol.js";
 import { isClaudeSystemInitMessage } from "./protocol.js";
+import { type ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
 
 export interface ClaudeTurnTranslatorOptions {
   /** AnyCode's own turn ordinal for this turn (never the CLI's `num_turns`). */
@@ -54,6 +55,12 @@ export interface ClaudeTurnTranslatorOptions {
    * every other tool_use id (returns `undefined`) — never guessed.
    */
   takePresentation?(toolUseId: string): ToolResultPresentation | undefined;
+  /**
+   * The engine-lifetime tracker of the CLI's own subagents (subagent-tasks.ts).
+   * When present, a subagent's frames become subagent_* events on its parent
+   * Agent card; when absent they stay folded away, exactly as before.
+   */
+  subagents?: ClaudeSubagentTasks;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -242,8 +249,10 @@ export class ClaudeTurnTranslator {
     // Subagent noise (cut §1.4 table + hazard (g)): a message BELONGING to a
     // subagent is folded away under its parent `Task` tool card. The filter is
     // strictly on the field — the root `Task` tool's own tool_use/tool_result
-    // carry `parent_tool_use_id: null` and must survive.
-    if (typeof message.parent_tool_use_id === "string") return [];
+    // carry `parent_tool_use_id: null` and must survive. The child's frames and
+    // the CLI's task_* lifecycle frames only ever surface as subagent_* events
+    // on that parent card, never as cards of their own.
+    if (isClaudeSubagentFrame(message)) return this.options.subagents?.onFrame(message) ?? [];
     switch (message.type) {
       case "system":
         return this.onSystem(message);

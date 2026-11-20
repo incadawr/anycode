@@ -40,7 +40,7 @@ import { useStore } from "zustand";
 import { focusExistingPreview } from "../dock/dock-store.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
-import { childBadgeKind, childLayoutStore, isBackgroundAgent, type ChildBadgeKind } from "../child-layout.js";
+import { childBadgeKind, childLayoutStore, isBackgroundAgent, isOutcomeLost, settledStatus, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
 import { Button } from "../ui/index.js";
 import { DiffView } from "./DiffView.js";
@@ -1300,8 +1300,25 @@ export function statusLabel(
   block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
     Partial<Pick<ToolCallBlock, "subagent" | "subagentDispatched">>,
 ): string {
-  if (block.status === "success" && isBackgroundAgent(block)) {
-    return "Dispatched";
+  if (block.status === "success") {
+    if (isOutcomeLost(block)) {
+      return "Unknown";
+    }
+    // Once the agent a call started has ended, the badge says how: a folded
+    // card shows nothing else, and the call's own success only meant "started".
+    const final = block.subagent?.final;
+    if (final != null) {
+      return final.finalTurnFinishReason === "length" ? "Truncated" : SUBAGENT_FINAL_LABELS[final.status];
+    }
+    // A call that returned while the agent it started keeps running: a
+    // background launch, the Claude CLI's own async Agent launch, or a
+    // SendMessage that resumed an agent.
+    if (block.subagent != null || isBackgroundAgent(block)) {
+      return "Dispatched";
+    }
+  }
+  if (settledStatus(block) === "cancelled" && block.status === "error") {
+    return SUBAGENT_FINAL_LABELS.cancelled;
   }
   if (block.toolName === "Agent") {
     if (block.status === "proposed") {
@@ -1312,6 +1329,13 @@ export function statusLabel(
     }
   }
   return STATUS_LABELS[block.status];
+}
+
+/** The badge's tint (the `tool-call-status-*` suffix): how the call actually ended, `unknown` when that was lost. */
+export function statusTone(
+  block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>,
+): ToolCallBlock["status"] | "unknown" {
+  return isOutcomeLost(block) ? "unknown" : settledStatus(block);
 }
 
 /**
@@ -1519,11 +1543,21 @@ export function activityRows(subagent: SubagentSubStatus): ActivityRowView[] {
  * `status: "error"` card needs no separate error field: same slot, same
  * text, rendered the same way as a successful result.
  */
-export function agentResultText(block: Pick<ToolCallBlock, "toolName" | "status" | "modelText">): string | null {
+export function agentResultText(
+  block: Pick<ToolCallBlock, "toolName" | "status" | "modelText"> & Partial<Pick<ToolCallBlock, "input">>,
+): string | null {
   if (block.toolName !== "Agent") {
     return null;
   }
   if (block.status === "proposed" || block.status === "running") {
+    return null;
+  }
+  // The Claude CLI answers a run_in_background Agent call at once with a
+  // launch acknowledgement written for the model (agent id, output file,
+  // "do not mention"); the child's real result arrives later in the CLI's own
+  // report turn. A successful launch therefore has no result to show here;
+  // the activity feed and sub-status carry the live state.
+  if (block.status === "success" && (block.input as { run_in_background?: unknown } | null | undefined)?.run_in_background === true) {
     return null;
   }
   return block.modelText;
@@ -2176,7 +2210,9 @@ export function ToolCallHeaderRow({
         {childAction !== undefined && !headerBadgeActionable && (
           <ChildBadge badge={childAction.badge} onOpen={undefined} />
         )}
-        {isAgent && !expanded && block.subagent && block.subagent.final === null && (
+        {/* Any card can carry a running agent: the Claude CLI reports an agent
+            resumed by SendMessage on the SendMessage card. */}
+        {!expanded && block.subagent && block.subagent.final === null && (
           <span className="subagent-collapsed-progress">
             <Spinner className="icon-spin" />
             {formatSubagentCounters(block.subagent)}
@@ -2297,7 +2333,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
     // state" discipline as MessageList's own `data-tab-id` (automation.ts's
     // `realTranscriptDom`).
     <div
-      className={`tool-call-card tool-call-status-${block.status}${enter ? " message-enter" : ""}`}
+      className={`tool-call-card tool-call-status-${statusTone(block)}${enter ? " message-enter" : ""}`}
       data-tool-call-id={block.toolCallId}
     >
       {/* the toggle gains a row wrapper because an actionable child
@@ -2338,6 +2374,16 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
             />
           ) : (
             <>
+              {/* A non-Agent card that carries an agent's run (a SendMessage
+                  that resumed it) shows the same sub-status and activity rows. */}
+              {block.subagent && (
+                <SubagentStatus
+                  subagent={block.subagent}
+                  parentModel={parentIdentity.model}
+                  parentEngine={parentIdentity.engine}
+                />
+              )}
+              {block.subagent && <ActivityFeed subagent={block.subagent} />}
               {parsedTodos !== null ? (
                 <TodoChecklist todos={parsedTodos} />
               ) : (

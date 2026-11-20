@@ -23,6 +23,7 @@ import type { EngineSwitchLaunch } from "../shared/engine-switch-control.js";
 import type { SwitchRuntime, SessionOptions } from "./session.js";
 import type { CodexEngine } from "./engines/codex/codex-engine.js";
 import type { ClaudeEngine } from "./engines/claude/claude-engine.js";
+import type { SessionEngine } from "./engines/session-engine.js";
 import { parseRecognizerEnv, recognizerEndpointFromFields } from "./recognizer-env.js";
 import { resolveGoBootModel } from "./go-boot-model.js";
 import { logHookConfigFailure } from "./hook-config-diagnostics.js";
@@ -1046,6 +1047,19 @@ function translatePreviewEvent(message: PreviewEventMessage): PreviewConsoleAgen
 const PREVIEW_CONSOLE_TURN_ID = "preview-console";
 
 let session: Session | null = null;
+
+/**
+ * Forwards a subagent_* event of the Claude CLI's own agents that has no owner
+ * turn to ride. Only the engine the session runs on speaks for its cards, with
+ * one exception: an engine the session already switched away from still
+ * settles the agents that died with it (subagent_end), or their cards would
+ * keep spinning in the transcript.
+ */
+function forwardClaudeDetachedEvent(engine: SessionEngine, event: AgentEvent): void {
+  if (session === null) return;
+  if (session.ownsRuntime(engine) || event.type === "subagent_end") session.emitDetachedSubagentEvent(event);
+}
+
 const hostDiagnosticSink = createReplayDiagnosticSink(
   message => process.parentPort.postMessage(message),
   event => session?.emitAgentEvent(event),
@@ -1489,6 +1503,7 @@ function hostSwitchFactory(
         routing.configure(runtime);
         runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
         bindClaudeUsage(raw, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null, runtime.identity!.model);
+        raw.onDetachedEvent = event => forwardClaudeDetachedEvent(runtime.engine, event);
       }, cleanup: () => { routing.cleanup(); } };
     },
   });
@@ -2595,6 +2610,9 @@ async function bootClaudeSession(
   // from here on, a bridged agent call's subagent_* events surface inside the
   // CLI's live turn (claude-engine.ts's bridge-event race).
   pushBridgeEvent = (event: AgentEvent) => claudeEngine.pushBridgeEvent(event);
+  // The CLI's own background agents report after the parent turn settled;
+  // their subagent_* events reach the card through the detached channel.
+  claudeEngine.onDetachedEvent = event => forwardClaudeDetachedEvent(booted.engine, event);
 
   // Identity facts, known the moment the transport connected. The POSTURE
   // (model/preset) is deliberately NOT here: it is written only from the

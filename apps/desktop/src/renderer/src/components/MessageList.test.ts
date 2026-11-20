@@ -635,6 +635,47 @@ describe("stackHeaderLabel (never masquerade as one tool name)", () => {
   });
 });
 
+describe("a stacked call whose agent did not complete", () => {
+  const agent = (final: NonNullable<ToolCallBlock["subagent"]>["final"]): ToolCallBlock =>
+    mkToolCall({
+      toolName: "Agent",
+      input: { prompt: "p" },
+      subagent: { agentType: "explore", description: "d", model: null, engine: null, turns: 1, toolCalls: 1, lastTool: null, activity: [], activityDropped: 0, final },
+    });
+
+  it("counts as failed in the stack's badge and tint, though the call itself succeeded", () => {
+    const stack = [mkToolCall(), agent({ status: "error", durationMs: 1 })];
+    expect(aggregateStackStatus(stack)).toBe("mixed");
+    expect(stackBadgeText(stack)).toBe("1 failed");
+    expect(stackStatusClass(stack)).toBe("tool-call-status-error");
+    expect(stackBadgeText([mkToolCall(), agent({ status: "cancelled", durationMs: -1 })])).toBe("1 failed");
+  });
+
+  it("an agent cut off by the output limit counts as failed", () => {
+    const stack = [mkToolCall(), agent({ status: "completed", durationMs: 1, finalTurnFinishReason: "length" })];
+    expect(aggregateStackStatus(stack)).toBe("mixed");
+    expect(stackBadgeText(stack)).toBe("1 failed");
+  });
+
+  it("a background agent whose outcome was lost keeps the stack from reading Success", () => {
+    const lost = mkToolCall({ toolName: "Agent", input: { prompt: "p", run_in_background: true }, subagent: null });
+    const stack = [mkToolCall(), lost];
+    expect(aggregateStackStatus(stack)).toBe("mixed");
+    expect(stackBadgeText(stack)).toBe("1 unknown");
+    expect(stackStatusClass(stack)).toBe("tool-call-status-unknown");
+    // A failure outranks the unknown.
+    const failed = [mkToolCall({ status: "error" }), lost];
+    expect(stackBadgeText(failed)).toBe("1 failed");
+    expect(stackStatusClass(failed)).toBe("tool-call-status-error");
+  });
+
+  it("an agent that completed keeps the stack a success", () => {
+    const stack = [mkToolCall(), agent({ status: "completed", durationMs: 1 })];
+    expect(aggregateStackStatus(stack)).toBe("success");
+    expect(stackBadgeText(stack)).toBe("Success");
+  });
+});
+
 describe("stackStatusClass", () => {
   it("maps an all-success stack to the success tint", () => {
     expect(stackStatusClass([mkToolCall({ status: "success" }), mkToolCall({ status: "success" })])).toBe(
@@ -711,6 +752,25 @@ describe("groupTranscriptBlocks (any adjacent terminal tool calls stack)", () =>
     expect(groupTranscriptBlocks([terminal, running])).toEqual([
       { kind: "single", block: terminal },
       { kind: "single", block: running },
+    ]);
+  });
+
+  it("does NOT stack a settled Agent call whose background subagent is still running, until it ends", () => {
+    const live: NonNullable<ToolCallBlock["subagent"]> = {
+      agentType: "code-writer", description: "Implement the parser", model: null, engine: null,
+      turns: 3, toolCalls: 3, lastTool: "Edit", activity: [], activityDropped: 0, final: null,
+    };
+    const write = mkToolCall({ id: "w", toolName: "Write" });
+    const agent = mkToolCall({ id: "ag", toolName: "Agent", input: { run_in_background: true }, subagent: live });
+    const bash = mkToolCall({ id: "b" });
+    expect(groupTranscriptBlocks([write, agent, bash])).toEqual([
+      { kind: "single", block: write },
+      { kind: "single", block: agent },
+      { kind: "single", block: bash },
+    ]);
+    const ended = { ...agent, subagent: { ...live, final: { status: "completed" as const, durationMs: 1000 } } };
+    expect(groupTranscriptBlocks([write, ended, bash])).toEqual([
+      { kind: "tool_stack", blocks: [write, ended, bash], status: "success" },
     ]);
   });
 
