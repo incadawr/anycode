@@ -1298,7 +1298,7 @@ export function childActionBadge(
  */
 export function statusLabel(
   block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
-    Partial<Pick<ToolCallBlock, "subagent" | "subagentDispatched">>,
+    Partial<Pick<ToolCallBlock, "subagent" | "subagentDispatched" | "subagentOutcomeUnknown">>,
 ): string {
   if (block.status === "success") {
     if (isOutcomeLost(block)) {

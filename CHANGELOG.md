@@ -7,6 +7,22 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.104] - 2026-11-20
+
+### Added
+
+- Agent cards in Claude sessions show the subagent’s activity as it runs, including after the parent turn finishes.
+
+### Fixed
+
+- Reopening a Claude session restores the recorded subagent outcome and activity. Collapsed tool groups show the corresponding status color.
+- Reopening a background Agent card shows Unknown when only its launch was recorded. Completed agents keep their recorded status.
+- Claude sessions skip routine notices about built-in skills at startup.
+
+### Changed
+
+- AnyCode supports and recommends Codex CLI 0.171.0.
+
 ## [0.0.103] - 2026-11-18
 
 ### Added

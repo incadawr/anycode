@@ -3082,9 +3082,10 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: { status: "cancelled", durationMs: -1 } }) })).toBe("Cancelled");
   });
 
-  it("labels a durable background admission without tier or detach as Dispatched", () => {
+  it("labels a live background admission Dispatched and a restored admission with no outcome Unknown", () => {
     const block = mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p" }, subagentDispatched: true });
     expect(statusLabel(block)).toBe("Dispatched");
+    expect(statusLabel({ ...block, subagentOutcomeUnknown: true })).toBe("Unknown");
     expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
     expect(statusLabel({ ...block, status: "error" })).toBe("Error");
     expect(statusLabel({ ...block, toolName: "Bash" })).toBe("Success");

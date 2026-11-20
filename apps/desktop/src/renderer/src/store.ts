@@ -2094,6 +2094,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
   const results = new Map<AssistantPart, ToolResultPart>();
   let previousTurn: string | undefined;
   for (const item of items) {
+    if (item.kind === "turn_error") { awaiting.clear(); continue; }
     const message = item.message;
     if (message.role === "user" || (item.turnId !== undefined && item.turnId !== previousTurn)) awaiting.clear();
     previousTurn = item.turnId;

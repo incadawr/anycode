@@ -35,10 +35,10 @@ protocol AnyCode's Codex adapter is built against.
 
 ## Supported version ceiling
 
-`<0.171.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.172.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.171.0 is accepted by version
+closed range, so any codex-cli build below 0.172.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -356,3 +356,10 @@ versions; no sandbox flags were weakened. Evidence is in the local
 Install smoke for the recommended 0.169.0 initially failed (1 failed, 1 skipped);
 an independent review rerun passed (1 passed, 1 skipped, approximately 63 s).
 The initial failure cause was not established.
+
+## 0.171.0 verification (2026-11-20)
+
+On macOS arm64, the real CLI passed the contract check. The changes from
+0.170.0 were additive. Consumed methods and approval decisions stayed compatible.
+The live desktop smoke passed all ten steps, including Allow/Deny, Stop,
+restart/resume and orphan checks, after waiting for the Codex provider to be ready.
