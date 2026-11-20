@@ -14,17 +14,15 @@ ships together (`@anycode/desktop`, `@anycode/core`, `@anycode/cli`).
 
 ## Where work lands
 
-Current development and releases land on **`master`**. Create feature branches
-from `master` and target external pull requests at `master`. The older `next`
-branch is currently unused.
-
-The maintainer chooses the release contents and version after review and
-verification. A merged change does not itself publish a release; the tag and
-draft-release review below remain the release boundary.
+Create feature branches from **`next`** and target pull requests at `next`.
+The maintainer chooses a commit on `next` as the base for each release
+candidate. Advance **`master`** to the verified release commit. The version
+tag identifies that exact commit, and publishing the reviewed draft makes
+the release available to users.
 
 ## Releasing a change
 
-1. Merge the reviewed changes into `master`.
+1. Prepare the release candidate from the selected commit on `next`.
 2. Choose the next SemVer number and update package manifests together.
 3. Add a concise user-facing entry to [`CHANGELOG.md`](../../CHANGELOG.md):
    `Added`, `Changed`, `Fixed`, `Removed`, or `Security`.
@@ -40,8 +38,9 @@ draft-release review below remain the release boundary.
    (no network); that is not permission to skip it.
 5. Run typecheck, targeted tests, and the desktop build; for UI flows, run the
    appropriate smoke from the [automation guide](automation-smoke.md).
-6. Create annotated tag `v<version>` only after the verified commit has been
-   merged and pushed.
+6. Fast-forward `master` to the verified release commit and create the annotated
+   tag `v<version>` on that same commit. Merge the release commit back into
+   `next` if it was prepared on a separate branch.
 7. Push the tag. Pushing is what starts the release — the tag alone does
    nothing until it reaches the remote.
 8. The artifact check now runs in CI. Every build job runs
@@ -101,8 +100,9 @@ touches no release.
 
 ## When a release run fails
 
-A version tagged but never published is not burned. Fix the cause on a branch from `master`
-with normal review and merge the fix into `master`. Delete the tag on the remote
+A version tagged but never published is not burned. Fix the cause on a branch from the failed release commit.
+Review and verify the fix, fast-forward `master` to the corrected commit,
+and bring it back into `next`. Delete the tag on the remote
 and locally (`git push origin :refs/tags/v<version>`, `git tag -d v<version>`),
 along with any draft release for it. Then create the annotated tag `v<version>`
 again on the fixed commit and push it. The manifests already carry the version,

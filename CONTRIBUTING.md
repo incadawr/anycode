@@ -27,8 +27,8 @@ and release guidance.
 
 ## Making a change
 
-1. Fork the repository and create a branch from `master`, where current
-   development and releases land (see the [release policy](docs/development/release.md)).
+1. Fork the repository and create a branch from `next`, the integration branch for
+   reviewed changes (see the [release policy](docs/development/release.md)).
 2. Use a short descriptive branch name, such as `feature/session-export`,
    `fix/mcp-timeout`, or `docs/setup-guide`.
 3. Keep the change focused. Include tests when behaviour changes.
@@ -45,13 +45,13 @@ and release guidance.
    pnpm --filter @anycode/desktop build
    ```
 
-5. Open a pull request against `master` using the provided template.
+5. Open a pull request against `next` using the provided template.
 
 ## Pull requests
 
 Describe the user-visible result, implementation approach where it matters,
 and the checks you ran. Link the related issue when one exists.
 
-Maintainers use squash merges to keep `master` readable. By submitting a pull
+Maintainers use squash merges to keep `next` readable. By submitting a pull
 request, you agree that your contribution is licensed under the
 [Apache License 2.0](LICENSE).
