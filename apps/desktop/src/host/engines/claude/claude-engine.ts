@@ -673,10 +673,10 @@ async function connectClaudeEngine(
   const createClient = (approvals: ClaudeApprovalBridge, next: TransportSpawn, path: string | undefined, current: () => boolean, bridge: ClaudeMcpBridge | undefined, disableBuiltins = false) => new ClaudeClient({
     ...options,
     ...(disableBuiltins ? { pluginDir: undefined, prepareBuiltinSkills: undefined } : {}),
+    // Only a failure is worth a notice. Successful preparation and the CLI
+    // listing the skills are routine; as toasts on every session start they
+    // read like a problem.
     onBuiltinSkillNotice: () => notices.push(warning("Built-in AnyCode skills could not be prepared. You can continue chatting.")),
-    onBuiltinSkillReady: stage => notices.push({ type: "engine_notice", level: "info", message: stage === "prepared"
-      ? "Built-in AnyCode skill files are prepared for this session."
-      : "Claude lists the built-in AnyCode skills for this session. This does not confirm they were used." }),
     ...(next.resume !== undefined ? { permissionModeFlag: undefined } : { permissionModeFlag: permissionModeToFlag(preset.mode) }),
     effort: engine === null ? requestedEffort : engine.snapshot().effort,
     ...next,

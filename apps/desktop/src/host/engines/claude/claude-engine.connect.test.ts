@@ -1668,26 +1668,20 @@ it("never retries the fallback boot", async () => {
   await expect(startClaudeEngine({ ...baseOptions(spawnImpl), pluginDir: "/sealed" })).rejects.toThrow("unknown boot failure");
   expect(spawnImpl.mock.calls.filter(([, args]) => !args.includes("--version"))).toHaveLength(2);
 });
-it("describes skill preparation and recognition without exposing internal identifiers", async () => {
+it("raises no notice when the built-in skills are prepared and recognized", async () => {
   const fake = fakeSpawn(undefined, MODELS, { commands: [{ name: "anycode-app:anycode-setup" }] });
   const lease = { root: "/sealed/private", bindChild: vi.fn(), abortNeverSpawned: vi.fn(), reclaim: vi.fn() };
   const connected = await startClaudeEngine({ ...baseOptions(fake.spawnImpl), prepareBuiltinSkills: async () => lease });
   try {
-    const events = [];
-    const turn = connected.engine.runTurn("synthetic", { signal: new AbortController().signal })[Symbol.asyncIterator]();
-    // Read only the boot notices, before the fake receives any user frame.
-    while (events.filter(event => event.type === "engine_notice").length < 2) {
-      const event = await turn.next();
-      if (event.done) break;
-      events.push(event.value);
-    }
-    await turn.return?.();
-    expect(fake.userMessages).toEqual([]);
-    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Built-in AnyCode skill files are prepared for this session." }));
-    expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", message: "Claude lists the built-in AnyCode skills for this session. This does not confirm they were used." }));
-    const messages = events.filter(e => e.type === "engine_notice").map(e => e.message).join(" ");
-    expect(messages).not.toContain("/sealed");
-    expect(messages).not.toMatch(/[a-f0-9-]{36}|plugin-start-failed|engine-switch preparation/);
+    const turn = (async () => {
+      const events = [];
+      for await (const event of connected.engine.runTurn("synthetic", { signal: new AbortController().signal })) events.push(event);
+      return events;
+    })();
+    await vi.waitFor(() => expect(fake.userMessages).toHaveLength(1));
+    fake.streams[0]!.emit("data", Buffer.from(JSON.stringify({ type: "result", subtype: "success", session_id: connected.sessionRef, result: "done", is_error: false }) + "\n"));
+    const events = await turn;
+    expect(events.filter(e => e.type === "engine_notice" && /skill/i.test(e.message))).toEqual([]);
   } finally { await connected.engine.dispose("session-close"); }
 });
 
