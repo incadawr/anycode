@@ -1,3 +1,4 @@
+import { registerClaudeTaskOutputIpc } from "./claude-task-output-ipc.js";
 import { registerChildWorktreeIpc } from "./child-worktree-ipc.js";
 import { ChildWorktreeResources } from "./child-worktree-resource.js";
 import { recordReasoningReplayRejection } from "./reasoning-replay.js";
@@ -3448,6 +3449,7 @@ void app.whenReady().then(async () => {
     fetch: route => fetchForProxyChain([], route),
   });
   registerSetupIpc(settingsIpcDeps);
+  registerClaudeTaskOutputIpc();
   // the per-tab workspace-trust answer. Main resolves folder + hash
   // from the tab's own record; the renderer sends a tab id and a decision only.
   // folder keys are realpath-canonical (symlink and target share

@@ -3851,6 +3851,14 @@ export class Session {
       case "task_output_request":
         if (this.engine.capabilities.supportsTasks) this.pushTaskOutput(message.taskId);
         break;
+      case "claude_task_output_request": {
+        const engine = this.engine;
+        const task = this.claudeBackgroundTasks.get(message.taskId);
+        const ref = (engine as SessionEngine & { sessionRef?: unknown }).sessionRef;
+        const sessionRef = engine.id === "claude" && typeof ref === "string" && task && task.status !== "running" ? ref : undefined;
+        this.outbound.sendDirect({ type: "claude_task_output", taskId: message.taskId, requestId: message.requestId, ...(sessionRef ? { sessionRef } : {}) });
+        break;
+      }
       case "task_kill_request":
         if (this.engine.capabilities.supportsTasks) this.onTaskKillRequest(message.requestId, message.taskId);
         break;
