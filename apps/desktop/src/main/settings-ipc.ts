@@ -902,6 +902,7 @@ const patchSchema = z.record(z.string(), z.unknown());
 // strict shape/range gate for the `sessionLimits` section.
 // Persistence works because `mergeSettings`/`deepMerge` sets a key absent from base wholesale, and the whole-document `settingsSchema.safeParse(merged)` gate is `.passthrough()` at the top level — `sessionLimits` survives both write and reload.
 const sessionLimitsSchema = z.object({
+  agentActiveTabsMax: z.number().int().min(SESSION_LIMIT_RANGES.agentActiveTabsMax.min).max(SESSION_LIMIT_RANGES.agentActiveTabsMax.max).optional(),
   maxTabs: z.number().int().min(SESSION_LIMIT_RANGES.maxTabs.min).max(SESSION_LIMIT_RANGES.maxTabs.max).optional(),
   childSessionsPerParentMax: z.number().int().min(SESSION_LIMIT_RANGES.childSessionsPerParentMax.min).max(SESSION_LIMIT_RANGES.childSessionsPerParentMax.max).optional(),
   childSessionsGlobalMax: z.number().int().min(SESSION_LIMIT_RANGES.childSessionsGlobalMax.min).max(SESSION_LIMIT_RANGES.childSessionsGlobalMax.max).optional(),

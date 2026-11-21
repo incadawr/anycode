@@ -266,6 +266,32 @@ function rig(options: {
   return { manager, deps, forkEnvs, forkArgs, forkCwds, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles, hosts, operations, deferredReplies };
 }
 
+describe("agent tab limit at both creation entrances", () => {
+  it("ignores idle sessions and reveals only authorized busy tabs", async () => {
+    const r = rig();
+    const idle = Array.from({ length: 8 }, (_, i) => ({ sessionId: `idle-${i}`, tabId: `tab-idle-${i}`, workspace: "/ws", activityState: "idle" }));
+    for (const t of idle) r.agentOpenedSessions.add(t.sessionId);
+    const busy = [
+      { sessionId: "visible", tabId: "visible-tab", workspace: "/ws", activityState: "running" },
+      { sessionId: "hidden", tabId: "secret-tab", workspace: "/ws", activityState: "waiting_approval" },
+    ];
+    r.agentOpenedSessions.add("visible"); r.agentOpenedSessions.add("hidden");
+    r.sessions.set("visible", true); r.sessions.set("hidden", false);
+    const deps = r.deps({ listTabs: () => [...idle, ...busy], currentSettings: () => ({ ...settings(), sessionLimits: { agentActiveTabsMax: 2 } }),
+      canViewAgentTab: async (_opener, id) => id === "visible" });
+    const external = await createSessionForAgent({ workspace: "/ws" }, deps);
+    expect(external).toMatchObject({ ok: false, reason: "too_many", detail: expect.stringContaining("visible-tab") });
+    if (external.ok) throw new Error("expected refusal");
+    expect(external.detail).not.toContain("secret-tab");
+    const native = await createSessionPeerOpener(deps)({ workspace: "/ws" }, { kind: "native", openerSessionId: "caller", authorize: async () => true });
+    expect(native).toMatchObject({ ok: false, reason: "too_many", detail: expect.stringContaining("visible-tab") });
+    if (native.ok) throw new Error("expected refusal");
+    expect(native.detail).not.toContain("secret-tab");
+    busy[0]!.activityState = "idle"; busy[1]!.activityState = "idle";
+    expect((await createSessionForAgent({ workspace: "/ws" }, deps)).ok).toBe(true);
+  });
+});
+
 describe("create_session — the production creation path primes a non-active connection before the fork", () => {
   it("opens an empty folder after the owner trusts it", async () => {
     const files = new Map<string, string>();

@@ -95,7 +95,7 @@ Limits and uncertainty:
 - Chains allow at most 8 hops and 32 messages within 30 minutes; exceeding them
   returns `refused` with `reason: "loop_limited"`. Sends, including replies,
   are limited to 20/minute per sender and 60/minute per workspace. Creation shares
-  the HTTP budget of 5/minute and 8 live agent-opened tabs.
+  the HTTP budget of 5/minute and the configurable active agent-opened tab limit (default 8).
 - `queued` is inbox admission; `acknowledged` is turn start, not proof the model
   applied the message. A Core steer is first `queued`; it becomes `acknowledged`
   with `deliveryKind: "core_seam"` once the message is inserted into the model
@@ -400,7 +400,7 @@ A model default is never invented: `null` means "unknown or absent", not
 Rules and limits:
 
 - The folder must be trusted in AnyCode (Settings → Permissions).
-- At most 5 creations per minute, and at most 8 agent-opened tabs alive at once.
+- At most 5 creations per minute, and by default 8 active agent-opened tabs. Idle tabs do not count towards the latter limit. Configure it under Settings → Tools; the overall open-tab limit still applies.
   The per-minute counter resets when the Sessions API restarts; the alive count
   follows the tabs still open in AnyCode.
   Only creations that succeed count towards the 5-per-minute limit; refused
@@ -554,7 +554,7 @@ Services that bridge an outside channel use the same tools. See the
 | Either call says `not_found` | No open session has that id. |
 | `create_session` says `project_not_enabled` | Tick **Allow agents to open tasks here** in the project's sidebar **⋯** menu. |
 | `create_session` says `not_trusted` | Trust the folder first (Settings → Permissions). |
-| `create_session` says `rate_limited` or `too_many` | At most 5 per minute and 8 agent-opened tabs alive. Wait, or close some. |
+| `create_session` says `rate_limited` or `too_many` | At most 5 per minute; active agent-opened tabs and all open tabs have separate configurable limits. Wait for work to finish or close a tab. |
 | `create_session` says `invalid_model` | For `core`, the `model` value matches no configured provider connection, or more than one; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. For `codex`/`claude`, the account does not offer that model; retry with one of the ids the error lists, or omit `model`. |
 | `create_session` says `invalid_effort` | The selected model does not advertise that effort. The error lists the allowed values for that engine and model; retry with one of them, or omit `effort` to use the engine default. |
 | `create_session` says `invalid_account` | The `account` value names no configured Codex account, a label two accounts share, or it was sent for an engine other than `codex`. The error lists the accounts as `label (id)`; retry with the id, omit `account` to use the default, or drop it for a non-Codex session. |

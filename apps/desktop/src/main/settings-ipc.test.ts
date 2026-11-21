@@ -859,15 +859,17 @@ describe("handleSet — merge + read-only", () => {
 describe("handleSet — sessionLimits", () => {
   it("persists a valid section and it survives a REAL reload", async () => {
     const res = await handleSet(makeDeps(), {
-      sessionLimits: { maxTabs: 12, childSessionsPerParentMax: 2, childSessionsGlobalMax: 10 },
+      sessionLimits: { maxTabs: 12, agentActiveTabsMax: 13, childSessionsPerParentMax: 2, childSessionsGlobalMax: 10 },
     });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
     expect(loaded.settings.sessionLimits).toEqual({
       maxTabs: 12,
+      agentActiveTabsMax: 13,
       childSessionsPerParentMax: 2,
       childSessionsGlobalMax: 10,
     });
+    expect(readSessionLimits(loaded.settings.sessionLimits).agentActiveTabsMax).toBe(13);
     expect(loaded.corruptBackupPath).toBeUndefined();
   });
 
@@ -876,6 +878,8 @@ describe("handleSet — sessionLimits", () => {
     const before = await readFile(settingsPath, "utf8");
     for (const section of [
       { maxTabs: 41 },
+      { agentActiveTabsMax: 0 },
+      { agentActiveTabsMax: 41 },
       { childSessionsPerParentMax: 0 },
       { childSessionsGlobalMax: 25 },
     ]) {

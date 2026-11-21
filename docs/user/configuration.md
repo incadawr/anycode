@@ -58,7 +58,7 @@ below; the snippet shows only the sections discussed here.
   - `tools.subagentStallTimeoutMs`: silence limit for a running subagent (default 600000 ms).
   - `tools.networkWaitMaxMs`: maximum network wait (default 1800000 ms, 30 minutes).
   - `tools.adaptiveTurnBudget`: opt into learned budgets when no explicit budget applies.
-- **Session limits** (Settings → Tools, top-level `sessionLimits`): open tabs (default 20), child sessions per parent (3) and app-wide (8). The pane accepts 4–40, 1–8 and 1–24.
+- **Session limits** (Settings → Tools, top-level `sessionLimits`): open tabs (default 20), active agent-opened tabs (8; idle tabs do not count), child sessions per parent (3) and app-wide (8). The pane accepts 4–40, 1–40, 1–8 and 1–24.
 - **Vision** (Settings → Vision): `recognizer` `{ connectionId, modelId }`. When the
   main model cannot see images, this connection and model answer `InspectImage`
   calls. Unset means the fallback is off.

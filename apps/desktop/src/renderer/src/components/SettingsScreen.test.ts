@@ -275,6 +275,11 @@ describe("buildSessionLimitsPatch", () => {
     });
   });
 
+  it("validates and saves the separate agent limit", () => {
+    expect(buildSessionLimitsPatch("", "", "", "13")).toEqual({ patch: { sessionLimits: { agentActiveTabsMax: 13 } } });
+    expect(buildSessionLimitsPatch("", "", "", "41")).toEqual({ error: expect.stringContaining("Active agent-opened tabs") });
+  });
+
   it("all blanks -> empty section (omitted)", () => {
     expect(buildSessionLimitsPatch("", "", "")).toEqual({ patch: { sessionLimits: {} } });
   });
