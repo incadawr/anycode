@@ -1957,7 +1957,6 @@ export class ClaudeEngine implements SessionEngine {
       await this.awaitContextUsageInFlight();
       const usage = await this.readContextUsage();
       if (usage !== null) yield usage;
-      this.scheduleQuotaRefresh();
       // session-cumulative token accounting, next to the context
       // meter read above. `lastTurnTokenUsage` is null when this turn's
       // `result.usage` was absent/malformed — no event this turn (fail-soft,
@@ -1993,6 +1992,7 @@ export class ClaudeEngine implements SessionEngine {
       this.stoppedErrorReported = this.terminalError instanceof ClaudeStoppedError;
       yield* this.terminalEvents(turn, this.terminalError, false);
     } finally {
+      if (inputDispatched && !this.disposed && this.terminalError === null) this.scheduleQuotaRefresh();
       this.turnActive = false;
       // An agent still running now (run_in_background) belongs to no later
       // turn: whatever it reports from here on rides the detached channel.
