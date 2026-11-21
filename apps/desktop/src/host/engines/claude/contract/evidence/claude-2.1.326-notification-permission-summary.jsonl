@@ -1,0 +1,22 @@
+{"type": "system", "subtype": "init"}
+{"type": "assistant", "content_types": [["tool_use", "Bash"]]}
+{"type": "rate_limit_event"}
+{"type": "system", "subtype": "background_tasks_changed"}
+{"type": "system", "subtype": "task_started", "task_id": "b339ms7fi", "tool_use_id": "toolu_01VuKxXURtyyYP5dRDxkSRxZ", "task_type": "local_bash"}
+{"type": "user", "content_types": [["tool_result", null]]}
+{"type": "assistant", "content_types": [["text", null]]}
+{"type": "result", "subtype": "success", "is_error": false, "stop_reason": "end_turn", "result_sample": "Started `sleep 8` in the background."}
+{"type": "system", "subtype": "task_updated", "task_id": "b339ms7fi"}
+{"type": "system", "subtype": "task_notification", "task_id": "b339ms7fi", "tool_use_id": "toolu_01VuKxXURtyyYP5dRDxkSRxZ", "status": "completed", "test_user_sent": true}
+{"type": "system", "subtype": "background_tasks_changed"}
+{"type": "system", "subtype": "init"}
+{"type": "assistant", "content_types": [["text", null]]}
+{"type": "rate_limit_event"}
+{"type": "result", "subtype": "success", "is_error": false, "origin": {"kind": "task-notification", "producer": "session-task", "runId": "0mwqie8ts-5db1b90f"}, "stop_reason": "end_turn", "result_sample": "DONE"}
+{"type": "system", "subtype": "init"}
+{"type": "assistant", "content_types": [["tool_use", "Bash"]]}
+{"type": "control_request", "request": "can_use_tool", "tool_name": "Bash"}
+{"type": "user", "content_types": [["tool_result", null]]}
+{"type": "assistant", "content_types": [["text", null]]}
+{"type": "result", "subtype": "success", "is_error": false, "stop_reason": "end_turn", "result_sample": "FINISHED"}
+{"exit_code": 0, "results": 3, "injected": true}

@@ -7,6 +7,22 @@ import { readFileSync } from "node:fs";
 const frame = (subtype: string, fields: Record<string, unknown>) => ({ type: "system", subtype, ...fields }) as ClaudeStreamMessage;
 
 describe("native background task correlation", () => {
+  it("records the real ordering of notification, distinct result, and the next permission request", () => {
+    const lines = readFileSync(new URL("./contract/evidence/claude-2.1.326-notification-permission-summary.jsonl", import.meta.url), "utf8").trim().split("\n");
+    const frames = lines.map(line => JSON.parse(line) as Record<string, unknown>);
+    const notification = frames.findIndex(frame => frame.subtype === "task_notification");
+    const results = frames.map((frame, i) => frame.type === "result" ? i : -1).filter(i => i >= 0);
+    const permission = frames.findIndex(frame => frame.type === "control_request" && frame.request === "can_use_tool" && frame.tool_name === "Bash");
+    expect(results).toHaveLength(3);
+    expect(frames[notification]).toMatchObject({ test_user_sent: true, status: "completed" });
+    expect(frames[results[1]!]!.origin).toMatchObject({ kind: "task-notification" });
+    expect(frames[results[2]!]!.origin).toBeUndefined();
+    expect(results[0]!).toBeLessThan(notification);
+    expect(notification).toBeLessThan(results[1]!);
+    expect(results[1]!).toBeLessThan(permission);
+    expect(permission).toBeLessThan(results[2]!);
+    expect(frames.at(-1)).toMatchObject({ exit_code: 0, results: 3 });
+  });
   it("projects the task ids and terminal result of a redacted live Bash capture", () => {
     // This is a field-only summary of the actual CLI 2.1.326 stream, not raw
     // assistant messages; use it only for lifecycle and origin assertions.
