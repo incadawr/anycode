@@ -400,6 +400,17 @@ function userMessageContent(text: string, attachments?: ImageAttachment[]): stri
   ];
 }
 
+/** CLI replay may normalize image blocks; never compare or log their payloads. */
+function matchesUserReplay(actual: unknown, expected: string | unknown[]): boolean {
+  if (typeof expected === "string") return actual === expected;
+  if (!Array.isArray(actual)) return false;
+  const blocks = (value: unknown[]) => value.filter((v): v is Record<string, unknown> => !!v && typeof v === "object");
+  const sent = blocks(expected), replay = blocks(actual);
+  const texts = (value: Record<string, unknown>[]) => value.filter(v => v.type === "text").map(v => v.text);
+  return JSON.stringify(texts(sent)) === JSON.stringify(texts(replay)) &&
+    sent.filter(v => v.type === "image").length === replay.filter(v => v.type === "image").length;
+}
+
 /**
  * cross-review F2: the slash-injection guard for NON-HUMAN user
  * frames. Root engine sessions interpret slash commands in stream-json user
@@ -1046,11 +1057,20 @@ export class ClaudeEngine implements SessionEngine {
    */
   onDetachedEvent?: (event: AgentEvent) => void;
   onNativeTurn?: (turn: NativeTurn) => void;
-  private notificationPending = false;
+  private readonly pendingNotifications: string[] = [];
   private unmatchedNotification = false;
   private nativeArmed = false;
   private nativeTurn: { stream: NativeTurn; translator: ClaudeTurnTranslator; events: AgentEvent[]; cancelled?: boolean; cancelTimer?: ReturnType<typeof setTimeout> } | null = null;
   private nativeAmbiguous = false;
+
+  private noteNotification(frame: ClaudeStreamMessage): void {
+    const id = (frame as Record<string, unknown>).task_id;
+    if (typeof id === "string" && id) this.pendingNotifications.push(id);
+  }
+
+  private consumeNotification(): void {
+    this.pendingNotifications.shift();
+  }
 
   private emitDetached(event: AgentEvent): void {
     try {
@@ -1069,7 +1089,7 @@ export class ClaudeEngine implements SessionEngine {
     native.stream.close();
     this.nativeTurn = null;
     this.nativeArmed = false;
-    this.notificationPending = false;
+    this.pendingNotifications.length = 0;
     this.unmatchedNotification = false;
   }
 
@@ -1943,10 +1963,10 @@ export class ClaudeEngine implements SessionEngine {
         // next iteration's takeFrame() re-parks. Exactly one read in flight.
         this.frameConsumed();
         const frame = raced.value.value;
-        if (frame.type === "user" && frame.isReplay === true && (frame.session_id === undefined || frame.session_id === this.sessionRef) && JSON.stringify(frame.message?.content) === JSON.stringify(sentContent)) ownerEchoSeen = true;
+        if (frame.type === "user" && frame.isReplay === true && (frame.session_id === undefined || frame.session_id === this.sessionRef) && matchesUserReplay(frame.message?.content, sentContent)) ownerEchoSeen = true;
         // A task-triggered CLI turn can begin after the owner's input was
         // sent. Its init and result do not settle that owner input.
-        if (candidateFrames !== null || (frame.type === "system" && frame.subtype === "init" && this.notificationPending) || this.nativeArmed) {
+        if (candidateFrames !== null || (frame.type === "system" && frame.subtype === "init" && (this.pendingNotifications.length > 0 || this.unmatchedNotification)) || this.nativeArmed) {
           candidateFrames ??= [];
           candidateFrames.push(frame);
           if (candidateFrames.length > 20_000) throw new Error("Claude background turn exceeded the frame buffer limit");
@@ -1962,8 +1982,6 @@ export class ClaudeEngine implements SessionEngine {
             }
           } else if ((origin === undefined || origin === null) && ownerEchoSeen) {
             this.nativeArmed = false;
-            this.notificationPending = false;
-            this.unmatchedNotification = false;
             for (const candidate of candidateFrames) {
               if (candidate.type === "assistant" || candidate.type === "stream_event" || (candidate.type === "system" && candidate.subtype === "init")) options.onInputAccepted?.();
               for (const event of translator.onMessage(candidate)) {
@@ -1976,6 +1994,9 @@ export class ClaudeEngine implements SessionEngine {
           }
           candidateFrames = null;
           continue;
+        }
+        if (frame.type === "result" && (frame as Record<string, unknown>).origin != null) {
+          throw new Error("Claude returned a turn result with an unrecognised origin");
         }
         // at user/tool-result and assistant boundaries, kick off a
         // throttled, non-overlapping mid-turn context refresh. Never awaited
@@ -1995,11 +2016,11 @@ export class ClaudeEngine implements SessionEngine {
         reportNotSent();
         const translated = translator.onMessage(raced.value.value);
         if (frame.type === "system" && frame.subtype === "task_notification" && !translated.some(event => event.type === "claude_background_task")) {
-          if (this.nativeBackgroundTasks.knowsNotification(frame)) this.notificationPending = true;
+          if (this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
           else this.unmatchedNotification = true;
         }
         for (const event of translated) {
-          if (frame.type === "system" && frame.subtype === "task_notification" && event.type === "claude_background_task" && event.status !== "running") this.notificationPending = true;
+          if (frame.type === "system" && frame.subtype === "task_notification" && event.type === "claude_background_task" && event.status !== "running") this.noteNotification(frame);
           if (event.type === "loop_end") terminal = true;
           yield event;
         }
@@ -2833,10 +2854,10 @@ export class ClaudeEngine implements SessionEngine {
   private absorbIdleFrame(frame: ClaudeStreamMessage): void {
     try {
       if (frame.type === "system" && (frame as { subtype?: string }).subtype === "init") {
-        if (this.notificationPending && this.foreignTurn === null) {
+        if (this.pendingNotifications.length > 0 && this.foreignTurn === null) {
           this.nativeArmed = !this.unmatchedNotification;
           if (this.unmatchedNotification) console.error("[claude] background turn has an unrecognised task notification");
-          this.notificationPending = false;
+          this.consumeNotification();
         }
         if (!this.nativeTurn) this.unmatchedNotification = false;
         // Live posture is state, not transcript: reconcile even mid-foreign-turn.
@@ -2862,9 +2883,9 @@ export class ClaudeEngine implements SessionEngine {
         const task = this.nativeBackgroundTasks.onFrame(frame);
         if (task) {
           this.emitDetached(task);
-          if (frame.subtype === "task_notification" && task.status !== "running") this.notificationPending = true;
+          if (frame.subtype === "task_notification" && task.status !== "running") this.noteNotification(frame);
         } else if (frame.type === "system" && frame.subtype === "task_notification") {
-          if (this.nativeBackgroundTasks.knowsNotification(frame)) this.notificationPending = true;
+          if (this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
           else this.unmatchedNotification = true;
         }
         return;
