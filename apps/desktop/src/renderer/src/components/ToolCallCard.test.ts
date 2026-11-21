@@ -2462,10 +2462,16 @@ describe("ToolCallCard (SSR) — open-in-preview control", () => {
   });
 
   it("offers external opening for a blocked Markdown preview", () => {
-    const html = renderRow({ path: "/other/plan.md", open: () => {}, error: "outside_allowed_roots", openExternal: () => {} });
-    expect(html).toContain("Preview blocked: file is outside allowed folders.");
-    expect(html).toContain("Open externally");
-    expect(html).toContain("Success");
+    for (const tool of ["Read", "Write"]) {
+      for (const path of ["/other/plan.md", "/other/plan.markdown", "/other/PLAN.MARKDOWN"]) {
+        const selected = previewablePathOf(tool, { file_path: path });
+        expect(selected).toBe(path);
+        const html = renderRow({ path: selected!, open: () => {}, error: "outside_allowed_roots", openExternal: () => {} });
+        expect(html).toContain("Preview blocked: file is outside allowed folders.");
+        expect(html).toContain("Open externally");
+        expect(html).toContain("Success");
+      }
+    }
   });
 
   it("shows no error span while nothing has failed", () => {

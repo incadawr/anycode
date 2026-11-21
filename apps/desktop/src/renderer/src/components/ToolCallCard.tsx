@@ -2253,7 +2253,7 @@ export function ToolCallHeaderRow({
           </button>
           {previewAction.error !== null && <span className="tool-call-open-error" role="alert">
             {previewAction.error.includes("outside_allowed_roots") ? "Preview blocked: file is outside allowed folders." : previewAction.error}
-            {previewAction.error.includes("outside_allowed_roots") && /\.md(?:own)?$/i.test(previewAction.path) && previewAction.openExternal && (
+            {previewAction.error.includes("outside_allowed_roots") && /\.(?:md|markdown)$/i.test(previewAction.path) && previewAction.openExternal && (
               <button type="button" className="tool-call-open" onClick={previewAction.openExternal}>Open externally…</button>
             )}
           </span>}
