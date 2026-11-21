@@ -1,0 +1,15 @@
+{"type": "system", "subtype": "init"}
+{"type": "system", "subtype": "api_retry"}
+{"type": "assistant", "content_types": [["tool_use", "Bash"]]}
+{"type": "rate_limit_event"}
+{"type": "system", "subtype": "background_tasks_changed"}
+{"type": "system", "subtype": "task_started", "task_id": "bhdalrdmc", "tool_use_id": "toolu_01YEji1o7oM2sm4TSK7Y2YcA", "task_type": "local_bash"}
+{"type": "user", "content_types": [["tool_result", null]]}
+{"type": "assistant", "content_types": [["text", null]]}
+{"type": "result", "subtype": "success", "is_error": false, "stop_reason": "end_turn", "result_sample": "Started `sleep 8` in the background (task bhdalrdmc). I'll reply DONE when it completes."}
+{"type": "system", "subtype": "task_updated", "task_id": "bhdalrdmc"}
+{"type": "system", "subtype": "task_notification", "task_id": "bhdalrdmc", "tool_use_id": "toolu_01YEji1o7oM2sm4TSK7Y2YcA", "status": "completed"}
+{"type": "system", "subtype": "background_tasks_changed"}
+{"type": "system", "subtype": "init"}
+{"type": "assistant", "content_types": [["text", null]]}
+{"type": "result", "subtype": "success", "is_error": false, "origin": {"kind": "task-notification", "producer": "session-task", "runId": "0mwqi9ele-c94219a4"}, "stop_reason": "end_turn", "result_sample": "DONE"}
