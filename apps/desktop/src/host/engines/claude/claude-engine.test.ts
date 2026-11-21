@@ -3450,15 +3450,63 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
   });
 });
 
-it("publishes refreshed subscription quota after a completed turn", async () => {
+it("does not block a completed turn on quota and publishes only while alive", async () => {
   const transport = new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl") });
+  let resolveUsage!: (value: unknown) => void;
+  const usage = new Promise<unknown>((resolve) => { resolveUsage = resolve; });
   const original = transport.controlRequest.bind(transport);
   vi.spyOn(transport, "controlRequest").mockImplementation(async (subtype, request) => {
-    if (subtype === "get_usage") return { rate_limits: { limits: [{ kind: "session", percent: 25, is_active: true }, { kind: "weekly_all", percent: 60 }] } } as never;
+    if (subtype === "get_usage") return await usage as never;
     return original(subtype, request);
   });
-  const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
-  const quota = events.find((event) => event.type === "engine_quota");
-  expect(quota).toMatchObject({ quota: { primary: { usedPercent: 25 }, secondary: { usedPercent: 60 } } });
-  expect(types(events).indexOf("engine_quota")).toBeGreaterThan(types(events).indexOf("loop_end"));
+  const engine = engineWith(transport);
+  const detached: AgentEvent[] = [];
+  engine.onDetachedEvent = (event) => detached.push(event);
+  const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+  expect(types(events)).toContain("loop_end");
+  expect(detached.filter((event) => event.type === "engine_quota")).toHaveLength(0);
+  resolveUsage({ rate_limits: { limits: [{ kind: "session", percent: 25, is_active: true }, { kind: "weekly_all", percent: 60 }] } });
+  await vi.waitFor(() => expect(detached).toContainEqual(expect.objectContaining({ type: "engine_quota", quota: expect.objectContaining({ primary: expect.objectContaining({ usedPercent: 25 }) }) })));
+});
+
+it("ignores a quota reply after disposal", async () => {
+  const transport = new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl") });
+  let resolveUsage!: (value: unknown) => void;
+  const usage = new Promise<unknown>((resolve) => { resolveUsage = resolve; });
+  const original = transport.controlRequest.bind(transport);
+  vi.spyOn(transport, "controlRequest").mockImplementation(async (subtype, request) => subtype === "get_usage" ? await usage as never : original(subtype, request));
+  const engine = engineWith(transport);
+  const detached: AgentEvent[] = [];
+  engine.onDetachedEvent = event => detached.push(event);
+  await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+  await engine.dispose("session-close");
+  resolveUsage({ rate_limits: { limits: [{ kind: "session", percent: 25 }] } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(detached.filter(event => event.type === "engine_quota")).toHaveLength(0);
+});
+
+it("coalesces overlapping quota pulls and preserves the last successful snapshot on failure", async () => {
+  const frames = streamFrames("w0-02-control-writeprobe.jsonl");
+  const transport = new FakeTransport({ frames });
+  let resolveUsage!: (value: unknown) => void;
+  const usage = new Promise<unknown>(resolve => { resolveUsage = resolve; });
+  const original = transport.controlRequest.bind(transport);
+  let calls = 0;
+  vi.spyOn(transport, "controlRequest").mockImplementation(async (subtype, request) => {
+    if (subtype !== "get_usage") return original(subtype, request);
+    calls++;
+    if (calls === 1) return await usage as never;
+    throw new Error("unavailable");
+  });
+  const engine = engineWith(transport);
+  const detached: AgentEvent[] = [];
+  engine.onDetachedEvent = event => detached.push(event);
+  await collect(engine.runTurn("first", { signal: new AbortController().signal }));
+  for (const frame of frames) transport.enqueue(frame);
+  await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+  expect(calls).toBe(1);
+  resolveUsage({ rate_limits: { limits: [{ kind: "session", percent: 25 }] } });
+  await vi.waitFor(() => expect(calls).toBe(2));
+  expect(engine.quotaSnapshot()?.limits[0]?.percent).toBe(25);
+  expect(detached.filter(event => event.type === "engine_quota")).toHaveLength(1);
 });

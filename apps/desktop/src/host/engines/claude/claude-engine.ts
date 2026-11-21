@@ -962,6 +962,8 @@ export class ClaudeEngine implements SessionEngine {
    */
   private readonly mcpStatusNotices: AgentEvent[] = [];
   private quota: ClaudeQuotaSnapshot | null = null;
+  private quotaRefreshRunning = false;
+  private quotaRefreshQueued = false;
   /** Cumulative `result.total_cost_usd` for this session (capability `costAccounting`). */
   private totalCostUsd = 0;
   /**
@@ -1320,11 +1322,11 @@ export class ClaudeEngine implements SessionEngine {
    * severity queues an `engine_notice` for the next turn's stream.
    */
   async refreshQuota(): Promise<ClaudeQuotaSnapshot | null> {
-    if (this.replacement || this.disposed) return this.quota;
+    if (this.replacement || this.disposed) return null;
     const generation = this.transportGeneration;
     try {
       const snapshot = decodeClaudeUsage(await this.client.controlRequest<unknown>("get_usage", {}));
-      if (snapshot === null || generation !== this.transportGeneration || this.disposed) return this.quota;
+      if (snapshot === null || (snapshot.windows.length === 0 && snapshot.limits.length === 0) || generation !== this.transportGeneration || this.disposed) return null;
       this.quota = snapshot;
       const notice = quotaNotice(snapshot);
       if (notice !== null && this.settings !== undefined) {
@@ -1334,8 +1336,27 @@ export class ClaudeEngine implements SessionEngine {
     } catch {
       // Quota is additive presentation data: a failed pull never fails a boot
       // or a turn, it just leaves the snapshot as it was.
-      return this.quota;
+      return null;
     }
+  }
+
+  /** Coalesce turns while a physical request is in flight; never hold up a turn. */
+  private scheduleQuotaRefresh(): void {
+    if (this.disposed) return;
+    if (this.quotaRefreshRunning) { this.quotaRefreshQueued = true; return; }
+    this.quotaRefreshRunning = true;
+    void this.refreshQuota().then((snapshot) => {
+      if (!this.disposed && snapshot !== null) {
+        const quota = claudeQuotaToWire(snapshot);
+        if (quota !== null) this.emitDetached({ type: "engine_quota", quota });
+      }
+    }).finally(() => {
+      this.quotaRefreshRunning = false;
+      if (this.quotaRefreshQueued && !this.disposed) {
+        this.quotaRefreshQueued = false;
+        this.scheduleQuotaRefresh();
+      }
+    });
   }
 
   /**
@@ -1936,8 +1957,7 @@ export class ClaudeEngine implements SessionEngine {
       await this.awaitContextUsageInFlight();
       const usage = await this.readContextUsage();
       if (usage !== null) yield usage;
-      const quota = claudeQuotaToWire(await this.refreshQuota());
-      if (quota !== null) yield { type: "engine_quota", quota };
+      this.scheduleQuotaRefresh();
       // session-cumulative token accounting, next to the context
       // meter read above. `lastTurnTokenUsage` is null when this turn's
       // `result.usage` was absent/malformed — no event this turn (fail-soft,
