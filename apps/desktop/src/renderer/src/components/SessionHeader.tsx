@@ -1,4 +1,5 @@
 import { ChildWorktreeControl } from "./ChildWorktreeControl.js";
+import { ClaudeBackgroundTasks } from "./ClaudeBackgroundTasks.js";
 /**
  * Session header (design ui-redesign-direction.md §2.1/§2.4) — replaces
  * `StatusBar`. Mounted as the first child of `ActiveTabBody`, inside the
@@ -260,7 +261,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       )}
 
       {externalEngine && <span className="engine-identity session-header-engine">{engine.id === "codex" ? "Codex" : engine.id}</span>}
-      {claudeBackgroundTasks.map(task => <span key={task.taskId} className={`claude-native-task claude-native-task-${task.status}`} role="status" title={`${task.kind === "bash" ? "Background Bash" : "Monitor"}: ${task.description}\n${task.status}${task.status === "running" ? ` · ${Math.max(0, Math.floor((taskNow - task.startedAt) / 1000))}s` : ""}${task.summary ? ` — ${task.summary}` : ""}`} aria-label={`${task.kind}: ${task.status}`}><span className={task.status === "running" ? "claude-native-task-spinner icon-spin" : ""}>{task.status === "running" ? "" : task.status === "completed" ? "✓" : "!"}</span></span>)}
+      <ClaudeBackgroundTasks tasks={claudeBackgroundTasks} now={taskNow} />
 
       <ChildWorktreeControl key={tabId} tabId={tabId} />
       {!isNewSession && <EnvironmentMenu placement="header" />}

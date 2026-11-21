@@ -138,8 +138,25 @@ async function wireFixture() {
   const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
   const close = async () => { channel.port1.close(); channel.port2.close(); await session.shutdown(); };
   send({ type: "ui_ready" });
-  return { transport, received, send, settle, close };
+  return { transport, received, send, settle, close, session };
 }
+
+it("authorizes output selection only for a completed task of this Claude session", async () => {
+  const { received, send, settle, close, session } = await wireFixture();
+  const task = { type: "claude_background_task" as const, taskId: "task", toolCallId: "tool", kind: "bash" as const, description: "fixture", startedAt: 1, status: "running" as const };
+  try {
+    session.emitDetachedSubagentEvent(task);
+    send({ type: "claude_task_output_request", taskId: "unknown", requestId: "unknown" });
+    send({ type: "claude_task_output_request", taskId: "task", requestId: "running" });
+    await settle();
+    expect(received).toContainEqual({ type: "claude_task_output", taskId: "unknown", requestId: "unknown" });
+    expect(received).toContainEqual({ type: "claude_task_output", taskId: "task", requestId: "running" });
+    session.emitDetachedSubagentEvent({ ...task, status: "completed" });
+    send({ type: "claude_task_output_request", taskId: "task", requestId: "completed" });
+    await settle();
+    expect(received).toContainEqual({ type: "claude_task_output", taskId: "task", requestId: "completed", sessionRef: "session" });
+  } finally { await close(); }
+});
 
 it("waits for both deferred and subsequent idle effort acknowledgements", async () => {
   const { transport, send, settle, close } = await wireFixture();

@@ -554,6 +554,7 @@ export type UiToHostMessage =
   // Renderer Panels sub-slice D: background-task list/output/kill controls.
   | { type: "task_list_request" }
   | { type: "task_output_request"; taskId: string }
+  | { type: "claude_task_output_request"; taskId: string; requestId: string }
   | { type: "task_kill_request"; requestId: string; taskId: string; confirmed: true }
   // Slice P7.26/R2 (design slice-P7.26-cut.md §4-7): read-only checkpoint-list
   // request (mirror of lsp_status_request — payload-less, served even mid-turn:
@@ -1092,6 +1093,7 @@ export type HostToUiMessage =
   // Renderer Panels sub-slice D: trusted background-task snapshots and output chunks.
   | { type: "task_list"; tasks: BackgroundTaskSnapshot[] }
   | { type: "task_output"; taskId: string; snapshot: BackgroundTaskSnapshot | null; newOutput: string }
+  | { type: "claude_task_output"; taskId: string; requestId: string; sessionRef?: string }
   | { type: "task_kill_result"; requestId: string; ok: boolean; reason?: string }
   // slice 3 §2: trusted snapshot of the host's own live
   // background-children registry (host/child-session-port.ts). Pushed on
@@ -1556,6 +1558,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("claude_restart_request") }).strict(),
   taskListRequestSchema,
   taskOutputRequestSchema,
+  z.object({ type: z.literal("claude_task_output_request"), taskId: z.string().min(1).max(128), requestId: z.string().min(1).max(128) }).strict(),
   taskKillRequestSchema,
   checkpointListRequestSchema,
   rewindRequestSchema,

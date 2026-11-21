@@ -9499,3 +9499,9 @@ dialog.role-picker-dialog {
 .sidebar-row-menu-button:focus-visible { outline: 2px solid var(--border-strong); }
 .sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-open { padding-right: calc(var(--sp-2) + 42px); }
 .sidebar-row-wrap:has(> .sidebar-row-menu-button) .sidebar-row-resumable { padding-right: 44px; }
+
+.claude-tasks { position: relative; display: flex; align-items: center; gap: 2px; -webkit-app-region: no-drag; }
+.claude-tasks .claude-native-task { min-width: 20px; padding: 3px; }
+.claude-task-details { position: absolute; z-index: 30; top: 100%; left: 0; width: min(360px, 80vw); max-height: 50vh; overflow: auto; padding: 12px; color: var(--text-1); background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 16px #0004; }
+.claude-task-description, .claude-task-summary { overflow-wrap: anywhere; white-space: pre-wrap; margin: 4px 0; }
+.claude-task-output { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
