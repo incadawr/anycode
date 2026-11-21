@@ -89,6 +89,10 @@ try {
   await poll(async () => { try { return (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId]?.connection === "ready"; } catch { return false; } });
   if (tool === "Write") await api(`/tabs/${tab.tabId}/mode`, "POST", { mode: "edit" });
   await api(`/tabs/${tab.tabId}/prompt`, "POST", { text: `${tool} the fixture` });
+  if (tool === "Write") {
+    await poll(() => evaluate("!!document.querySelector('.permission-allow-button')"));
+    await evaluate("document.querySelector('.permission-allow-button').click()");
+  }
   await poll(() => evaluate(`([...document.querySelectorAll('.tool-call-toggle-row')].some(e => e.textContent.includes(${JSON.stringify(tool)}) && e.textContent.includes('Success') && e.querySelector('.tool-call-open')))`) , 60000);
   await evaluate(`([...document.querySelectorAll('.tool-call-toggle-row')].find(e => e.textContent.includes(${JSON.stringify(tool)}) && e.textContent.includes('Success')).querySelector('.tool-call-open').click())`);
   await poll(() => evaluate("document.querySelector('.tool-call-open-error')?.textContent.includes('Open externally')"));

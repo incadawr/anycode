@@ -539,6 +539,18 @@ describe("handleArtifactOpen", () => {
     expect(no.reveal).not.toHaveBeenCalled();
   });
 
+  it("opens contained Markdown without confirmation and refuses HTML", async () => {
+    const { deps, workspace, openPath, confirmOpen } = await makeRig();
+    const markdown = join(workspace, "notes.MARKDOWN");
+    const html = join(workspace, "notes.html");
+    await seed(markdown, "# hi");
+    await seed(html, "<p>hi</p>");
+    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: markdown })).toEqual({ ok: true });
+    expect(openPath).toHaveBeenCalledWith(await realpath(markdown));
+    expect(confirmOpen).not.toHaveBeenCalled();
+    expect(await handleArtifactOpen(deps, { tabId: TAB_ID, path: html })).toEqual({ ok: false, reason: "not_openable" });
+  });
+
   it("openPaths an in-root image (allowlisted extension)", async () => {
     const { deps, workspace, openPath, reveal } = await makeRig();
     await seed(join(workspace, "icon.png"), "png");
