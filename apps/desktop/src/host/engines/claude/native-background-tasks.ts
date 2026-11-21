@@ -8,6 +8,18 @@ export class ClaudeNativeBackgroundTasks {
   private readonly tasks = new Map<string, Task>();
   private readonly runs = new Map<string, string>();
 
+  /** Transport loss does not establish whether the native command stopped. */
+  abandonAll(): Task[] {
+    const changed: Task[] = [];
+    for (const [id, task] of this.tasks) {
+      if (task.status !== "running") continue;
+      const unknown: Task = { ...task, status: "unknown", summary: "Claude connection ended; task status is unknown." };
+      this.tasks.set(id, unknown);
+      changed.push(unknown);
+    }
+    return changed;
+  }
+
   knowsNotification(frame: ClaudeStreamMessage): boolean {
     if (frame.type !== "system" || frame.subtype !== "task_notification") return false;
     const f = frame as Record<string, unknown>;
@@ -34,7 +46,7 @@ export class ClaudeNativeBackgroundTasks {
       return task;
     }
     const old = this.tasks.get(id);
-    if (!old || old.status !== "running" || (typeof f.tool_use_id === "string" && f.tool_use_id !== old.toolCallId)) return undefined;
+    if (!old || (old.status !== "running" && !(old.status === "unknown" && f.subtype === "task_notification")) || (typeof f.tool_use_id === "string" && f.tool_use_id !== old.toolCallId)) return undefined;
     const run = this.runs.get(id);
     if (run && typeof f.run_id === "string" && run !== f.run_id) return undefined;
     if (f.subtype === "task_progress") {
@@ -49,6 +61,7 @@ export class ClaudeNativeBackgroundTasks {
     const task: Task = { ...old, status,
       ...(typeof f.summary === "string" ? { summary: f.summary } : {}),
       ...(typeof f.output_file === "string" ? { outputFile: f.output_file } : {}) };
+    if (old.status === "unknown" && typeof f.summary !== "string") delete task.summary;
     this.tasks.set(id, task);
     return task;
   }

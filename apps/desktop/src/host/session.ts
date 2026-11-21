@@ -3422,8 +3422,8 @@ export class Session {
         if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_start" });
         for (const boundary of this.switchBoundaries) this.outbound.sendDirect(boundary);
         this.outbound.replay();
-        if (this.claudeTurnPreview && this.claudeTurnPreview.turnId === this.turnId) this.outbound.sendDirect({ type: "agent_event", ...this.claudeTurnPreview });
         if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_end" });
+        if (this.claudeTurnPreview && this.claudeTurnPreview.turnId === this.turnId) this.outbound.sendDirect({ type: "agent_event", ...this.claudeTurnPreview });
         for (const state of this.detachedCardStates.values()) {
           for (const event of [state.start, state.latest]) {
             if (event) this.outbound.sendDirect({ type: "agent_event", turnId: "detached-subagent", event });

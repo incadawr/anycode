@@ -1072,6 +1072,12 @@ export class ClaudeEngine implements SessionEngine {
     this.pendingNotifications.shift();
   }
 
+  private trackTranslatedNotification(frame: ClaudeStreamMessage, events: readonly AgentEvent[]): void {
+    if (frame.type !== "system" || frame.subtype !== "task_notification") return;
+    if (events.some(event => event.type === "claude_background_task" && event.status !== "running") || this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
+    else this.unmatchedNotification = true;
+  }
+
   private emitDetached(event: AgentEvent): void {
     try {
       this.onDetachedEvent?.(event);
@@ -1093,9 +1099,10 @@ export class ClaudeEngine implements SessionEngine {
     this.unmatchedNotification = false;
   }
 
-  /** The CLI's own agents die with its process: settle their cards instead of leaving them running. */
-  private settleOrphanedSubagents(): void {
+  /** Settle agent cards and mark native task outcomes unknown when observation ends. */
+  private settleOrphanedTasks(): void {
     for (const event of this.subagentTasks.abandonAll()) this.emitDetached(event);
+    for (const event of this.nativeBackgroundTasks.abandonAll()) this.emitDetached(event);
   }
 
   constructor(
@@ -1272,7 +1279,7 @@ export class ClaudeEngine implements SessionEngine {
     this.stopIdleReader();
     this.frameConsumed();
     this.approvals?.denyAll("Claude transport is restarting", "turn_cancelled");
-    this.settleOrphanedSubagents();
+    this.settleOrphanedTasks();
     const factory = this.transportFactory!;
     const abort = this.replacementAbort = new AbortController();
     const current = () => !this.disposed && !abort.signal.aborted && generation === this.transportGeneration;
@@ -1820,7 +1827,7 @@ export class ClaudeEngine implements SessionEngine {
             this.foreignTurn = null;
             // Every way out but "done" leaves the CLI closed or gone: its
             // agents can no longer report, so their cards settle here.
-            if (stopped !== "done") this.settleOrphanedSubagents();
+            if (stopped !== "done") this.settleOrphanedTasks();
             if (stopped === "settle-timeout") {
               const settledError = new Error(
                 `Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms; the session was closed. Start a new session to continue.`,
@@ -1934,7 +1941,7 @@ export class ClaudeEngine implements SessionEngine {
             );
             this.terminalError = settledError;
             void this.client.close().catch(() => {});
-            this.settleOrphanedSubagents();
+            this.settleOrphanedTasks();
             yield {
               type: "engine_notice",
               level: "info",
@@ -1957,7 +1964,7 @@ export class ClaudeEngine implements SessionEngine {
           // Transport closed under a pending Stop (e.g. Stop then tab close):
           // that is the cancellation the user asked for, not an engine error.
           if (abortObserved) {
-            this.settleOrphanedSubagents();
+            this.settleOrphanedTasks();
             reportNotSent();
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return;
@@ -2023,7 +2030,9 @@ export class ClaudeEngine implements SessionEngine {
             this.nativeArmed = false;
             for (const candidate of candidateFrames) {
               if (candidate.type === "assistant" || candidate.type === "stream_event" || (candidate.type === "system" && candidate.subtype === "init")) options.onInputAccepted?.();
-              for (const event of translator.onMessage(candidate)) {
+              const translated = translator.onMessage(candidate);
+              this.trackTranslatedNotification(candidate, translated);
+              for (const event of translated) {
                 if (event.type === "loop_end") terminal = true;
                 yield event;
               }
@@ -2054,12 +2063,8 @@ export class ClaudeEngine implements SessionEngine {
           (frame.type === "stream_event" || frame.type === "assistant" || (frame.type === "system" && frame.subtype === "init"))) options.onInputAccepted?.();
         reportNotSent();
         const translated = translator.onMessage(raced.value.value);
-        if (frame.type === "system" && frame.subtype === "task_notification" && !translated.some(event => event.type === "claude_background_task")) {
-          if (this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
-          else this.unmatchedNotification = true;
-        }
+        this.trackTranslatedNotification(frame, translated);
         for (const event of translated) {
-          if (frame.type === "system" && frame.subtype === "task_notification" && event.type === "claude_background_task" && event.status !== "running") this.noteNotification(frame);
           if (event.type === "loop_end") terminal = true;
           yield event;
         }
@@ -2115,7 +2120,7 @@ export class ClaudeEngine implements SessionEngine {
       this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
       // A turn that lost its transport releases the child.
       void this.client.close().catch(() => {});
-      this.settleOrphanedSubagents();
+      this.settleOrphanedTasks();
       yield { type: "error", error: this.terminalError, safe: engineDeathSafe(this.terminalError) };
       reportNotSent();
       this.stoppedErrorReported = this.terminalError instanceof ClaudeStoppedError;
@@ -2352,7 +2357,7 @@ export class ClaudeEngine implements SessionEngine {
       this.terminalError = terminalError;
       this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
       void this.client.close().catch(() => {});
-      this.settleOrphanedSubagents();
+      this.settleOrphanedTasks();
       ok = false;
       error = terminalError.message;
     } finally {
@@ -2378,7 +2383,7 @@ export class ClaudeEngine implements SessionEngine {
     this.transportGeneration += 1;
     this.replacementAbort?.abort(new ClaudeTransportAbortError("claude_transport_retired"));
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
-    this.settleOrphanedSubagents();
+    this.settleOrphanedTasks();
     // epoch bump + wake stops the idle reader; the disposal wait
     // settles a waiting owner turn, which terminalizes cancelled.
     this.stopIdleReader();
@@ -2947,6 +2952,8 @@ export class ClaudeEngine implements SessionEngine {
           } else if (!this.unmatchedNotification && fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0) {
             native.events.push(...native.translator.onMessage(frame));
             for (const event of native.events) native.stream.push(event);
+            // This turn ran independently of runTurn's post-turn refresh.
+            this.scheduleQuotaRefresh();
           } else {
             if (this.turnActive) this.nativeAmbiguous = true;
             console.error("[claude] autonomous turn result did not identify a task notification");
@@ -3024,7 +3031,7 @@ export class ClaudeEngine implements SessionEngine {
         if (epoch === this.idleEpoch) {
           this.idleFailure = error instanceof Error ? error : new Error("Claude transport failed");
           this.failNativeTurn();
-          this.settleOrphanedSubagents();
+          this.settleOrphanedTasks();
         }
         return null;
       }), wake])
@@ -3042,7 +3049,7 @@ export class ClaudeEngine implements SessionEngine {
           if (value.done) {
             this.idleFailure = this.client.terminalFailure ?? new Error("Claude exited while idle");
             this.failNativeTurn();
-            this.settleOrphanedSubagents();
+            this.settleOrphanedTasks();
             this.idleReading = false;
             return;
           }
