@@ -523,6 +523,22 @@ describe("handleArtifactReadImage", () => {
 });
 
 describe("handleArtifactOpen", () => {
+  it("confirms an outside Markdown file each time and respects cancellation", async () => {
+    const yes = await makeRig({ confirm: true });
+    const path = join(yes.home, "outside.md");
+    await seed(path, "# test");
+    await handleArtifactAllow(yes.deps, { tabId: TAB_ID, path });
+    expect(await handleArtifactOpen(yes.deps, { tabId: TAB_ID, path })).toEqual({ ok: true });
+    expect(yes.confirmOpen).toHaveBeenCalledWith(await realpath(path));
+    expect(yes.openPath).toHaveBeenCalledWith(await realpath(path));
+    const no = await makeRig({ confirm: false });
+    const other = join(no.home, "outside.md");
+    await seed(other, "# test");
+    expect(await handleArtifactOpen(no.deps, { tabId: TAB_ID, path: other })).toEqual({ ok: false, reason: "declined" });
+    expect(no.openPath).not.toHaveBeenCalled();
+    expect(no.reveal).not.toHaveBeenCalled();
+  });
+
   it("openPaths an in-root image (allowlisted extension)", async () => {
     const { deps, workspace, openPath, reveal } = await makeRig();
     await seed(join(workspace, "icon.png"), "png");

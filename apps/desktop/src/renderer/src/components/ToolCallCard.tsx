@@ -1898,6 +1898,7 @@ export interface ArtifactPreviewAction {
   open: () => void;
   /** Main's refusal reason from the last attempt (containment, missing file), rendered beside the control; `null` while nothing has failed. */
   error: string | null;
+  openExternal?: () => void;
 }
 
 /**
@@ -1924,6 +1925,11 @@ function useArtifactPreviewAction(path: string | null): ArtifactPreviewAction | 
   return {
     path,
     error,
+    openExternal: () => {
+      void api.open(tabId, path).then((result) => {
+        if (!result.ok && result.reason !== "declined") setError(`Could not open file: ${result.reason}`);
+      });
+    },
     open: () => {
       void api.preview(tabId, path).then((result) => {
         if (result.ok) focusExistingPreview(tabId, result.value.previewId);
@@ -2245,7 +2251,12 @@ export function ToolCallHeaderRow({
           >
             Open
           </button>
-          {previewAction.error !== null && <span className="tool-call-open-error">{previewAction.error}</span>}
+          {previewAction.error !== null && <span className="tool-call-open-error" role="alert">
+            {previewAction.error.includes("outside_allowed_roots") ? "Preview blocked: file is outside allowed folders." : previewAction.error}
+            {previewAction.error.includes("outside_allowed_roots") && /\.(?:md|markdown)$/i.test(previewAction.path) && previewAction.openExternal && (
+              <button type="button" className="tool-call-open" onClick={previewAction.openExternal}>Open externally…</button>
+            )}
+          </span>}
         </>
       )}
     </div>

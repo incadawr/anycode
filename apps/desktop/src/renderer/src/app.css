@@ -4334,6 +4334,7 @@ button.environment-menu-row:hover,
    alone painted before this wrapper existed, and collapsed cards still fill
    the card's clickable header exactly as before. */
 .tool-call-toggle-row {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
 }
@@ -4655,7 +4656,8 @@ button.environment-menu-row:hover,
    refused while the card itself is perfectly fine, so this reports beside
    the control rather than through the card's own status badge. */
 .tool-call-toggle-row .tool-call-open-error {
-  flex-shrink: 0;
+  flex: 0 0 100%;
+  overflow-wrap: anywhere;
   margin-right: var(--sp-3);
   color: var(--danger);
   font-size: var(--fs-2xs);

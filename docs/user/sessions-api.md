@@ -507,7 +507,7 @@ rest of `settings.json` keeps working.
 3. Call `get_message_status` with the returned `messageId`. A state of
    `acknowledged` means the session took the message. It does not prove the
    model has read or applied it.
-4. `wait_for_result` defaults to 30 seconds on the server and accepts at most
+4. `wait_for_result` defaults to 25 seconds on the server and accepts at most
    120 seconds. Call `wait_for_result` with the same `sessionId` and `messageId` to get the
    answer. Give a request timeout longer than `timeoutMs` in your MCP client
    (its default is 60 seconds), or keep `timeoutMs` at 50000 or less and call
