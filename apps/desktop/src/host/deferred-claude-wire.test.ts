@@ -147,6 +147,13 @@ it("authorizes output selection only for a completed task of this Claude session
     send({ type: "claude_task_output_request", taskId: "task", requestId: "completed" });
     await settle();
     expect(received).toContainEqual({ type: "claude_task_output", taskId: "task", requestId: "completed", sessionRef: "session" });
+    received.length = 0;
+    send({ type: "ui_ready" });
+    await settle();
+    expect(received).toContainEqual(expect.objectContaining({ type: "agent_event", event: expect.objectContaining({ taskId: "task", status: "completed" }) }));
+    send({ type: "claude_task_output_request", taskId: "task", requestId: "after-reload" });
+    await settle();
+    expect(received).toContainEqual({ type: "claude_task_output", taskId: "task", requestId: "after-reload", sessionRef: "session" });
   } finally { await close(); }
 });
 
