@@ -509,9 +509,9 @@ rest of `settings.json` keeps working.
    model has read or applied it.
 4. `wait_for_result` defaults to 25 seconds on the server and accepts at most
    120 seconds. Call `wait_for_result` with the same `sessionId` and `messageId` to get the
-   answer. Give a request timeout longer than `timeoutMs` in your MCP client
-   (its default is 60 seconds), or keep `timeoutMs` at 50000 or less and call
-   again while the status is `pending`.
+   answer. A host poll can take up to 20 seconds beyond `timeoutMs`. Allow at
+   least 150 seconds in the MCP client for the maximum wait; with a 60-second
+   client timeout, use `timeoutMs` of 30000 or less and retry while pending.
 
 Services that bridge an outside channel use the same tools. See the
 [channel plugin guide](https://github.com/incadawr/anycode/blob/master/docs/development/channel-plugins.md).
