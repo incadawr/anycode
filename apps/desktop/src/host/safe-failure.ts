@@ -44,7 +44,7 @@ export function classifyEngineFailure(error: unknown): { code: SafeFailureCode; 
   let code: SafeFailureCode = "unknown";
   if (status === 401 || /authentication.failed|not signed in|unauthorized|auth.*expired|login required/i.test(text)) code = "auth";
   else if (status === 403 || /permission denied|organization.*not.*permit|forbidden/i.test(text)) code = "forbidden";
-  else if (/quota|usage limit|billing.*(?:problem|error)|credit.*exhaust/i.test(text)) code = "quota";
+  else if (/quota|usage limit|usage credits|requires[^\n]*credits|billing.*(?:problem|error)|credit.*exhaust/i.test(text)) code = "quota";
   else if (status === 429 || /rate.?limit|too many requests/i.test(text)) code = "rate_limited";
   else if (/prompt.too.long|context.*(?:limit|length|exceed)|maximum.*tokens/i.test(text)) code = "context_limit";
   else if (/timeout|timed out/i.test(text)) code = "connect_timeout";

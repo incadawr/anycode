@@ -21,3 +21,8 @@ it("preserves the native safe explanation on the wire without a sign-in hint", (
   const wire = sanitizeAgentEvent({ type: "error", error: new Error("Bearer raw-secret"), safe: { code: "auth", statusCode: 401, message: "authentication failed: This API key has expired. Signing in again will not renew this key." } });
   expect(wire.type === "error" && wire.error.message).toBe("authentication failed (HTTP 401): This API key has expired. Signing in again will not renew this key.");
 });
+
+it("distinguishes credit exhaustion from a plain 429", () => {
+  expect(classifyEngineFailure(Object.assign(new Error("Fable 5.2 requires usage credits. Switch to another model"), { status: 429 })).code).toBe("quota");
+  expect(classifyEngineFailure(Object.assign(new Error("Too many requests"), { status: 429 })).code).toBe("rate_limited");
+});
