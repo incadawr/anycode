@@ -85,6 +85,9 @@ function consoleArgument(arg: unknown): string {
 
 /** Keep only explicitly understood host messages; dynamic output is suppressed. */
 export function safeHostLine(line: string): string | undefined {
+  if (/^\[claude\] automatic resume failed: (?:auth|forbidden|quota|rate_limited|proxy_unreachable|proxy_auth|tls|network|connect_timeout|server|context_limit|engine_connection|engine_protocol|unknown)(?: HTTP [1-5][0-9]{2})?$/.test(line)) return line;
+  if (line === "[claude] background turn has an unrecognised task notification" ||
+      line === "[claude] autonomous turn result did not identify a task notification") return line;
   if (line.startsWith("[host] started. workspace=")) return "[host] started";
   if (line.startsWith("[host] initialized. workspace=")) return "[host] initialized";
   if (line === "[host] UI port wired." || line === "[host] terminal port wired.") return line;

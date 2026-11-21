@@ -29,6 +29,19 @@ describe("local crash reporting", () => {
 });
 
 describe("diagnostic log", () => {
+  it("persists only fixed Claude resume and ambiguity diagnostics through the host stream", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-claude-"));
+    const log = createDiagnosticLog(dir);
+    const host = log.stream("host stderr");
+    host(Buffer.from("[claude] automatic resume failed: rate_limited HTTP 429\n[claude] background turn has an unrecognised task notification\n[claude] autonomous turn result did not identify a task notification\n[claude] automatic resume failed: rate_limited HTTP 429 SECRET\n[claude] automatic resume failed: SECRET\n"));
+    host.end(); await log.flush();
+    const text = await readFile(join(dir, "anycode.log"), "utf8");
+    expect(text).toContain("[claude] automatic resume failed: rate_limited HTTP 429");
+    expect(text).toContain("[claude] background turn has an unrecognised task notification");
+    expect(text).toContain("[claude] autonomous turn result did not identify a task notification");
+    expect(text).toContain("[2 host output lines suppressed]");
+    expect(text).not.toContain("SECRET");
+  });
   it("redacts common credentials including split host output", async () => {
     const dir = await mkdtemp(join(tmpdir(), "diagnostic-"));
     const log = createDiagnosticLog(dir);
