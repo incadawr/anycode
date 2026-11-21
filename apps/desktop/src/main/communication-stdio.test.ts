@@ -57,7 +57,7 @@ describe("stdio request deadlines", () => {
       child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: { name } })}\n`);
       await output.next();
     }
-    expect(errors.match(/DEADLINE:\d+/g)).toEqual(["DEADLINE:130000", "DEADLINE:30000", "DEADLINE:30000"]);
+    expect(errors.match(/DEADLINE:\d+/g)).toEqual(["DEADLINE:150000", "DEADLINE:30000", "DEADLINE:30000"]);
   });
 });
 
