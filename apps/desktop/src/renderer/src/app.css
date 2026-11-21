@@ -129,6 +129,8 @@ body {
 }
 .claude-native-task { display: inline-flex; align-items: center; color: var(--text-3); }
 .claude-native-task-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; }
+.claude-turn-preview { flex: 0 1 auto; max-height: 30vh; overflow: auto; margin: 8px 16px; padding: 10px 12px; border: 1px dashed var(--text-3); border-radius: 6px; color: var(--text-2); overflow-wrap: anywhere; }
+.claude-turn-preview-text { white-space: pre-wrap; margin-top: 6px; }
 
 /* Shimmer text treatment (R3 — first consumer of the R2 shimmer keyframe).
    A --text-1 highlight sweeps over a --text-2 base in reading direction

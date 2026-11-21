@@ -1627,6 +1627,10 @@ export class ClaudeEngine implements SessionEngine {
     // or to an owner message sent concurrently. The terminal origin resolves
     // that ambiguity; until then neither translator may claim the frames.
     let candidateFrames: ClaudeStreamMessage[] | null = null;
+    let previewTranslator: ClaudeTurnTranslator | null = null;
+    let previewText = "";
+    let previewVisible = false;
+    const previewTools = new Map<string, { id: string; name: string; status: "preparing" | "requested" | "completed" | "failed" }>();
     let ownerEchoSeen = false;
     const sentContent = userMessageContent(options.origin === "system" ? neutralizeSystemOriginSlashes(input) : input, options.attachments);
     // the run-turn-local PENDING COMPLETION slot for a mid-turn
@@ -1912,6 +1916,7 @@ export class ClaudeEngine implements SessionEngine {
         }
         if (raced.kind === "abort") {
           abortObserved = true;
+          if (previewVisible) { previewVisible = false; yield { type: "claude_turn_preview", preview: null }; }
           // an observed Stop disables mid-turn usage delivery — a
           // measurement settling after the abort must never surface as a
           // context_usage of the dying turn.
@@ -1967,10 +1972,44 @@ export class ClaudeEngine implements SessionEngine {
         // A task-triggered CLI turn can begin after the owner's input was
         // sent. Its init and result do not settle that owner input.
         if (candidateFrames !== null || (frame.type === "system" && frame.subtype === "init" && (this.pendingNotifications.length > 0 || this.unmatchedNotification)) || this.nativeArmed) {
-          candidateFrames ??= [];
+          if (candidateFrames === null) {
+            candidateFrames = [];
+            previewTranslator = new ClaudeTurnTranslator({ turn });
+            previewText = "";
+            previewTools.clear();
+          }
           candidateFrames.push(frame);
           if (candidateFrames.length > 20_000) throw new Error("Claude background turn exceeded the frame buffer limit");
-          if (frame.type !== "result") continue;
+          if (frame.type !== "result") {
+            let changed = false;
+            if (frame.type === "stream_event" && frame.event.type === "content_block_start") {
+              const block = frame.event.content_block;
+              if (block && typeof block === "object") {
+                const value = block as Record<string, unknown>;
+                if (value.type === "tool_use" && typeof value.id === "string" && typeof value.name === "string" && previewTools.size < 100) {
+                  previewTools.set(value.id, { id: value.id, name: value.name.slice(0, 200), status: "preparing" }); changed = true;
+                }
+              }
+            }
+            for (const event of previewTranslator!.onMessage(frame)) {
+              if (event.type === "text_delta" && event.text && previewText.length < 64_000) {
+                previewText = (previewText + event.text).slice(0, 64_000); changed = true;
+              } else if (event.type === "tool_input_start" && previewTools.size < 100) {
+                previewTools.set(event.id, { id: event.id, name: event.toolName.slice(0, 200), status: "preparing" }); changed = true;
+              } else if (event.type === "tool_execution_start" && (previewTools.has(event.toolCallId) || previewTools.size < 100)) {
+                previewTools.set(event.toolCallId, { id: event.toolCallId, name: event.toolName.slice(0, 200), status: "requested" }); changed = true;
+              } else if (event.type === "tool_result") {
+                const tool = previewTools.get(event.outcome.toolCallId);
+                if (tool) { previewTools.set(tool.id, { ...tool, status: event.outcome.status === "success" ? "completed" : "failed" }); changed = true; }
+              }
+            }
+            if (changed && !abortObserved) {
+              previewVisible = true;
+              yield { type: "claude_turn_preview", preview: { text: previewText, tools: [...previewTools.values()] } };
+            }
+            continue;
+          }
+          if (previewVisible) { previewVisible = false; yield { type: "claude_turn_preview", preview: null }; }
           const origin = (frame as Record<string, unknown>).origin;
           const fields = origin && typeof origin === "object" ? origin as Record<string, unknown> : undefined;
           const background = fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0;
@@ -2067,6 +2106,7 @@ export class ClaudeEngine implements SessionEngine {
         };
       }
     } catch (error) {
+      if (previewVisible) { previewVisible = false; yield { type: "claude_turn_preview", preview: null }; }
       const terminalError = this.terminalError ?? (error instanceof Error ? error : new Error(String(error)));
       this.terminalError = !inputDispatched && this.foreignTurn
         ? new ClaudeStoppedError("while idle", terminalError)

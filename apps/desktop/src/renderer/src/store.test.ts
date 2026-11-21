@@ -9905,3 +9905,17 @@ it("tracks detached Claude task updates while ignoring unrelated stale turns", (
   store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: { ...task, status: "completed", summary: "done" } });
   expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "task", status: "completed", summary: "done" }]);
 });
+
+it("keeps provisional Claude content out of the transcript and clears it", () => {
+  const store = createDesktopStore();
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+  store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t" });
+  const preview = { text: "unassigned live text", tools: [{ id: "c", name: "Bash", status: "requested" as const }] };
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "t", event: { type: "claude_turn_preview", preview } });
+  expect(store.getState().claudeTurnPreview).toEqual(preview);
+  expect(JSON.stringify(store.getState().transcript)).not.toContain("unassigned live text");
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "stale", event: { type: "claude_turn_preview", preview: null } });
+  expect(store.getState().claudeTurnPreview).toEqual(preview);
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "t", event: { type: "claude_turn_preview", preview: null } });
+  expect(store.getState().claudeTurnPreview).toBeNull();
+});

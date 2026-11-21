@@ -374,6 +374,77 @@ function ownerFrames(label: string, usage?: Record<string, unknown>): ClaudeStre
 }
 
 describe("Claude autonomous background turn through Session", () => {
+  it("shows two ordinary answers live after an orphaned notification without persisting the preview", async () => {
+    const task = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [task, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const raw = engineWith(transport);
+    const rows: Parameters<ConstructorParameters<typeof ClaudeShadowTranscriptEngine>[1]["record"]>[1][number][] = [];
+    const shadow = new ClaudeShadowTranscriptEngine(raw, { record: (_ref, items) => { rows.push(...items); }, list: async () => rows }, "session-ref-1", []);
+    const h = createHarness({ steps: [], engine: shadow });
+    raw.onNativeTurn = turn => h.session.acceptClaudeNativeTurn(shadow, turn);
+    raw.onDetachedEvent = event => h.session.emitDetachedSubagentEvent(event);
+    const completedTurns = () => new Set(h.received.flatMap(m => m.type === "agent_event" && m.event.type === "loop_end" ? [m.turnId] : [])).size;
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "initial", text: "launch" });
+      await h.waitUntil(() => completedTurns() === 1);
+      transport.push({ type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" } as unknown as ClaudeStreamMessage);
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "claude_background_task" && m.event.status === "completed"));
+      for (const [index, label] of ["first", "second"].entries()) {
+        h.send({ type: "user_message", requestId: label, text: label });
+        await h.waitUntil(() => transport.sent.length === index + 2);
+        for (const frame of [
+          { type: "user", isReplay: true, message: { role: "user", content: label } }, init,
+          { type: "stream_event", event: { type: "message_start", message: { id: label } } },
+          { type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "text" } } },
+          { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: `LIVE ${label}` } } },
+        ]) transport.push(frame as ClaudeStreamMessage);
+        await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "claude_turn_preview" && m.event.preview?.text === `LIVE ${label}`));
+        transport.push(foreignAssistantFrame(label, `LIVE ${label}`));
+        transport.push(foreignToolUseFrame(label, "Bash"));
+        await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "claude_turn_preview" && m.event.preview?.text === `LIVE ${label}` && m.event.preview.tools.some(t => t.name === "Bash" && t.status === "requested")));
+        if (index === 0) {
+          const before = h.received.length;
+          h.send({ type: "ui_ready" });
+          await h.waitUntil(() => h.received.slice(before).some(m => m.type === "agent_event" && m.event.type === "claude_turn_preview" && m.event.preview?.text === "LIVE first"));
+        }
+        expect(JSON.stringify(rows)).not.toContain(`LIVE ${label}`);
+        expect(completedTurns()).toBe(index + 1);
+        transport.push(foreignResultFrame(label));
+        await h.waitUntil(() => completedTurns() === index + 2);
+        await vi.waitFor(() => expect(JSON.stringify(rows)).toContain(`LIVE ${label}`));
+        expect(JSON.stringify(rows).split(`LIVE ${label}`).length - 1).toBe(1);
+        const sentEvents = h.received.filter(m => m.type === "agent_event" && m.event.type === "claude_turn_preview");
+        expect(sentEvents.at(-1)).toMatchObject({ event: { preview: null } });
+      }
+      const journal = (h.session as unknown as { presentationJournal: { snapshot(): unknown } }).presentationJournal;
+      expect(JSON.stringify(journal.snapshot())).not.toContain("claude_turn_preview");
+      expect(transport.sent).toEqual(["launch", "first", "second"]);
+    } finally { await h.session.shutdown(); h.close(); }
+  }, 10_000);
+
+  it("clears a provisional answer immediately on cancellation", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const controller = new AbortController(); const events: AgentEvent[] = [];
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      const pending = (async () => { for await (const event of engine.runTurn("next", { signal: controller.signal })) events.push(event); })();
+      await vi.waitFor(() => expect(transport.sent).toHaveLength(2));
+      for (const frame of [
+        { type: "user", isReplay: true, message: { role: "user", content: "next" } },
+        { type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" },
+        { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] },
+        foreignAssistantFrame("candidate", "LIVE BEFORE STOP"),
+      ]) transport.push(frame as ClaudeStreamMessage);
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "claude_turn_preview", preview: expect.objectContaining({ text: "LIVE BEFORE STOP" }) })));
+      controller.abort();
+      await vi.waitFor(() => expect(events).toContainEqual({ type: "claude_turn_preview", preview: null }));
+      transport.push({ ...foreignResultFrame("stopped"), terminal_reason: "aborted_streaming" } as ClaudeStreamMessage);
+      await pending;
+    } finally { await engine.dispose("session-close"); }
+  });
   it("retains a notification when the owner runs before the autonomous turn", async () => {
     const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
     const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;
@@ -409,7 +480,8 @@ describe("Claude autonomous background turn through Session", () => {
       ]) transport.enqueue(frame as ClaudeStreamMessage);
       const owner = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
       expect(JSON.stringify(owner)).toContain("OWNER OUTPUT next");
-      expect(JSON.stringify(owner)).not.toContain("FOREIGN PRIVATE");
+      expect(JSON.stringify(owner.filter(event => event.type !== "claude_turn_preview"))).not.toContain("FOREIGN PRIVATE");
+      expect(owner).toContainEqual({ type: "claude_turn_preview", preview: null });
       expect(adopted).not.toHaveBeenCalled();
       expect(owner).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
     } finally { await engine.dispose("session-close"); }
@@ -466,6 +538,13 @@ describe("Claude autonomous background turn through Session", () => {
       expect(JSON.stringify(rows)).toContain("NATIVE A");
       expect(JSON.stringify(rows)).toContain("NATIVE B");
       expect(JSON.stringify(rows)).toContain("OWNER OUTPUT next");
+      const ownerRow = rows.find(row => (row.data as { message: { role: string; content: unknown } }).message.role === "user" && (row.data as { message: { content: unknown } }).message.content === "next question");
+      const ownerTurnId = (ownerRow?.data as { turnId?: string } | undefined)?.turnId;
+      expect(ownerTurnId).toBeTruthy();
+      const ownerHistory = rows.filter(row => (row.data as { turnId?: string }).turnId === ownerTurnId);
+      expect(JSON.stringify(ownerHistory)).toContain("OWNER OUTPUT next");
+      expect(JSON.stringify(ownerHistory)).not.toContain("NATIVE A");
+      expect(JSON.stringify(ownerHistory)).not.toContain("NATIVE B");
       expect(transport.sent).toEqual(["launch", "next question"]);
     } finally { await h.session.shutdown(); h.close(); }
   }, 10_000);
@@ -492,7 +571,8 @@ describe("Claude autonomous background turn through Session", () => {
         foreignAssistantFrame("other", "FOREIGN OUTPUT"), foreignResultFrame("other"),
       ]) transport.enqueue(frame as ClaudeStreamMessage);
       const events = await collect(engine.runTurn("owner", { signal: new AbortController().signal }));
-      expect(JSON.stringify(events)).not.toContain("FOREIGN OUTPUT");
+      expect(JSON.stringify(events.filter(event => event.type !== "claude_turn_preview"))).not.toContain("FOREIGN OUTPUT");
+      expect(events).toContainEqual({ type: "claude_turn_preview", preview: null });
       expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "error" }));
     } finally { await engine.dispose("session-close"); }
   });
@@ -541,7 +621,7 @@ describe("Claude autonomous background turn through Session", () => {
       ]) transport.enqueue(frame as ClaudeStreamMessage);
       const owner = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
       expect(JSON.stringify(owner)).toContain("OWNER OUTPUT next");
-      expect(JSON.stringify(owner)).not.toContain("NATIVE RESULT");
+      expect(JSON.stringify(owner.filter(event => event.type !== "claude_turn_preview"))).not.toContain("NATIVE RESULT");
       expect(JSON.stringify(await native[0]!)).toContain("NATIVE RESULT");
       expect(transport.sent).toEqual(["launch", "next"]);
     } finally { await engine.dispose("session-close"); }

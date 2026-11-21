@@ -1320,6 +1320,7 @@ export class Session {
   private readonly presentationJournal: PresentationJournal;
   private readonly detachedCardStates = new Map<string, { start?: WireAgentEvent; latest?: WireAgentEvent; finished: boolean }>();
   private readonly claudeBackgroundTasks = new Map<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>();
+  private claudeTurnPreview: { turnId: string; event: Extract<WireAgentEvent, { type: "claude_turn_preview" }> } | null = null;
   private readonly outbound: Outbound;
   /**
    * NOT readonly — the engine_swap_request handler re-assigns
@@ -3421,6 +3422,7 @@ export class Session {
         if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_start" });
         for (const boundary of this.switchBoundaries) this.outbound.sendDirect(boundary);
         this.outbound.replay();
+        if (this.claudeTurnPreview && this.claudeTurnPreview.turnId === this.turnId) this.outbound.sendDirect({ type: "agent_event", ...this.claudeTurnPreview });
         if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_end" });
         for (const state of this.detachedCardStates.values()) {
           for (const event of [state.start, state.latest]) {
@@ -6329,6 +6331,12 @@ export class Session {
       }
       let noticeConsumeAttempted = false;
       for await (const event of stream) {
+        // Provisional content is neither history nor replayable presentation.
+        if (event.type === "claude_turn_preview") {
+          this.claudeTurnPreview = event.preview ? { turnId, event } : null;
+          this.outbound.sendDirect({ type: "agent_event", turnId, event });
+          continue;
+        }
         this.observeNetworkEvent(event);
         if (this.engine.id === "core" && (event.type === "text_delta" || event.type === "reasoning_delta" || event.type === "tool_input_start" || event.type === "tool_input_delta" || event.type === "tool_input_end" || event.type === "tool_call" || event.type === "finish")) {
           this.lastProviderActivityAt = Date.now();
@@ -6633,6 +6641,10 @@ export class Session {
       await persistTurnError();
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     } finally {
+      if (this.engine.id === "claude") {
+        this.claudeTurnPreview = null;
+        this.outbound.sendDirect({ type: "agent_event", turnId, event: { type: "claude_turn_preview", preview: null } });
+      }
       if (this.peerTurnObserver && !peerTerminalPublished) {
         lastCompletedText = null; peerTextIsFinal = false;
         recordResult("unknown");
