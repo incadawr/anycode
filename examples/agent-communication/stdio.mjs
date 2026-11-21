@@ -22,7 +22,11 @@ let endpoint;
 async function post(request) {
   return fetch(endpoint, {
     method: 'POST', headers: { Authorization: `Bearer ${discovery.token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25' },
-    body: JSON.stringify(request), signal: AbortSignal.timeout(130000),
+    // Only long polls need the extended deadline; ordinary RPCs keep their
+    // original failure bound. Clients must also set their own request timeout.
+    body: JSON.stringify(request), signal: AbortSignal.timeout(
+      request?.method === 'tools/call' && request?.params?.name === 'wait_for_result' ? 130000 : 30000
+    ),
   });
 }
 /**

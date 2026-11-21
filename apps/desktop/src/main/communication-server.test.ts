@@ -1,3 +1,4 @@
+import { ensureStdioAdapterCopy, nodeAdapterFs } from "./communication-adapter.js";
 import { createCommunicationController } from "./communication-controller.js";
 import { mkdtemp, mkdir, writeFile, readFile, stat, rm, realpath } from "node:fs/promises";
 import { realpathSync } from "node:fs";
@@ -892,11 +893,14 @@ describe("session handles and wait_for_result", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(140);
   });
 
-  it("returns pending after the maximum wait through the stdio bridge", async () => {
+  it.skipIf(process.env.ANYCODE_LONG_WAIT_SMOKE !== "1")("returns pending after the maximum wait through the stdio bridge", async () => {
     const f = await waitFixture({ answer: () => ({ state: "running", turnId: "t" }), pollMs: 1000 });
     const sent = await f.send("allowed");
     const client = new Client({ name: "long-wait-test", version: "1" });
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
+    const source = fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url));
+    const copied = ensureStdioAdapterCopy(nodeAdapterFs, source, join(f.dir, "agent-communication"));
+    expect(copied).not.toBeNull();
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [copied!, f.discoveryFile] }));
     cleanups.push(() => client.close());
     const result = await client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 120000 } }, undefined, { timeout: 135000 });
     expect(value(result)).toMatchObject({ status: "pending", messageId: sent.envelope.messageId });

@@ -38,6 +38,29 @@ async function bridge(url: string) {
 }
 function ok(id = 1) { return JSON.stringify({ jsonrpc: "2.0", id, result: "ok" }); }
 
+describe("stdio request deadlines", () => {
+  it("extends only wait_for_result", async () => {
+    const s = await server((_req, res) => res.end(ok()));
+    const dir = await mkdtemp(join(tmpdir(), "anycode-deadline-"));
+    cleanups.push(() => rm(dir, { recursive: true, force: true }));
+    const discovery = join(dir, "endpoint.json");
+    const preload = join(dir, "deadline.cjs");
+    await writeFile(discovery, JSON.stringify({ url: s.url, token }), { mode: 0o600 });
+    await writeFile(preload, `const original = AbortSignal.timeout; AbortSignal.timeout = function(ms) { process.stderr.write('DEADLINE:' + ms + '\\n'); return original.call(this, ms); };`);
+    const script = fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url));
+    const child = spawn(process.execPath, ["--require", preload, script, discovery], { stdio: ["pipe", "pipe", "pipe"] });
+    cleanups.push(() => { child.kill(); });
+    const output = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    let errors = "";
+    child.stderr.on("data", (chunk) => { errors += chunk.toString(); });
+    for (const [id, method, name] of [[1, "tools/call", "wait_for_result"], [2, "tools/call", "get_session_status"], [3, "tools/list", "wait_for_result"]] as const) {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params: { name } })}\n`);
+      await output.next();
+    }
+    expect(errors.match(/DEADLINE:\d+/g)).toEqual(["DEADLINE:130000", "DEADLINE:30000", "DEADLINE:30000"]);
+  });
+});
+
 describe("stdio discovery refresh", () => {
   it("survives being started while the host is down and reaches it once it is up", async () => {
     const s = await server((_req, res) => res.end(ok()));
