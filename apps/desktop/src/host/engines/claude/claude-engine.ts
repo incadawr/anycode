@@ -1508,7 +1508,11 @@ export class ClaudeEngine implements SessionEngine {
         ...(this.nativeMaterialized ? { resume: this.sessionRef } : { sessionId: this.sessionRef }),
         ...(this.settings?.effort ? { effort: this.settings.effort } : {}),
       });
-    } catch {
+    } catch (error) {
+      // Replacement may fail for a different reason from the original exit.
+      // Do not log raw CLI/provider text: it can contain credentials or paths.
+      const classified = classifyEngineFailure(error);
+      console.error(`[claude] automatic resume failed: ${classified.code}${classified.statusCode !== undefined ? ` HTTP ${classified.statusCode}` : ""}`);
       this.terminalError = new ClaudeStoppedError("while idle", failure, true);
     }
   }

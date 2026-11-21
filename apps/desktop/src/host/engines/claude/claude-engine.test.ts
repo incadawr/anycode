@@ -1050,7 +1050,8 @@ describe("ClaudeEngine — cancellation and disposal", () => {
 
   it("reports idle exit details once if resume fails and preserves unsent input", async () => {
     const dead = new FakeTransport({ rejectStreamOnce: new ClaudeClientError("claude exited unexpectedly (code=1, signal=SIGTERM)") });
-    const factory = vi.fn(async () => { throw new Error("private spawn details"); });
+    const factory = vi.fn(async () => { throw new Error("network private spawn details"); });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false, factory);
     engine.nativeMaterialized = true;
     dead.releaseStreamReject();
@@ -1058,6 +1059,8 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     const notSent = vi.fn();
     const first = await collect(engine.runTurn("recover me", { signal: new AbortController().signal, onInputNotSent: notSent }));
     expect(factory).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith("[claude] automatic resume failed: network");
+    log.mockRestore();
     expect(notSent).toHaveBeenCalledOnce();
     const error = first.find(event => event.type === "error");
     expect(error).toMatchObject({ safe: { code: "engine_dead", message: expect.stringContaining("while idle") } });
