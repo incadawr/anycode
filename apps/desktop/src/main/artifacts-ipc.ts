@@ -655,10 +655,10 @@ export async function handleArtifactReadImage(deps: ArtifactsIpcDeps, raw: unkno
 }
 
 /**
- * artifact-open: `shell.openPath`, gated on the image-extension allowlist
- * (openPath EXECUTES non-viewable types via the OS handler) and — outside the
+ * artifact-open: `shell.openPath`, gated on the image and Markdown extension allowlist
+ * (openPath EXECUTES other types via the OS handler) and — outside the
  * allowed roots, and not already consented — on an explicit user
- * confirmation. The extension gate runs FIRST: never prompt about (or
+ * confirmation (always required for outside Markdown). The extension gate runs FIRST: never prompt about (or
  * silently allow via a stale grant) a file that would be refused either way.
  * An openPath error (no handler, user cancel) degrades to reveal so the user
  * is never left with a dead click.
@@ -672,10 +672,10 @@ export async function handleArtifactOpen(deps: ArtifactsIpcDeps, raw: unknown): 
   if ("failure" in resolved) {
     return { ok: false, reason: resolved.failure };
   }
-  if (!OPENABLE_EXTENSIONS.has(extensionOf(resolved.realPath))) {
+  if (!OPENABLE_EXTENSIONS.has(extensionOf(resolved.realPath)) && ![".md", ".markdown"].includes(extensionOf(resolved.realPath))) {
     return { ok: false, reason: "not_openable" };
   }
-  if (!resolved.contained && !deps.consent.isAllowed(parsed.data.tabId, resolved.realPath)) {
+  if (!resolved.contained && ([".md", ".markdown"].includes(extensionOf(resolved.realPath)) || !deps.consent.isAllowed(parsed.data.tabId, resolved.realPath))) {
     let approved: boolean;
     try {
       approved = await deps.confirmOpen(resolved.realPath);

@@ -2423,7 +2423,7 @@ describe("ToolCallCard (SSR) — open-in-preview control", () => {
     workflow: null,
   };
 
-  function renderRow(previewAction?: { path: string; open: () => void; error: string | null }): string {
+  function renderRow(previewAction?: { path: string; open: () => void; error: string | null; openExternal?: () => void }): string {
     return renderToStaticMarkup(
       createElement(ToolCallHeaderRow, {
         block: docBlock,
@@ -2459,6 +2459,13 @@ describe("ToolCallCard (SSR) — open-in-preview control", () => {
     const html = renderRow({ path: "/repo/plan.md", open: () => {}, error: "outside the workspace" });
     expect(html).toContain('class="tool-call-open-error"');
     expect(html).toContain(">outside the workspace</span>");
+  });
+
+  it("offers external opening for a blocked Markdown preview", () => {
+    const html = renderRow({ path: "/other/plan.md", open: () => {}, error: "outside_allowed_roots", openExternal: () => {} });
+    expect(html).toContain("Preview blocked: file is outside allowed folders.");
+    expect(html).toContain("Open externally");
+    expect(html).toContain("Success");
   });
 
   it("shows no error span while nothing has failed", () => {
