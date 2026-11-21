@@ -160,6 +160,7 @@ describe("claudeQuotaToWire — the decoded snapshot on the shared quota wire", 
     const wire = claudeQuotaToWire(decodeClaudeUsage(liveUsageResponse()))!;
     expect(wire.primary).toMatchObject({ usedPercent: 3, windowDurationMins: 300 });
     expect(wire.secondary).toMatchObject({ usedPercent: 76, windowDurationMins: 10080 });
+    expect(wire.governing).toMatchObject({ usedPercent: 94, family: "Fable weekly" });
   });
 
   it("is null for an absent snapshot, so an engine with no quota keeps the projection byte-identical", () => {
@@ -226,6 +227,6 @@ describe("claudeQuotaToWire — the decoded snapshot on the shared quota wire", 
     expect(Number.isFinite(wire.primary!.resetsAt)).toBe(true);
     // Seconds, not milliseconds: an order of magnitude below any ms timestamp.
     expect(wire.primary!.resetsAt!).toBeLessThan(10_000_000_000);
-    expect(wire.primary!.resetsAt).toBe(1784368200); // Math.round(Date.parse("2026-07-18T16:59:59.901099+00:00")/1000)
+    expect(wire.primary!.resetsAt).toBe(1784368200); // Math.round(Date.parse("2026-07-18T09:49:59.900817+00:00")/1000)
   });
 });

@@ -183,13 +183,7 @@ function describeLimit(limit: ClaudeQuotaLimit): string {
  * the shape is the one codex's quota seam populates, and its field names are
  * engine-neutral even though the type carries a Codex-era name.
  *
- * Rule 1 of this module governs the projection too — `primary` is the GOVERNING
- * limit from `limits[]` (severity first, then percent), never a flat window.
- * The flat windows under-report: the captured payload's `seven_day` reads 76
- * while its active critical limit reads 94, and showing 76 would tell a user at
- * the edge of a lockout that they have room. `secondary` is the next-highest
- * limit, so the pair still describes the session/weekly split the flat windows
- * were reaching for.
+ * Flat subscription windows are shown alongside the distinct governing scoped limit.
  */
 export function claudeQuotaToWire(snapshot: ClaudeQuotaSnapshot | null): CodexRateLimitsWire | null {
   if (snapshot === null) return null;
@@ -201,7 +195,10 @@ export function claudeQuotaToWire(snapshot: ClaudeQuotaSnapshot | null): CodexRa
       const resetsAt = window.resetsAt === undefined ? NaN : Math.round(Date.parse(window.resetsAt) / 1000);
       return { usedPercent: window.utilization, windowDurationMins, ...(Number.isFinite(resetsAt) ? { resetsAt } : {}) };
     };
-    return { primary: projectWindow(fiveHour, 300), secondary: projectWindow(sevenDay, 10080),
+    const limit = governingLimit(snapshot);
+    const reset = limit?.resetsAt === undefined ? NaN : Math.round(Date.parse(limit.resetsAt) / 1000);
+    const governing = limit !== null && limit.scopeLabel !== undefined ? { usedPercent: limit.percent, family: `${limit.scopeLabel} ${describeLimit(limit)}`, ...(Number.isFinite(reset) ? { resetsAt: reset } : {}) } : undefined;
+    return { primary: projectWindow(fiveHour, 300), secondary: projectWindow(sevenDay, 10080), ...(governing === undefined ? {} : { governing }),
       ...(snapshot.subscriptionType === undefined ? {} : { planType: snapshot.subscriptionType }), observedAt: snapshot.observedAt };
   }
   const governing = governingLimit(snapshot);

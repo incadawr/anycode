@@ -870,6 +870,7 @@ export interface QuotaPopoverView {
   primaryLine: string | null;
   secondaryLine: string | null;
   creditsLine: string | null;
+  governingLine?: string | null;
 }
 
 /**
@@ -888,7 +889,7 @@ export function buildQuotaPopoverView(quota: CodexRateLimitsWire | null, now: nu
   if (primaryLine === null && secondaryLine === null && creditsLine === null) {
     return null;
   }
-  return { primaryLine, secondaryLine, creditsLine };
+  return { primaryLine, secondaryLine, creditsLine, ...(quota.governing ? { governingLine: formatQuotaWindowLine(quota.governing, quota.governing.family, now) } : {}) };
 }
 
 /** Nominal popover width (px) for the right-edge-anchored viewport clamp — mirrors ModelPill's `MODEL_PILL_POPOVER_WIDTH` (matches `.ctx-popover`'s CSS `width`). */
@@ -1311,6 +1312,7 @@ function CtxPopover({
               <>
                 {quotaView.primaryLine !== null && <div className="ctx-popover-session">{quotaView.primaryLine}</div>}
                 {quotaView.secondaryLine !== null && <div className="ctx-popover-session">{quotaView.secondaryLine}</div>}
+                {quotaView.governingLine && <div className="ctx-popover-session">{quotaView.governingLine}</div>}
                 {quotaView.creditsLine !== null && <div className="ctx-popover-session">{quotaView.creditsLine}</div>}
               </>
             )}
