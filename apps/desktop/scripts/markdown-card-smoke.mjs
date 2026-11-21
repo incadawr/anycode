@@ -10,7 +10,7 @@ import { connectIsolatedCdp } from "./isolated-cdp.mjs";
 import { createServer as createHttpServer } from "node:http";
 
 const profile = mkdtempSync(join(tmpdir(), "anycode-approval-expiry-"));
-const tool = process.argv.includes("--write") ? "Write" : "Read";
+const tool = "Read";
 const outside = join(process.cwd(), ".markdown-card-smoke-fixture.markdown");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const fixture = createHttpServer((request, response) => {
@@ -21,7 +21,7 @@ const fixture = createHttpServer((request, response) => {
     const lastUser = input.messages.findLastIndex((message) => message.role === "user");
     const prompt = JSON.stringify(input.messages[lastUser]?.content ?? "");
     const answered = input.messages.slice(lastUser + 1).some((message) => message.role === "tool");
-    const call = { name: tool, arguments: JSON.stringify(tool === "Write" ? { file_path: outside, content: "# Isolated smoke fixture\n" } : { file_path: outside }) };
+    const call = { name: tool, arguments: JSON.stringify({ file_path: outside }) };
     const base = { id: "fixture-chat", object: "chat.completion.chunk", created: 0, model: input.model };
     response.writeHead(200, { "Content-Type": "text/event-stream" });
     if (!answered) {
@@ -45,7 +45,7 @@ writeFileSync(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
 const env = buildSmokeEnv(process.env, profile, 0, binary);
 writeFileSync(join(profile, "settings.json"), JSON.stringify({
   version: 2, provider: { activeConnectionId: "conn-smoke", custom: [{ id: "custom:smoke", name: "Smoke", baseUrl: fixtureUrl, kind: "openai-compatible", models: ["a"] }], connections: [{ id: "conn-smoke", providerId: "custom:smoke", label: "Approval smoke", model: "a", models: ["a"], transport: "openai-chat-completions", baseUrl: fixtureUrl, authOptional: true }] },
-  tools: {}, permissions: { alwaysAllow: [{ toolName: "Read" }, { toolName: "Write" }] }, ui: { theme: "dark" }, security: { allowWeakSecretStorage: false },
+  tools: {}, permissions: { alwaysAllow: [{ toolName: "Read" }] }, ui: { theme: "dark" }, security: { allowWeakSecretStorage: false },
 }));
 const app = launchSmokeElectron(spawn, { env, detached: true });
 let ws, cdp, createdFixture = false;
