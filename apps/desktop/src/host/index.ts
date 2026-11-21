@@ -1508,6 +1508,7 @@ function hostSwitchFactory(
           shadow.observeSubagent(event);
           forwardClaudeDetachedEvent(shadow, event);
         };
+        raw.onNativeTurn = turn => { if (session) session.acceptClaudeNativeTurn(shadow, turn); else turn.cancel(); };
       }, cleanup: () => { routing.cleanup(); } };
     },
   });
@@ -2777,6 +2778,7 @@ async function bootClaudeSession(
     shadowEngine.observeSubagent(event);
     forwardClaudeDetachedEvent(booted.engine, event);
   };
+  claudeEngine.onNativeTurn = turn => { if (session) session.acceptClaudeNativeTurn(booted.engine, turn); else turn.cancel(); };
   // `fs` built ABOVE (slice S4 — needed early for the agent-profile
   // catalog scan, before `connected` exists) and reused here verbatim.
 

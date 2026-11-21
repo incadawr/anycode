@@ -51,6 +51,7 @@ import { ClaudeApprovalBridge } from "./approval-bridge.js";
 import { ClaudeClient, ClaudeClientError, type ClaudeClientOptions, type ClaudeSpawnArgsOptions } from "./claude-client.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
 import { ClaudeNativeBackgroundTasks } from "./native-background-tasks.js";
+import { NativeTurn } from "./native-turn.js";
 import { ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
@@ -1044,6 +1045,11 @@ export class ClaudeEngine implements SessionEngine {
    * subagent channel; unbound, those events are dropped.
    */
   onDetachedEvent?: (event: AgentEvent) => void;
+  onNativeTurn?: (turn: NativeTurn) => void;
+  private notificationPending = false;
+  private nativeArmed = false;
+  private nativeTurn: { stream: NativeTurn; translator: ClaudeTurnTranslator; events: AgentEvent[]; cancelled?: boolean; cancelTimer?: ReturnType<typeof setTimeout> } | null = null;
+  private nativeAmbiguous = false;
 
   private emitDetached(event: AgentEvent): void {
     try {
@@ -1051,6 +1057,18 @@ export class ClaudeEngine implements SessionEngine {
     } catch {
       // A closing session must never fail the engine's own cleanup.
     }
+  }
+
+  private failNativeTurn(): void {
+    const native = this.nativeTurn;
+    if (!native) return;
+    if (native.cancelTimer) clearTimeout(native.cancelTimer);
+    native.stream.push({ type: "error", error: new Error("Claude exited during a background turn") });
+    for (const event of native.translator.finishTerminal("error")) native.stream.push(event);
+    native.stream.close();
+    this.nativeTurn = null;
+    this.nativeArmed = false;
+    this.notificationPending = false;
   }
 
   /** The CLI's own agents die with its process: settle their cards instead of leaving them running. */
@@ -1921,6 +1939,17 @@ export class ClaudeEngine implements SessionEngine {
         // the slot's frame is consumed by THIS loop iteration; the
         // next iteration's takeFrame() re-parks. Exactly one read in flight.
         this.frameConsumed();
+        const frame = raced.value.value;
+        // A task-triggered CLI turn can begin after the owner's input was
+        // sent. Its init and result do not settle that owner input.
+        if ((frame.type === "system" && frame.subtype === "init" && this.notificationPending) || this.nativeArmed || this.nativeTurn) {
+          this.absorbIdleFrame(frame);
+          if (this.nativeAmbiguous) {
+            this.nativeAmbiguous = false;
+            throw new Error("Claude returned an ambiguous background turn result");
+          }
+          continue;
+        }
         // at user/tool-result and assistant boundaries, kick off a
         // throttled, non-overlapping mid-turn context refresh. Never awaited
         // here — the completion rides the race above.
@@ -1933,12 +1962,12 @@ export class ClaudeEngine implements SessionEngine {
             }
           }
         }
-        const frame = raced.value.value;
         const ownerSession = frame.session_id === undefined || frame.session_id === this.sessionRef;
         if (inputDispatched && ownerSession && frame.parent_tool_use_id == null &&
           (frame.type === "stream_event" || frame.type === "assistant" || (frame.type === "system" && frame.subtype === "init"))) options.onInputAccepted?.();
         reportNotSent();
         for (const event of translator.onMessage(raced.value.value)) {
+          if (frame.type === "system" && frame.subtype === "task_notification" && event.type === "claude_background_task" && event.status !== "running") this.notificationPending = true;
           if (event.type === "loop_end") terminal = true;
           yield event;
         }
@@ -2252,6 +2281,7 @@ export class ClaudeEngine implements SessionEngine {
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.disposed = true;
+    this.failNativeTurn();
     this.transportGeneration += 1;
     this.replacementAbort?.abort(new ClaudeTransportAbortError("claude_transport_retired"));
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
@@ -2771,6 +2801,10 @@ export class ClaudeEngine implements SessionEngine {
   private absorbIdleFrame(frame: ClaudeStreamMessage): void {
     try {
       if (frame.type === "system" && (frame as { subtype?: string }).subtype === "init") {
+        if (this.notificationPending && this.foreignTurn === null) {
+          this.nativeArmed = true;
+          this.notificationPending = false;
+        }
         // Live posture is state, not transcript: reconcile even mid-foreign-turn.
         this.onSystemInit(frame as unknown as ClaudeSystemInitMessage);
         // an init absorbed OUTSIDE an owner turn has no live
@@ -2792,7 +2826,10 @@ export class ClaudeEngine implements SessionEngine {
         // result the agent never produces.
         for (const event of this.subagentTasks.onFrame(frame)) this.emitDetached(event);
         const task = this.nativeBackgroundTasks.onFrame(frame);
-        if (task) this.emitDetached(task);
+        if (task) {
+          this.emitDetached(task);
+          if (frame.subtype === "task_notification" && task.status !== "running") this.notificationPending = true;
+        }
         return;
       }
       if (frame.type === "result") {
@@ -2801,6 +2838,26 @@ export class ClaudeEngine implements SessionEngine {
         // set is NOT — an absorbed turn owns no meter/token accounting, so the
         // owner turn's own top-of-turn reset is re-asserted here (onResult
         // sets lastTurnTokenUsage; the owner's numbers must stay its own).
+        const native = this.nativeTurn;
+        if (!native && this.nativeArmed) this.nativeArmed = false;
+        if (native) {
+          if (native.cancelTimer) clearTimeout(native.cancelTimer);
+          const origin = (frame as Record<string, unknown>).origin;
+          const fields = origin && typeof origin === "object" ? origin as Record<string, unknown> : undefined;
+          if (native.cancelled) {
+            for (const event of native.translator.finishTerminal("cancelled")) native.stream.push(event);
+          } else if (fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0) {
+            native.events.push(...native.translator.onMessage(frame));
+            for (const event of native.events) native.stream.push(event);
+          } else {
+            if (this.turnActive) this.nativeAmbiguous = true;
+            console.error("[claude] autonomous turn result did not identify a task notification");
+            native.stream.push({ type: "error", error: new Error("Claude could not identify the background turn result") });
+            for (const event of native.translator.finishTerminal("error")) native.stream.push(event);
+          }
+          native.stream.close();
+          this.nativeTurn = null;
+        }
         this.onResult(frame as unknown as ClaudeResultMessage);
         this.resetTurnTokenUsage();
         const open = this.foreignTurn;
@@ -2812,10 +2869,37 @@ export class ClaudeEngine implements SessionEngine {
         let settle: () => void = () => {};
         const promise = new Promise<void>((resolve) => { settle = resolve; });
         this.foreignTurn = { done: { promise, resolve: settle } };
-        this.queueNotice({
+        if (!this.nativeArmed || !this.onNativeTurn) this.queueNotice({
           type: "engine_notice", level: "info",
           message: "Claude started a turn on its own (likely a cross-session notice); its output is kept out of this transcript.",
         });
+      }
+      if (this.nativeArmed && !this.nativeTurn && this.onNativeTurn && (frame.type === "assistant" || frame.type === "stream_event") && (frame.session_id === undefined || frame.session_id === this.sessionRef)) {
+        this.nativeArmed = false;
+        const turn = ++this.turnNumber;
+        const stream = new NativeTurn(() => {
+          if (!this.nativeTurn || this.nativeTurn.cancelTimer) return;
+          this.nativeTurn.cancelled = true;
+          this.approvals?.denyAll("Claude turn was cancelled", "turn_cancelled");
+          void this.client.interrupt().catch(() => {});
+          this.nativeTurn.cancelTimer = setTimeout(() => {
+            this.terminalError = new Error("Claude did not settle the cancelled background turn");
+            this.failNativeTurn();
+            void this.client.close().catch(() => {});
+          }, this.bounds.postInterruptSettleMs);
+          this.nativeTurn.cancelTimer.unref?.();
+        });
+        this.nativeTurn = { stream, translator: new ClaudeTurnTranslator({ turn, subagents: this.subagentTasks, nativeBackgroundTasks: this.nativeBackgroundTasks }), events: [] };
+        stream.push({ type: "turn_start", turn });
+        try { this.onNativeTurn(stream); }
+        catch { console.error("[claude] unable to admit background turn"); this.failNativeTurn(); }
+      }
+      if (this.nativeTurn) {
+        this.nativeTurn.events.push(...this.nativeTurn.translator.onMessage(frame));
+        if (this.nativeTurn.events.length > 20_000) {
+          console.error("[claude] background turn exceeded the event buffer limit");
+          this.failNativeTurn();
+        }
       }
       // Everything else — including frames while a foreign turn is already
       // open — is absorbed silently. rate_limit_event quota state is NOT
@@ -2840,6 +2924,7 @@ export class ClaudeEngine implements SessionEngine {
       void Promise.race([this.takeFrame().then((value) => value, (error: unknown) => {
         if (epoch === this.idleEpoch) {
           this.idleFailure = error instanceof Error ? error : new Error("Claude transport failed");
+          this.failNativeTurn();
           this.settleOrphanedSubagents();
         }
         return null;
@@ -2857,6 +2942,7 @@ export class ClaudeEngine implements SessionEngine {
           }
           if (value.done) {
             this.idleFailure = this.client.terminalFailure ?? new Error("Claude exited while idle");
+            this.failNativeTurn();
             this.settleOrphanedSubagents();
             this.idleReading = false;
             return;

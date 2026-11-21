@@ -95,7 +95,7 @@ export class SqliteClaudeShadowTranscript implements ClaudeShadowTranscriptPort 
  * text pair, cut §1.4 hazard (з)) — never the raw partial deltas.
  */
 export function projectClaudeTurn(
-  input: string,
+  input: string | undefined,
   events: readonly AgentEvent[],
   now: () => number = Date.now,
   turnOrdinal = 0,
@@ -111,7 +111,7 @@ export function projectClaudeTurn(
   // a tool_use id); the user item has no such wire id of its own, so a bare
   // "user" would repeat on every turn — and a two-turn resume would hydrate two
   // items with the same id, colliding as React keys and making dedup ambiguous.
-  items.push({ id: `user:${turnOrdinal}`, createdAt: nextCreatedAt(), message: { role: "user", content: input } });
+  if (input !== undefined) items.push({ id: `user:${turnOrdinal}`, createdAt: nextCreatedAt(), message: { role: "user", content: input } });
 
   const openText = new Map<string, string>();
   for (const event of events) {
@@ -339,6 +339,24 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
         for (const event of events) {
           if (event.type === "subagent_start" && !this.cards.get(event.toolCallId)?.result) this.cards.delete(event.toolCallId);
         }
+      }
+    }
+  }
+
+  async *recordNativeTurn(source: AsyncIterable<AgentEvent>, turnId: string): AsyncIterable<AgentEvent> {
+    const turn = this.nextTurnOrdinal++;
+    const events: AgentEvent[] = [];
+    try {
+      for await (const event of source) { this.observeSubagent(event); events.push(event); yield event; }
+    } finally {
+      try {
+        const projected = projectClaudeTurn(undefined, events, this.now, turn).map(item => ({ ...item, turnId }));
+        const rows = projected.map((data, positionInTurn) => ({ turnOrdinal: turn, positionInTurn, itemId: `${turn}:${positionInTurn}`, data }));
+        for (const row of rows) this.attachSubagent(row);
+        this.sink.record(this.sessionRef, rows);
+      } catch (error) {
+        this.projectionFailure = error;
+        console.error(`[claude] native turn projection failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
