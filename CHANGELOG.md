@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Project menus in the sidebar fit within the window when opened near its lower edge.
 - Markdown cards offer to open a file in its external application when the file is outside the workspace. The confirmation shows the selected path.
 - Claude reports when a model requires usage credits. The context popover refreshes available subscription limits after a turn.
+- Claude sessions show background tasks in the session header and record replies triggered by task completion in the conversation.
 - The Sessions API stdio bridge allows long result polls to finish.
 
 ### Changed
