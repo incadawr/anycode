@@ -374,6 +374,69 @@ function ownerFrames(label: string, usage?: Record<string, unknown>): ClaudeStre
 }
 
 describe("Claude autonomous background turn through Session", () => {
+  it.each(["unknown-task", "wrong-origin", "no-listener", "cancelled"])("does not refresh quota for an unaccepted native turn: %s", async (scenario) => {
+    const task = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [task, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const original = transport.controlRequest.bind(transport);
+    let calls = 0;
+    vi.spyOn(transport, "controlRequest").mockImplementation(async (subtype, request) => {
+      if (subtype !== "get_usage") return original(subtype, request);
+      calls++;
+      return { rate_limits: { limits: [{ kind: "session", percent: 10 }] } } as never;
+    });
+    const engine = engineWith(transport); const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = event => detached.push(event);
+    if (scenario !== "no-listener") engine.onNativeTurn = turn => {
+      if (scenario === "cancelled") turn.cancel();
+      void collect(turn);
+    };
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      await vi.waitFor(() => expect(detached.some(event => event.type === "engine_quota")).toBe(true));
+      transport.push({ type: "system", subtype: "task_notification", task_id: scenario === "unknown-task" ? "other" : "bg", tool_use_id: scenario === "unknown-task" ? "other" : "bash", status: "completed" } as unknown as ClaudeStreamMessage);
+      transport.push({ type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage);
+      transport.push(foreignAssistantFrame("candidate", "candidate"));
+      const state = engine as unknown as { foreignTurn: unknown };
+      await vi.waitFor(() => expect(state.foreignTurn).not.toBeNull());
+      transport.push({ ...foreignResultFrame("done"), origin: { kind: scenario === "wrong-origin" ? "other" : "task-notification", producer: "session-task", runId: "run" } } as ClaudeStreamMessage);
+      await vi.waitFor(() => expect(state.foreignTurn).toBeNull());
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(calls).toBe(1);
+      expect(detached.filter(event => event.type === "engine_quota")).toHaveLength(1);
+    } finally { await engine.dispose("session-close"); }
+  });
+  it("refreshes quota after an accepted idle native turn through Session and renderer", async () => {
+    const task = { type: "system", subtype: "task_started", task_id: "bg-quota", tool_use_id: "bash-quota", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [task, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const original = transport.controlRequest.bind(transport);
+    let calls = 0;
+    vi.spyOn(transport, "controlRequest").mockImplementation(async (subtype, request) => {
+      if (subtype !== "get_usage") return original(subtype, request);
+      calls++;
+      return { rate_limits: { limits: [{ kind: "session", percent: calls === 1 ? 10 : 31, is_active: true }, { kind: "weekly_all", percent: calls === 1 ? 20 : 62 }] } } as never;
+    });
+    const raw = engineWith(transport);
+    const shadow = new ClaudeShadowTranscriptEngine(raw, { record: () => {}, list: async () => [] }, "session-ref-1", []);
+    const h = createHarness({ steps: [], engine: shadow });
+    raw.onNativeTurn = turn => h.session.acceptClaudeNativeTurn(shadow, turn);
+    raw.onDetachedEvent = event => h.session.emitDetachedSubagentEvent(event);
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "initial", text: "launch" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "engine_quota" && m.event.quota.primary?.usedPercent === 10));
+      for (const frame of [
+        { type: "system", subtype: "task_notification", task_id: "bg-quota", tool_use_id: "bash-quota", status: "completed" },
+        { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] },
+        foreignAssistantFrame("native-quota", "native done"),
+        { ...foreignResultFrame("done"), origin: { kind: "task-notification", producer: "session-task", runId: "run" } },
+      ]) transport.push(frame as ClaudeStreamMessage);
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "engine_quota" && m.event.quota.primary?.usedPercent === 31));
+      expect(calls).toBe(2);
+      const store = createDesktopStore();
+      for (const message of h.received) store.getState().applyHostMessage(message);
+      expect(store.getState().quota).toMatchObject({ primary: { usedPercent: 31 }, secondary: { usedPercent: 62 } });
+    } finally { await h.session.shutdown(); h.close(); }
+  }, 10_000);
   it("shows two ordinary answers live after an orphaned notification without persisting the preview", async () => {
     const task = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
     const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;

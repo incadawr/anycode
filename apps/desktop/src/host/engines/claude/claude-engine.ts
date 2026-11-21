@@ -2947,6 +2947,8 @@ export class ClaudeEngine implements SessionEngine {
           } else if (!this.unmatchedNotification && fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0) {
             native.events.push(...native.translator.onMessage(frame));
             for (const event of native.events) native.stream.push(event);
+            // This turn ran independently of runTurn's post-turn refresh.
+            this.scheduleQuotaRefresh();
           } else {
             if (this.turnActive) this.nativeAmbiguous = true;
             console.error("[claude] autonomous turn result did not identify a task notification");
