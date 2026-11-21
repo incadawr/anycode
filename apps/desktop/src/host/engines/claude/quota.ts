@@ -193,6 +193,17 @@ function describeLimit(limit: ClaudeQuotaLimit): string {
  */
 export function claudeQuotaToWire(snapshot: ClaudeQuotaSnapshot | null): CodexRateLimitsWire | null {
   if (snapshot === null) return null;
+  const fiveHour = snapshot.windows.find((window) => window.key === "five_hour");
+  const sevenDay = snapshot.windows.find((window) => window.key === "seven_day");
+  if (fiveHour !== undefined || sevenDay !== undefined) {
+    const projectWindow = (window: ClaudeQuotaWindow | undefined, windowDurationMins: number): CodexRateLimitsWire["primary"] => {
+      if (window === undefined) return null;
+      const resetsAt = window.resetsAt === undefined ? NaN : Math.round(Date.parse(window.resetsAt) / 1000);
+      return { usedPercent: window.utilization, windowDurationMins, ...(Number.isFinite(resetsAt) ? { resetsAt } : {}) };
+    };
+    return { primary: projectWindow(fiveHour, 300), secondary: projectWindow(sevenDay, 10080),
+      ...(snapshot.subscriptionType === undefined ? {} : { planType: snapshot.subscriptionType }), observedAt: snapshot.observedAt };
+  }
   const governing = governingLimit(snapshot);
   const ranked = [...snapshot.limits].sort((a, b) => b.percent - a.percent);
   const next = ranked.find((limit) => limit !== governing);

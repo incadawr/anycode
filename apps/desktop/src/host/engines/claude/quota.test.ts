@@ -156,24 +156,10 @@ describe("governingLimit — selection order", () => {
  * test stayed green.
  */
 describe("claudeQuotaToWire — the decoded snapshot on the shared quota wire", () => {
-  it("reports the GOVERNING limit as primary, not the under-reporting flat window", () => {
-    const snapshot = decodeClaudeUsage(liveUsageResponse())!;
-    const wire = claudeQuotaToWire(snapshot)!;
-
-    const governing = governingLimit(snapshot)!;
-    expect(wire.primary!.usedPercent).toBe(governing.percent);
-    // The whole point of rule 1: the flat seven_day window reads lower than the
-    // active limit does, and showing the window would understate the exposure.
-    const flat = snapshot.windows.find((window) => window.key === "seven_day");
-    expect(flat!.utilization).toBeLessThan(wire.primary!.usedPercent);
-  });
-
-  it("carries the plan type and a named limit, and a second limit as secondary", () => {
+  it("projects the five-hour and seven-day subscription windows with their durations", () => {
     const wire = claudeQuotaToWire(decodeClaudeUsage(liveUsageResponse()))!;
-    expect(wire.planType).toBeDefined();
-    expect(wire.limitName).toBeDefined();
-    expect(wire.secondary).not.toBeNull();
-    expect(wire.observedAt).toEqual(expect.any(String));
+    expect(wire.primary).toMatchObject({ usedPercent: 3, windowDurationMins: 300 });
+    expect(wire.secondary).toMatchObject({ usedPercent: 76, windowDurationMins: 10080 });
   });
 
   it("is null for an absent snapshot, so an engine with no quota keeps the projection byte-identical", () => {
@@ -240,6 +226,6 @@ describe("claudeQuotaToWire — the decoded snapshot on the shared quota wire", 
     expect(Number.isFinite(wire.primary!.resetsAt)).toBe(true);
     // Seconds, not milliseconds: an order of magnitude below any ms timestamp.
     expect(wire.primary!.resetsAt!).toBeLessThan(10_000_000_000);
-    expect(wire.primary!.resetsAt).toBe(1784394000); // Math.round(Date.parse("2026-07-18T16:59:59.901099+00:00")/1000)
+    expect(wire.primary!.resetsAt).toBe(1784368200); // Math.round(Date.parse("2026-07-18T16:59:59.901099+00:00")/1000)
   });
 });

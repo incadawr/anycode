@@ -3449,3 +3449,16 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
     });
   });
 });
+
+it("publishes refreshed subscription quota after a completed turn", async () => {
+  const transport = new FakeTransport({ frames: streamFrames("w0-02-control-writeprobe.jsonl") });
+  const original = transport.controlRequest.bind(transport);
+  vi.spyOn(transport, "controlRequest").mockImplementation(async (subtype, request) => {
+    if (subtype === "get_usage") return { rate_limits: { limits: [{ kind: "session", percent: 25, is_active: true }, { kind: "weekly_all", percent: 60 }] } } as never;
+    return original(subtype, request);
+  });
+  const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
+  const quota = events.find((event) => event.type === "engine_quota");
+  expect(quota).toMatchObject({ quota: { primary: { usedPercent: 25 }, secondary: { usedPercent: 60 } } });
+  expect(types(events).indexOf("engine_quota")).toBeGreaterThan(types(events).indexOf("loop_end"));
+});

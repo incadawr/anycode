@@ -70,7 +70,7 @@ import {
   findClaudePresetByMode,
   type ClaudePermissionPresetDefinition,
 } from "./presets.js";
-import { decodeClaudeUsage, quotaNotice, type ClaudeQuotaSnapshot } from "./quota.js";
+import { claudeQuotaToWire, decodeClaudeUsage, quotaNotice, type ClaudeQuotaSnapshot } from "./quota.js";
 
 export const CLAUDE_NOT_SIGNED_IN =
   "Claude Code is not signed in — run `claude auth login` in a terminal, then start a new Claude session.";
@@ -1936,6 +1936,8 @@ export class ClaudeEngine implements SessionEngine {
       await this.awaitContextUsageInFlight();
       const usage = await this.readContextUsage();
       if (usage !== null) yield usage;
+      const quota = claudeQuotaToWire(await this.refreshQuota());
+      if (quota !== null) yield { type: "engine_quota", quota };
       // session-cumulative token accounting, next to the context
       // meter read above. `lastTurnTokenUsage` is null when this turn's
       // `result.usage` was absent/malformed — no event this turn (fail-soft,
