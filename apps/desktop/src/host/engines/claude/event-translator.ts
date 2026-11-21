@@ -228,6 +228,7 @@ export class ClaudeTurnTranslator {
   private failureLatched = false;
   /** The message the terminal `error` event carries when nothing has been emitted yet. */
   private latchedFailureMessage: string | null = null;
+  private pendingGenericRateLimit = false;
   /**
    * review F2: assistant messages seen this turn (one
    * `message_start` each). This turn's MODEL-ROUND count — the metric the
@@ -333,7 +334,6 @@ export class ClaudeTurnTranslator {
     // The signed-out trap (probe #12): `result` will claim `subtype:"success"`,
     // so THIS is where a turn's real failure becomes visible.
     if (typeof message.error === "string" && !this.errorEmitted) {
-      this.errorEmitted = true;
       this.failureLatched = true;
       const content = message.message?.content;
       const credits = message.error === "rate_limit" && Array.isArray(content) && content.some(part => {
@@ -341,7 +341,16 @@ export class ClaudeTurnTranslator {
         return value?.type === "text" && typeof value.text === "string" && /usage credits|requires[^\n]*credits/i.test(value.text);
       });
       const explanation = credits ? "This model requires usage credits. Choose another model or manage usage credits." : assistantErrorMessage(message.error);
-      events.push(credits ? { type: "error", error: new Error(explanation), safe: { code: "quota", message: explanation } } : { type: "error", error: new Error(explanation) });
+      if (message.error === "rate_limit" && !credits) {
+        // A following rate_limit_event may identify credit exhaustion. Delay
+        // the generic error until the result (or transport closure) so the
+        // user receives the more specific diagnosis exactly once.
+        this.pendingGenericRateLimit = true;
+        this.latchFailure(explanation);
+      } else {
+        this.errorEmitted = true;
+        events.push(credits ? { type: "error", error: new Error(explanation), safe: { code: "quota", message: explanation } } : { type: "error", error: new Error(explanation) });
+      }
     }
     const content = message.message?.content;
     if (!Array.isArray(content)) return events;
@@ -572,19 +581,17 @@ export class ClaudeTurnTranslator {
    * cancelled, an `error` event when (and only when) the turn ends in error and
    * none has been emitted yet, then always `turn_end`+`loop_end`.
    *
-   * `errorEmitted` keeps the "exactly one terminal error" guarantee: an
-   * `assistant.error` earlier in the turn already told the user what went
-   * wrong, so the terminal does not repeat it — but a turn that fails with NO
-   * earlier signal must not end faceless either, which is what an error
-   * `loop_end` with no `error` event looks like in the UI.
+   * `errorEmitted` keeps the "exactly one terminal error" guarantee. A
+   * generic rate limit is held for a more specific credits frame and, if
+   * still pending, reported even when the transport closes or is cancelled.
    */
   private finish(outcome: { loop: LoopEndReason; finish: FinishReason }, errorMessage?: string): AgentEvent[] {
     if (this.finished) return [];
     this.finished = true;
     const events: AgentEvent[] = [...this.closeOpenBlocks()];
-    if (outcome.loop === "error" && !this.errorEmitted) {
+    if (!this.errorEmitted && (outcome.loop === "error" || this.pendingGenericRateLimit)) {
       this.errorEmitted = true;
-      events.push({ type: "error", error: new Error(errorMessage ?? "Claude ended the turn with an error.") });
+      events.push({ type: "error", error: new Error(errorMessage ?? this.latchedFailureMessage ?? "Claude ended the turn with an error.") });
     }
     for (const [toolCallId, projection] of this.tools) {
       events.push({

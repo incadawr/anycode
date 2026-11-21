@@ -743,3 +743,32 @@ it("classifies the Claude assistant credits frame before redaction", () => {
   const error = events.find(event => event.type === "error")!;
   expect(sanitizeAgentEvent(error, "claude")).toMatchObject({ type: "error", error: { code: "quota", message: expect.stringContaining("Choose another model") } });
 });
+
+it("prefers a later structured credits rejection over a generic assistant rate limit", () => {
+  const translator = new ClaudeTurnTranslator({ turn: 1 });
+  const frames = [
+    { type: "assistant", error: "rate_limit", message: { id: "m", content: [] } },
+    { type: "rate_limit_event", rate_limit_info: { status: "rejected", errorCode: "credits_required" } },
+    { type: "result", subtype: "success", terminal_reason: "completed" },
+  ] as unknown as ClaudeStreamMessage[];
+  const events = frames.flatMap(frame => translator.onMessage(frame));
+  const errors = ofType(events, "error");
+  expect(errors).toHaveLength(1);
+  expect(sanitizeAgentEvent(errors[0]!, "claude")).toMatchObject({ type: "error", error: { code: "quota", message: expect.stringContaining("Choose another model") } });
+  expect(ofType(events, "turn_end")).toHaveLength(1);
+  expect(ofType(events, "loop_end")).toMatchObject([{ reason: "error" }]);
+});
+
+it.each(["result", "cancelled", "error"] as const)("reports a generic rate limit on %s without a credits frame", (ending) => {
+  const translator = new ClaudeTurnTranslator({ turn: 1 });
+  const early = translator.onMessage({ type: "assistant", error: "rate_limit", message: { id: "m", content: [] } } as unknown as ClaudeStreamMessage);
+  expect(ofType(early, "error")).toHaveLength(0);
+  const terminal = ending === "result"
+    ? translator.onMessage({ type: "result", subtype: "success", terminal_reason: "completed" } as unknown as ClaudeStreamMessage)
+    : translator.finishTerminal(ending);
+  const errors = ofType(terminal, "error");
+  expect(errors).toHaveLength(1);
+  expect(sanitizeAgentEvent(errors[0]!, "claude")).toMatchObject({ type: "error", error: { code: "rate_limited" } });
+  expect(ofType(terminal, "turn_end")).toHaveLength(1);
+  expect(ofType(terminal, "loop_end")).toHaveLength(1);
+});
