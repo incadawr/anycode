@@ -521,6 +521,12 @@ export function clampMenuLeft(triggerLeft: number, menuWidth: number, viewportWi
   return Math.max(margin, Math.min(triggerLeft, maxLeft));
 }
 
+export function menuTop(triggerTop: number, triggerBottom: number, height: number, viewport: number, gap = 4): number {
+  const below = triggerBottom + gap;
+  const preferred = below + height <= viewport - 8 ? below : triggerTop - gap - height;
+  return Math.max(8, Math.min(preferred, viewport - 8 - height));
+}
+
 // ---------------------------------------------------------------------------
 // session delete. Pure message/verdict helpers (unit-tested in
 // Sidebar.test.ts, same discipline as buildSidebarGroups above); the IPC
@@ -768,6 +774,18 @@ export function Sidebar({
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const menuItemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  useLayoutEffect(() => {
+    const position = (element: HTMLDivElement | null, trigger: HTMLButtonElement | null) => {
+      if (!element || !trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      element.style.maxHeight = `${Math.max(0, window.innerHeight - 16)}px`;
+      element.style.overflowY = "auto";
+      element.style.top = `${menuTop(rect.top, rect.bottom, element.getBoundingClientRect().height, window.innerHeight)}px`;
+    };
+    position(menuRef.current, menuTriggerRef.current);
+    position(rowMenuRef.current, rowMenu?.trigger ?? null);
+  }, [menuFor, deleteOlderSubmenuFor, rowMenu]);
 
   // The last healthy tab stays open; a failed host can be closed.
   const canClose = tabs.length > 1;

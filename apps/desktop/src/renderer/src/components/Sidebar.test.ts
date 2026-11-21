@@ -20,6 +20,7 @@ import {
   bulkDeleteConfirm,
   capSessionPage,
   clampMenuLeft,
+  menuTop,
   deleteOlderNotice,
   filterSidebarGroups,
   formatAge,
@@ -1018,4 +1019,10 @@ describe("user title projection", () => {
     resolveOld([current]); await pending; await Promise.resolve();
     expect(index.sessions?.[0]?.userTitle).toBe("New");
   });
+});
+
+it("positions menus below, flips above, and clamps oversized menus", () => {
+  expect(menuTop(20, 40, 100, 500)).toBe(44);
+  expect(menuTop(450, 470, 100, 500)).toBe(346);
+  expect(menuTop(30, 50, 700, 500)).toBe(8);
 });
