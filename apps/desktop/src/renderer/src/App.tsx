@@ -47,6 +47,7 @@ import { AccountBudgetCard } from "./components/AccountBudgetCard.js";
 import { WindowControls } from "./components/WindowControls.js";
 import { SessionHeader } from "./components/SessionHeader.js";
 import { MessageList } from "./components/MessageList.js";
+import { ClaudeTurnPreview } from "./components/ClaudeTurnPreview.js";
 import { HostBanner } from "./components/HostBanner.js";
 import { Composer, shouldEnqueue } from "./components/Composer.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
@@ -400,6 +401,7 @@ export interface SessionSurfaceProps {
 export function SessionSurface({ tabId, onToast, suppressPermissionModal = false }: SessionSurfaceProps) {
   const connection = useTabStore((state) => state.connection);
   const transcript = useTabStore((state) => state.transcript);
+  const claudeTurnPreview = useTabStore((state) => state.claudeTurnPreview);
   const todoReminderState = useTabStore((state) => state.todoReminderState);
   const turn = useTabStore((state) => state.turn);
   const lastFatal = useTabStore((state) => state.lastFatal);
@@ -503,6 +505,8 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
           {...(rewindProp !== undefined ? { rewind: rewindProp } : {})}
           {...(codexContinue !== undefined ? { codexContinue } : {})}
         />
+
+        <ClaudeTurnPreview preview={claudeTurnPreview} />
 
         {waitingForNetwork && turn.status === "running" && (
           <div className="banner banner-info network-wait-line" role="status">

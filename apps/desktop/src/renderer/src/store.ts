@@ -1485,6 +1485,7 @@ export interface DesktopState {
   backgroundTasks: BackgroundTaskSnapshot[];
   claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
+  claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   /** Accumulated output chunks keyed by taskId. */
   backgroundTaskOutput: Record<string, string>;
   /**
@@ -1896,6 +1897,7 @@ interface SessionSlice {
   backgroundTasks: BackgroundTaskSnapshot[];
   claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
+  claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
   recentBackgroundChildren: WireBackgroundChild[];
@@ -1981,6 +1983,7 @@ function initialSessionSlice(): SessionSlice {
     backgroundTasks: [],
     claudeBackgroundTasks: [],
     claudeTaskOutput: null,
+    claudeTurnPreview: null,
     backgroundTaskOutput: {},
     backgroundChildren: [],
     recentBackgroundChildren: [],
@@ -4340,7 +4343,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // ── loop end: footer block + turn goes idle again (immediate) ──
         case "loop_end": {
           // review F2: the loop ended — no stream can still be parked.
-          set({ networkWaitEpisodes: { parent: 0, subagent: 0 }, waitingForNetwork: false });
+          set({ networkWaitEpisodes: { parent: 0, subagent: 0 }, waitingForNetwork: false, claudeTurnPreview: null });
           // the footer appends ONCE per outer turn — a replayed
           // loop_end (ring duplicate of an already-terminated turn) must not
           // stack a second footer. The idle flip below stays unconditional
@@ -4910,6 +4913,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // may additionally give warning/retry/info notices a dedicated
         // transcript line later — additive on top of this, not a
         // replacement.
+        case "claude_turn_preview":
+          set({ claudeTurnPreview: event.preview });
+          return;
         case "claude_background_task":
           set(state => {
             const tasks = [...state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId), event];

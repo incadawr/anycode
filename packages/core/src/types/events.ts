@@ -235,6 +235,8 @@ export type CeilingRefusalReason =
 export type AgentEvent =
   | ModelStreamEvent
   | { type: "claude_background_task"; taskId: string; toolCallId: string; kind: "bash" | "monitor"; description: string; startedAt: number; status: "running" | "completed" | "failed" | "stopped"; summary?: string; outputFile?: string }
+  /** Ephemeral unassigned Claude output; never a transcript or history item. */
+  | { type: "claude_turn_preview"; preview: { text: string; tools: Array<{ id: string; name: string; status: "preparing" | "requested" | "completed" | "failed" }> } | null }
   | { type: "turn_start"; turn: number }
   | { type: "turn_end"; turn: number; finishReason: FinishReason }
   /**

@@ -315,6 +315,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     let accepted = options.onInputDispatched === undefined;
     try {
       for await (const event of this.engine.runTurn(input, { ...options, onInputAccepted: (nativeId) => { options.onInputAccepted?.(nativeId); accepted = true; } })) {
+        if (event.type === "claude_turn_preview") { yield event; continue; }
         this.observeSubagent(event);
         events.push(event);
         yield event;
