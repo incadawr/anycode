@@ -892,6 +892,16 @@ describe("session handles and wait_for_result", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(140);
   });
 
+  it("returns pending after the maximum wait through the stdio bridge", async () => {
+    const f = await waitFixture({ answer: () => ({ state: "running", turnId: "t" }), pollMs: 1000 });
+    const sent = await f.send("allowed");
+    const client = new Client({ name: "long-wait-test", version: "1" });
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
+    cleanups.push(() => client.close());
+    const result = await client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 120000 } }, undefined, { timeout: 135000 });
+    expect(value(result)).toMatchObject({ status: "pending", messageId: sent.envelope.messageId });
+  }, 140000);
+
   it("wait_for_result neither or both ids is an error", async () => {
     const f = await waitFixture();
     const neither = await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed" } });

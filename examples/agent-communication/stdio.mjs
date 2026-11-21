@@ -22,7 +22,7 @@ let endpoint;
 async function post(request) {
   return fetch(endpoint, {
     method: 'POST', headers: { Authorization: `Bearer ${discovery.token}`, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25' },
-    body: JSON.stringify(request), signal: AbortSignal.timeout(30000),
+    body: JSON.stringify(request), signal: AbortSignal.timeout(130000),
   });
 }
 /**
