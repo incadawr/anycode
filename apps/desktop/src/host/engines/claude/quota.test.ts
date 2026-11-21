@@ -160,7 +160,7 @@ describe("claudeQuotaToWire — the decoded snapshot on the shared quota wire", 
     const wire = claudeQuotaToWire(decodeClaudeUsage(liveUsageResponse()))!;
     expect(wire.primary).toMatchObject({ usedPercent: 3, windowDurationMins: 300 });
     expect(wire.secondary).toMatchObject({ usedPercent: 76, windowDurationMins: 10080 });
-    expect(wire.governing).toMatchObject({ usedPercent: 94, family: "Fable weekly" });
+    expect(wire.governing).toMatchObject({ usedPercent: 94, family: "Fable weekly limit" });
   });
 
   it("is null for an absent snapshot, so an engine with no quota keeps the projection byte-identical", () => {

@@ -197,7 +197,7 @@ export function claudeQuotaToWire(snapshot: ClaudeQuotaSnapshot | null): CodexRa
     };
     const limit = governingLimit(snapshot);
     const reset = limit?.resetsAt === undefined ? NaN : Math.round(Date.parse(limit.resetsAt) / 1000);
-    const governing = limit !== null && limit.scopeLabel !== undefined ? { usedPercent: limit.percent, family: `${limit.scopeLabel} ${describeLimit(limit)}`, ...(Number.isFinite(reset) ? { resetsAt: reset } : {}) } : undefined;
+    const governing = limit !== null ? { usedPercent: limit.percent, family: `${limit.scopeLabel ?? "Claude"} ${describeLimit(limit)} limit`, ...(Number.isFinite(reset) ? { resetsAt: reset } : {}) } : undefined;
     return { primary: projectWindow(fiveHour, 300), secondary: projectWindow(sevenDay, 10080), ...(governing === undefined ? {} : { governing }),
       ...(snapshot.subscriptionType === undefined ? {} : { planType: snapshot.subscriptionType }), observedAt: snapshot.observedAt };
   }
