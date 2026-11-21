@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeResultMessage, ClaudeStreamMessage, ClaudeSystemInitMessage } from "./protocol.js";
+import { sanitizeAgentEvent } from "../../serialize.js";
 import { ClaudeSubagentTasks } from "./subagent-tasks.js";
 
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
@@ -190,9 +191,8 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
       type: "rate_limit_event",
       rate_limit_info: { status: "rejected", errorCode: "credits_required" },
     } as unknown as ClaudeStreamMessage);
-    expect(events).toEqual([
-      { type: "engine_notice", level: "warning", message: "Claude usage limit reached — usage credits are required to continue." },
-    ]);
+    expect(events).toHaveLength(1);
+    expect(sanitizeAgentEvent(events[0]!, "claude")).toMatchObject({ type: "error", error: { code: "quota", message: expect.stringContaining("Choose another model") } });
   });
 
   it("row: result -> turn_end + loop_end, ALWAYS last and in that order", () => {
@@ -735,4 +735,11 @@ describe("ClaudeTurnTranslator — browser tool names (C6)", () => {
       expect(ofType(events, "tool_execution_start")[0]!.toolName).toBe(name);
     }
   });
+});
+
+it("classifies the Claude assistant credits frame before redaction", () => {
+  const translator = new ClaudeTurnTranslator({ turn: 1 });
+  const events = translator.onMessage({ type: "assistant", error: "rate_limit", message: { id: "m", content: [{ type: "text", text: "Fable 5.2 requires usage credits. Switch to another model." }] } } as unknown as ClaudeStreamMessage);
+  const error = events.find(event => event.type === "error")!;
+  expect(sanitizeAgentEvent(error, "claude")).toMatchObject({ type: "error", error: { code: "quota", message: expect.stringContaining("Choose another model") } });
 });

@@ -792,6 +792,7 @@ export type AgentEvent =
 export interface CodexRateLimitsWire {
   primary?: { usedPercent: number; family?: string; windowDurationMins?: number | null; resetsAt?: number | null } | null;
   secondary?: { usedPercent: number; family?: string; windowDurationMins?: number | null; resetsAt?: number | null } | null;
+  governing?: { usedPercent: number; family: string; resetsAt?: number | null } | null;
   credits?: { hasCredits: boolean; unlimited: boolean; balance?: string | null } | null;
   planType?: string | null;
   limitName?: string | null;

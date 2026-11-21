@@ -781,7 +781,7 @@ export function Sidebar({
       const rect = trigger.getBoundingClientRect();
       element.style.maxHeight = `${Math.max(0, window.innerHeight - 16)}px`;
       element.style.overflowY = "auto";
-      element.style.top = `${menuTop(rect.top, rect.bottom, element.getBoundingClientRect().height, window.innerHeight)}px`;
+      element.style.top = `${menuTop(rect.top, rect.bottom, element.offsetHeight, window.innerHeight)}px`;
     };
     position(menuRef.current, menuTriggerRef.current);
     position(rowMenuRef.current, rowMenu?.trigger ?? null);

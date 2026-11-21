@@ -335,7 +335,13 @@ export class ClaudeTurnTranslator {
     if (typeof message.error === "string" && !this.errorEmitted) {
       this.errorEmitted = true;
       this.failureLatched = true;
-      events.push({ type: "error", error: new Error(assistantErrorMessage(message.error)) });
+      const content = message.message?.content;
+      const credits = message.error === "rate_limit" && Array.isArray(content) && content.some(part => {
+        const value = record(part);
+        return value?.type === "text" && typeof value.text === "string" && /usage credits|requires[^\n]*credits/i.test(value.text);
+      });
+      const explanation = credits ? "This model requires usage credits. Choose another model or manage usage credits." : assistantErrorMessage(message.error);
+      events.push(credits ? { type: "error", error: new Error(explanation), safe: { code: "quota", message: explanation } } : { type: "error", error: new Error(explanation) });
     }
     const content = message.message?.content;
     if (!Array.isArray(content)) return events;
@@ -511,6 +517,12 @@ export class ClaudeTurnTranslator {
 
   private onRateLimitEvent(message: ClaudeRateLimitEventMessage): AgentEvent[] {
     const info = message.rate_limit_info;
+    if (record(info) !== null && info.status === "rejected" && info.errorCode === "credits_required" && !this.errorEmitted) {
+      const explanation = "This model requires usage credits. Choose another model or manage usage credits.";
+      this.errorEmitted = true;
+      this.failureLatched = true;
+      return [{ type: "error", error: new Error(explanation), safe: { code: "quota", message: explanation } }];
+    }
     if (record(info) === null || info.status === "allowed") return [];
     // `credits_required` is the known "limit exhausted" form (R-W0-4); any
     // other non-allowed status still surfaces, generically.
