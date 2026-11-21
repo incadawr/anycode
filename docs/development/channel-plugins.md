@@ -274,7 +274,9 @@ Request:
 Give exactly one of `messageId` or `correlationId`. With `correlationId`, the
 server uses the newest message to that session with that correlation id.
 `timeoutMs` is 1 to 120000 (default 25000). The call returns when the turn that
-consumed the message reaches a terminal state, or when the timeout passes.
+consumed the message reaches a terminal state, or when the timeout passes. A
+slow host poll can add up to 20 seconds; use a client timeout of at least
+150 seconds for the maximum wait.
 
 Done (the same shape as `get_session_result`, plus `status` and `messageId`):
 
