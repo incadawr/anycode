@@ -18,7 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { SqlitePersistenceAdapter } from "@anycode/core";
+import { SqlitePersistenceAdapter, bashTool } from "@anycode/core";
+import { ClaudeShadowTranscriptEngine } from "./shadow-transcript.js";
 import type { AgentEvent, ToolResultPresentation } from "@anycode/core";
 import { claudeUsageRecord } from "../../claude-usage.js";
 import { bindClaudeUsage } from "../../native-usage.js";
@@ -371,6 +372,101 @@ function ownerFrames(label: string, usage?: Record<string, unknown>): ClaudeStre
     foreignResultFrame(`owner result ${label}`, { usage }),
   ];
 }
+
+describe("Claude autonomous background turn through Session", () => {
+  it("does not close a dispatched user turn on a task-notification result", async () => {
+    const task = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [task, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const native: Promise<AgentEvent[]>[] = [];
+    engine.onNativeTurn = stream => native.push(collect(stream));
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [
+        { type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" },
+        { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] },
+        foreignAssistantFrame("native", "NATIVE RESULT"),
+        { ...foreignResultFrame("native"), origin: { kind: "task-notification", producer: "session-task", runId: "run" } },
+        ...ownerFrames("next"),
+      ]) transport.enqueue(frame as ClaudeStreamMessage);
+      const owner = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(JSON.stringify(owner)).toContain("OWNER OUTPUT next");
+      expect(JSON.stringify(owner)).not.toContain("NATIVE RESULT");
+      expect(JSON.stringify(await native[0]!)).toContain("NATIVE RESULT");
+      expect(transport.sent).toEqual(["launch", "next"]);
+    } finally { await engine.dispose("session-close"); }
+  });
+  it("coalesces known notifications and rejects an ambiguous result without exposing its text", async () => {
+    const task = (id: string) => ({ type: "system", subtype: "task_started", task_id: id, tool_use_id: `tool-${id}`, task_type: "local_bash" }) as unknown as ClaudeStreamMessage;
+    const notify = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, tool_use_id: `tool-${id}`, status: "completed" }) as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [task("a"), task("b"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const streams: Promise<AgentEvent[]>[] = [];
+    engine.onNativeTurn = stream => streams.push(collect(stream));
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      transport.push(notify("a")); transport.push(notify("b"));
+      transport.push({ type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage);
+      transport.push(foreignAssistantFrame("ambiguous", "FOREIGN SECRET"));
+      await vi.waitFor(() => expect(streams).toHaveLength(1));
+      transport.push(foreignResultFrame("unknown origin"));
+      const events = await streams[0]!;
+      expect(JSON.stringify(events)).not.toContain("FOREIGN SECRET");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "error" }));
+      expect(transport.sent).toEqual(["launch"]);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("does not adopt an unsolicited foreign turn after an unknown notification", async () => {
+    const transport = new FakeTransport({ frames: ownerFrames("initial"), contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      transport.push({ type: "system", subtype: "task_notification", task_id: "unknown", tool_use_id: "other", status: "completed" } as unknown as ClaudeStreamMessage);
+      transport.push({ type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage);
+      transport.push(foreignAssistantFrame("other", "foreign"));
+      transport.push(foreignResultFrame("foreign"));
+      for (const frame of ownerFrames("after")) transport.enqueue(frame);
+      const owner = await collect(engine.runTurn("after", { signal: new AbortController().signal }));
+      expect(JSON.stringify(owner)).toContain("OWNER OUTPUT after");
+      expect(adopted).not.toHaveBeenCalled();
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("admits a correlated turn, keeps permissions live, persists its answer, and queues the next user input", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg1", tool_use_id: "bash1", task_type: "local_bash", description: "sleep" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const raw = engineWith(transport);
+    const rows: Parameters<ConstructorParameters<typeof ClaudeShadowTranscriptEngine>[1]["record"]>[1][number][] = [];
+    const shadow = new ClaudeShadowTranscriptEngine(raw, { record: (_ref, items) => { rows.push(...items); }, list: async () => rows }, "session-ref-1", []);
+    vi.spyOn(shadow, "capabilities", "get").mockReturnValue({ ...shadow.capabilities, supportsInteractiveApprovals: true });
+    const h = createHarness({ steps: [], engine: shadow });
+    raw.onNativeTurn = turn => h.session.acceptClaudeNativeTurn(shadow, turn);
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "initial", text: "launch" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      transport.push({ type: "system", subtype: "task_notification", task_id: "bg1", tool_use_id: "bash1", status: "completed" } as unknown as ClaudeStreamMessage);
+      transport.push({ type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: ["interrupt_receipt_v1"] } as unknown as ClaudeStreamMessage);
+      transport.push(foreignAssistantFrame("native", "NATIVE ANSWER"));
+      await h.waitUntil(() => h.received.filter(m => m.type === "turn_started").length === 2);
+      const approval = h.broker.requestPermission({ toolName: "Bash", input: { command: "printf ok" }, metadata: bashTool.metadata, mode: "build" });
+      const req = await h.waitFor((m): m is Extract<typeof m, { type: "permission_request" }> => m.type === "permission_request");
+      h.send({ type: "permission_response", requestId: req.requestId, behavior: "allow" });
+      await expect(approval).resolves.toMatchObject({ behavior: "allow" });
+      for (const frame of ownerFrames("next")) transport.enqueue(frame);
+      h.send({ type: "user_message", requestId: "next", text: "next question" });
+      transport.push({ ...foreignResultFrame("native"), origin: { kind: "task-notification", producer: "session-task", runId: "run" } } as ClaudeStreamMessage);
+      await h.waitUntil(() => h.received.filter(m => m.type === "agent_event" && m.event.type === "loop_end").length === 3);
+      expect(transport.sent).toEqual(["launch", "next question"]);
+      expect(JSON.stringify(h.received)).toContain("NATIVE ANSWER");
+      const messages = rows.map(row => (row.data as { message: { role: string; content: unknown } }).message);
+      expect(messages.filter(message => message.role === "user").map(message => message.content)).toEqual(["launch", "next question"]);
+      expect(JSON.stringify(rows)).toContain("NATIVE ANSWER");
+    } finally { await h.session.shutdown(); h.close(); }
+  }, 10_000);
+});
 
 describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
   it("carries the writeprobe turn through to turn_end/loop_end, emitting BOTH tool_call and tool_execution_start (W17)", async () => {
@@ -1050,7 +1146,8 @@ describe("ClaudeEngine — cancellation and disposal", () => {
 
   it("reports idle exit details once if resume fails and preserves unsent input", async () => {
     const dead = new FakeTransport({ rejectStreamOnce: new ClaudeClientError("claude exited unexpectedly (code=1, signal=SIGTERM)") });
-    const factory = vi.fn(async () => { throw new Error("private spawn details"); });
+    const factory = vi.fn(async () => { throw new Error("network private spawn details"); });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false, factory);
     engine.nativeMaterialized = true;
     dead.releaseStreamReject();
@@ -1058,6 +1155,8 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     const notSent = vi.fn();
     const first = await collect(engine.runTurn("recover me", { signal: new AbortController().signal, onInputNotSent: notSent }));
     expect(factory).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith("[claude] automatic resume failed: network");
+    log.mockRestore();
     expect(notSent).toHaveBeenCalledOnce();
     const error = first.find(event => event.type === "error");
     expect(error).toMatchObject({ safe: { code: "engine_dead", message: expect.stringContaining("while idle") } });

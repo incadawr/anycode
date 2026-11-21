@@ -17,6 +17,13 @@ import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeResultMessage, ClaudeStreamMessage, ClaudeSystemInitMessage } from "./protocol.js";
 import { sanitizeAgentEvent } from "../../serialize.js";
 import { ClaudeSubagentTasks } from "./subagent-tasks.js";
+import { ClaudeNativeBackgroundTasks } from "./native-background-tasks.js";
+
+it("translates synthetic native task frames inside a turn", () => {
+  const translator = new ClaudeTurnTranslator({ turn: 1, subagents: new ClaudeSubagentTasks(), nativeBackgroundTasks: new ClaudeNativeBackgroundTasks() });
+  const frame = { type: "system", subtype: "task_started", task_id: "t", tool_use_id: "call", task_type: "local_bash", description: "build" } as ClaudeStreamMessage;
+  expect(translator.onMessage(frame)).toMatchObject([{ type: "claude_background_task", taskId: "t", status: "running" }]);
+});
 
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
 

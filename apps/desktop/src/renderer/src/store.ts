@@ -1483,6 +1483,7 @@ export interface DesktopState {
   workspaceTrust: WorkspaceTrustRequest | null;
   /** Latest background-task snapshots from the host, replaced wholesale. */
   backgroundTasks: BackgroundTaskSnapshot[];
+  claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   /** Accumulated output chunks keyed by taskId. */
   backgroundTaskOutput: Record<string, string>;
   /**
@@ -1892,6 +1893,7 @@ interface SessionSlice {
   hookConfigError: string | null;
   workspaceTrust: WorkspaceTrustRequest | null;
   backgroundTasks: BackgroundTaskSnapshot[];
+  claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
   recentBackgroundChildren: WireBackgroundChild[];
@@ -1975,6 +1977,7 @@ function initialSessionSlice(): SessionSlice {
     hookConfigError: null,
     workspaceTrust: null,
     backgroundTasks: [],
+    claudeBackgroundTasks: [],
     backgroundTaskOutput: {},
     backgroundChildren: [],
     recentBackgroundChildren: [],
@@ -3978,6 +3981,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         get().turn.turnId !== turnId &&
         event.type !== "context_usage" &&
         event.type !== "preview_console" &&
+        !(event.type === "claude_background_task" && turnId === "detached-subagent") &&
         event.type !== "compaction_start" &&
         event.type !== "compaction_end" &&
         !(turnId === "detached-subagent" && (event.type === "subagent_start" || event.type === "subagent_progress" || event.type === "subagent_activity" || event.type === "subagent_end" || event.type === "engine_quota")) &&
@@ -4903,6 +4907,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // may additionally give warning/retry/info notices a dedicated
         // transcript line later — additive on top of this, not a
         // replacement.
+        case "claude_background_task":
+          set(state => {
+            const tasks = [...state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId), event];
+            return { claudeBackgroundTasks: [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)] };
+          });
+          return;
         case "engine_notice":
           if (turnId === ENGINE_SWITCH_NOTICE_TURN_ID && boundaryId) {
             const id = `engine-boundary:${boundaryId}`;

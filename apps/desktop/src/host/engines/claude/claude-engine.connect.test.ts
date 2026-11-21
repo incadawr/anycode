@@ -883,6 +883,22 @@ describe("— browser tools through the engine door (C8/C9/C10/C12/C14)", () => 
 });
 
 describe("the CLI's own agents across a transport replacement", () => {
+  it("forwards synthetic native Bash lifecycle frames while idle", async () => {
+    const fake = fakeSpawn();
+    const { engine } = await startClaudeEngine(baseOptions(fake.spawnImpl));
+    const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = event => detached.push(event);
+    try {
+      for (const frame of [
+        { type: "system", subtype: "task_started", task_id: "t", tool_use_id: "call", task_type: "local_bash", description: "build" },
+        { type: "system", subtype: "task_notification", task_id: "t", tool_use_id: "call", status: "completed", summary: "done" },
+      ]) fake.streams[0]!.emit("data", Buffer.from(JSON.stringify(frame) + "\n"));
+      await vi.waitFor(() => expect(detached).toMatchObject([
+        { type: "claude_background_task", taskId: "t", status: "running" },
+        { type: "claude_background_task", taskId: "t", status: "completed", summary: "done" },
+      ]));
+    } finally { await engine.dispose("session-close"); }
+  });
   it("settles the CLI's own running agents as cancelled when the transport is replaced", async () => {
     const fake = fakeSpawn();
     const { engine, sessionRef } = await startClaudeEngine(baseOptions(fake.spawnImpl));

@@ -1319,6 +1319,7 @@ const answerApprovalSchema = z.object({
 export class Session {
   private readonly presentationJournal: PresentationJournal;
   private readonly detachedCardStates = new Map<string, { start?: WireAgentEvent; latest?: WireAgentEvent; finished: boolean }>();
+  private readonly claudeBackgroundTasks = new Map<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>();
   private readonly outbound: Outbound;
   /**
    * NOT readonly — the engine_swap_request handler re-assigns
@@ -1735,6 +1736,34 @@ export class Session {
    */
   private readonly runningTools = new Map<string, true>();
   private currentTurn: Promise<void> | null = null;
+  private readonly pendingClaudeTurns: Array<{ engine: SessionEngine; stream: AsyncIterable<AgentEvent> & { cancel(): void } }> = [];
+
+  acceptClaudeNativeTurn(engine: SessionEngine, stream: AsyncIterable<AgentEvent> & { cancel(): void }): void {
+    if (!this.ownsRuntime(engine)) { stream.cancel(); return; }
+    this.pendingClaudeTurns.push({ engine, stream });
+    this.drainClaudeNativeTurns();
+  }
+
+  private drainClaudeNativeTurns(): void {
+    if (this.busy || this.shuttingDown || this.pendingClaudeTurns.length === 0) return;
+    const next = this.pendingClaudeTurns.shift()!;
+    if (!this.ownsRuntime(next.engine) || !next.engine.recordNativeTurn) { next.stream.cancel(); this.drainClaudeNativeTurns(); return; }
+    this.busy = true;
+    const promise = this.runTurn(randomUUID(), undefined, undefined, false, undefined, undefined, next.stream).finally(() => {
+      this.busy = false;
+      this.abort = null;
+      this.turnId = null;
+      this.currentStep = undefined;
+      this.lastTurnRequest = undefined;
+      this.liveStreams.clear();
+      this.runningTools.clear();
+      if (this.currentTurn === promise) this.currentTurn = null;
+      this.drainClaudeNativeTurns();
+      if (!this.busy && this.steerQueue.length > 0) this.startNextQueuedSteerTurn();
+      this.drainAgentInbox();
+    });
+    this.currentTurn = promise;
+  }
 
   /**
    * CUT-S2 §10.12.1: flipped as the FIRST step of `shutdown()`,
@@ -3125,6 +3154,7 @@ export class Session {
     this.orchestrateListener = undefined;
     this.presentationJournal.clear();
     this.detachedCardStates.clear();
+    this.claudeBackgroundTasks.clear();
   }
 
   private route(raw: unknown, canonicalHydrated = false): void {
@@ -3397,6 +3427,7 @@ export class Session {
             if (event) this.outbound.sendDirect({ type: "agent_event", turnId: "detached-subagent", event });
           }
         }
+        for (const event of this.claudeBackgroundTasks.values()) this.outbound.sendDirect({ type: "agent_event", turnId: "detached-subagent", event });
         this.outbound.sendDirect(this.broker.approvalState());
         this.outbound.sendDirect({ type: "context_usage_checkpoint", contextUsage: this.checkpointContextUsage });
         // GitHub #19: re-assert the authoritative title on every ui_ready, as
@@ -5122,6 +5153,7 @@ export class Session {
   /** Detached events intentionally bypass presentationJournal and durable history; they have no turn, step, or attempt. */
   emitDetachedSubagentEvent(event: AgentEvent): void {
     const wire = sanitizeAgentEvent(event, this.engine.id);
+    if (wire.type === "claude_background_task") this.rememberClaudeBackgroundTask(wire);
     if (wire.type === "subagent_start" || wire.type === "subagent_progress" || wire.type === "subagent_end") {
       const state = this.detachedCardStates.get(wire.toolCallId) ?? { finished: false };
       if (wire.type === "subagent_start") state.start = wire;
@@ -5136,6 +5168,15 @@ export class Session {
       if (finished.length > 500) this.detachedCardStates.delete(finished[0]![0]);
     }
     this.outbound.emit({ type: "agent_event", turnId: "detached-subagent", event: wire });
+  }
+
+  private rememberClaudeBackgroundTask(event: Extract<WireAgentEvent, { type: "claude_background_task" }>): void {
+    this.claudeBackgroundTasks.delete(event.taskId);
+    this.claudeBackgroundTasks.set(event.taskId, event);
+    if (this.claudeBackgroundTasks.size > 100) {
+      const finished = [...this.claudeBackgroundTasks].find(([, task]) => task.status !== "running");
+      if (finished) this.claudeBackgroundTasks.delete(finished[0]);
+    }
   }
 
   /**
@@ -5462,7 +5503,8 @@ export class Session {
           (settled.terminalReason === "cancelled" || settled.terminalReason === "error" || settled.terminalReason === "max_turns")) {
           this.rejectQueuedComposerMessages(settled.terminalReason);
         }
-        if (this.child === undefined && this.steerQueue.length > 0) {
+        this.drainClaudeNativeTurns();
+        if (this.child === undefined && !this.busy && this.steerQueue.length > 0) {
           if (this.shuttingDown) this.rejectQueuedSteerMessages();
           else this.startNextQueuedSteerTurn();
         }
@@ -6125,6 +6167,7 @@ export class Session {
     carriesWorktreeExitNotice = false,
     origin?: "system",
     pendingTurnIdHolder?: { turnId: string; originalText: string },
+    nativeStream?: AsyncIterable<AgentEvent> & { cancel(): void },
   ): Promise<void> {
     // phase-1 defect 3: the outer turn UUID is minted by
     // `acceptUserMessage` at ADMISSION (captured there into pendingPrompt,
@@ -6133,6 +6176,7 @@ export class Session {
     // call) never carry a pending prompt.
     const turnId = pendingTurnIdHolder?.turnId ?? randomUUID();
     const controller = new AbortController();
+    if (nativeStream) controller.signal.addEventListener("abort", () => nativeStream.cancel(), { once: true });
     this.turnId = turnId;
     this.latestTurnId = turnId;
     this.nativeUsageStep = 0;
@@ -6279,7 +6323,7 @@ export class Session {
         turnId,
         ...deliveryHooks,
       };
-      const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
+      const stream = nativeStream ? this.engine.recordNativeTurn?.(nativeStream, turnId) : text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
         throw new Error("active engine cannot continue a relocated turn");
       }
@@ -6381,6 +6425,7 @@ export class Session {
         // event) BEFORE journaling/emitting, so the live row and the replayed
         // one are the same row.
         const wireEvent = this.recordCompactionOutcome(sanitizeAgentEvent(event, this.engine.id));
+        if (wireEvent.type === "claude_background_task") this.rememberClaudeBackgroundTask(wireEvent);
         // track the inner request ordinal (core's turn_start.turn,
         // reset per outer turn) and stamp it onto the envelope for core
         // turns — the renderer's fold checkpoint keys events and durable
