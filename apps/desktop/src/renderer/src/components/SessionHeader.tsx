@@ -136,6 +136,14 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   // third subscription — `data-running` badge on the toggle while
   // any background task of this tab is still live.
   const backgroundTasks = useTabStore((state) => state.backgroundTasks);
+  const claudeBackgroundTasks = useTabStore((state) => state.claudeBackgroundTasks);
+  const [taskNow, setTaskNow] = useState(Date.now);
+  const hasRunningClaudeTask = claudeBackgroundTasks.some(task => task.status === "running");
+  useEffect(() => {
+    if (!hasRunningClaudeTask) return;
+    const timer = setInterval(() => setTaskNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [hasRunningClaudeTask]);
   const tasksRunning = backgroundTasks.some((task) => task.status === "running");
 
   // D15 (96-P3): the Previews menu — visible whenever the active tab has
@@ -252,6 +260,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       )}
 
       {externalEngine && <span className="engine-identity session-header-engine">{engine.id === "codex" ? "Codex" : engine.id}</span>}
+      {claudeBackgroundTasks.map(task => <span key={task.taskId} className={`claude-native-task claude-native-task-${task.status}`} role="status" title={`${task.kind === "bash" ? "Background Bash" : "Monitor"}: ${task.description}\n${task.status}${task.status === "running" ? ` · ${Math.max(0, Math.floor((taskNow - task.startedAt) / 1000))}s` : ""}${task.summary ? ` — ${task.summary}` : ""}`} aria-label={`${task.kind}: ${task.status}`}><span className={task.status === "running" ? "claude-native-task-spinner icon-spin" : ""}>{task.status === "running" ? "" : task.status === "completed" ? "✓" : "!"}</span></span>)}
 
       <ChildWorktreeControl key={tabId} tabId={tabId} />
       {!isNewSession && <EnvironmentMenu placement="header" />}

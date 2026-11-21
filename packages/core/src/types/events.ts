@@ -234,6 +234,7 @@ export type CeilingRefusalReason =
 /** Full event stream produced by the agent loop; superset of the model stream vocabulary. */
 export type AgentEvent =
   | ModelStreamEvent
+  | { type: "claude_background_task"; taskId: string; toolCallId: string; kind: "bash" | "monitor"; description: string; startedAt: number; status: "running" | "completed" | "failed" | "stopped"; summary?: string; outputFile?: string }
   | { type: "turn_start"; turn: number }
   | { type: "turn_end"; turn: number; finishReason: FinishReason }
   /**

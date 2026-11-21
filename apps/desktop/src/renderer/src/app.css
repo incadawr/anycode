@@ -127,6 +127,8 @@ body {
 .icon-spin {
   animation: spin 800ms linear infinite;
 }
+.claude-native-task { display: inline-flex; align-items: center; color: var(--text-3); }
+.claude-native-task-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; }
 
 /* Shimmer text treatment (R3 — first consumer of the R2 shimmer keyframe).
    A --text-1 highlight sweeps over a --text-2 base in reading direction

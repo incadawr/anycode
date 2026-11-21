@@ -9895,3 +9895,13 @@ it("notifies a git result observer exactly once for its own request", () => {
   store.getState().applyHostMessage({ type: "git_result", requestId: "own", outcome });
   expect(observer).toHaveBeenCalledExactlyOnceWith(outcome);
 });
+
+it("tracks detached Claude task updates while ignoring unrelated stale turns", () => {
+  const store = createDesktopStore();
+  const task = { type: "claude_background_task" as const, taskId: "task", toolCallId: "call", kind: "bash" as const, description: "build", startedAt: 1, status: "running" as const };
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "stale", event: task });
+  expect(store.getState().claudeBackgroundTasks).toEqual([]);
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: task });
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: { ...task, status: "completed", summary: "done" } });
+  expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "task", status: "completed", summary: "done" }]);
+});

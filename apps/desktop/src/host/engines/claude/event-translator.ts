@@ -26,6 +26,7 @@ import type {
 } from "./protocol.js";
 import { isClaudeSystemInitMessage } from "./protocol.js";
 import { type ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
+import type { ClaudeNativeBackgroundTasks } from "./native-background-tasks.js";
 
 export interface ClaudeTurnTranslatorOptions {
   /** AnyCode's own turn ordinal for this turn (never the CLI's `num_turns`). */
@@ -61,6 +62,7 @@ export interface ClaudeTurnTranslatorOptions {
    * Agent card; when absent they stay folded away, exactly as before.
    */
   subagents?: ClaudeSubagentTasks;
+  nativeBackgroundTasks?: ClaudeNativeBackgroundTasks;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -252,7 +254,10 @@ export class ClaudeTurnTranslator {
     // carry `parent_tool_use_id: null` and must survive. The child's frames and
     // the CLI's task_* lifecycle frames only ever surface as subagent_* events
     // on that parent card, never as cards of their own.
-    if (isClaudeSubagentFrame(message)) return this.options.subagents?.onFrame(message) ?? [];
+    if (isClaudeSubagentFrame(message)) {
+      const task = this.options.nativeBackgroundTasks?.onFrame(message);
+      return [...(this.options.subagents?.onFrame(message) ?? []), ...(task ? [task] : [])];
+    }
     switch (message.type) {
       case "system":
         return this.onSystem(message);

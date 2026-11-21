@@ -50,6 +50,7 @@ import { claudeOrchestrationAvailability, prepareClaudeOrchestrationSpawn, asser
 import { ClaudeApprovalBridge } from "./approval-bridge.js";
 import { ClaudeClient, ClaudeClientError, type ClaudeClientOptions, type ClaudeSpawnArgsOptions } from "./claude-client.js";
 import { ClaudeTurnTranslator } from "./event-translator.js";
+import { ClaudeNativeBackgroundTasks } from "./native-background-tasks.js";
 import { ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
@@ -1035,6 +1036,7 @@ export class ClaudeEngine implements SessionEngine {
    * rest of its life while the engine is idle.
    */
   private readonly subagentTasks = new ClaudeSubagentTasks((event) => this.emitDetached(event));
+  private readonly nativeBackgroundTasks = new ClaudeNativeBackgroundTasks();
   /**
    * Receives the subagent_* events of the CLI's own agents that arrive with
    * no owner turn to carry them (a `run_in_background` agent working after
@@ -1568,6 +1570,7 @@ export class ClaudeEngine implements SessionEngine {
       onResult: (result) => this.onResult(result, true),
       ...(this.takePresentation !== undefined ? { takePresentation: this.takePresentation } : {}),
       subagents: this.subagentTasks,
+      nativeBackgroundTasks: this.nativeBackgroundTasks,
     });
     this.interruptSent = false;
     // Reserve stream ownership before the first yield or await, so a paused
@@ -2188,6 +2191,8 @@ export class ClaudeEngine implements SessionEngine {
           // An agent the CLI keeps running (run_in_background) reports during
           // the summarization turn too; no turn carries its card here.
           for (const event of this.subagentTasks.onFrame(frame)) this.emitDetached(event);
+          const task = this.nativeBackgroundTasks.onFrame(frame);
+          if (task) this.emitDetached(task);
           continue;
         }
         if (frame.type === "system") {
@@ -2786,6 +2791,8 @@ export class ClaudeEngine implements SessionEngine {
         // open a foreign turn — the next owner send would then wait for a
         // result the agent never produces.
         for (const event of this.subagentTasks.onFrame(frame)) this.emitDetached(event);
+        const task = this.nativeBackgroundTasks.onFrame(frame);
+        if (task) this.emitDetached(task);
         return;
       }
       if (frame.type === "result") {
