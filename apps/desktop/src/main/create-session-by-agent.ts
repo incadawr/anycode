@@ -79,6 +79,7 @@ export interface CreateSessionByAgentDeps {
   listCodexAccounts?(): Promise<CodexAccountOption[]>;
   randomUUID(): string;
   agentOpenedSessions: Set<string>;
+  canViewAgentTab?(openerSessionId: string, targetSessionId: string): Promise<boolean>;
   agentSessionOpeners?: Map<string, string>;
   agentSessionTitles: Map<string, string>;
   /**
@@ -89,7 +90,7 @@ export interface CreateSessionByAgentDeps {
    */
   pushAgentTitle?(sessionId: string): void;
   /** Live tab list, for handle-uniqueness checks against live sessions. */
-  listTabs(): ReadonlyArray<{ sessionId: string }>;
+  listTabs(): ReadonlyArray<{ sessionId: string; tabId?: string; workspace?: string; activityState?: string }>;
   /**
    * Deletes the database row of a session this attempt just allocated, when
    * preparation fails after the host forked (an abandoned prepared session
@@ -152,7 +153,31 @@ export async function createSessionForAgent(
   const openerProc = opener?.proc;
   let deliver: (() => Promise<{ state: string; messageId?: string }>) | undefined;
   const outcome = await creationAdmissionFor(deps.agentOpenedSessions, deps.listTabs).run(() =>
-    createAdmittedSession(request, deps, policy, callback => { deliver = callback; }, managed));
+    createAdmittedSession(request, deps, policy, callback => { deliver = callback; }, managed), {
+      limits: () => deps.currentSettings().sessionLimits,
+      describe: async (busy, limit) => {
+        const visible: string[] = [];
+        const sessions = deps.sessions();
+        for (const tab of busy) {
+          if (!tab.tabId || !tab.workspace || !sessions) continue;
+          try {
+            // Restrict external diagnostics to the already-authorized requested
+            // workspace and exposed sessions. Native access is rechecked.
+            const key = deps.realpathSync(tab.workspace);
+            const requestKey = deps.realpathSync(request.workspace);
+            if (key !== requestKey) continue;
+            if (policy.kind === "external") {
+              if (!sessions.isExposed(tab.sessionId)) continue;
+            } else {
+              if (!deps.canViewAgentTab || !await deps.canViewAgentTab(policy.openerSessionId, tab.sessionId)) continue;
+            }
+            const handle = sessions.getHandle(tab.sessionId);
+            visible.push(`tabId=${tab.tabId}, handle=${handle ?? "(none)"}, state=${tab.activityState ?? "unknown"}`);
+          } catch { /* Fail closed on stale paths or permissions. */ }
+        }
+        return `Active agent-opened tab limit ${limit} reached. Wait for a turn to finish or close a busy tab.${visible.length ? ` Accessible busy tabs: ${visible.join("; ")}` : " No busy tabs in the requested workspace are available to this caller."}`;
+      },
+    });
   if (outcome.ok && opener && manager?.getTab(opener.tabId) === opener && opener.proc === openerProc)
     delete opener.childWorktreeRefusal;
   if (!outcome.ok && managed?.current() && managed.worktreeRefused)
@@ -184,7 +209,7 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
   const trust = await deps.readTrustStore();
   if (!current()) return { ok: false, reason: "not_allowed" };
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
-  if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
+  if (tabs.atCapacity()) return { ok: false, reason: "too_many", detail: "The overall open-tab limit is reached. Close a tab or adjust Maximum open tabs in Settings." };
   const engine = request.engine ?? "core";
   if (managed) {
     let sameCheckout = false;

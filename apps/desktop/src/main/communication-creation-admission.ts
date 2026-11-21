@@ -1,14 +1,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CreateSessionOutcome } from "./communication-server.js";
+import { readSessionLimits, SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 
 export const CREATE_SESSION_RATE_LIMIT = 5;
 export const CREATE_SESSION_RATE_WINDOW_MS = 60_000;
-export const MAX_AGENT_OPENED_TABS = 8;
+
+export const MAX_AGENT_OPENED_TABS = SESSION_LIMIT_RANGES.agentActiveTabsMax.default;
+type AdmissionTab = { sessionId: string; tabId?: string; workspace?: string; activityState?: string };
+type AdmissionOptions = { limits?: unknown; describe?: (tabs: AdmissionTab[], limit: number) => Promise<string> };
 
 /** One app-run budget shared by all creators using main's ownership set.
  * The critical section outlives any caller RPC deadline or disconnect. */
 const admissions = new WeakMap<Set<string>, ReturnType<typeof createCreationAdmission>>();
-export function creationAdmissionFor(owned: Set<string>, listTabs: () => ReadonlyArray<{ sessionId: string }>, now = Date.now) {
+export function creationAdmissionFor(owned: Set<string>, listTabs: () => ReadonlyArray<AdmissionTab>, now = Date.now) {
   let admission = admissions.get(owned);
   if (!admission) {
     admission = createCreationAdmission(owned, listTabs, now);
@@ -17,19 +21,23 @@ export function creationAdmissionFor(owned: Set<string>, listTabs: () => Readonl
   return admission;
 }
 
-function createCreationAdmission(owned: Set<string>, listTabs: () => ReadonlyArray<{ sessionId: string }>, now: () => number) {
+function createCreationAdmission(owned: Set<string>, listTabs: () => ReadonlyArray<AdmissionTab>, now: () => number) {
   const context = new AsyncLocalStorage<{ active: boolean }>();
   let tail: Promise<unknown> = Promise.resolve();
   const times: number[] = [];
   return {
-    run(task: () => Promise<CreateSessionOutcome>): Promise<CreateSessionOutcome> {
+    run(task: () => Promise<CreateSessionOutcome>, options: AdmissionOptions = {}): Promise<CreateSessionOutcome> {
       if (context.getStore()?.active) return Promise.reject(new Error("Nested creation admission"));
       const result = tail.then(async (): Promise<CreateSessionOutcome> => {
         const at = now();
         while (times.length && times[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) times.shift();
         if (times.length >= CREATE_SESSION_RATE_LIMIT) return { ok: false, reason: "rate_limited" };
-        const live = new Set(listTabs().map(t => t.sessionId));
-        if ([...owned].filter(id => live.has(id)).length >= MAX_AGENT_OPENED_TABS) return { ok: false, reason: "too_many" };
+        const busy = listTabs().filter(t => owned.has(t.sessionId) && t.activityState !== "idle");
+        const limit = readSessionLimits(typeof options.limits === "function" ? options.limits() : options.limits).agentActiveTabsMax ?? MAX_AGENT_OPENED_TABS;
+        if (busy.length >= limit) {
+          const detail = options.describe ? await options.describe(busy, limit) : `Active agent-opened tab limit reached (${limit}); wait for a turn to finish.`;
+          return { ok: false, reason: "too_many", detail };
+        }
         const scope = { active: true };
         let outcome: CreateSessionOutcome;
         try { outcome = await context.run(scope, task); }

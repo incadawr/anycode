@@ -1,10 +1,12 @@
 export const SESSION_LIMIT_RANGES = {
+  agentActiveTabsMax: { min: 1, max: 40, default: 8 },
   maxTabs: { min: 4, max: 40, default: 20 },            // (8 -> 20)
   childSessionsPerParentMax: { min: 1, max: 8, default: 3 },  // slice 2
   childSessionsGlobalMax: { min: 1, max: 24, default: 8 },
 } as const;
 
 export interface SessionLimitsSettings {
+  agentActiveTabsMax?: number;
   maxTabs?: number;
   childSessionsPerParentMax?: number;
   childSessionsGlobalMax?: number;
@@ -25,6 +27,8 @@ export function readSessionLimits(raw: unknown): SessionLimitsSettings {
   const out: SessionLimitsSettings = {};
   if (typeof raw !== "object" || raw === null) return out;
   const src = raw as Record<string, unknown>;
+  const agentActiveTabsMax = clampSessionLimit("agentActiveTabsMax", src.agentActiveTabsMax);
+  if (agentActiveTabsMax !== undefined) out.agentActiveTabsMax = agentActiveTabsMax;
   const maxTabs = clampSessionLimit("maxTabs", src.maxTabs);
   if (maxTabs !== undefined) out.maxTabs = maxTabs;
   const perParent = clampSessionLimit("childSessionsPerParentMax", src.childSessionsPerParentMax);

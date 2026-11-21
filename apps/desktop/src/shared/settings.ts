@@ -865,6 +865,7 @@ export interface AnycodeSettings {
    * section strictly before persisting, and readers clamp defensively (shared/session-limits.ts).
    */
   sessionLimits?: {
+    agentActiveTabsMax?: number;
     maxTabs?: number;
     childSessionsPerParentMax?: number;
     childSessionsGlobalMax?: number;

@@ -435,8 +435,10 @@ export function buildSessionLimitsPatch(
   maxTabsText: string,
   perParentText: string,
   globalText: string,
+  agentText = "",
 ): SessionLimitsPatchResult {
   const fields: Array<[keyof SessionLimitsSettings, string, string, { readonly min: number; readonly max: number }]> = [
+    ["agentActiveTabsMax", "Active agent-opened tabs", agentText, SESSION_LIMIT_RANGES.agentActiveTabsMax],
     ["maxTabs", "Maximum open tabs", maxTabsText, SESSION_LIMIT_RANGES.maxTabs],
     ["childSessionsPerParentMax", "Child sessions per parent", perParentText, SESSION_LIMIT_RANGES.childSessionsPerParentMax],
     ["childSessionsGlobalMax", "Child sessions app-wide", globalText, SESSION_LIMIT_RANGES.childSessionsGlobalMax],
@@ -1497,6 +1499,7 @@ export function SettingsScreen({
   // how long a turn waits for the network before it fails (blank = default 30 min).
   const [networkWait, setNetworkWait] = useState("");
   // slice 2: live session-capacity limit fields.
+  const [sessionAgentMax, setSessionAgentMax] = useState("");
   const [sessionMaxTabs, setSessionMaxTabs] = useState("");
   const [sessionPerParent, setSessionPerParent] = useState("");
   const [sessionGlobal, setSessionGlobal] = useState("");
@@ -1733,6 +1736,7 @@ export function SettingsScreen({
       setMaxRetries(snapshot.settings.tools.maxRetries?.toString() ?? "");
       setNetworkRetryBudget(snapshot.settings.tools.networkRetryBudgetMs?.toString() ?? "");
       setNetworkWait(snapshot.settings.tools.networkWaitMaxMs?.toString() ?? "");
+      setSessionAgentMax(snapshot.settings.sessionLimits?.agentActiveTabsMax?.toString() ?? "");
       setSessionMaxTabs(snapshot.settings.sessionLimits?.maxTabs?.toString() ?? "");
       setSessionPerParent(snapshot.settings.sessionLimits?.childSessionsPerParentMax?.toString() ?? "");
       setSessionGlobal(snapshot.settings.sessionLimits?.childSessionsGlobalMax?.toString() ?? "");
@@ -1777,7 +1781,7 @@ export function SettingsScreen({
     if (!maxTurnsValid || !subagentMaxTurnsValid || !windowValid) return;
     // validate the sessionLimits fields FIRST — a bad
     // value refuses the whole save (nothing written) with a field-naming error.
-    const limits = buildSessionLimitsPatch(sessionMaxTabs, sessionPerParent, sessionGlobal);
+    const limits = buildSessionLimitsPatch(sessionMaxTabs, sessionPerParent, sessionGlobal, sessionAgentMax);
     if ("error" in limits) {
       setSessionLimitsError(limits.error);
       return;
@@ -2126,6 +2130,11 @@ export function SettingsScreen({
                     disabled={readOnly} placeholder="20" onChange={(e) => setSessionMaxTabs(e.target.value)} />
                 </label>
                 <label className="settings-field">
+                  <span className="settings-field-label">Active agent-opened tabs</span>
+                  <input className="settings-field-input" type="text" inputMode="numeric" value={sessionAgentMax}
+                    disabled={readOnly} placeholder="8" onChange={(e) => setSessionAgentMax(e.target.value)} />
+                </label>
+                <label className="settings-field">
                   <span className="settings-field-label">Child sessions per parent</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={sessionPerParent}
                     disabled={readOnly} placeholder="3" onChange={(e) => setSessionPerParent(e.target.value)} />
@@ -2136,7 +2145,7 @@ export function SettingsScreen({
                     disabled={readOnly} placeholder="8" onChange={(e) => setSessionGlobal(e.target.value)} />
                 </label>
                 <div className="settings-field-hint">
-                  Blank leaves the existing value unchanged; an unset setting uses the default (20 tabs, 3 per parent, 8 app-wide). Allowed ranges: tabs 4–40, per parent 1–8, app-wide 1–24. Changes apply without restart.
+                  Blank leaves the existing value unchanged; an unset setting uses the default (20 tabs, 3 per parent, 8 app-wide). Active agent-opened tabs default to 8 (range 1–40); idle tabs do not count. Allowed ranges: tabs 4–40, per parent 1–8, app-wide 1–24. Changes apply without restart.
                 </div>
                 {sessionLimitsError !== null && (
                   <div className="settings-field-error" role="alert">{sessionLimitsError}</div>

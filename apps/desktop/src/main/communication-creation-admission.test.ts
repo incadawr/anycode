@@ -59,6 +59,17 @@ describe("creation reservation", () => {
     expect((await create()).ok).toBe(true);
     expect(forks).toBe(9);
   });
+  it("ignores eight idle tabs and applies a changed busy limit inside the queue", async () => {
+    const owned = new Set(Array.from({ length: 8 }, (_, i) => `s${i}`));
+    const tabs = [...owned].map(sessionId => ({ sessionId, activityState: "idle" }));
+    const admission = creationAdmissionFor(owned, () => tabs);
+    const create = () => admission.run(async () => ({ ok: true, sessionId: "new", tabId: "new-tab" }), { limits: { agentActiveTabsMax: 2 } });
+    expect((await create()).ok).toBe(true);
+    tabs[0]!.activityState = "running";
+    tabs[1]!.activityState = "waiting_approval";
+    expect(await create()).toMatchObject({ ok: false, reason: "too_many", detail: expect.stringContaining("2") });
+    expect((await admission.run(async () => ({ ok: true, sessionId: "other", tabId: "other" }), { limits: { agentActiveTabsMax: 3 } })).ok).toBe(true);
+  });
   it("does not charge rejected or thrown preparation against the rate window", async () => {
     const admission = creationAdmissionFor(new Set(), () => []);
     for (let i = 0; i < 8; i++) {

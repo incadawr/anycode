@@ -2682,6 +2682,15 @@ void app.whenReady().then(async () => {
     listCodexAccounts: async () => listCodexAccounts(),
     randomUUID,
     agentOpenedSessions,
+    canViewAgentTab: async (opener, target) => {
+      const caller = currentPeer(opener), recipient = currentPeer(target);
+      if (!caller || !recipient || !peerAccess || !await peerAccess.canAccess(caller, recipient, "list")) return false;
+      const freshCaller = currentPeer(opener), freshRecipient = currentPeer(target);
+      return !!freshCaller && !!freshRecipient && freshCaller.proc === caller.proc && freshRecipient.proc === recipient.proc &&
+        freshCaller.generation === caller.generation && freshRecipient.generation === recipient.generation &&
+        freshCaller.workspaceKey === caller.workspaceKey && freshRecipient.workspaceKey === recipient.workspaceKey &&
+        await peerAccess.canAccess(freshCaller, freshRecipient, "list");
+    },
     agentSessionTitles,
     agentSessionOpeners,
     pushAgentTitle: (sessionId) => agentTitlePushes.retain(sessionId),
