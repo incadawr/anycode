@@ -7,6 +7,17 @@ import { readFileSync } from "node:fs";
 const frame = (subtype: string, fields: Record<string, unknown>) => ({ type: "system", subtype, ...fields }) as ClaudeStreamMessage;
 
 describe("native background task correlation", () => {
+  it("settles only still-running tasks as unknown once observation is lost", () => {
+    const tasks = new ClaudeNativeBackgroundTasks();
+    tasks.onFrame(frame("task_started", { task_id: "a", tool_use_id: "ta", task_type: "local_bash" }));
+    tasks.onFrame(frame("task_started", { task_id: "b", tool_use_id: "tb", task_type: "monitor" }));
+    tasks.onFrame(frame("task_notification", { task_id: "a", tool_use_id: "ta", status: "completed" }));
+    expect(tasks.abandonAll()).toMatchObject([{ taskId: "b", status: "unknown", summary: "Claude connection ended; task status is unknown." }]);
+    expect(tasks.abandonAll()).toEqual([]);
+    const later = tasks.onFrame(frame("task_notification", { task_id: "b", tool_use_id: "tb", status: "completed" }));
+    expect(later).toMatchObject({ taskId: "b", status: "completed" });
+    expect(later?.summary).toBeUndefined();
+  });
   it("records the real ordering of notification, distinct result, and the next permission request", () => {
     const lines = readFileSync(new URL("./contract/evidence/claude-2.1.326-notification-permission-summary.jsonl", import.meta.url), "utf8").trim().split("\n");
     const frames = lines.map(line => JSON.parse(line) as Record<string, unknown>);
