@@ -2129,11 +2129,8 @@ export function SettingsScreen({
                   <input className="settings-field-input" type="text" inputMode="numeric" value={sessionMaxTabs}
                     disabled={readOnly} placeholder="20" onChange={(e) => setSessionMaxTabs(e.target.value)} />
                 </label>
-                <label className="settings-field">
-                  <span className="settings-field-label">Active agent-opened tabs</span>
-                  <input className="settings-field-input" type="text" inputMode="numeric" value={sessionAgentMax}
-                    disabled={readOnly} placeholder="8" onChange={(e) => setSessionAgentMax(e.target.value)} />
-                </label>
+                <Input label="Active agent-opened tabs" className="settings-field-input" type="text" inputMode="numeric" value={sessionAgentMax}
+                  disabled={readOnly} placeholder="8" onChange={(e) => setSessionAgentMax(e.target.value)} />
                 <label className="settings-field">
                   <span className="settings-field-label">Child sessions per parent</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={sessionPerParent}

@@ -4343,7 +4343,7 @@ button.environment-menu-row:hover,
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  width: 100%;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 36px;
   padding: var(--sp-2) var(--sp-3);
@@ -4657,8 +4657,9 @@ button.environment-menu-row:hover,
    the control rather than through the card's own status badge. */
 .tool-call-toggle-row .tool-call-open-error {
   flex: 0 0 100%;
+  box-sizing: border-box;
   overflow-wrap: anywhere;
-  margin-right: var(--sp-3);
+  padding: 0 var(--sp-3);
   color: var(--danger);
   font-size: var(--fs-2xs);
 }
