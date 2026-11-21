@@ -14,12 +14,19 @@ import { MemFs, nodeWirePort } from "./test-harness.js";
 class Transport implements ClaudeTransport {
   readonly inputs: Array<{ input: string | unknown[]; effort: string | undefined }> = [];
   readonly controls: Array<{ subtype: string; request?: Record<string, unknown> }> = [];
+  readonly quotaRequests: Array<{ subtype: string; request?: Record<string, unknown> }> = [];
   effort: string | undefined;
   private pendingControls: Array<{ request?: Record<string, unknown>; resolve: (value: unknown) => void; reject: (error: Error) => void }> = [];
   private queue: ClaudeStreamMessage[] = [];
   private waiter: ((result: IteratorResult<ClaudeStreamMessage>) => void) | undefined;
   async initialize() { return { commands: [], models: [], account: { tokenSource: "oauth" } }; }
   controlRequest<T>(subtype: string, request?: Record<string, unknown>): Promise<T> {
+    if (subtype === "get_usage") {
+      this.quotaRequests.push({ subtype, request });
+      // Keep quota pending throughout the test: settings acknowledgements and
+      // the following user input must not depend on this background request.
+      return new Promise<T>(() => {});
+    }
     this.controls.push({ subtype, request });
     return new Promise((resolve, reject) => { this.pendingControls.push({ request, resolve: (value) => resolve(value as T), reject }); });
   }
@@ -83,6 +90,7 @@ it("waits for Claude's acknowledged effort control before sending the next input
     expect(received).toContainEqual(expect.objectContaining({ type: "engine_settings_changed", state: "pending", effort: "xhigh" }));
     transport.finish();
     await settle();
+    expect(transport.quotaRequests).toEqual([{ subtype: "get_usage", request: {} }]);
     expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { settings: { effortLevel: "xhigh" } } }]);
     send({ type: "ui_ready" });
     send({ type: "user_message", requestId: "b", text: "second" });
@@ -142,6 +150,7 @@ it("waits for both deferred and subsequent idle effort acknowledgements", async 
     await settle();
     transport.finish();
     await settle();
+    expect(transport.quotaRequests).toHaveLength(1);
     send({ type: "set_engine_effort", effort: "xhigh" });
     send({ type: "user_message", requestId: "b", text: "second" });
     await settle();
@@ -168,6 +177,7 @@ it.each([true, false])("waits for a pending model change before applying deferre
     await settle();
     transport.finish();
     await settle();
+    expect(transport.quotaRequests).toHaveLength(1);
     expect(transport.controls).toHaveLength(1);
     send({ type: "user_message", requestId: "b", text: "second" });
     await settle();
