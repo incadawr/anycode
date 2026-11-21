@@ -75,7 +75,7 @@ import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, relative as pathRelative, resolve as pathResolve, sep } from "node:path";
 import { z } from "zod";
 import type { PreviewOpenSuccess, PreviewResult } from "../shared/preview.js";
-import { extensionOfPath, PREVIEWABLE_DOC_EXTENSIONS } from "../shared/previewable.js";
+import { extensionOfPath, MARKDOWN_EXTENSIONS, PREVIEWABLE_DOC_EXTENSIONS } from "../shared/previewable.js";
 
 // ── channels (preload duplicates these literals — shared/** convention is frozen per-track) ──
 
@@ -672,10 +672,10 @@ export async function handleArtifactOpen(deps: ArtifactsIpcDeps, raw: unknown): 
   if ("failure" in resolved) {
     return { ok: false, reason: resolved.failure };
   }
-  if (!OPENABLE_EXTENSIONS.has(extensionOf(resolved.realPath)) && ![".md", ".markdown"].includes(extensionOf(resolved.realPath))) {
+  if (!OPENABLE_EXTENSIONS.has(extensionOf(resolved.realPath)) && !MARKDOWN_EXTENSIONS.has(extensionOf(resolved.realPath))) {
     return { ok: false, reason: "not_openable" };
   }
-  if (!resolved.contained && ([".md", ".markdown"].includes(extensionOf(resolved.realPath)) || !deps.consent.isAllowed(parsed.data.tabId, resolved.realPath))) {
+  if (!resolved.contained && (MARKDOWN_EXTENSIONS.has(extensionOf(resolved.realPath)) || !deps.consent.isAllowed(parsed.data.tabId, resolved.realPath))) {
     let approved: boolean;
     try {
       approved = await deps.confirmOpen(resolved.realPath);

@@ -893,6 +893,13 @@ describe("session handles and wait_for_result", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(140);
   });
 
+  it("returns pending when a slow final host poll completes after the deadline", async () => {
+    const f = await waitFixture({ answer: async () => { await new Promise(resolve => setTimeout(resolve, 200)); return { state: "running" }; } });
+    const sent = await f.send("allowed");
+    const result = value(await f.client.callTool({ name: "wait_for_result", arguments: { sessionId: "allowed", messageId: sent.envelope.messageId, timeoutMs: 100 } }));
+    expect(result).toMatchObject({ status: "pending", messageId: sent.envelope.messageId });
+  });
+
   it.skipIf(process.env.ANYCODE_LONG_WAIT_SMOKE !== "1")("returns pending after the maximum wait through the stdio bridge", async () => {
     const f = await waitFixture({ answer: () => ({ state: "running", turnId: "t" }), pollMs: 1000 });
     const sent = await f.send("allowed");

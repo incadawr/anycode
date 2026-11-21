@@ -25,7 +25,7 @@ async function post(request) {
     // Only long polls need the extended deadline; ordinary RPCs keep their
     // original failure bound. Clients must also set their own request timeout.
     body: JSON.stringify(request), signal: AbortSignal.timeout(
-      request?.method === 'tools/call' && request?.params?.name === 'wait_for_result' ? 130000 : 30000
+      request?.method === 'tools/call' && request?.params?.name === 'wait_for_result' ? 150000 : 30000
     ),
   });
 }
