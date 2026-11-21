@@ -374,6 +374,49 @@ function ownerFrames(label: string, usage?: Record<string, unknown>): ClaudeStre
 }
 
 describe("Claude autonomous background turn through Session", () => {
+  it("does not attribute an ambiguous result to an owner without its replayed input", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [
+        { type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" },
+        { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] },
+        foreignAssistantFrame("other", "FOREIGN OUTPUT"), foreignResultFrame("other"),
+      ]) transport.enqueue(frame as ClaudeStreamMessage);
+      const events = await collect(engine.runTurn("owner", { signal: new AbortController().signal }));
+      expect(JSON.stringify(events)).not.toContain("FOREIGN OUTPUT");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "error" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+  it.each(["idle", "owner turn"])("keeps the next owner turn when a %s notification starts no native turn", async (when) => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const notification = { type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: when === "idle" ? [start, ...ownerFrames("initial")] : [start, foreignAssistantFrame("first", "initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const native: Promise<AgentEvent[]>[] = [];
+    engine.onNativeTurn = turn => native.push(collect(turn));
+    const detached: AgentEvent[] = []; engine.onDetachedEvent = event => detached.push(event);
+    try {
+      const first = collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      if (when === "owner turn") {
+        await vi.waitFor(() => expect(transport.sent).toHaveLength(1));
+        transport.push(notification); transport.push(foreignResultFrame("initial"));
+      }
+      await first;
+      if (when === "idle") {
+        transport.push(notification);
+        await vi.waitFor(() => expect(detached).toContainEqual(expect.objectContaining({ type: "claude_background_task", status: "completed" })));
+      }
+      transport.enqueue({ type: "user", isReplay: true, message: { role: "user", content: "next" } } as unknown as ClaudeStreamMessage);
+      transport.enqueue({ type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage);
+      for (const frame of ownerFrames("next")) transport.enqueue(frame);
+      const owner = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(JSON.stringify(owner)).toContain("OWNER OUTPUT next");
+      expect(owner).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(native).toHaveLength(0);
+    } finally { await engine.dispose("session-close"); }
+  });
   it("does not close a dispatched user turn on a task-notification result", async () => {
     const task = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
     const transport = new FakeTransport({ frames: [task, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
@@ -383,6 +426,7 @@ describe("Claude autonomous background turn through Session", () => {
     try {
       await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
       for (const frame of [
+        { type: "user", isReplay: true, message: { role: "user", content: "next" } },
         { type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" },
         { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] },
         foreignAssistantFrame("native", "NATIVE RESULT"),
@@ -430,6 +474,25 @@ describe("Claude autonomous background turn through Session", () => {
       for (const frame of ownerFrames("after")) transport.enqueue(frame);
       const owner = await collect(engine.runTurn("after", { signal: new AbortController().signal }));
       expect(JSON.stringify(owner)).toContain("OWNER OUTPUT after");
+      expect(adopted).not.toHaveBeenCalled();
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("does not adopt a turn when a known and an unknown notification are mixed", async () => {
+    const task = { type: "system", subtype: "task_started", task_id: "known", tool_use_id: "own", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [task, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [
+        { type: "system", subtype: "task_notification", task_id: "known", tool_use_id: "own", status: "completed" },
+        { type: "system", subtype: "task_notification", task_id: "unknown", tool_use_id: "other", status: "completed" },
+        { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] },
+        foreignAssistantFrame("other", "foreign"),
+        { ...foreignResultFrame("foreign"), origin: { kind: "task-notification", producer: "session-task", runId: "unknown" } },
+      ]) transport.push(frame as ClaudeStreamMessage);
+      for (const frame of ownerFrames("after")) transport.enqueue(frame);
+      await collect(engine.runTurn("after", { signal: new AbortController().signal }));
       expect(adopted).not.toHaveBeenCalled();
     } finally { await engine.dispose("session-close"); }
   });

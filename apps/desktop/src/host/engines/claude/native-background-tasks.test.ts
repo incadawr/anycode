@@ -50,6 +50,8 @@ describe("native background task correlation", () => {
     expect(tasks.onFrame(frame("task_progress", { task_id: "b", description: "waiting" }))).toMatchObject({ taskId: "b", description: "waiting" });
     expect(tasks.onFrame(frame("task_notification", { task_id: "a", status: "completed", summary: "done", output_file: "/tmp/a.output" }))).toMatchObject({ taskId: "a", status: "completed", summary: "done" });
     expect(tasks.onFrame(frame("task_notification", { task_id: "a", status: "failed" }))).toBeUndefined();
+    expect(tasks.knowsNotification(frame("task_notification", { task_id: "a", tool_use_id: "ta", status: "completed" }))).toBe(true);
+    expect(tasks.knowsNotification(frame("task_notification", { task_id: "a", tool_use_id: "tb", status: "completed" }))).toBe(false);
     expect(tasks.onFrame(frame("task_notification", { task_id: "b", status: "failed" }))).toMatchObject({ taskId: "b", status: "failed" });
   });
   it("does not infer tasks from unrelated or incomplete frames", () => {
