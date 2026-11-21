@@ -25,7 +25,7 @@ const metadata: ToolMetadata = {
     "When supported by the shell, use `set -o pipefail;` before the pipeline, or redirect to a log file and check the producer's exit code before reading the log.\n" +
     "- A nonzero exitCode means the command failed, even if the tool call returned normally. A null exitCode means no exit code is available; check status. Background starts return a task id instead of an exit code.\n" +
     "- Redirect background job stdout and stderr to a file or /dev/null if it must survive the AnyCode process exiting. During the session, output after the foreground call returns is discarded.\n" +
-    "- timeout is in milliseconds (max 600000); the default is 120000 for foreground commands and 21600000 for background commands.",
+    "- Use the built-in `timeout` (ms, max 600000). Default: 120000 for foreground commands and 21600000 for background commands.",
   readOnly: false,
   destructive: true,
   concurrentSafe: false,
