@@ -7,6 +7,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.105] - 2026-11-21
+
+### Fixed
+
+- Project menus in the sidebar fit within the window when opened near its lower edge.
+- Markdown cards offer to open a file in its external application when the file is outside the workspace. The confirmation shows the selected path.
+- Claude reports when a model requires usage credits. The context popover refreshes available subscription limits after a turn.
+- The Sessions API stdio bridge allows long result polls to finish.
+
+### Changed
+
+- Settings lets you choose how many agent-opened tabs can be active at once. Idle tabs still count toward the overall open-tab limit.
+- The Bash tool description points agents to its built-in timeout.
+
 ## [0.0.104] - 2026-11-20
 
 ### Added
