@@ -7528,6 +7528,14 @@ describe("desktop store — engine_quota / engine_session_tokens (cut §3.4/§5.
     expect(store.getState().quota).toBeNull();
   });
 
+  it("accepts a detached quota update after the turn ends", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(codexHostReadyWithQuota(undefined));
+    const quota = { primary: { usedPercent: 30, windowDurationMins: 300 }, secondary: { usedPercent: 65, windowDurationMins: 10080 }, observedAt: "2026-07-16T00:00:00.000Z" };
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: { type: "engine_quota", quota } });
+    expect(store.getState().quota).toEqual(quota);
+  });
+
   it("engine_quota REPLACES the whole quota snapshot — a field present in the FIRST push but absent from the SECOND must NOT survive (host already sparse-merged; the renderer must not re-merge)", () => {
     const store = createDesktopStore();
     store.getState().applyHostMessage(codexHostReadyWithQuota(undefined));
