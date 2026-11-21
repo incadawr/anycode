@@ -8,6 +8,16 @@ export class ClaudeNativeBackgroundTasks {
   private readonly tasks = new Map<string, Task>();
   private readonly runs = new Map<string, string>();
 
+  knowsNotification(frame: ClaudeStreamMessage): boolean {
+    if (frame.type !== "system" || frame.subtype !== "task_notification") return false;
+    const f = frame as Record<string, unknown>;
+    if (typeof f.task_id !== "string") return false;
+    const task = this.tasks.get(f.task_id);
+    if (!task || (typeof f.tool_use_id === "string" && f.tool_use_id !== task.toolCallId)) return false;
+    const run = this.runs.get(f.task_id);
+    return !(run && typeof f.run_id === "string" && run !== f.run_id);
+  }
+
   onFrame(frame: ClaudeStreamMessage): Task | undefined {
     if (frame.type !== "system") return undefined;
     const f = frame as Record<string, unknown>;
