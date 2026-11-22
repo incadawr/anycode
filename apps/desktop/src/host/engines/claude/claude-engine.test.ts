@@ -4319,6 +4319,34 @@ describe("Claude notification-driven turns (5370 review follow-ups)", () => {
     } finally { await engine.dispose("session-close"); }
   });
 
+  it.each(["an unanswered permission prompt", "a quota read still in flight"])("retires the old process at once despite %s, discarding its later frames", async (scenario) => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const after = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 20 }, next: [after] }); engine.onNativeTurn = turn => { void collect(turn); };
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notified("a"), init, foreignAssistantFrame("odd", "ODD OUTPUT"), { ...foreignResultFrame("odd"), origin: { kind: "unknown-producer" } }]) transport.enqueue(frame as ClaudeStreamMessage);
+      const first = await collectWithin(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
+      expect(first).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
+      // The old process holds a request open: a permission prompt nobody
+      // answers stays pending forever; a quota read settles only later.
+      let busy = true;
+      Object.defineProperty(transport, "hasPendingRequests", { get: () => busy && transport.closed === 0 });
+      if (scenario === "a quota read still in flight") setTimeout(() => { busy = false; }, 150);
+      const run = collectWithin(engine.runTurn("next", { signal: new AbortController().signal }));
+      // While the request is open, the old process starts another turn.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      for (const frame of [init, foreignAssistantFrame("late", "LATE OUTPUT")]) transport.push(frame);
+      await vi.waitFor(() => expect(after.sent).toEqual(["next"]), { timeout: 1000 });
+      for (const frame of [init, echo("next"), ...ownerFrames("next")]) after.push(frame);
+      const next = await run;
+      expect(transport.closed).toBeGreaterThan(0);
+      expect(JSON.stringify(next)).not.toContain("LATE OUTPUT");
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
   it("does not drop a pending notification when absorbing an unattributable turn", async () => {
     const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 20 } });
