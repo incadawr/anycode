@@ -849,6 +849,52 @@
   stroke: var(--danger);
 }
 
+/* ── AnchoredPanel ───────────────────────────────────────────────────────── */
+.ak-anchored {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  min-width: 220px;
+  max-width: min(var(--popover-max-w), calc(100vw - 16px));
+  max-height: min(50vh, calc(100vh - 16px));
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-surface);
+  box-shadow: var(--shadow-popup);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+}
+.ak-anchored__header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.ak-anchored__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ak-anchored__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--sp-3);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
 /* ── Popover / Menu ──────────────────────────────────────────────────────── */
 .ak-popover {
   position: fixed;

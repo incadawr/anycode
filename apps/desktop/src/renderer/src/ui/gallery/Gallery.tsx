@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AnchoredPanel,
   Badge,
   Banner,
   Button,
@@ -73,6 +74,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function Gallery(): React.ReactElement {
   const popTrigger = useRef<HTMLButtonElement>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const panelAnchor = useRef<HTMLSpanElement>(null);
   const [accent, setAccent] = useState<string>("current");
   const [theme, setTheme] = useState<Theme>("dark");
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
@@ -324,6 +327,7 @@ export function Gallery(): React.ReactElement {
             <Button variant="secondary" onClick={() => setModalOpen(true)}>Open modal</Button>
             <Button variant="secondary" onClick={() => setDrawerOpen(true)}>Open drawer</Button>
             <span ref={node => { popTrigger.current = node?.querySelector("button") ?? null; }}><Button variant="secondary" onClick={() => setPopOpen((v) => !v)}>Toggle popover</Button></span>
+            <span ref={panelAnchor}><Button variant="secondary" onClick={() => setPanelOpen((v) => !v)}>Toggle panel</Button></span>
             <Menu label="Menu" heading="Actions">
               <MenuItem label="plan" description="read only" onSelect={() => undefined} />
               <MenuItem label="build" description="write" checkable selected onSelect={() => undefined} />
@@ -331,6 +335,9 @@ export function Gallery(): React.ReactElement {
               <MenuItem label="yolo" description="no prompts" disabled onSelect={() => undefined} />
             </Menu>
           </Row>
+          <AnchoredPanel open={panelOpen} onClose={() => setPanelOpen(false)} anchorRef={panelAnchor} title="Background tasks" align="start">
+            <p style={{ margin: 0 }}>Anchored panel: a non-modal dialog attached to its trigger.</p>
+          </AnchoredPanel>
           {popOpen ? (
             <Popover
               triggerRef={popTrigger}
