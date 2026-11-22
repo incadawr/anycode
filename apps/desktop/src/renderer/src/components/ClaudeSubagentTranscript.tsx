@@ -49,18 +49,18 @@ export function transcriptEntryLabel(entry: ClaudeSubagentEntry): string {
 
 export function SubagentTranscriptFeed({ state }: { state: SubagentTranscriptState }) {
   if (state.phase === "loading" || state.phase === "idle") {
-    return <p role="status" className="subagent-transcript-note">Loading transcript…</p>;
+    return <p role="status" className="subagent-transcript-status">Loading transcript…</p>;
   }
   if (state.phase === "error") {
-    return <p role="alert" className="subagent-transcript-note">{state.message}</p>;
+    return <p role="alert" className="subagent-transcript-status">{state.message}</p>;
   }
   if (state.entries.length === 0) {
-    return <p role="status" className="subagent-transcript-note">The transcript is empty so far.</p>;
+    return <p role="status" className="subagent-transcript-status">The transcript is empty so far.</p>;
   }
   return (
     <ol className="subagent-transcript-feed">
       {(state.droppedEntries > 0 || state.truncatedHead) && (
-        <li className="subagent-transcript-note">Earlier part of the run is not shown (file is large).</li>
+        <li className="subagent-transcript-status">Earlier part of the run is not shown (file is large).</li>
       )}
       {state.entries.map((entry, index) => (
         <li key={index} className={`subagent-transcript-entry subagent-transcript-${entry.kind}${entry.isError === true ? " subagent-transcript-error" : ""}`}>
@@ -102,6 +102,9 @@ export function ClaudeSubagentTranscriptButton({ toolCallId, title, subtitle }: 
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [state, setState] = useState<SubagentTranscriptState>({ phase: "idle" });
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const pendingRequest = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useOverlayFlag(open);
@@ -118,13 +121,15 @@ export function ClaudeSubagentTranscriptButton({ toolCallId, title, subtitle }: 
     clearTimer();
     const requestId = crypto.randomUUID();
     pendingRequest.current = requestId;
+    setRefreshFailed(false);
     if (keepContent) setRefreshing(true);
     else setState({ phase: "loading" });
     timer.current = setTimeout(() => {
       if (pendingRequest.current !== requestId) return;
       pendingRequest.current = null;
       setRefreshing(false);
-      setState((current) => (current.phase === "ready" ? current : { phase: "error", message: transcriptErrorMessage("timeout") }));
+      if (stateRef.current.phase === "ready") setRefreshFailed(true);
+      else setState({ phase: "error", message: transcriptErrorMessage("timeout") });
     }, TRANSCRIPT_RESPONSE_TIMEOUT_MS);
     send({ type: "claude_subagent_transcript_request", requestId, toolCallId });
   };
@@ -135,7 +140,9 @@ export function ClaudeSubagentTranscriptButton({ toolCallId, title, subtitle }: 
     pendingRequest.current = null;
     clearTimer();
     setRefreshing(false);
-    setState(next);
+    // A failed refresh keeps the content already on screen and says so inline.
+    if (stateRef.current.phase === "ready" && next.phase === "error") setRefreshFailed(true);
+    else setState(next);
   }, [response, toolCallId]);
 
   return (
@@ -169,6 +176,7 @@ export function ClaudeSubagentTranscriptButton({ toolCallId, title, subtitle }: 
           </Button>
         }
       >
+        {refreshFailed && <p role="alert" className="subagent-transcript-hint">Refresh failed. Showing the last loaded transcript.</p>}
         <SubagentTranscriptFeed state={state} />
       </Modal>
     </>

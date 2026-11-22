@@ -28,6 +28,8 @@ describe("Claude subagent transcript view", () => {
     expect(html).toContain("subagent-transcript-error");
     expect(html).toContain("All done");
     expect(html).not.toContain("<button");
+    // status lines and the note entry kind use different classes
+    expect(html).not.toContain("subagent-transcript-status");
   });
 
   it("shows an honest note when the head is not shown, and loading/error/empty states", () => {

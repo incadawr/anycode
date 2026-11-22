@@ -11,7 +11,9 @@ import { parseClaudeSubagentTranscript, type ClaudeSubagentTranscriptResult } fr
  * Real layout (verified against CLI 2.1.x): `<config>/projects/<project>/<sessionRef>/subagents/agent-<id>.jsonl`
  * with a sibling `agent-<id>.meta.json` whose `toolUseId` is the parent's Agent tool_use id,
  * i.e. the card's `toolCallId`. `<project>` is the session cwd with every non-alphanumeric
- * character replaced by "-". The renderer supplies only the tool call id.
+ * character replaced by "-". The CLI truncates folder names over 200 characters and appends a
+ * hash; such cwds are not built here and fall back to the `projects/*` scan.
+ * The renderer supplies only the tool call id.
  */
 const idSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const requestSchema = z.object({ sessionRef: idSchema, toolCallId: idSchema }).strict();
@@ -128,7 +130,8 @@ export interface ClaudeSubagentTranscriptLocation {
 
 export async function readClaudeSubagentTranscript(raw: unknown, location: ClaudeSubagentTranscriptLocation): Promise<ClaudeSubagentTranscriptResult> {
   const parsed = requestSchema.safeParse(raw);
-  if (!parsed.success) return { ok: false, reason: "unavailable" };
+  // Without O_NOFOLLOW (Windows) no safe read is possible: say so, not "not found yet".
+  if (!parsed.success || typeof constants.O_NOFOLLOW !== "number") return { ok: false, reason: "unavailable" };
   try {
     const key = `${parsed.data.sessionRef}\0${parsed.data.toolCallId}`;
     let file = location.cache?.get(key);

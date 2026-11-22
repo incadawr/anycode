@@ -11,9 +11,9 @@
 
 /**
  * `prompt` is the task the agent was launched with (only ever the true first
- * line of the file); `message` is any later user-side text (e.g. a follow-up);
- * `note` is CLI/harness-injected user-side text (isMeta lines, context
- * summaries); `text` is the agent's own speech.
+ * line of the file); `message` is any later user-side text, including the
+ * coordinating session's messages; `note` is CLI/harness-injected text (isMeta
+ * lines, context-compaction summaries); `text` is the agent's own speech.
  */
 export type ClaudeSubagentEntryKind = "prompt" | "message" | "note" | "text" | "thinking" | "tool_use" | "tool_result";
 
@@ -74,14 +74,26 @@ interface ParseState {
   firstLineOpen: boolean;
 }
 
-function userTextEntry(text: string, meta: boolean, state: ParseState): ClaudeSubagentEntry[] {
+interface UserLineFlags {
+  /** `isMeta`: injected by the CLI/harness rather than typed by the user. */
+  meta: boolean;
+  /** Context-compaction summary (`isCompactSummary` / `isVisibleInTranscriptOnly`). */
+  compact: boolean;
+  /** A message from the coordinating session (`origin.kind === "coordinator"`). */
+  coordinator: boolean;
+}
+
+function userTextEntry(text: string, flags: UserLineFlags, state: ParseState): ClaudeSubagentEntry[] {
   if (text.trim().length === 0) return [];
-  if (meta) {
-    return isPureSystemReminder(text) ? [] : [{ kind: "note", title: "", text: cap(text) }];
-  }
-  const kind: ClaudeSubagentEntryKind = state.firstLineOpen ? "prompt" : "message";
+  const entry = (kind: ClaudeSubagentEntryKind): ClaudeSubagentEntry[] => [{ kind, title: "", text: cap(text) }];
+  if (flags.compact) return entry("note");
+  if (flags.meta && isPureSystemReminder(text)) return [];
+  // The first user text of any kind is the run's prompt (a skill-invoked agent's
+  // real prompt can be an isMeta line); a window that started mid-file has none.
+  const wasFirst = state.firstLineOpen;
   state.firstLineOpen = false;
-  return [{ kind, title: "", text: cap(text) }];
+  if (wasFirst) return entry("prompt");
+  return entry(flags.meta && !flags.coordinator ? "note" : "message");
 }
 
 function lineEntries(line: unknown, state: ParseState): ClaudeSubagentEntry[] {
@@ -90,16 +102,21 @@ function lineEntries(line: unknown, state: ParseState): ClaudeSubagentEntry[] {
   if (!isRecord(message)) return [];
   const content = message.content;
   const isUser = line.type === "user";
-  const meta = line.isMeta === true;
+  const origin = isRecord(line.origin) ? line.origin : undefined;
+  const flags: UserLineFlags = {
+    meta: line.isMeta === true,
+    compact: line.isCompactSummary === true || line.isVisibleInTranscriptOnly === true,
+    coordinator: origin?.kind === "coordinator",
+  };
   if (typeof content === "string") {
-    return isUser ? userTextEntry(content, meta, state) : content.trim().length > 0 ? [{ kind: "text", title: "", text: cap(content) }] : [];
+    return isUser ? userTextEntry(content, flags, state) : content.trim().length > 0 ? [{ kind: "text", title: "", text: cap(content) }] : [];
   }
   if (!Array.isArray(content)) return [];
   const out: ClaudeSubagentEntry[] = [];
   for (const block of content) {
     if (!isRecord(block)) continue;
     if (block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0) {
-      if (isUser) out.push(...userTextEntry(block.text, meta, state));
+      if (isUser) out.push(...userTextEntry(block.text, flags, state));
       else out.push({ kind: "text", title: "", text: cap(block.text) });
     } else if (!isUser && block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim().length > 0) {
       out.push({ kind: "thinking", title: "", text: cap(block.thinking) });

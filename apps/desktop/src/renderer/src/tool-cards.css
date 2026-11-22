@@ -123,11 +123,13 @@
   flex-direction: column;
   gap: var(--sp-3);
 }
-.subagent-transcript-note {
+.subagent-transcript-status {
   margin: 0;
   color: var(--text-3);
   font-size: var(--fs-sm);
 }
+.subagent-transcript-note .subagent-transcript-pre { color: var(--text-3); max-height: 6rem; }
+.subagent-transcript-hint { margin: var(--sp-2) 0 0; color: var(--warning); font-size: var(--fs-xs); }
 .subagent-transcript-label {
   font-size: var(--fs-2xs);
   font-weight: var(--w-semibold);

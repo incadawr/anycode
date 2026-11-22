@@ -48,25 +48,32 @@ describe("parseClaudeSubagentTranscript", () => {
 
   const user = (content: unknown, extra: object = {}) => line({ type: "user", message: { role: "user", content }, ...extra });
 
-  it("labels user-side text by role: first real line is the prompt, later ones are user messages, isMeta are notes", () => {
+  it("labels user-side text by role using the real line shapes", () => {
     const text = [
       user("<system-reminder> Your final report is delivered through SubagentHandback </system-reminder>", { isMeta: true }),
-      user("Review target: 92", { isMeta: true }),
       user("Implement the thing"),
       line({ type: "assistant", message: { content: [{ type: "text", text: "On it." }] } }),
-      user("The coordinator sent a message while you were working: fix X", { isMeta: true }),
-      user("This session is being continued from a previous conversation that ran out of context.", { isMeta: true }),
+      user("The coordinator sent a message while you were working: fix X", { isMeta: true, origin: { kind: "coordinator" } }),
+      user("[SYSTEM NOTIFICATION] task finished", { isMeta: true, origin: { kind: "task-notification", producer: "session-task" } }),
+      user("This session is being continued from a previous conversation that ran out of context.", { isCompactSummary: true, isVisibleInTranscriptOnly: true }),
       user([{ type: "text", text: "Also check Y" }]),
     ].join("\n");
     const { entries } = parseClaudeSubagentTranscript(text);
     expect(entries.map((e) => [e.kind, e.text.slice(0, 20)])).toEqual([
-      ["note", "Review target: 92"],
       ["prompt", "Implement the thing"],
       ["text", "On it."],
-      ["note", "The coordinator sent"],
+      ["message", "The coordinator sent"],
+      ["note", "[SYSTEM NOTIFICATION"],
       ["note", "This session is bein"],
       ["message", "Also check Y"],
     ]);
+  });
+
+  it("treats a first isMeta line (skill-invoked agent) as the prompt and later user text as messages", () => {
+    const { entries } = parseClaudeSubagentTranscript(
+      [user("Review target: 92", { isMeta: true }), user("follow-up question")].join("\n"),
+    );
+    expect(entries.map((e) => e.kind)).toEqual(["prompt", "message"]);
   });
 
   it("assigns no prompt when the window started mid-file", () => {
