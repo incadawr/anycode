@@ -144,10 +144,9 @@ export interface ClaudeEngineTimeouts {
   /** minimum spacing between mid-turn `get_context_usage` refreshes. */
   midTurnContextUsageIntervalMs: number;
   /**
-   * How long the CLI must stay quiet before an input whose own turn could not
-   * be identified counts as settled: a report turn ends once the CLI goes quiet
-   * after absorbing the turn that may have folded it in, and the next send waits
-   * this long for a late answer to an unconfirmed input to start.
+   * How long the CLI may stay without starting a turn after an absorbed
+   * autonomous turn before an unreplayed report counts as folded into it.
+   * Non-turn frames (rate limits, task status) restart the window.
    */
   unconfirmedInputQuietMs: number;
 }
@@ -155,7 +154,7 @@ export interface ClaudeEngineTimeouts {
 export const DEFAULT_CLAUDE_ENGINE_TIMEOUTS: ClaudeEngineTimeouts = {
   postInterruptSettleMs: CLAUDE_POST_INTERRUPT_SETTLE_MS,
   midTurnContextUsageIntervalMs: 30_000,
-  unconfirmedInputQuietMs: 5_000,
+  unconfirmedInputQuietMs: 20_000,
 };
 
 /** The narrow transport seam, so lifecycle tests need no real child process. */
@@ -1091,11 +1090,12 @@ export class ClaudeEngine implements SessionEngine {
   /** The pending entry whose turn the last idle init started; settled by that turn's result. */
   private armedNotification: { taskId: string; runId?: string } | null = null;
   /**
-   * An input whose turn ended without its own result being identified: its
-   * answer may still be on the way, so the next send first waits for the CLI
-   * to go quiet (or for that answer to be absorbed).
+   * A turn ended without its input's own result being identified, so that
+   * process may still answer it. The next send first retires the transport and
+   * resumes the native session on a new process: nothing the old process says
+   * can then acknowledge or complete a later input.
    */
-  private unconfirmedInput = false;
+  private retireBeforeSend = false;
   private nativeTurn: { stream: NativeTurn; translator: ClaudeTurnTranslator; events: AgentEvent[]; cancelled?: boolean; cancelTimer?: ReturnType<typeof setTimeout> } | null = null;
   private nativeAmbiguous = false;
 
@@ -1155,7 +1155,6 @@ export class ClaudeEngine implements SessionEngine {
     this.unmatchedNotification = false;
     this.nativeArmed = false;
     this.armedNotification = null;
-    this.unconfirmedInput = false;
   }
 
   /** Records a task notification seen by the engine. */
@@ -1635,6 +1634,24 @@ export class ClaudeEngine implements SessionEngine {
     return this.terminalError === null;
   }
 
+  /**
+   * Replaces the process after an unconfirmed turn through the idle-resume
+   * path (same native session, `--resume`). Whatever the old process was
+   * still running for that input dies with it.
+   */
+  private async retireUnconfirmedTransport(): Promise<void> {
+    const open = this.foreignTurn;
+    this.foreignTurn = null;
+    open?.done.resolve();
+    this.failNativeTurn();
+    await this.awaitContextUsageInFlight();
+    // A control request still in flight (a quota read) settles quickly; the
+    // replacement refuses a busy transport.
+    for (let waited = 0; this.client.hasPendingRequests && waited < CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
+    this.idleFailure = new Error("Claude turn ended unconfirmed; resuming on a new process");
+    await this.resumeIdleTransport();
+  }
+
   private async resumeIdleTransport(): Promise<void> {
     // Only an idle stream death qualifies. Never replay an in-flight prompt,
     // foreign turn, orchestration transition, or protocol failure mid-turn.
@@ -1672,6 +1689,11 @@ export class ClaudeEngine implements SessionEngine {
     const turn = ++this.turnNumber;
     if ((this.client.terminalFailure || this.readyFrame?.done) && !this.turnActive && !this.terminalError && !this.replacement) {
       this.idleFailure ??= this.client.terminalFailure ?? new Error("Claude exited while idle");
+    }
+    if (this.retireBeforeSend && !options.signal.aborted && !this.replacement && !this.terminalError && !this.disposed) {
+      this.retireBeforeSend = false;
+      resumeAttempted = true;
+      await this.retireUnconfirmedTransport();
     }
     if (this.idleFailure && !options.signal.aborted && !this.replacement) {
       resumeAttempted = true;
@@ -1740,11 +1762,15 @@ export class ClaudeEngine implements SessionEngine {
     /** Armed after an absorbed autonomous turn while an unreplayed input still waits for its answer. */
     let reportReconcile: SettleDeadline | null = null;
     const cancelReconcile = (): void => { reportReconcile?.cancel(); reportReconcile = null; };
+    const armReconcile = (): void => { reportReconcile?.cancel(); reportReconcile = deadline(this.bounds.unconfirmedInputQuietMs); };
+    const reconcileArmed = (): boolean => reportReconcile !== null;
+    const reconcileRacers = (): Promise<{ kind: "report-quiet" }>[] =>
+      reportReconcile === null ? [] : [reportReconcile.promise.then(() => ({ kind: "report-quiet" as const }))];
     /** Ends this turn without the input's own result: not an engine failure. */
     const unattributedTurnEnd = (): AgentEvent[] => {
       console.error("[claude] a turn result could not be attributed to the sent input");
       cancelReconcile();
-      this.unconfirmedInput = true;
+      this.retireBeforeSend = true;
       return [
         warning("Claude answered in a turn AnyCode could not attribute to this message, so its output is not shown here. The message may still have reached Claude."),
         ...translator.finishTerminal("cancelled"),
@@ -1964,38 +1990,6 @@ export class ClaudeEngine implements SessionEngine {
           // foreign turns re-enter the wait above) before any send.
           continue barrier;
         }
-        // (c) An earlier input ended without its own result being identified:
-        //     its answer may still start. Hold the send until the CLI has been
-        //     quiet for a bounded window, absorbing whatever arrives as foreign,
-        //     so a late answer can never acknowledge or complete this input.
-        if (this.unconfirmedInput) {
-          const disposal = this.ensureDisposalWait();
-          const quiet = deadline(this.bounds.unconfirmedInputQuietMs);
-          let raced;
-          try {
-            raced = await Promise.race([
-              disposal.then(() => ({ kind: "dispose" as const })),
-              abort.promise.then(() => ({ kind: "abort" as const })),
-              quiet.promise,
-              this.takeFrame().then(
-                (value) => ({ kind: "frame" as const, value }),
-                (error: unknown) => ({ kind: "rejected" as const, error }),
-              ),
-            ]);
-          } finally { quiet.cancel(); }
-          if (raced.kind === "dispose" || raced.kind === "abort") { sendCancelled = true; break barrier; }
-          if (raced.kind === "settle-timeout") { this.unconfirmedInput = false; continue barrier; }
-          if (raced.kind === "rejected") {
-            if (this.disposed) { sendCancelled = true; break barrier; }
-            throw this.terminalError ?? (raced.error instanceof Error ? raced.error : new Error(String(raced.error)));
-          }
-          // A stream end stays in the read slot for the drain above to handle.
-          if (!raced.value.done) {
-            this.frameConsumed();
-            this.absorbIdleFrame(raced.value.value);
-          }
-          continue barrier;
-        }
         // FINAL SEGMENT — no await or yield from here to the send: readiness,
         // disposal and Stop are re-inspected synchronously. A frame that
         // landed during the last checkpoint's microtask gap is classified
@@ -2048,7 +2042,7 @@ export class ClaudeEngine implements SessionEngine {
           // (dispose, or a swept turn) is harmlessly skipped below.
           this.nextBridgeEvent().then((event) => ({ kind: "bridge-event" as const, event })),
           ...settleRacers(),
-          ...(reportReconcile !== null ? [reportReconcile.promise.then(() => ({ kind: "report-quiet" as const }))] : []),
+          ...reconcileRacers(),
         ]);
         if (raced.kind === "report-quiet") {
           // The CLI went quiet after an autonomous turn without starting one
@@ -2131,7 +2125,13 @@ export class ClaudeEngine implements SessionEngine {
         // next iteration's takeFrame() re-parks. Exactly one read in flight.
         this.frameConsumed();
         const frame = raced.value.value;
-        cancelReconcile();
+        // Only a frame that proves a turn is running settles the reconcile
+        // window; noise between turns (rate limits, task status) restarts it.
+        if (reconcileArmed()) {
+          const turnFrame = frame.type === "assistant" || frame.type === "stream_event" || frame.type === "result" || frame.type === "user" || (frame.type === "system" && frame.subtype === "init");
+          if (turnFrame) cancelReconcile();
+          else armReconcile();
+        }
         const ownerEcho = frame.type === "user" && frame.isReplay === true && (frame.session_id === undefined || frame.session_id === this.sessionRef) && matchesUserReplay(frame.message?.content, sentContent);
         if (ownerEcho) ownerEchoSeen = true;
         this.observeNotificationReplay(frame);
@@ -2144,7 +2144,7 @@ export class ClaudeEngine implements SessionEngine {
           absorbingCandidate = false;
           this.nativeAmbiguous = false;
           if (taskNotificationRunId(frame) !== undefined && !absorbedOwnerEcho) {
-            if (awaitsUnreplayedTurn) reportReconcile = deadline(this.bounds.unconfirmedInputQuietMs);
+            if (awaitsUnreplayedTurn) armReconcile();
             continue;
           }
           for (const event of unattributedTurnEnd()) {
@@ -2202,9 +2202,10 @@ export class ClaudeEngine implements SessionEngine {
           if (previewVisible) { previewVisible = false; yield { type: "claude_turn_preview", preview: null }; }
           // The CLI tags every autonomous turn's result and never tags the turn
           // of an input written to stdin (see taskNotificationRunId), and the
-          // send barrier fences any earlier input whose answer is still owed
-          // (unconfirmedInput). So an untagged result is this input's answer: a
-          // human input is also identified by its echo, while a report sent by
+          // transport is retired after any turn whose input stayed unconfirmed
+          // (retireBeforeSend), so no earlier input's answer is still owed.
+          // An untagged result is therefore this input's answer: a human input
+          // is also identified by its echo, while a report sent by
           // AnyCode (system origin) carries a <task-notification> block, which
           // the CLI never replays.
           const untaggedIsOwner = ownerEchoSeen || options.origin === "system";
@@ -2243,7 +2244,7 @@ export class ClaudeEngine implements SessionEngine {
             this.nativeAmbiguous = false;
             // An unreplayed input may have been folded into the turn that just
             // ended: if the CLI now goes quiet, its answer was that turn's.
-            if (awaitsUnreplayedTurn) reportReconcile = deadline(this.bounds.unconfirmedInputQuietMs);
+            if (awaitsUnreplayedTurn) armReconcile();
           } else {
             // A result with an origin this engine does not know. Not an engine
             // failure: keep the output out of this transcript, leave the input
@@ -3174,9 +3175,6 @@ export class ClaudeEngine implements SessionEngine {
         const native = this.nativeTurn;
         if (!native && this.nativeArmed) this.nativeArmed = false;
         this.settleNotificationResult(frame);
-        // An untagged result outside an owner turn is the late answer to an
-        // unconfirmed input (autonomous turns are always tagged).
-        if (taskNotificationRunId(frame) === undefined) this.unconfirmedInput = false;
         if (native) {
           if (native.cancelTimer) clearTimeout(native.cancelTimer);
           const origin = (frame as Record<string, unknown>).origin;
