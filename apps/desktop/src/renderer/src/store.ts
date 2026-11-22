@@ -1485,6 +1485,7 @@ export interface DesktopState {
   backgroundTasks: BackgroundTaskSnapshot[];
   claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
+  claudeSessionRef: { requestId: string; sessionRef?: string } | null;
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   /** Accumulated output chunks keyed by taskId. */
   backgroundTaskOutput: Record<string, string>;
@@ -1897,6 +1898,7 @@ interface SessionSlice {
   backgroundTasks: BackgroundTaskSnapshot[];
   claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
+  claudeSessionRef: { requestId: string; sessionRef?: string } | null;
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
@@ -1983,6 +1985,7 @@ function initialSessionSlice(): SessionSlice {
     backgroundTasks: [],
     claudeBackgroundTasks: [],
     claudeTaskOutput: null,
+    claudeSessionRef: null,
     claudeTurnPreview: null,
     backgroundTaskOutput: {},
     backgroundChildren: [],
@@ -6208,6 +6211,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           case "claude_task_output":
             set({ claudeTaskOutput: { taskId: message.taskId, requestId: message.requestId, sessionRef: message.sessionRef } });
+            return;
+          case "claude_session_ref":
+            set({ claudeSessionRef: { requestId: message.requestId, ...(message.sessionRef !== undefined ? { sessionRef: message.sessionRef } : {}) } });
             return;
           case "task_kill_result":
             if (!message.ok) {

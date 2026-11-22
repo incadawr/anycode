@@ -3861,6 +3861,12 @@ export class Session {
         this.outbound.sendDirect({ type: "claude_task_output", taskId: message.taskId, requestId: message.requestId, ...(sessionRef ? { sessionRef } : {}) });
         break;
       }
+      case "claude_session_ref_request": {
+        const engine = this.engine;
+        const ref = (engine as SessionEngine & { sessionRef?: unknown }).sessionRef;
+        this.outbound.sendDirect({ type: "claude_session_ref", requestId: message.requestId, ...(engine.id === "claude" && typeof ref === "string" && ref.length > 0 ? { sessionRef: ref } : {}) });
+        break;
+      }
       case "task_kill_request":
         if (this.engine.capabilities.supportsTasks) this.onTaskKillRequest(message.requestId, message.taskId);
         break;

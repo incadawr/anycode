@@ -555,6 +555,7 @@ export type UiToHostMessage =
   | { type: "task_list_request" }
   | { type: "task_output_request"; taskId: string }
   | { type: "claude_task_output_request"; taskId: string; requestId: string }
+  | { type: "claude_session_ref_request"; requestId: string }
   | { type: "task_kill_request"; requestId: string; taskId: string; confirmed: true }
   // Slice P7.26/R2 (design slice-P7.26-cut.md §4-7): read-only checkpoint-list
   // request (mirror of lsp_status_request — payload-less, served even mid-turn:
@@ -1094,6 +1095,8 @@ export type HostToUiMessage =
   | { type: "task_list"; tasks: BackgroundTaskSnapshot[] }
   | { type: "task_output"; taskId: string; snapshot: BackgroundTaskSnapshot | null; newOutput: string }
   | { type: "claude_task_output"; taskId: string; requestId: string; sessionRef?: string }
+  // Answer to claude_session_ref_request: the Claude CLI session id (names its subagents folder); absent off the Claude engine.
+  | { type: "claude_session_ref"; requestId: string; sessionRef?: string }
   | { type: "task_kill_result"; requestId: string; ok: boolean; reason?: string }
   // slice 3 §2: trusted snapshot of the host's own live
   // background-children registry (host/child-session-port.ts). Pushed on
@@ -1559,6 +1562,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   taskListRequestSchema,
   taskOutputRequestSchema,
   z.object({ type: z.literal("claude_task_output_request"), taskId: z.string().min(1).max(128), requestId: z.string().min(1).max(128) }).strict(),
+  z.object({ type: z.literal("claude_session_ref_request"), requestId: z.string().min(1).max(128) }).strict(),
   taskKillRequestSchema,
   checkpointListRequestSchema,
   rewindRequestSchema,

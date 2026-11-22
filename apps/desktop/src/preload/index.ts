@@ -1392,6 +1392,9 @@ contextBridge.exposeInMainWorld("anycode", {
   // read/open/reveal. Image bytes cross back base64-encoded (a `file://`
   // URL would never pass CSP); `open` is the ONLY path to `shell.openPath`
   // and is gated main-side on the image allowlist.
+  claudeSubagentTranscript: {
+    read: (sessionRef: string, toolCallId: string) => ipcRenderer.invoke("anycode:claude-subagent-transcript-read", { sessionRef, toolCallId }),
+  },
   claudeTaskOutput: {
     pick: (taskId: string, sessionRef: string): Promise<{ ok: true; content: string } | { ok: false; reason: "cancelled" | "unavailable" }> => ipcRenderer.invoke("anycode:claude-task-output-pick", { taskId, sessionRef }),
   },

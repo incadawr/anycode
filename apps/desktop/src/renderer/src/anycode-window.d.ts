@@ -810,6 +810,7 @@ declare global {
       // for transcript file links). The renderer supplies only tabId + the
       // model-authored path; main re-checks containment + the image-extension
       // allowlist before any read/open/reveal (main/artifacts-ipc.ts).
+      claudeSubagentTranscript: { read(sessionRef: string, toolCallId: string): Promise<import("../../shared/claude-subagent-transcript").ClaudeSubagentTranscriptResult> };
       claudeTaskOutput: { pick(taskId: string, sessionRef: string): Promise<{ ok: true; content: string } | { ok: false; reason: "cancelled" | "unavailable" }> };
       artifacts: {
         readImage(tabId: string, path: string): Promise<ArtifactReadImageResult>;
