@@ -383,6 +383,46 @@ function ownerFrames(label: string, usage?: Record<string, unknown>): ClaudeStre
 }
 
 describe("Claude autonomous background turn through Session", () => {
+  it.each(["local_bash", "local_agent", "unknown"])("folds a %s notification into an active autonomous turn", async (kind) => {
+    const start = (id: string, type: string) => ({ type: "system", subtype: "task_started", task_id: id, run_id: `run-${id}`, tool_use_id: `tool-${id}`, task_type: type, is_backgrounded: true }) as unknown as ClaudeStreamMessage;
+    const notify = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, run_id: `run-${id}`, tool_use_id: `tool-${id}`, status: "completed", summary: `report ${id}` }) as unknown as ClaudeStreamMessage;
+    const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start("a", "local_bash"), ...(kind === "unknown" ? [] : [start("b", kind)]), ...ownerFrames("initial")] });
+    const engine = engineWith(transport); const native: Promise<AgentEvent[]>[] = []; const detached: AgentEvent[] = [];
+    engine.onNativeTurn = turn => native.push(collect(turn));
+    engine.onDetachedEvent = event => detached.push(event);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notify("a"), init, foreignAssistantFrame("native", "FINAL ANSWER"), notify("b"), { ...foreignResultFrame("done"), origin: { kind: "task-notification", producer: "session-task", runId: "run-a" } }]) transport.push(frame as ClaudeStreamMessage);
+      await vi.waitFor(() => expect(native).toHaveLength(1));
+      const events = await native[0]!;
+      expect(JSON.stringify(events)).toContain("FINAL ANSWER");
+      expect(events.filter(event => event.type === "error")).toHaveLength(0);
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      if (kind === "local_agent") expect(detached.filter(event => event.type === "subagent_end" && event.toolCallId === "tool-b")).toHaveLength(1);
+      if (kind === "local_bash") expect(detached.filter(event => event.type === "claude_background_task" && event.taskId === "b" && event.status === "completed")).toHaveLength(1);
+      for (const frame of [init, foreignAssistantFrame("foreign", "UNRELATED"), foreignResultFrame("foreign")]) transport.push(frame);
+      await vi.waitFor(() => expect((engine as unknown as { foreignTurn: unknown }).foreignTurn).toBeNull());
+      expect(native).toHaveLength(1);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("delivers a successful autonomous result without origin while logging its uncertain attribution", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "a", tool_use_id: "tool-a", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")] });
+    const engine = engineWith(transport); const native: Promise<AgentEvent[]>[] = [];
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    engine.onNativeTurn = turn => native.push(collect(turn));
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [{ type: "system", subtype: "task_notification", task_id: "a", tool_use_id: "tool-a", status: "completed" }, { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] }, foreignAssistantFrame("native", "ANSWER"), foreignResultFrame("done")]) transport.push(frame as ClaudeStreamMessage);
+      await vi.waitFor(() => expect(native).toHaveLength(1));
+      const events = await native[0]!;
+      expect(JSON.stringify(events)).toContain("ANSWER");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(log).toHaveBeenCalledWith("[claude] autonomous turn result did not identify a task notification");
+    } finally { log.mockRestore(); await engine.dispose("session-close"); }
+  });
   it("preserves a second notification encountered while releasing buffered owner frames", async () => {
     const task = (id: string) => ({ type: "system", subtype: "task_started", task_id: id, tool_use_id: `tool-${id}`, task_type: "local_bash" }) as unknown as ClaudeStreamMessage;
     const notify = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, tool_use_id: `tool-${id}`, status: "completed" }) as unknown as ClaudeStreamMessage;
@@ -423,7 +463,7 @@ describe("Claude autonomous background turn through Session", () => {
       expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "bg-eof", status: "unknown", summary: "Claude connection ended; task status is unknown." }]);
     } finally { await h.session.shutdown(); h.close(); }
   });
-  it.each(["unknown-task", "wrong-origin", "no-listener", "cancelled"])("does not refresh quota for an unaccepted native turn: %s", async (scenario) => {
+  it.each(["unknown-task", "no-listener", "cancelled"])("does not refresh quota for an unaccepted native turn: %s", async (scenario) => {
     const task = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
     const transport = new FakeTransport({ frames: [task, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const original = transport.controlRequest.bind(transport);
@@ -756,7 +796,7 @@ describe("Claude autonomous background turn through Session", () => {
       expect(transport.sent).toEqual(["launch", "next"]);
     } finally { await engine.dispose("session-close"); }
   });
-  it("coalesces known notifications and rejects an ambiguous result without exposing its text", async () => {
+  it("preserves a successful admitted turn even when its result has no origin", async () => {
     const task = (id: string) => ({ type: "system", subtype: "task_started", task_id: id, tool_use_id: `tool-${id}`, task_type: "local_bash" }) as unknown as ClaudeStreamMessage;
     const notify = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, tool_use_id: `tool-${id}`, status: "completed" }) as unknown as ClaudeStreamMessage;
     const transport = new FakeTransport({ frames: [task("a"), task("b"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
@@ -771,8 +811,8 @@ describe("Claude autonomous background turn through Session", () => {
       await vi.waitFor(() => expect(streams).toHaveLength(1));
       transport.push(foreignResultFrame("unknown origin"));
       const events = await streams[0]!;
-      expect(JSON.stringify(events)).not.toContain("FOREIGN SECRET");
-      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "error" }));
+      expect(JSON.stringify(events)).toContain("FOREIGN SECRET");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
       expect(transport.sent).toEqual(["launch"]);
     } finally { await engine.dispose("session-close"); }
   });

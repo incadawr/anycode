@@ -35,6 +35,16 @@ const FOREGROUND_TOOL = "toolu_01RDu83vHyAmThJmAAheTCUb";
 describe("ClaudeSubagentTasks — a real background agent (w0-19)", () => {
   const events = replay("w0-19-background-agent.jsonl");
 
+  it("recognizes only the live agent run before consuming its notification", () => {
+    const tasks = new ClaudeSubagentTasks();
+    tasks.onFrame(system("task_started", { task_id: "agent", run_id: "run", tool_use_id: "tool", task_type: "local_agent" }));
+    const done = system("task_notification", { task_id: "agent", run_id: "run", tool_use_id: "tool", status: "completed" });
+    expect(tasks.knowsNotification(system("task_notification", { task_id: "agent", run_id: "old", tool_use_id: "tool" }))).toBe(false);
+    expect(tasks.knowsNotification(done)).toBe(true);
+    tasks.onFrame(done);
+    expect(tasks.knowsNotification(done)).toBe(false);
+  });
+
   it("emits start, an activity row per child tool call, a progress per task_progress, then one end, in wire order", () => {
     expect(events.map((event) => event.type)).toEqual([
       "subagent_start",

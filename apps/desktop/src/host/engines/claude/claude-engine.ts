@@ -1165,12 +1165,18 @@ export class ClaudeEngine implements SessionEngine {
     // A foreground task (a long Bash command, a foreground Agent) completes
     // inside the owner's own tool call: no autonomous turn follows it.
     if (this.nativeBackgroundTasks.takeForegroundCompletion(frame)) return;
+    // The CLI attaches notifications arriving during an autonomous turn to
+    // that turn; they do not schedule another turn.
+    if (this.nativeTurn) {
+      if (!settledKnownTask && !this.nativeBackgroundTasks.knowsNotification(frame)) console.error("[claude] background turn received an unrecognised task notification");
+      return;
+    }
     if (settledKnownTask || this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
     else this.unmatchedNotification = true;
   }
 
-  private trackTranslatedNotification(frame: ClaudeStreamMessage, events: readonly AgentEvent[]): void {
-    this.trackNotification(frame, events.some(event => event.type === "claude_background_task" && event.status !== "running"));
+  private trackTranslatedNotification(frame: ClaudeStreamMessage, events: readonly AgentEvent[], knownSubagent: boolean): void {
+    this.trackNotification(frame, knownSubagent || events.some(event => event.type === "claude_background_task" && event.status !== "running"));
   }
 
   private emitDetached(event: AgentEvent): void {
@@ -2257,8 +2263,9 @@ export class ClaudeEngine implements SessionEngine {
             if (frame.type !== "result") ownerCommittedEarly = true;
             for (const candidate of candidates) {
               if (candidate.type === "assistant" || candidate.type === "stream_event" || (candidate.type === "system" && candidate.subtype === "init")) options.onInputAccepted?.();
+              const knownSubagent = this.subagentTasks.knowsNotification(candidate);
               const translated = translator.onMessage(candidate);
-              this.trackTranslatedNotification(candidate, translated);
+              this.trackTranslatedNotification(candidate, translated, knownSubagent);
               for (const event of translated) {
                 if (event.type === "loop_end") terminal = true;
                 yield event;
@@ -2327,8 +2334,9 @@ export class ClaudeEngine implements SessionEngine {
         if (inputDispatched && ownerSession && frame.parent_tool_use_id == null &&
           (frame.type === "stream_event" || frame.type === "assistant" || (frame.type === "system" && frame.subtype === "init"))) options.onInputAccepted?.();
         reportNotSent();
+        const knownSubagent = this.subagentTasks.knowsNotification(frame);
         const translated = translator.onMessage(raced.value.value);
-        this.trackTranslatedNotification(frame, translated);
+        this.trackTranslatedNotification(frame, translated, knownSubagent);
         for (const event of translated) {
           if (event.type === "loop_end") terminal = true;
           yield event;
@@ -3193,10 +3201,11 @@ export class ClaudeEngine implements SessionEngine {
         // agent keeps working after its parent turn's result. They must never
         // open a foreign turn — the next owner send would then wait for a
         // result the agent never produces.
+        const knownSubagent = this.subagentTasks.knowsNotification(frame);
         for (const event of this.subagentTasks.onFrame(frame)) this.emitDetached(event);
         const task = this.nativeBackgroundTasks.onFrame(frame);
         if (task) this.emitDetached(task);
-        this.trackNotification(frame, task !== undefined && task.status !== "running");
+        this.trackNotification(frame, knownSubagent || (task !== undefined && task.status !== "running"));
         return;
       }
       if (frame.type === "result") {
@@ -3207,6 +3216,9 @@ export class ClaudeEngine implements SessionEngine {
         // sets lastTurnTokenUsage; the owner's numbers must stay its own).
         const native = this.nativeTurn;
         if (!native && this.nativeArmed) this.nativeArmed = false;
+        // Once an admitted turn ends, its armed notification cannot wake it
+        // again, even if the CLI omitted the result's origin.
+        if (native && taskNotificationRunId(frame) === undefined && this.armedNotification) this.removeNotification(this.armedNotification);
         this.settleNotificationResult(frame);
         if (native) {
           if (native.cancelTimer) clearTimeout(native.cancelTimer);
@@ -3214,7 +3226,11 @@ export class ClaudeEngine implements SessionEngine {
           const fields = origin && typeof origin === "object" ? origin as Record<string, unknown> : undefined;
           if (native.cancelled) {
             for (const event of native.translator.finishTerminal("cancelled")) native.stream.push(event);
-          } else if (!this.unmatchedNotification && fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0) {
+          } else if ((frame as Record<string, unknown>).subtype === "success" || (!this.unmatchedNotification && fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0)) {
+            if (fields?.kind !== "task-notification" || fields.producer !== "session-task" || typeof fields.runId !== "string" || !fields.runId) {
+              if (this.turnActive) this.nativeAmbiguous = true;
+              console.error("[claude] autonomous turn result did not identify a task notification");
+            }
             native.events.push(...native.translator.onMessage(frame));
             for (const event of native.events) native.stream.push(event);
             // This turn ran independently of runTurn's post-turn refresh.
