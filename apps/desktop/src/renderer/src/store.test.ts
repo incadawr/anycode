@@ -9914,6 +9914,29 @@ it("tracks detached Claude task updates while ignoring unrelated stale turns", (
   expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "task", status: "completed", summary: "done" }]);
 });
 
+it("never lists a foreground-tracked task, and lists it once the CLI moves it to the background", () => {
+  const store = createDesktopStore();
+  const task = { type: "claude_background_task" as const, taskId: "fg", toolCallId: "call", kind: "bash" as const, description: "sleep 6", startedAt: 1, status: "running" as const };
+  const send = (event: object) => store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: event as never });
+  send({ ...task, foreground: true });
+  expect(store.getState().claudeBackgroundTasks).toEqual([]);
+  send({ ...task, status: "completed", foreground: true });
+  expect(store.getState().claudeBackgroundTasks).toEqual([]);
+  send({ ...task, taskId: "moved", foreground: true });
+  send({ ...task, taskId: "moved" });
+  expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "moved", status: "running" }]);
+});
+
+it("keeps the last state per launching tool call beyond the popover list cap", () => {
+  const store = createDesktopStore();
+  const send = (event: object) => store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: event as never });
+  for (let index = 0; index < 8; index += 1) send({ type: "claude_background_task", taskId: `t${index}`, toolCallId: `c${index}`, kind: "bash", description: "x", startedAt: 1, status: "failed", summary: "failed with exit code 2" });
+  expect(store.getState().claudeBackgroundTasks).toHaveLength(5);
+  expect(store.getState().claudeTaskByToolCall.c0).toMatchObject({ status: "failed" });
+  send({ type: "claude_background_task", taskId: "fg", toolCallId: "cfg", kind: "bash", description: "x", startedAt: 1, status: "running", foreground: true });
+  expect(store.getState().claudeTaskByToolCall.cfg).toBeUndefined();
+});
+
 it("keeps provisional Claude content out of the transcript and clears it", () => {
   const store = createDesktopStore();
   store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });

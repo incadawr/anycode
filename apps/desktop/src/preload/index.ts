@@ -1390,10 +1390,12 @@ contextBridge.exposeInMainWorld("anycode", {
   // (main/artifacts-ipc.ts) re-checks containment (workspace / ~/.anycode /
   // tmpdir, symlink-resolved) and the image-extension allowlist before any
   // read/open/reveal. Image bytes cross back base64-encoded (a `file://`
-  // URL would never pass CSP); `open` is the ONLY path to `shell.openPath`
-  // and is gated main-side on the image allowlist.
+  // URL would never pass CSP); `open` is gated main-side on the image allowlist.
+  // The one other `shell.openPath` caller is `claudeTaskOutput.open` below: it takes ids (+ an optional path hint)
+  // and main re-validates the file lives in Claude's own tasks dir, is user-owned and non-executable.
   claudeTaskOutput: {
-    pick: (taskId: string, sessionRef: string): Promise<{ ok: true; content: string } | { ok: false; reason: "cancelled" | "unavailable" }> => ipcRenderer.invoke("anycode:claude-task-output-pick", { taskId, sessionRef }),
+    read: (request: { taskId: string; sessionRef: string; outputFile?: string }): Promise<{ ok: true; content: string; truncated: boolean } | { ok: false; reason: "unavailable" }> => ipcRenderer.invoke("anycode:claude-task-output-read", request),
+    open: (request: { taskId: string; sessionRef: string; outputFile?: string }): Promise<{ ok: boolean }> => ipcRenderer.invoke("anycode:claude-task-output-open", request),
   },
   artifacts: {
     readImage: (tabId: string, path: string): Promise<ArtifactReadImageResult> =>

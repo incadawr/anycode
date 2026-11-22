@@ -1484,6 +1484,8 @@ export interface DesktopState {
   /** Latest background-task snapshots from the host, replaced wholesale. */
   backgroundTasks: BackgroundTaskSnapshot[];
   claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
+  /** Last known state per launching tool call (bounded), independent of the popover list cap: feeds the Bash card link. */
+  claudeTaskByToolCall: Record<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   /** Accumulated output chunks keyed by taskId. */
@@ -1896,6 +1898,8 @@ interface SessionSlice {
   workspaceTrust: WorkspaceTrustRequest | null;
   backgroundTasks: BackgroundTaskSnapshot[];
   claudeBackgroundTasks: Array<Extract<WireAgentEvent, { type: "claude_background_task" }>>;
+  /** Last known state per launching tool call (bounded), independent of the popover list cap: feeds the Bash card link. */
+  claudeTaskByToolCall: Record<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
@@ -1982,6 +1986,7 @@ function initialSessionSlice(): SessionSlice {
     workspaceTrust: null,
     backgroundTasks: [],
     claudeBackgroundTasks: [],
+    claudeTaskByToolCall: {},
     claudeTaskOutput: null,
     claudeTurnPreview: null,
     backgroundTaskOutput: {},
@@ -4918,8 +4923,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         case "claude_background_task":
           set(state => {
+            // A foreground-tracked call is not a background task: never listed (a later move to the background arrives unflagged).
+            if (event.foreground === true) return state.claudeBackgroundTasks.some(task => task.taskId === event.taskId) ? { claudeBackgroundTasks: state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId) } : {};
             const tasks = [...state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId), event];
-            return { claudeBackgroundTasks: [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)] };
+            const { [event.toolCallId]: _previous, ...rest } = state.claudeTaskByToolCall;
+            const byCall = { ...rest, [event.toolCallId]: event };
+            const keys = Object.keys(byCall);
+            for (const key of keys.slice(0, Math.max(0, keys.length - 100))) delete byCall[key];
+            return { claudeTaskByToolCall: byCall, claudeBackgroundTasks: [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)] };
           });
           return;
         case "engine_notice":

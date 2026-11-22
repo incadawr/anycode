@@ -141,7 +141,7 @@ async function wireFixture() {
   return { transport, received, send, settle, close, session };
 }
 
-it("authorizes output selection only for a completed task of this Claude session", async () => {
+it("hands out the session reference only for a known task of this Claude session", async () => {
   const { received, send, settle, close, session } = await wireFixture();
   const task = { type: "claude_background_task" as const, taskId: "task", toolCallId: "tool", kind: "bash" as const, description: "fixture", startedAt: 1, status: "running" as const };
   try {
@@ -150,7 +150,7 @@ it("authorizes output selection only for a completed task of this Claude session
     send({ type: "claude_task_output_request", taskId: "task", requestId: "running" });
     await settle();
     expect(received).toContainEqual({ type: "claude_task_output", taskId: "unknown", requestId: "unknown" });
-    expect(received).toContainEqual({ type: "claude_task_output", taskId: "task", requestId: "running" });
+    expect(received).toContainEqual({ type: "claude_task_output", taskId: "task", requestId: "running", sessionRef: "session" });
     session.emitDetachedSubagentEvent({ ...task, status: "completed" });
     send({ type: "claude_task_output_request", taskId: "task", requestId: "completed" });
     await settle();

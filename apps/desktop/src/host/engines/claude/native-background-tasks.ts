@@ -71,7 +71,8 @@ export class ClaudeNativeBackgroundTasks {
       const kind = f.task_type === "local_bash" ? "bash" : f.task_type === "monitor" || f.task_type === "local_monitor" ? "monitor" : undefined;
       if (!kind || typeof f.tool_use_id !== "string" || !f.tool_use_id) return undefined;
       const task: Task = { type: "claude_background_task", taskId: id, toolCallId: f.tool_use_id, kind,
-        description: typeof f.description === "string" ? f.description : "", startedAt: Date.now(), status: "running" };
+        description: typeof f.description === "string" ? f.description : "", startedAt: Date.now(), status: "running",
+        ...(f.is_backgrounded === false ? { foreground: true as const } : {}) };
       this.tasks.set(id, task);
       if (typeof f.run_id === "string") this.runs.set(id, f.run_id);
       else this.runs.delete(id);
@@ -79,8 +80,15 @@ export class ClaudeNativeBackgroundTasks {
     }
     if (f.subtype === "task_updated") {
       const patch = f.patch && typeof f.patch === "object" ? f.patch as Record<string, unknown> : undefined;
-      if (patch?.is_backgrounded === true && this.foregroundRunMatches(id, f)) this.foreground.delete(id);
-      return undefined;
+      if (patch?.is_backgrounded !== true) return undefined;
+      if (this.foregroundRunMatches(id, f)) this.foreground.delete(id);
+      const current = this.tasks.get(id);
+      const run = this.runs.get(id);
+      if (!current?.foreground || current.status !== "running" || (run && typeof f.run_id === "string" && run !== f.run_id)) return undefined;
+      // Moved to the background: from now on it is a background task for display.
+      const { foreground: _foreground, ...moved } = current;
+      this.tasks.set(id, moved);
+      return moved;
     }
     const old = this.tasks.get(id);
     if (!old || (old.status !== "running" && !(old.status === "unknown" && f.subtype === "task_notification")) || (typeof f.tool_use_id === "string" && f.tool_use_id !== old.toolCallId)) return undefined;

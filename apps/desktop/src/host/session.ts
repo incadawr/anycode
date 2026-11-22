@@ -3857,7 +3857,7 @@ export class Session {
         const engine = this.engine;
         const task = this.claudeBackgroundTasks.get(message.taskId);
         const ref = (engine as SessionEngine & { sessionRef?: unknown }).sessionRef;
-        const sessionRef = engine.id === "claude" && typeof ref === "string" && task && task.status !== "running" ? ref : undefined;
+        const sessionRef = engine.id === "claude" && typeof ref === "string" && task ? ref : undefined;
         this.outbound.sendDirect({ type: "claude_task_output", taskId: message.taskId, requestId: message.requestId, ...(sessionRef ? { sessionRef } : {}) });
         break;
       }
