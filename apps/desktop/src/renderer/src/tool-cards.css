@@ -75,37 +75,86 @@
   color: var(--text-ghost);
 }
 
-.subagent-name {
+.subagent-persona {
+  font-size: var(--fs-sm);
   font-weight: var(--w-semibold);
+  color: var(--text-1);
+  flex: none;
+}
+
+/* The description is human text, not a machine anchor: UI face, not mono. */
+.subagent-collapsed-line .tool-call-summary {
+  font-family: var(--font-ui);
   font-size: var(--fs-sm);
   color: var(--text-2);
-  flex: none;
 }
 
-.subagent-persona {
-  font-size: var(--fs-xs);
-  color: var(--text-2);
-  flex: none;
-}
-
-/* Child model id on the collapsed row. Follows the accent-coloured persona it
-   belongs to, one tier quieter, mono so an id reads as an id. */
-.subagent-collapsed-model,
-.subagent-collapsed-engine {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--text-2);
+/* Model / engine as one quiet pill at the end of the collapsed header. */
+.subagent-collapsed-badge {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* Inherited from the parent tab, not the child's own choice: one tier quieter. */
-.subagent-collapsed-model-inherited,
-.subagent-collapsed-engine-inherited {
+  padding: 0.05rem var(--sp-2);
+  border-radius: var(--r-full);
+  background: var(--bg-hover);
   color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
 }
+
+/* Newest activity lines of a running agent, shown under the folded header. */
+.subagent-collapsed-preview {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + 1em + var(--sp-2));
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+/* Claude subagent transcript (read-only modal feed). */
+.subagent-transcript-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.subagent-transcript-status {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.subagent-transcript-note .subagent-transcript-pre { color: var(--text-3); max-height: 6rem; }
+.subagent-transcript-hint { margin: var(--sp-2) 0 0; color: var(--warning); font-size: var(--fs-xs); }
+.subagent-transcript-label {
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-semibold);
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.15rem;
+}
+.subagent-transcript-body {
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+.subagent-transcript-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.subagent-transcript-tool_use .subagent-transcript-pre { color: var(--text-1); }
+.subagent-transcript-thinking .subagent-transcript-body { color: var(--text-3); font-style: italic; }
+.subagent-transcript-error .subagent-transcript-pre { color: var(--danger); }
 
 /* Wraps to its own full-width row below the header (the header stays a
    single flex row otherwise; :has() precedent already used in app.css). */
@@ -208,7 +257,8 @@
   overflow-y: auto;
 }
 
-.subagent-activity-row {
+.subagent-activity-row,
+.subagent-preview-row {
   /* The feed is a height-capped column: rows must overflow it, not flex down
      below their own line box (which makes glyphs overlap and defeats scroll). */
   flex-shrink: 0;

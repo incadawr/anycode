@@ -32,6 +32,7 @@
  * already rendered by formatSubagentCounters when expanded.
  */
 import { useCallback, useContext, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import type { ReactNode } from "react";
 import type { TokenUsage } from "@anycode/core";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowStepStatus, WorkflowSubStatus } from "../store.js";
 import { TabContext, type TabContextValue } from "../tab-context.js";
@@ -46,6 +47,7 @@ import { Button } from "../ui/index.js";
 import { backgroundCardStatus, type ClaudeBackgroundTask } from "../claude-background-tasks.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
+import { ClaudeSubagentTranscriptButton } from "./ClaudeSubagentTranscript.js";
 import { Markdown } from "./Markdown.js";
 import { formatElapsed } from "./WorkingRow.js";
 
@@ -334,6 +336,54 @@ export function inheritedParentModelFor(
     return liveParentModel;
   }
   return undefined;
+}
+
+const INHERITED_SUFFIX = " (inherited)";
+
+/**
+ * The collapsed Agent header's identity badge: "<model> · <engine>" as one
+ * quiet pill, with the "(inherited)" provenance moved out of the text and into
+ * the tooltip. `showEngine` is false while a running child already carries its
+ * explicit engine as the counters line's prefix (no duplicate). Null when
+ * neither slot is known.
+ */
+export function subagentIdentityBadge(
+  identity: { model: SubagentIdentitySlot; engine: SubagentIdentitySlot },
+  showEngine: boolean,
+): { text: string; title: string } | null {
+  const bare = (label: string) => (label.endsWith(INHERITED_SUFFIX) ? label.slice(0, -INHERITED_SUFFIX.length) : label);
+  const parts: { text: string; title: string }[] = [];
+  if (identity.model.label !== null) {
+    parts.push({
+      text: bare(identity.model.label),
+      title: `Model: ${bare(identity.model.label)}${identity.model.inherited ? " (inherited from the parent session)" : ""}`,
+    });
+  }
+  if (showEngine && identity.engine.label !== null) {
+    parts.push({
+      text: bare(identity.engine.label),
+      title: `Engine: ${bare(identity.engine.label)}${identity.engine.inherited ? " (inherited from the parent session)" : ""}`,
+    });
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  return { text: parts.map((part) => part.text).join(" · "), title: parts.map((part) => part.title).join("\n") };
+}
+
+/** How many of the newest activity rows a collapsed running card previews. */
+export const COLLAPSED_PREVIEW_ROWS = 3;
+
+/**
+ * Newest activity lines for the collapsed card, oldest of the slice first.
+ * Only a RUNNING agent previews (a settled card is a one-line ledger row);
+ * empty when nothing has happened yet.
+ */
+export function collapsedActivityPreview(subagent: SubagentSubStatus | null | undefined, limit: number = COLLAPSED_PREVIEW_ROWS): string[] {
+  if (subagent === null || subagent === undefined || subagent.final !== null) {
+    return [];
+  }
+  return subagent.activity.slice(-limit).map(activityRowText);
 }
 
 const WORKFLOW_FINAL_LABELS: Record<NonNullable<WorkflowSubStatus["final"]>["status"], string> = {
@@ -2142,6 +2192,7 @@ export function ToolCallHeaderRow({
   parentModel,
   parentEngine,
   backgroundTask,
+  transcriptAction,
 }: {
   block: ToolCallBlock;
   expanded: boolean;
@@ -2149,6 +2200,8 @@ export function ToolCallHeaderRow({
   /** The Claude background task this call launched: its state replaces the launch's immediate "Success". */
   backgroundTask?: ClaudeBackgroundTask | undefined;
   onToggleExpanded: () => void;
+  /** The Claude subagent "Open" transcript control, mounted by ToolCallCard for Claude-engine Agent cards only. */
+  transcriptAction?: ReactNode;
   childAction?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
   /** resolved by ToolCallCard, passed as a plain prop for the same reason `childAction` is — a static render can see a prop, never a hook. */
   previewAction?: ArtifactPreviewAction;
@@ -2161,6 +2214,10 @@ export function ToolCallHeaderRow({
     isAgent && block.subagent !== null
       ? resolveSubagentIdentity(block.subagent.model, block.subagent.engine, parentModel, parentEngine)
       : null;
+  const collapsedBadge =
+    collapsedIdentity === null || block.subagent === null
+      ? null
+      : subagentIdentityBadge(collapsedIdentity, !(block.subagent.final === null && block.subagent.engine !== null));
   // an actionable badge (waiting for permission + onOpen) cannot
   // render inside the toggle <button> — nested buttons are invalid HTML — so
   // it is hoisted out into this row wrapper; every other kind keeps its
@@ -2182,33 +2239,18 @@ export function ToolCallHeaderRow({
         {isAgent && !expanded ? (
           <span className="subagent-collapsed-line">
             <BotIcon />
-            <span className="subagent-name">SubAgent</span>
-            {block.subagent && <span className="subagent-persona">{block.subagent.agentType}</span>}
-            {/* The collapsed row is the DEFAULT state, so a model that only
-                showed once expanded would be invisible in practice. Explicit
-                child identity wins; a null child slot falls back to the
-                parent's known value marked " (inherited)". */}
-            {collapsedIdentity?.model.label != null && (
-              <span
-                className={`subagent-collapsed-model${collapsedIdentity.model.inherited ? " subagent-collapsed-model-inherited" : ""}`}
-                title={collapsedIdentity.model.label}
-              >
-                {collapsedIdentity.model.label}
+            <span className="subagent-persona">{block.subagent ? block.subagent.agentType : "SubAgent"}</span>
+            <span className="tool-call-summary">{collapsedSummary(block)}</span>
+            {/* Model/engine ride as one muted badge, not as a monospace
+                string between the type and the description. Inherited
+                provenance lives in the tooltip. The running counters line
+                already carries an explicit child engine as its prefix, so the
+                badge omits the engine then. */}
+            {collapsedBadge !== null && (
+              <span className="subagent-collapsed-badge" title={collapsedBadge.title}>
+                {collapsedBadge.text}
               </span>
             )}
-            {/* The running counters line below already carries an explicit
-                child engine as its "<engine> · " prefix — don't duplicate it;
-                inherited and settled engines are only labelled here. */}
-            {collapsedIdentity?.engine.label != null &&
-              !(block.subagent?.final === null && block.subagent?.engine !== null) && (
-                <span
-                  className={`subagent-collapsed-engine${collapsedIdentity.engine.inherited ? " subagent-collapsed-engine-inherited" : ""}`}
-                  title={collapsedIdentity.engine.label}
-                >
-                  {collapsedIdentity.engine.label}
-                </span>
-              )}
-            <span className="tool-call-summary">{collapsedSummary(block)}</span>
           </span>
         ) : (
           <>
@@ -2260,6 +2302,7 @@ export function ToolCallHeaderRow({
           expanded body would repeat this exact `artifacts.preview` call,
           which is the redundancy the night-track smoke already removed once
           from the artifact chip. */}
+      {transcriptAction}
       {previewAction !== undefined && (
         <>
           <button
@@ -2351,6 +2394,9 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   const isDiffable = block.toolName === "Write" || block.toolName === "Edit";
   const hasSnapshot = block.snapshots.before !== null || block.snapshots.after !== null;
   const isAgent = block.toolName === "Agent";
+  // The newest few activity lines of a RUNNING agent, visible without
+  // expanding the card (the full feed stays in the expanded body).
+  const previewRows = collapsedActivityPreview(block.subagent);
   // Only cap when the body is shown: a folded card must not re-split its full
   // modelText on every sibling re-render (the slice's "keep giant-output cost
   // out while folded" thesis). The body's `capped !== null` guard keeps this
@@ -2383,7 +2429,25 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
         parentModel={parentIdentity.model}
         parentEngine={parentIdentity.engine}
         backgroundTask={backgroundTask}
+        transcriptAction={
+          liveParentIdentity.engine === "claude" && isAgent && block.subagent != null && block.subagent.sessionChild !== true ? (
+            <ClaudeSubagentTranscriptButton
+              toolCallId={block.toolCallId}
+              title={block.subagent.agentType}
+              subtitle={block.subagent.description}
+            />
+          ) : undefined
+        }
       />
+      {!expanded && previewRows.length > 0 && (
+        <ul className="subagent-collapsed-preview" aria-label="Latest agent activity">
+          {previewRows.map((text, index) => (
+            <li key={`${previewRows.length}-${index}`} className="subagent-preview-row">
+              {text}
+            </li>
+          ))}
+        </ul>
+      )}
       {backgroundContext !== null && isAgent && block.status === "running" && <BackgroundAgentControls block={block} ctx={backgroundContext} />}
       {expanded && (
         // aria-live="off" (design §1.9): a user-driven expand must not dump

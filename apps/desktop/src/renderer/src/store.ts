@@ -1,3 +1,4 @@
+import type { ClaudeSubagentTranscriptResult } from "../../shared/claude-subagent-transcript.js";
 import type { ClaudeCommandRow } from "../../shared/claude-commands.js";
 import { type AgentDisplayCard, agentMessageText } from "../../shared/communication.js";
 import type { AgentDelivery } from "../../shared/communication.js";
@@ -1487,6 +1488,7 @@ export interface DesktopState {
   /** Last known state per launching tool call (bounded), independent of the popover list cap: feeds the Bash card link. */
   claudeTaskByToolCall: Record<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
+  claudeSubagentTranscript: { requestId: string; toolCallId: string; result: ClaudeSubagentTranscriptResult } | null;
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   /** Accumulated output chunks keyed by taskId. */
   backgroundTaskOutput: Record<string, string>;
@@ -1901,6 +1903,7 @@ interface SessionSlice {
   /** Last known state per launching tool call (bounded), independent of the popover list cap: feeds the Bash card link. */
   claudeTaskByToolCall: Record<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>;
   claudeTaskOutput: { taskId: string; requestId: string; sessionRef?: string } | null;
+  claudeSubagentTranscript: { requestId: string; toolCallId: string; result: ClaudeSubagentTranscriptResult } | null;
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
@@ -1988,6 +1991,7 @@ function initialSessionSlice(): SessionSlice {
     claudeBackgroundTasks: [],
     claudeTaskByToolCall: {},
     claudeTaskOutput: null,
+    claudeSubagentTranscript: null,
     claudeTurnPreview: null,
     backgroundTaskOutput: {},
     backgroundChildren: [],
@@ -6219,6 +6223,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           case "claude_task_output":
             set({ claudeTaskOutput: { taskId: message.taskId, requestId: message.requestId, sessionRef: message.sessionRef } });
+            return;
+          case "claude_subagent_transcript":
+            set({ claudeSubagentTranscript: { requestId: message.requestId, toolCallId: message.toolCallId, result: message.result } });
             return;
           case "task_kill_result":
             if (!message.ok) {
