@@ -9546,13 +9546,13 @@ dialog.role-picker-dialog {
 .claude-bg-trigger { width: auto; gap: var(--sp-1); padding: 0 var(--sp-2); color: var(--text-3); }
 .claude-bg-trigger-running { color: var(--text-2); }
 .claude-bg-count { font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }
-.claude-bg-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + var(--sp-1)); display: flex; flex-direction: column; box-sizing: border-box; width: min(24rem, 80vw); max-height: min(50vh, 24rem); background: var(--bg-overlay); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-popup); color: var(--text-2); font-size: var(--fs-xs); }
+.claude-bg-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + var(--sp-1)); display: flex; flex-direction: column; box-sizing: border-box; width: min(24rem, 80vw); max-height: min(60vh, 30rem); background: var(--bg-overlay); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-popup); color: var(--text-2); font-size: var(--fs-xs); }
 .claude-bg-head { display: flex; justify-content: space-between; gap: var(--sp-2); flex: none; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-2xs); }
 .claude-bg-body { display: flex; flex-direction: column; gap: var(--sp-2); flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--sp-2); overflow-wrap: anywhere; }
 .claude-bg-foot { display: flex; justify-content: flex-end; flex: none; padding: var(--sp-2); border-top: 1px solid var(--border); }
 .claude-bg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.claude-bg-row { display: flex; align-items: flex-start; justify-content: flex-start; gap: var(--sp-2); width: 100%; height: auto; padding: var(--sp-1) var(--sp-2); text-align: left; font-size: var(--fs-xs); color: var(--text-2); }
-.claude-bg-row[aria-pressed="true"] { background: var(--bg-selected); color: var(--text-1); }
+.claude-bg-list .claude-bg-row { display: flex; white-space: normal; font-weight: var(--w-regular, 400); align-items: flex-start; justify-content: flex-start; gap: var(--sp-2); width: 100%; height: auto; padding: var(--sp-1) var(--sp-2); text-align: left; font-size: var(--fs-xs); color: var(--text-2); }
+.claude-bg-list .claude-bg-row[aria-pressed="true"] { background: var(--bg-selected); color: var(--text-1); }
 .claude-bg-row-icon { display: inline-flex; flex: none; padding-top: 2px; color: var(--text-3); }
 .claude-bg-row-completed .claude-bg-row-icon { color: var(--success); }
 .claude-bg-row-failed .claude-bg-row-icon { color: var(--danger); }
@@ -9561,4 +9561,4 @@ dialog.role-picker-dialog {
 .claude-bg-row-meta { color: var(--text-3); font-size: var(--fs-2xs); }
 .claude-bg-summary { padding: 0 var(--sp-2); color: var(--text-3); font-size: var(--fs-2xs); white-space: pre-wrap; }
 .claude-bg-note { padding: 0 var(--sp-2); color: var(--text-3); font-size: var(--fs-2xs); }
-.claude-bg-output { margin: 0; max-height: 12rem; overflow: auto; padding: var(--sp-2); background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-2xs); line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.claude-bg-output { flex: none; margin: 0; max-height: 14rem; overflow: auto; padding: var(--sp-2); background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text-2); font-family: var(--font-mono); font-size: var(--fs-2xs); line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }

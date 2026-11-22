@@ -73,7 +73,8 @@ export function ClaudeBackgroundTasks() {
     return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onPointer); };
   }, [open, close]);
 
-  const task = visible.find(item => item.taskId === selected) ?? (visible.length === 1 ? visible[0] : undefined);
+  // Until one is picked, show the first running task (else the latest one), so the output is visible on open.
+  const task = visible.find(item => item.taskId === selected) ?? visible.find(item => item.status === "running") ?? visible[visible.length - 1];
   const taskId = task?.taskId;
   const status = task?.status;
   const hint = task ? taskOutputHint(task, transcript) : undefined;
@@ -119,7 +120,7 @@ export function ClaudeBackgroundTasks() {
           {visible.map(item => {
             const state = backgroundCardStatus(item);
             return <li key={item.taskId}>
-              <Button variant="ghost" size="sm" className={`claude-bg-row claude-bg-row-${item.status}`} aria-pressed={item.taskId === taskId} onClick={() => setSelected(item.taskId === selected ? null : item.taskId)}>
+              <Button variant="ghost" size="sm" className={`claude-bg-row claude-bg-row-${item.status}`} aria-pressed={item.taskId === taskId} onClick={() => setSelected(item.taskId)}>
                 <span className="claude-bg-row-icon"><StatusIcon status={item.status} /></span>
                 <span className="claude-bg-row-main">
                   <span className="claude-bg-row-title">{backgroundTaskKindLabel(item)}: {taskDescription(item, transcript)}</span>
