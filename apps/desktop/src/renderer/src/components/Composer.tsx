@@ -1,3 +1,4 @@
+import { ClaudeBackgroundTasks } from "./ClaudeBackgroundTasks.js";
 import { OpenCodeGoQuota } from "./OpenCodeGoQuota.js";
 import { saveRecovery } from "../orchestration-recovery-storage.js";
 import { planComposerDrop } from "../composer-drop.js";
@@ -2411,6 +2412,7 @@ export function Composer() {
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
+      <ClaudeBackgroundTasks />
       <BackgroundAgents />
       <PromptQueue onRestore={(item: QueuedPrompt, deliveryRequestId?: string) => {
         if (imagesStillLoading()) return false;

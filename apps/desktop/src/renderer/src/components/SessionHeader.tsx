@@ -1,5 +1,4 @@
 import { ChildWorktreeControl } from "./ChildWorktreeControl.js";
-import { ClaudeBackgroundTasks } from "./ClaudeBackgroundTasks.js";
 /**
  * Session header (design ui-redesign-direction.md §2.1/§2.4) — replaces
  * `StatusBar`. Mounted as the first child of `ActiveTabBody`, inside the
@@ -137,14 +136,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   // third subscription — `data-running` badge on the toggle while
   // any background task of this tab is still live.
   const backgroundTasks = useTabStore((state) => state.backgroundTasks);
-  const claudeBackgroundTasks = useTabStore((state) => state.claudeBackgroundTasks);
-  const [taskNow, setTaskNow] = useState(Date.now);
-  const hasRunningClaudeTask = claudeBackgroundTasks.some(task => task.status === "running");
-  useEffect(() => {
-    if (!hasRunningClaudeTask) return;
-    const timer = setInterval(() => setTaskNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [hasRunningClaudeTask]);
   const tasksRunning = backgroundTasks.some((task) => task.status === "running");
 
   // D15 (96-P3): the Previews menu — visible whenever the active tab has
@@ -261,7 +252,6 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       )}
 
       {externalEngine && <span className="engine-identity session-header-engine">{engine.id === "codex" ? "Codex" : engine.id}</span>}
-      <ClaudeBackgroundTasks tasks={claudeBackgroundTasks} now={taskNow} />
 
       <ChildWorktreeControl key={tabId} tabId={tabId} />
       {!isNewSession && <EnvironmentMenu placement="header" />}

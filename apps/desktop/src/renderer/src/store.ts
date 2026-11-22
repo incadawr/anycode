@@ -4918,6 +4918,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         case "claude_background_task":
           set(state => {
+            // A foreground-tracked call is not a background task: never listed (a later move to the background arrives unflagged).
+            if (event.foreground === true) return state.claudeBackgroundTasks.some(task => task.taskId === event.taskId) ? { claudeBackgroundTasks: state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId) } : {};
             const tasks = [...state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId), event];
             return { claudeBackgroundTasks: [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)] };
           });

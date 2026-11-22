@@ -43,6 +43,7 @@ import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, isBackgroundAgent, isOutcomeLost, settledStatus, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
 import { Button } from "../ui/index.js";
+import { backgroundCardStatus, backgroundTaskForToolCall, type ClaudeBackgroundTask } from "../claude-background-tasks.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -1231,6 +1232,20 @@ function useChildSessionAction(
 }
 
 /**
+ * The Claude background task this card launched (Bash `run_in_background`, Monitor), if the CLI
+ * reported one for its tool call. Foreground-tracked tasks never link. `undefined` without a tab context.
+ */
+function useLinkedBackgroundTask(toolCallId: string): ClaudeBackgroundTask | undefined {
+  const ctx = useContext(TabContext);
+  const subscribe = useCallback((onChange: () => void) => (ctx === null ? () => {} : ctx.store.subscribe(onChange)), [ctx]);
+  const snapshot = useCallback(
+    () => (ctx === null ? undefined : backgroundTaskForToolCall(ctx.store.getState().claudeBackgroundTasks, toolCallId)),
+    [ctx, toolCallId],
+  );
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
+/**
  * The parent session's identity (model + engine id) as seen from THIS card's
  * own tab context — the tab the card is mounted under, never the globally
  * active tab (a child surface mounts under its own provider; ModelPill's
@@ -2126,10 +2141,13 @@ export function ToolCallHeaderRow({
   previewAction,
   parentModel,
   parentEngine,
+  backgroundTask,
 }: {
   block: ToolCallBlock;
   expanded: boolean;
   bodyId: string;
+  /** The Claude background task this call launched: its state replaces the launch's immediate "Success". */
+  backgroundTask?: ClaudeBackgroundTask | undefined;
   onToggleExpanded: () => void;
   childAction?: { badge: ChildBadgeKind; onOpen: (() => void) | undefined };
   /** resolved by ToolCallCard, passed as a plain prop for the same reason `childAction` is — a static render can see a prop, never a hook. */
@@ -2204,7 +2222,7 @@ export function ToolCallHeaderRow({
         {block.workflow !== null && !expanded && block.workflow.steps.length > 0 && (
           <WorkflowCollapsedTicks workflow={block.workflow} />
         )}
-        <span className="tool-call-status-badge" title={invalidInputDetail(block) ?? undefined}>{statusLabel(block)}</span>
+        <span className="tool-call-status-badge" title={invalidInputDetail(block) ?? undefined}>{backgroundTask !== undefined && block.status === "success" ? backgroundCardStatus(backgroundTask).label : statusLabel(block)}</span>
         {/* CUT-S2 §2.5 (C3): the session-child badge lives in the
             ALWAYS-visible toggle row, not just the expanded body below — an
             Agent card defaults to COLLAPSED in every status
@@ -2326,6 +2344,9 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
       ? { model: undefined, engine: undefined }
       : { model: inheritedParentModel, engine: liveParentIdentity.engine };
   const previewAction = useArtifactPreviewAction(previewablePathOf(block.toolName, block.input));
+  const linkedTask = useLinkedBackgroundTask(block.toolCallId);
+  const backgroundTask = block.status === "success" ? linkedTask : undefined;
+  const cardTone = backgroundTask !== undefined ? backgroundCardStatus(backgroundTask).tone : statusTone(block);
 
   const isDiffable = block.toolName === "Write" || block.toolName === "Edit";
   const hasSnapshot = block.snapshots.before !== null || block.snapshots.after !== null;
@@ -2345,7 +2366,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
     // state" discipline as MessageList's own `data-tab-id` (automation.ts's
     // `realTranscriptDom`).
     <div
-      className={`tool-call-card tool-call-status-${statusTone(block)}${enter ? " message-enter" : ""}`}
+      className={`tool-call-card tool-call-status-${cardTone}${enter ? " message-enter" : ""}`}
       data-tool-call-id={block.toolCallId}
     >
       {/* the toggle gains a row wrapper because an actionable child
@@ -2361,6 +2382,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
         previewAction={previewAction ?? undefined}
         parentModel={parentIdentity.model}
         parentEngine={parentIdentity.engine}
+        backgroundTask={backgroundTask}
       />
       {backgroundContext !== null && isAgent && block.status === "running" && <BackgroundAgentControls block={block} ctx={backgroundContext} />}
       {expanded && (

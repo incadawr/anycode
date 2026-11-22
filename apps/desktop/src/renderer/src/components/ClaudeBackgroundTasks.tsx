@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import type { WireAgentEvent } from "../../../shared/protocol.js";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Button } from "../ui/index.js";
+import { Button, IconButton, IconDanger, IconSpinner, IconSuccess } from "../ui/index.js";
 import type { TranscriptBlock } from "../store.js";
+import { backgroundCardStatus, backgroundTaskKindLabel, formatTaskElapsed, outputFileFromResult, visibleBackgroundTasks, type ClaudeBackgroundTask } from "../claude-background-tasks.js";
 
-type Task = Extract<WireAgentEvent, { type: "claude_background_task" }>;
+type Task = ClaudeBackgroundTask;
+const POLL_MS = 2000;
+const TAIL_LINES = 200;
 
 export function taskDescription(task: Task, transcript: readonly TranscriptBlock[]): string {
   if (task.description.trim()) return task.description;
@@ -16,53 +18,127 @@ export function taskDescription(task: Task, transcript: readonly TranscriptBlock
   return typeof value === "string" && value.trim() ? value.slice(0, 500) : "Background task";
 }
 
-export function claudeTaskTitle(task: Task, now: number): string {
-  const kind = task.kind === "bash" ? "Background Bash" : "Monitor";
-  const elapsed = Math.max(0, Math.floor((now - task.startedAt) / 1000));
-  return `${kind}: ${task.description || "Background task"}\nStarted ${new Date(task.startedAt).toLocaleTimeString()} · ${task.status}${task.status === "running" ? ` · ${elapsed}s` : ""}${task.summary ? ` — ${task.summary.slice(0, 500)}` : ""}`;
+/** The path the launch result named, else the notification's own `output_file`. Main re-validates either. */
+export function taskOutputHint(task: Task, transcript: readonly TranscriptBlock[]): string | undefined {
+  if (task.outputFile) return task.outputFile;
+  const call = transcript.find(block => block.kind === "tool_call" && block.toolCallId === task.toolCallId);
+  return call?.kind === "tool_call" ? outputFileFromResult(call.modelText) : undefined;
 }
 
-export function ClaudeBackgroundTasks({ tasks, now }: { tasks: Task[]; now: number }) {
+function tail(content: string): string {
+  const lines = content.split("\n");
+  return lines.length > TAIL_LINES ? lines.slice(-TAIL_LINES).join("\n") : content;
+}
+
+function StatusIcon({ status }: { status: Task["status"] }) {
+  if (status === "running") return <IconSpinner size={12} className="icon-spin" />;
+  return status === "completed" ? <IconSuccess size={12} /> : <IconDanger size={12} />;
+}
+
+type Output = { taskId: string; content: string; truncated: boolean } | { taskId: string; content: null };
+
+export function ClaudeBackgroundTasks() {
+  const tasks = useTabStore(state => state.claudeBackgroundTasks);
+  const [now, setNow] = useState(Date.now);
+  const anyRunning = tasks.some(item => item.status === "running" && item.foreground !== true);
+  useEffect(() => {
+    if (!anyRunning) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [anyRunning]);
   const transcript = useTabStore(state => state.transcript);
-  const [selected, setSelected] = useState<string | null>(null);
   const response = useTabStore(state => state.claudeTaskOutput);
-  const [output, setOutput] = useState<{ taskId: string; content: string | null; cancelled?: boolean } | null>(null);
-  const [pending, setPending] = useState<{ taskId: string; requestId: string } | null>(null);
-  const [picking, setPicking] = useState(false);
-  const opened = useRef<string | null>(null);
-  useEffect(() => {
-    if (!pending || !response || response.requestId !== pending.requestId || response.taskId !== pending.taskId || opened.current === pending.requestId) return;
-    opened.current = pending.requestId;
-    setPending(null);
-    if (!response.sessionRef) { setOutput({ taskId: pending.taskId, content: null }); return; }
-    setPicking(true);
-    void window.anycode.claudeTaskOutput.pick(pending.taskId, response.sessionRef).then(result => {
-      if (result.ok) setOutput({ taskId: pending.taskId, content: result.content });
-      else setOutput({ taskId: pending.taskId, content: null, cancelled: result.reason === "cancelled" });
-    }).catch(() => setOutput({ taskId: pending.taskId, content: null })).finally(() => setPicking(false));
-  }, [pending, response]);
   const send = useTabSend();
-  const displayTasks = tasks.map(item => ({ ...item, description: taskDescription(item, transcript) }));
-  const task = displayTasks.find(item => item.taskId === selected);
+  const visible = visibleBackgroundTasks(tasks);
+  const running = visible.filter(task => task.status === "running").length;
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [sessionRef, setSessionRef] = useState<{ taskId: string; ref: string | null } | null>(null);
+  const [output, setOutput] = useState<Output | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const requestId = useRef<string | null>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useOverlayFlag(open);
   useEffect(() => {
-    if (!task) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") { setSelected(null); setPending(null); setOutput(null); } };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [task?.taskId]);
-  useOverlayFlag(!!task);
-  return <div className="claude-tasks">
-    {displayTasks.map(item => <Button key={item.taskId} variant="ghost" size="sm" className={`claude-native-task claude-native-task-${item.status}`} title={claudeTaskTitle(item, now)} aria-label={claudeTaskTitle(item, now)} aria-expanded={selected === item.taskId} onClick={() => { setPending(null); setOutput(null); setSelected(selected === item.taskId ? null : item.taskId); }}>
-      <span aria-hidden="true" className={item.status === "running" ? "claude-native-task-spinner icon-spin" : ""}>{item.status === "running" ? "" : item.status === "completed" ? "✓" : "!"}</span>
-    </Button>)}
-    {task && <div className="claude-task-details" role="region" aria-label="Claude background task">
-      <Button variant="ghost" size="sm" aria-label="Close background task details" onClick={() => { setSelected(null); setPending(null); setOutput(null); }}>×</Button>
-      <strong>{task.kind === "bash" ? "Background Bash" : "Monitor"}</strong>
-      <div className="claude-task-description">{task.description || "Background task"}</div>
-      <div>{task.status} · started {new Date(task.startedAt).toLocaleTimeString()}{task.status === "running" ? ` · ${Math.max(0, Math.floor((now - task.startedAt) / 1000))}s` : ""}</div>
-      {task.summary && <div className="claude-task-summary">{task.summary.length > 500 ? `${task.summary.slice(0, 500)}…` : task.summary}</div>}
-      {task.status !== "running" && <><p>Choose {task.taskId}.output in the session’s tasks folder. On macOS and Linux, the picker opens there when found in Claude’s usual location: /tmp/claude-&lt;user id&gt;/&lt;project&gt;/&lt;session&gt;/tasks.</p><Button size="sm" disabled={!!pending || picking} onClick={() => { const requestId = crypto.randomUUID(); setOutput(null); setPending({ taskId: task.taskId, requestId }); send({ type: "claude_task_output_request", taskId: task.taskId, requestId }); }}>Choose output file…</Button></>}
-      {output?.taskId === task.taskId && (output.content === null ? <p role="status">{output.cancelled ? "File selection cancelled." : "Output unavailable: choose this task’s file from its session, and check that it is accessible."}</p> : output.content === "" ? <p role="status">The output file is empty.</p> : <pre className="claude-task-output">{output.content}</pre>)}
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); close(); triggerRef.current?.focus(); } };
+    const onPointer = (event: MouseEvent) => {
+      const node = event.target as Node;
+      if (!panel.current?.contains(node) && !triggerRef.current?.contains(node)) close();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onPointer);
+    return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onPointer); };
+  }, [open, close]);
+
+  const task = visible.find(item => item.taskId === selected) ?? (visible.length === 1 ? visible[0] : undefined);
+  const taskId = task?.taskId;
+  const status = task?.status;
+  const hint = task ? taskOutputHint(task, transcript) : undefined;
+
+  // Ask the host for the session reference once per selection; the path itself is resolved and validated in main.
+  useEffect(() => {
+    if (!open || !taskId) return;
+    const id = crypto.randomUUID();
+    requestId.current = id;
+    setSessionRef(null);
+    setOutput(null);
+    send({ type: "claude_task_output_request", taskId, requestId: id });
+  }, [open, taskId, send]);
+  useEffect(() => {
+    if (response && taskId && response.requestId === requestId.current && response.taskId === taskId) setSessionRef({ taskId, ref: response.sessionRef ?? null });
+  }, [response, taskId]);
+
+  const ref = sessionRef && sessionRef.taskId === taskId ? sessionRef.ref : undefined;
+  useEffect(() => {
+    if (!open || !taskId) return;
+    if (ref === null) { setOutput({ taskId, content: null }); return; }
+    if (ref === undefined) return;
+    let stale = false;
+    const read = () => void window.anycode.claudeTaskOutput.read({ taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) })
+      .then(result => { if (!stale) setOutput(result.ok ? { taskId, content: result.content, truncated: result.truncated } : { taskId, content: null }); })
+      .catch(() => { if (!stale) setOutput({ taskId, content: null }); });
+    read();
+    const timer = status === "running" ? setInterval(read, POLL_MS) : undefined;
+    return () => { stale = true; if (timer) clearInterval(timer); };
+  }, [open, taskId, ref, status, hint]);
+
+  if (visible.length === 0) return null;
+  const label = running > 0 ? `Background tasks: ${running} running` : `Background tasks: ${visible.length}`;
+  const shown = output?.taskId === taskId ? output : null;
+  return <span className="claude-bg-tasks" ref={node => { triggerRef.current = node?.querySelector("button") ?? null; }}>
+    <IconButton label={label} pressed={open} className={`claude-bg-trigger${running > 0 ? " claude-bg-trigger-running" : ""}`}
+      aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(value => !value)}
+      icon={<>{running > 0 ? <IconSpinner size={14} className="icon-spin" /> : <IconSuccess size={14} />}<span className="claude-bg-count">{running > 0 ? running : visible.length}</span></>} />
+    {open && <div ref={panel} className="claude-bg-popover" role="dialog" aria-label="Background tasks">
+      <div className="claude-bg-head"><span>Background tasks</span><span>{running > 0 ? `${running} running` : "all finished"}</span></div>
+      <div className="claude-bg-body">
+        <ul className="claude-bg-list">
+          {visible.map(item => {
+            const state = backgroundCardStatus(item);
+            return <li key={item.taskId}>
+              <Button variant="ghost" size="sm" className={`claude-bg-row claude-bg-row-${item.status}`} aria-pressed={item.taskId === taskId} onClick={() => setSelected(item.taskId === selected ? null : item.taskId)}>
+                <span className="claude-bg-row-icon"><StatusIcon status={item.status} /></span>
+                <span className="claude-bg-row-main">
+                  <span className="claude-bg-row-title">{backgroundTaskKindLabel(item)}: {taskDescription(item, transcript)}</span>
+                  <span className="claude-bg-row-meta">{state.label}{item.status === "running" ? ` · ${formatTaskElapsed(item.startedAt, now)}` : ""}</span>
+                </span>
+              </Button>
+            </li>;
+          })}
+        </ul>
+        {task?.summary && <div className="claude-bg-summary">{task.summary.length > 500 ? `${task.summary.slice(0, 500)}…` : task.summary}</div>}
+        {task && (shown === null
+          ? <div className="claude-bg-note" role="status">Loading output…</div>
+          : shown.content === null
+            ? <div className="claude-bg-note" role="status">Output is not available yet.</div>
+            : shown.content === ""
+              ? <div className="claude-bg-note" role="status">No output yet.</div>
+              : <pre className="claude-bg-output" tabIndex={0} aria-label="Task output">{`${shown.truncated ? "[earlier output omitted]\n" : ""}${tail(shown.content)}`}</pre>)}
+      </div>
+      {task && ref && <div className="claude-bg-foot"><Button size="sm" variant="secondary" onClick={() => void window.anycode.claudeTaskOutput.open({ taskId: task.taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) })}>Open output file</Button></div>}
     </div>}
-  </div>;
+  </span>;
 }

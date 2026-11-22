@@ -9914,6 +9914,19 @@ it("tracks detached Claude task updates while ignoring unrelated stale turns", (
   expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "task", status: "completed", summary: "done" }]);
 });
 
+it("never lists a foreground-tracked task, and lists it once the CLI moves it to the background", () => {
+  const store = createDesktopStore();
+  const task = { type: "claude_background_task" as const, taskId: "fg", toolCallId: "call", kind: "bash" as const, description: "sleep 6", startedAt: 1, status: "running" as const };
+  const send = (event: object) => store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: event as never });
+  send({ ...task, foreground: true });
+  expect(store.getState().claudeBackgroundTasks).toEqual([]);
+  send({ ...task, status: "completed", foreground: true });
+  expect(store.getState().claudeBackgroundTasks).toEqual([]);
+  send({ ...task, taskId: "moved", foreground: true });
+  send({ ...task, taskId: "moved" });
+  expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "moved", status: "running" }]);
+});
+
 it("keeps provisional Claude content out of the transcript and clears it", () => {
   const store = createDesktopStore();
   store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
