@@ -263,9 +263,17 @@ class FakeTransport implements ClaudeTransport {
  */
 function engineWith(
   transport: ClaudeTransport,
-  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts>; slashPassthrough?: boolean; restricted?: () => boolean } = {},
+  overrides: { model?: string; presetId?: string; catalog?: ClaudeModelCatalog; timeouts?: Partial<ClaudeEngineTimeouts>; slashPassthrough?: boolean; restricted?: () => boolean;
+    /** Transports a resume (transport replacement) hands out, in order. */
+    next?: ClaudeTransport[] } = {},
 ): ClaudeEngine {
   const catalog = overrides.catalog ?? fixtureCatalog();
+  const next = overrides.next;
+  const factory = next === undefined ? undefined : async () => {
+    const client = next.shift();
+    if (!client) throw new Error("no replacement transport left");
+    return { client, approvals: undefined as never, close: () => client.close() };
+  };
   return new ClaudeEngine(transport, "session-ref-1", undefined, {
     catalog,
     model: overrides.model ?? "default",
@@ -273,7 +281,7 @@ function engineWith(
     effortsByModel: new Map(),
     notices: [],
     slashPassthrough: overrides.slashPassthrough ?? true,
-  }, overrides.timeouts, undefined, undefined, false, undefined, undefined, overrides.restricted);
+  }, overrides.timeouts, undefined, undefined, false, factory, undefined, overrides.restricted);
 }
 
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
@@ -672,7 +680,8 @@ describe("Claude autonomous background turn through Session", () => {
   it("does not attribute an ambiguous result to an owner without its replayed input", async () => {
     const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
     const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
-    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 20 } });
+    const after = new FakeTransport({ frames: ownerFrames("after"), contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { next: [after] });
     try {
       await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
       for (const frame of [
@@ -687,8 +696,11 @@ describe("Claude autonomous background turn through Session", () => {
       expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", level: "warning" }));
       expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
       expect(events.some(event => event.type === "error")).toBe(false);
-      for (const frame of ownerFrames("after")) transport.enqueue(frame);
+      // The process that may still answer is retired; the next input goes to a resumed one.
       const next = await collect(engine.runTurn("after", { signal: new AbortController().signal }));
+      expect(transport.closed).toBeGreaterThan(0);
+      expect(transport.sent).toHaveLength(2);
+      expect(after.sent).toEqual(["after"]);
       expect(JSON.stringify(next)).toContain("OWNER OUTPUT after");
       expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
     } finally { await engine.dispose("session-close"); }
@@ -4258,42 +4270,49 @@ describe("Claude notification-driven turns (5370 review follow-ups)", () => {
       expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
     } finally { await engine.dispose("session-close"); }
   }, 20_000);
-it("ends a report folded into an autonomous turn once the CLI goes quiet, without killing the engine", async () => {
+  it.each(["silence", "rate-limit and task-status noise, then silence"])("ends a report folded into an autonomous turn once the CLI goes quiet (%s), without killing the engine", async (scenario) => {
     const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
-    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 50 } }); engine.onNativeTurn = turn => { void collect(turn); };
+    const after = new FakeTransport({ frames: [init, echo("next"), ...ownerFrames("next")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 50 }, next: [after] }); engine.onNativeTurn = turn => { void collect(turn); };
     try {
       await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
-      // The CLI takes the report into the turn it runs for run a: no echo, a tagged result, then nothing more.
-      for (const frame of [notified("a"), init, foreignAssistantFrame("folded", "FOLDED ANSWER"), tagged("folded", "run-a")]) transport.enqueue(frame);
+      // The CLI takes the report into the turn it runs for run a: no echo, a tagged result, then no turn of its own.
+      const noise = scenario === "silence" ? [] : [
+        { type: "rate_limit_event", rate_limit_info: { status: "allowed" } },
+        { type: "system", subtype: "task_progress", task_id: "other", description: "still running" },
+      ];
+      for (const frame of [notified("a"), init, foreignAssistantFrame("folded", "FOLDED ANSWER"), tagged("folded", "run-a"), ...noise]) transport.enqueue(frame as ClaudeStreamMessage);
       const accepted = vi.fn();
       const events = await collectWithin(engine.runTurn(report, { signal: new AbortController().signal, origin: "system", onInputAccepted: accepted }));
       expect(events.some(event => event.type === "error")).toBe(false);
       expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", level: "warning" }));
       expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
       expect(accepted).not.toHaveBeenCalled();
-      for (const frame of [init, echo("next"), ...ownerFrames("next")]) transport.enqueue(frame);
       const next = await collectWithin(engine.runTurn("next", { signal: new AbortController().signal }));
       expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(after.sent).toEqual(["next"]);
     } finally { await engine.dispose("session-close"); }
   });
 
-  it("holds the next send until a late answer to an unconfirmed report has drained", async () => {
+  it("retires the process after an unconfirmed report, so its late answer cannot attach to the next input", async () => {
     const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
-    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 150 } }); engine.onNativeTurn = turn => { void collect(turn); };
+    const after = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 20 }, next: [after] }); engine.onNativeTurn = turn => { void collect(turn); };
     try {
       await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
       for (const frame of [notified("a"), init, foreignAssistantFrame("odd", "ODD OUTPUT"), { ...foreignResultFrame("odd"), origin: { kind: "unknown-producer" } }]) transport.enqueue(frame as ClaudeStreamMessage);
       const first = await collectWithin(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
       expect(first).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
-      const sent = transport.sent.length;
-      const accepted = vi.fn();
-      const run = collectWithin(engine.runTurn("next", { signal: new AbortController().signal, onInputAccepted: accepted }));
-      await new Promise(resolve => setTimeout(resolve, 10));
-      // The report's real answer starts only now.
+      const sentBefore = transport.sent.length;
+      const run = collectWithin(engine.runTurn("next", { signal: new AbortController().signal }));
+      await vi.waitFor(() => expect(after.sent).toEqual(["next"]));
+      // Well past any quiet window, the old process starts the report's real answer.
+      await new Promise(resolve => setTimeout(resolve, 60));
       for (const frame of [init, foreignAssistantFrame("late", "LATE REPORT ANSWER"), foreignResultFrame("late")]) transport.push(frame);
-      await vi.waitFor(() => expect(transport.sent.length).toBe(sent + 1));
-      for (const frame of [init, echo("next"), ...ownerFrames("next")]) transport.push(frame);
+      for (const frame of [init, echo("next"), ...ownerFrames("next")]) after.push(frame);
       const next = await run;
+      expect(transport.closed).toBeGreaterThan(0);
+      expect(transport.sent).toHaveLength(sentBefore);
       expect(JSON.stringify(next)).not.toContain("LATE REPORT ANSWER");
       expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
       expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
