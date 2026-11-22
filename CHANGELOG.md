@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Skill import finds skills installed as symlinks in `~/.claude/skills`, `~/.codex/skills` and `~/.zcode/skills`.
+
 ## [0.0.105] - 2026-11-21
 
 ### Fixed

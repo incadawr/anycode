@@ -6,7 +6,7 @@
  * are proven by REAL execution on node fs.
  */
 
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, stat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -221,16 +221,70 @@ describe("applySkillImport", () => {
   });
 });
 
+describe("symlinked skills in home catalogs", () => {
+  it("lists a symlinked skill dir and applySkillImport copies SKILL.md + support files, skipping nested symlinks", async () => {
+    const home = await tmp("home-");
+    const ws = await tmp("ws-");
+    const real = await tmp("real-");
+    await seed(join(real, "SKILL.md"), "---\nname: linked-skill\ndescription: via symlink\n---\nbody\n");
+    await seed(join(real, "agents/helper.md"), "helper\n");
+    const secret = join(real, "..", "secret-outside.txt");
+    await writeFile(secret, "SECRET\n", "utf-8");
+    await symlink(secret, join(real, "leak.txt"));
+    await mkdir(join(home, ".claude/skills"), { recursive: true });
+    await symlink(real, join(home, ".claude/skills/linked-skill"));
+
+    const candidates = await scanHarnessSkills(fs, home, ws);
+    expect(candidates.map((c) => c.name)).toEqual(["linked-skill"]);
+    expect(candidates[0]!.harness).toBe("claude");
+    expect(candidates[0]!.sourceDir).toBe(await realpath(real));
+
+    const target = join(ws, ".anycode/skills");
+    const results = await applySkillImport(fs, target, candidates);
+    expect(results[0]!.applied).toBe(true);
+    expect(await readFile(join(target, "linked-skill/SKILL.md"), "utf-8")).toContain("via symlink");
+    expect(await readFile(join(target, "linked-skill/agents/helper.md"), "utf-8")).toBe("helper\n");
+    expect(await exists(join(target, "linked-skill/leak.txt"))).toBe(false);
+    expect(results[0]!.notes.some((n) => n.includes("symlink"))).toBe(true);
+  });
+
+  it("skips a broken symlink, a symlink to a file and a symlink to a dir without SKILL.md without throwing", async () => {
+    const home = await tmp("home-");
+    const ws = await tmp("ws-");
+    const real = await tmp("real-");
+    await mkdir(join(home, ".codex/skills"), { recursive: true });
+    await symlink(join(real, "missing"), join(home, ".codex/skills/broken"));
+    await writeFile(join(real, "file.txt"), "x", "utf-8");
+    await symlink(join(real, "file.txt"), join(home, ".codex/skills/tofile"));
+    await mkdir(join(real, "empty"));
+    await symlink(join(real, "empty"), join(home, ".codex/skills/noskill"));
+
+    expect(await scanHarnessSkills(fs, home, ws)).toEqual([]);
+  });
+
+  it("still skips a symlinked skill dir in the workspace .claude/skills", async () => {
+    const home = await tmp("home-");
+    const ws = await tmp("ws-");
+    const real = await tmp("real-");
+    await seed(join(real, "SKILL.md"), "---\nname: wslinked\ndescription: d\n---\nbody\n");
+    await mkdir(join(ws, ".claude/skills"), { recursive: true });
+    await symlink(real, join(ws, ".claude/skills/wslinked"));
+
+    expect(await scanHarnessSkills(fs, home, ws)).toEqual([]);
+  });
+});
+
 describe("harness-skill-import security hardening (P7.20 W5-FIX)", () => {
-  it("P1-a: scan skips a symlinked skill dir and a symlinked SKILL.md (fail-closed)", async () => {
+  it("P1-a: scan skips a symlinked skill dir in the workspace catalog and a symlinked SKILL.md (fail-closed)", async () => {
     const home = await tmp("home-");
     const ws = await tmp("ws-");
     const outside = await tmp("outside-");
     // A real, valid skill — must be found.
     await seed(join(home, ".claude/skills/good/SKILL.md"), "---\nname: good\ndescription: real\n---\nbody\n");
-    // An outside skill dir exposed via a symlinked catalog entry — must NOT be followed.
+    // An outside skill dir exposed via a symlinked WORKSPACE catalog entry (untrusted) — must NOT be followed.
     await seed(join(outside, "evilskill/SKILL.md"), "---\nname: evil\ndescription: exfil\n---\nbody\n");
-    await symlink(join(outside, "evilskill"), join(home, ".claude/skills/evil"));
+    await mkdir(join(ws, ".claude/skills"), { recursive: true });
+    await symlink(join(outside, "evilskill"), join(ws, ".claude/skills/evil"));
     // A skill dir whose SKILL.md is itself a symlink to an outside file — must NOT be read.
     await mkdir(join(home, ".claude/skills/linked"), { recursive: true });
     await writeFile(join(outside, "target.md"), "---\nname: linked\ndescription: x\n---\nbody\n", "utf-8");
