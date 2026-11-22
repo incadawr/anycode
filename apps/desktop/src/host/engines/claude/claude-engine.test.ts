@@ -39,7 +39,7 @@ import {
 import { ClaudeModelCatalog } from "./models.js";
 import { findClaudePreset } from "./presets.js";
 import { ClaudeClientError } from "./claude-client.js";
-import { CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS } from "../../../shared/claude-timeouts.js";
+import { CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS, CLAUDE_TEARDOWN_TOTAL_BUDGET_MS } from "../../../shared/claude-timeouts.js";
 import type { ClaudeStreamMessage } from "./protocol.js";
 
 const FIXTURES_DIR = fileURLToPath(new URL("./contract/fixtures/", import.meta.url));
@@ -4367,6 +4367,20 @@ describe("Claude notification-driven turns (5370 review follow-ups)", () => {
       expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
     } finally { await engine.dispose("session-close"); }
   }, 15_000);
+
+  it("fails the swap without spawning when the old process never finishes its teardown", async () => {
+    const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const next = [new FakeTransport()];
+    const engine = engineWith(transport, { next });
+    transport.close = () => new Promise<void>(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const swap = engine.replaceTransport({ sessionId: engine.sessionRef }).then(() => null, (error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(CLAUDE_TEARDOWN_TOTAL_BUDGET_MS + 2_000);
+      expect(await swap).toBeInstanceOf(Error);
+      expect(next).toHaveLength(1);
+    } finally { vi.useRealTimers(); void engine.dispose("session-close"); }
+  });
 
   it("does not drop a pending notification when absorbing an unattributable turn", async () => {
     const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });

@@ -1406,7 +1406,10 @@ export class ClaudeEngine implements SessionEngine {
     const replacing = (async () => {
       try {
         let teardownTimer: ReturnType<typeof setTimeout> | undefined;
-        const teardownBound = new Promise<void>(resolve => { teardownTimer = setTimeout(resolve, CLAUDE_TEARDOWN_TOTAL_BUDGET_MS + CLAUDE_TEARDOWN_SLACK_MS); });
+        // Only a completed close permits spawning: a process that outlives its
+        // teardown budget would otherwise share the native session with the
+        // replacement. Timing out fails the swap like a throwing close.
+        const teardownBound = new Promise<never>((_, reject) => { teardownTimer = setTimeout(() => reject(new ClaudeTransportAbortError("claude_transport_timeout")), CLAUDE_TEARDOWN_TOTAL_BUDGET_MS + CLAUDE_TEARDOWN_SLACK_MS); });
         try { await Promise.race([previousClose(), teardownBound]); }
         finally { clearTimeout(teardownTimer); }
         if (!current()) throw transportAbortError(abort.signal);
