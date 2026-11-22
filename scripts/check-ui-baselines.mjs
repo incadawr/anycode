@@ -36,19 +36,30 @@ export function multisetExcess(head, base) {
   return excess;
 }
 
+const git = (root, args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+/** File text at `rev`, or undefined when the file is genuinely absent there. Any git failure throws. */
 function show(root, rev, file) {
-  try {
-    return execFileSync("git", ["show", `${rev}:${file}`], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-  } catch {
-    return undefined;
-  }
+  if (git(root, ["ls-tree", "--name-only", rev, "--", file]).trim() === "") return undefined;
+  return git(root, ["show", `${rev}:${file}`]);
 }
 
 export function check(root, base) {
   const problems = [];
   const notes = [];
+  try {
+    git(root, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]);
+  } catch {
+    return { problems: [`base revision "${base}" is not an existing commit; cannot compare baselines`], notes };
+  }
   for (const { file, list } of BASELINES) {
-    const baseText = show(root, base, file);
+    let baseText;
+    try {
+      baseText = show(root, base, file);
+    } catch (error) {
+      problems.push(`${file}: cannot read at ${base}: ${error instanceof Error ? error.message : error}`);
+      continue;
+    }
     if (baseText === undefined) { notes.push(`${file}: not present at ${base}; skipped (guard being introduced)`); continue; }
     const head = list(JSON.parse(readFileSync(root + "/" + file, "utf8")));
     const excess = multisetExcess(head, list(JSON.parse(baseText)));

@@ -134,6 +134,12 @@ export function codeEntries(path: string, source: string): string[] {
         if (ts.isJsxAttribute(attr)) {
           const name = ts.isIdentifier(attr.name) ? attr.name.text : attr.name.getText(file);
           const init = attr.initializer;
+          if (name === "style" && init && ts.isJsxExpression(init) && init.expression && ts.isIdentifier(unwrap(init.expression))) {
+            // A style object held in a const: the definition reports fixed/absolute; the use reports a dynamic position.
+            const held = resolver.object(init.expression);
+            const position = held && flattenObject(held, resolver).get("position");
+            if (position && possibleValues(position, resolver).includes(DYNAMIC)) add(attr, "inline position: dynamic", node);
+          }
           if (!init) checkAttribute(name, name === "role" ? [] : "present", attr, node);
           else if (ts.isStringLiteralLike(init)) checkAttribute(name, [init.text], attr, node);
           else if (ts.isJsxExpression(init) && init.expression) checkAttribute(name, name === "role" ? possibleValues(init.expression, resolver) : "present", attr, node);
@@ -262,6 +268,28 @@ it("keys JSX entries by the element's static class and id, not just the componen
   expect(a).toEqual(["x.tsx | C | <div.old-menu> | role=menu"]);
   expect(b).toEqual(["x.tsx | C | <div.new-menu#n> | role=menu"]);
   expect(baselineDiff(b, a).added).toEqual(b);
+});
+
+it("does not resolve names declared more than once in a file (review bypass: shadowed const)", () => {
+  const source = [
+    'const role = "button";',
+    'function C() { const role = "dialog"; return <div role={role} />; }',
+  ].join("\n");
+  expect(codeEntries("x.tsx", source)).toEqual(["x.tsx | C | <div> | role=<dynamic>"]);
+  expect(codeEntries("x.tsx", 'const a = "fixed"; const D = (a: string) => <i style={{ position: a }} />;')).toEqual(["x.tsx | D | <i> | inline position: dynamic"]);
+});
+
+it("resolves static interpolations in CSS templates and marks unknown ones dynamic (review bypass)", () => {
+  expect(codeEntries("x.ts", 'const css = `.a{position:${"fixed"}}`;')).toEqual(["x.ts | css-string in css :: .a | position: fixed"]);
+  expect(codeEntries("x.ts", 'const P = "fixed"; const css = `.a{position:${P}}`;')).toEqual(["x.ts | css-string in css :: .a | position: fixed"]);
+  expect(codeEntries("x.ts", "const css = (p: string) => `.a{position:${p}}`;")).toEqual(["x.ts | css-string in css :: .a | position: dynamic"]);
+  expect(codeEntries("x.ts", 'const css = ".a{position:" + "fixed" + "}";')).toEqual(["x.ts | css-string in css :: .a | position: fixed"]);
+});
+
+it("handles static computed keys and style objects held in consts (review bypasses)", () => {
+  expect(codeEntries("x.tsx", 'const A = () => <i style={{ ["position"]: "fixed" }} />;')).toEqual(["x.tsx | A | <i> | inline position: fixed"]);
+  expect(codeEntries("x.tsx", 'const K = "position"; const B = () => <i style={{ [K]: "absolute", ["zIndex"]: 2 }} />;')).toEqual(["x.tsx | B | <i> | inline position: absolute + z-index"]);
+  expect(codeEntries("x.tsx", "const style = { position: getPosition() }; const C = () => <div style={style} />;")).toEqual(["x.tsx | C | <div> | inline position: dynamic"]);
 });
 
 it("checks CSS embedded in strings and <style> text", () => {

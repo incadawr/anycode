@@ -24,6 +24,32 @@ in the same change. Never increase the baseline to admit new UI literals.
 `tokens-defined.test.ts` checks that referenced custom properties are defined.
 `typography-tokens.test.ts` and `overlay-boundary.test.ts` are described below.
 
+Run the guards from the repository root:
+
+```sh
+pnpm --filter @anycode/desktop exec vitest run src/renderer/src/color-literals.test.ts src/renderer/src/tokens-defined.test.ts src/renderer/src/raw-controls.test.ts src/renderer/src/ui-boundary.test.ts src/renderer/src/typography-tokens.test.ts src/renderer/src/overlay-boundary.test.ts
+node scripts/check-ui-baselines.mjs --base origin/next
+```
+
+## Overlays, menus and toasts
+
+- `Modal` uses a native `<dialog>` in the top layer. Its slots are `headerExtra`,
+  `children` (scrollable body), and `footer`; sizes are `sm`, `md`, and `lg`
+  (`wide` aliases `lg`). The title and subtitle supply `aria-labelledby` and
+  `aria-describedby`. Focus stays inside, Escape closes it, and focus returns
+  to the trigger when it closes.
+- `Drawer` is a side panel with a sticky header and footer, a scrollable body,
+  and `md` and `lg` sizes.
+- Overlay backdrops use `--bg-scrim`; do not add color literals to the kit.
+- `Menu` provides a trigger and a `role="menu"` menu with `MenuItem` and
+  `MenuSeparator`. Arrow keys and Home/End navigate; Escape returns focus.
+- `AnchoredPanel` is a non-modal `role="dialog"` detail window anchored to a trigger (`anchorRef`, `side`, `align`, `headerActions`); it flips above/below, clamps to the viewport, and closes on Escape, outside click or the close button.
+- `Popover` is a manually positioned, viewport-constrained **menu**: it hard-codes `role="menu"` and menu keyboard navigation. Do not use it for informational content; use `AnchoredPanel` for informational panels.
+- `Toast` supports `info`, `ok`, `success`, `run`, `warn`, `warning`, `bad`,
+  `error`, and `neutral` tones. It uses polite status announcements, except
+  errors use assertive alerts. `duration` enables auto-dismissal and the timer
+  is cleared on unmount. `ToastStack` optionally labels its region.
+
 ## Typography and overlay guards
 
 Both guards keep a named legacy baseline in a JSON file next to the test
@@ -49,7 +75,7 @@ fallback is not a token), and the keywords `inherit`, `initial`, `unset`,
 `revert`, `normal`. The shorthand is parsed into parts (weight/style, an `--fs-*`
 size, an optional `--lh-*` or `normal` height, a family). Declaring `--fs-*` or
 `--lh-*` anywhere except `tokens.css` is a violation, because it would change what
-a token means. A same-file `const` that resolves to an allowed token string passes;
+a token means. A same-file `const` that resolves to an allowed token string passes (a name declared more than once in the file, in any scope, is treated as unresolved);
 any other non-literal value is a violation. The guard cannot detect a missing
 `font-size` or a wrong choice of token: give primitives typographic defaults and
 check the result in the browser.

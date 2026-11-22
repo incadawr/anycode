@@ -29,6 +29,13 @@ it("fails when the head baseline gains an entry and ignores layout exceptions", 
   run("commit", "-q", "-m", "base");
   const base = run("rev-parse", "HEAD");
 
+  // A missing or unusable base must fail, not skip.
+  expect(check(dir, "does-not-exist").problems).toEqual([expect.stringContaining("not an existing commit")]);
+  expect(check(dir, "does-not-exist").notes).toEqual([]);
+  // Only a genuinely absent file at an existing base is skipped.
+  const empty = run("commit-tree", run("hash-object", "-t", "tree", "/dev/null"), "-m", "empty");
+  expect(check(dir, empty)).toEqual({ problems: [], notes: [expect.stringContaining("skipped"), expect.stringContaining("skipped")] });
+
   put(["t1"], ["o1"], { "new layout": "documented layout reason" });
   expect(check(dir, base).problems).toEqual([]);
 

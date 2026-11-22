@@ -99,7 +99,7 @@ export function scriptEntries(path: string, source: string): string[] {
   const out: string[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) {
-      const key = propertyKey(node);
+      const key = propertyKey(node, resolver);
       const init = ts.isPropertyAssignment(node) ? node.initializer : node.name;
       const css = key === "fontSize" ? "font-size" : key === "lineHeight" ? "line-height" : key === "font" ? "font" : undefined;
       if (key !== undefined && (css || isTypographyVariable(key))) {
@@ -193,6 +193,22 @@ it("resolves same-file constants and still rejects dynamic values", () => {
     "x.tsx | C | fontSize | p.s",
     "x.tsx | C | lineHeight | var(--fs-sm)",
   ]);
+});
+
+it("does not resolve names declared more than once in a file (review bypass: shadowed const)", () => {
+  const source = 'const size = "var(--fs-sm)"; function C() { const size = "90px"; return <div style={{ fontSize: size }} />; }';
+  expect(scriptEntries("x.tsx", source)).toEqual(["x.tsx | C | fontSize | size"]);
+});
+
+it("handles static computed keys (review bypass)", () => {
+  expect(scriptEntries("x.tsx", 'const C = () => <i style={{ ["fontSize"]: 90, ["lineHeight"]: "var(--lh-body)" }} />;')).toEqual(["x.tsx | C | fontSize | 90"]);
+  expect(scriptEntries("x.tsx", 'const K = "font"; const C = () => <i style={{ [K]: "9px serif" }} />;')).toEqual(["x.tsx | C | font | 9px serif"]);
+});
+
+it("resolves static interpolations in CSS templates and flags unknown ones (review bypass)", () => {
+  expect(scriptEntries("x.ts", 'const css = `.a{font-size:${"90px"}}`;')).toEqual(["x.ts | css-string in css :: .a | font-size | 90px"]);
+  expect(scriptEntries("x.ts", 'const css = `.a{font-size:${"var(--fs-sm)"}}`;')).toEqual([]);
+  expect(scriptEntries("x.ts", "const css = (n: number) => `.a{font-size:${n}px}`;")).toEqual(["x.ts | css-string in css :: .a | font-size | var(--dynamic-interpolation)px"]);
 });
 
 it("checks CSS embedded in strings and <style> text", () => {

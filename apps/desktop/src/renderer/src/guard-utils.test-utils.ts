@@ -146,39 +146,73 @@ export interface Resolver {
 }
 
 export function createResolver(file: ts.SourceFile): Resolver {
+  // Scope-conservative: a name resolves only if the whole file declares it exactly
+  // once (any binding kind, any scope) and that declaration is a const with an
+  // initializer. Names declared more than once are treated as unresolved.
+  const declared = new Map<string, number>();
   const consts = new Map<string, ts.Expression>();
+  const declare = (name: ts.Node | undefined): void => {
+    if (!name) return;
+    if (ts.isIdentifier(name)) declared.set(name.text, (declared.get(name.text) ?? 0) + 1);
+    else if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
+      for (const element of name.elements) if (ts.isBindingElement(element)) declare(element.name);
+    }
+  };
   const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
-      && node.parent && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)) {
-      // The first declaration wins; shadowing in other scopes is a known boundary.
-      if (!consts.has(node.name.text)) consts.set(node.name.text, node.initializer);
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node)) {
+      if (!ts.isBindingElement(node)) declare(node.name); // binding elements are declared through their pattern
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+        && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)) consts.set(node.name.text, node.initializer);
+    } else if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isEnumDeclaration(node)) {
+      declare(node.name);
+    } else if (ts.isImportClause(node) || ts.isNamespaceImport(node) || ts.isImportSpecifier(node) || ts.isImportEqualsDeclaration(node)) {
+      declare(node.name);
     }
     ts.forEachChild(node, visit);
   };
   visit(file);
+  const unique = (name: string): ts.Expression | undefined => (declared.get(name) === 1 ? consts.get(name) : undefined);
   const str = (expr: ts.Expression, seen: Set<string>): string | undefined => {
     const e = unwrap(expr);
     if (ts.isStringLiteralLike(e)) return e.text;
+    if (ts.isTemplateExpression(e)) {
+      let text = e.head.text;
+      for (const span of e.templateSpans) {
+        const inner = str(span.expression, seen);
+        if (inner === undefined) return undefined;
+        text += inner + span.literal.text;
+      }
+      return text;
+    }
     if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = str(e.left, seen), right = str(e.right, seen);
       return left !== undefined && right !== undefined ? left + right : undefined;
     }
-    if (ts.isIdentifier(e) && consts.has(e.text) && !seen.has(e.text)) return str(consts.get(e.text)!, new Set([...seen, e.text]));
+    if (ts.isIdentifier(e) && !seen.has(e.text)) {
+      const init = unique(e.text);
+      return init ? str(init, new Set([...seen, e.text])) : undefined;
+    }
     return undefined;
   };
   const obj = (expr: ts.Expression, seen: Set<string>): ts.ObjectLiteralExpression | undefined => {
     const e = unwrap(expr);
     if (ts.isObjectLiteralExpression(e)) return e;
-    if (ts.isIdentifier(e) && consts.has(e.text) && !seen.has(e.text)) return obj(consts.get(e.text)!, new Set([...seen, e.text]));
+    if (ts.isIdentifier(e) && !seen.has(e.text)) {
+      const init = unique(e.text);
+      return init ? obj(init, new Set([...seen, e.text])) : undefined;
+    }
     return undefined;
   };
   return { string: expr => str(expr, new Set()), object: expr => obj(expr, new Set()) };
 }
 
-export function propertyKey(prop: ts.ObjectLiteralElementLike): string | undefined {
+export function propertyKey(prop: ts.ObjectLiteralElementLike, resolver?: Resolver): string | undefined {
   if (!ts.isPropertyAssignment(prop) && !ts.isShorthandPropertyAssignment(prop)) return undefined;
   const name = prop.name;
-  return ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) return name.text;
+  // Static computed keys ({ ["fontSize"]: 1 }, { [KEY]: 1 } with a unique const) are ordinary properties.
+  if (ts.isComputedPropertyName(name) && resolver) return resolver.string(name.expression);
+  return undefined;
 }
 
 /** Properties of an object literal with literal spreads (inline or same-file const) flattened. */
@@ -189,7 +223,7 @@ export function flattenObject(obj: ts.ObjectLiteralExpression, resolver: Resolve
       const inner = resolver.object(prop.expression);
       if (inner) for (const [k, v] of flattenObject(inner, resolver, depth + 1)) out.set(k, v);
     } else if (ts.isPropertyAssignment(prop)) {
-      const key = propertyKey(prop);
+      const key = propertyKey(prop, resolver);
       if (key !== undefined) out.set(key, prop.initializer);
     } else if (ts.isShorthandPropertyAssignment(prop)) {
       out.set(prop.name.text, prop.name);
@@ -198,14 +232,21 @@ export function flattenObject(obj: ts.ObjectLiteralExpression, resolver: Resolve
   return out;
 }
 
-/** String-like snippets of a file that look like embedded CSS (css strings, templates, <style> text). */
+/** Stands in for an interpolation that is not a compile-time string: counts as dynamic for position and as a non-token for typography. */
+// Split so tokens-defined.test.ts does not read the marker as a real custom property.
+export const DYNAMIC_CSS = "var(" + "--dynamic-interpolation)";
+
+/** String-like snippets of a file that look like embedded CSS (css strings, templates, concatenations, <style> text). */
 export function embeddedCss(file: ts.SourceFile): { css: string; context: string }[] {
+  const resolver = createResolver(file);
   const out: { css: string; context: string }[] = [];
   const looksLikeCss = (text: string): boolean => /\{[^{}]*[\w-]+\s*:[^{}]*\}/.test(text);
+  const isPlus = (n: ts.Node): boolean => ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken;
   const visit = (node: ts.Node): void => {
     let text: string | undefined;
     if (ts.isStringLiteralLike(node)) text = node.text;
-    else if (ts.isTemplateExpression(node)) text = node.head.text + node.templateSpans.map(span => "0" + span.literal.text).join("");
+    else if (ts.isTemplateExpression(node)) text = node.head.text + node.templateSpans.map(span => (resolver.string(span.expression) ?? DYNAMIC_CSS) + span.literal.text).join("");
+    else if (isPlus(node) && !isPlus(node.parent)) text = resolver.string(node as ts.Expression);
     else if (ts.isJsxText(node) && node.parent && ts.isJsxElement(node.parent) && ts.isIdentifier(node.parent.openingElement.tagName) && node.parent.openingElement.tagName.text === "style") text = node.text;
     if (text !== undefined && looksLikeCss(text)) out.push({ css: text, context: contextName(node) });
     ts.forEachChild(node, visit);
