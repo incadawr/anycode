@@ -64,6 +64,9 @@ export type { ContextRingProps } from "./components/ContextRing.js";
 export { Popover, MenuItem, MenuSeparator } from "./components/Popover.js";
 export type { PopoverProps, PopoverPosition, MenuItemProps } from "./components/Popover.js";
 
+export { AnchoredPanel } from "./components/AnchoredPanel.js";
+export type { AnchoredPanelProps, AnchoredPanelSide, AnchoredPanelAlign } from "./components/AnchoredPanel.js";
+
 export { Menu } from "./components/Menu.js";
 export type { MenuProps } from "./components/Menu.js";
 

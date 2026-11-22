@@ -41,6 +41,7 @@ pnpm --filter @anycode/desktop exec vitest run src/renderer/src/color-literals.t
 - Overlay backdrops use `--bg-scrim`; do not add color literals to the kit.
 - `Menu` provides a trigger and a `role="menu"` menu with `MenuItem` and
   `MenuSeparator`. Arrow keys and Home/End navigate; Escape returns focus.
+- `AnchoredPanel` is a non-modal `role="dialog"` detail window anchored to a trigger (`anchorRef`, `side`, `align`, `headerActions`); it flips above/below, clamps to the viewport, and closes on Escape, outside click or the close button.
 - `Popover` is manually positioned and constrained to the viewport.
 - `Toast` supports `info`, `ok`, `success`, `run`, `warn`, `warning`, `bad`,
   `error`, and `neutral` tones. It uses polite status announcements, except
