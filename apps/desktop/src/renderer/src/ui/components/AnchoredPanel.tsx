@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useCallback, useId, useLayoutEffect, useEffect, useRef } from "react";
 import type { ReactNode, RefObject } from "react";
 import { IconButton } from "./IconButton.js";
@@ -79,7 +80,9 @@ export function AnchoredPanel({
   }, [open, onClose, anchorRef]);
 
   if (!open) return null;
-  return (
+  // Portaled to <body>: an ancestor with containment (container-type, transform, filter) would otherwise
+  // become the containing block of this fixed element and offset the viewport coordinates computed in place().
+  return createPortal(
     <div
       ref={ref}
       className={["ak-anchored", className].filter(Boolean).join(" ")}
@@ -94,6 +97,7 @@ export function AnchoredPanel({
         <IconButton label="Close" icon={<IconClose size={14} />} onClick={onClose} />
       </div>
       <div className="ak-anchored__body">{children}</div>
-    </div>
+    </div>,
+    document.body,
   );
 }

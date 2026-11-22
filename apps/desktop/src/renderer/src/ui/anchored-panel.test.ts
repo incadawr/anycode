@@ -10,7 +10,8 @@ function setup(props: Record<string, unknown> = {}) {
   const anchorRef = { current: button };
   const onClose = vi.fn();
   const view = mount(h(AnchoredPanel, { open: true, onClose, anchorRef, title: "Details", children: h("p", null, "Body"), ...props }));
-  return { button, onClose, anchorRef, ...view };
+  // The panel is portaled to <body>, so lookups go through the document.
+  return { ...view, container: document.body, button, onClose, anchorRef };
 }
 
 it("AnchoredPanel: dialog named by its title, not modal, not a menu", () => {
@@ -66,11 +67,20 @@ it("AnchoredPanel: placement flips above and clamps to the viewport", () => {
   Object.defineProperty(window, "innerHeight", { value: 768, configurable: true });
   try {
     const anchorRef = createRef<HTMLElement>() as { current: HTMLElement | null }; anchorRef.current = button;
-    const { container } = mount(h(AnchoredPanel, { open: true, onClose: noop, anchorRef, title: "T", align: "start" }));
+    mount(h(AnchoredPanel, { open: true, onClose: noop, anchorRef, title: "T", align: "start" }));
+    const container = document.body;
     const el = container.querySelector<HTMLElement>(".ak-anchored")!;
     expect(el.dataset.side).toBe("top");
     expect(parseFloat(el.style.left)).toBe(1024 - 300 - 8);
     expect(parseFloat(el.style.top)).toBe(700 - 6 - 200);
     act(() => { /* flush */ });
   } finally { HTMLElement.prototype.getBoundingClientRect = proto; button.remove(); }
+});
+it("AnchoredPanel: portaled to body so a containing-block ancestor cannot offset it", () => {
+  const button = document.createElement("button"); document.body.append(button);
+  const view = mount(h("div", { style: { containerType: "inline-size" } }, h(AnchoredPanel, { open: true, onClose: noop, anchorRef: { current: button }, title: "T" })));
+  const panel = document.body.querySelector(".ak-anchored")!;
+  expect(panel.parentElement).toBe(document.body);
+  expect(view.container.contains(panel)).toBe(false);
+  button.remove();
 });

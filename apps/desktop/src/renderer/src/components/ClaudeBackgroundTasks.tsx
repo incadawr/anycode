@@ -60,6 +60,8 @@ export function ClaudeBackgroundTasks() {
   const [openFailed, setOpenFailed] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
   const requestId = useRef<string | null>(null);
+  // Stable callback ref: an inline one is detached and re-attached on every render, after the panel placed itself.
+  const setTrigger = useCallback((node: HTMLElement | null) => { triggerRef.current = node?.querySelector("button") ?? null; }, []);
   const close = useCallback(() => setOpen(false), []);
   useOverlayFlag(open);
   // Until one is picked, show the first running task (else the latest one), so the output is visible on open.
@@ -103,7 +105,7 @@ export function ClaudeBackgroundTasks() {
   if (visible.length === 0) return null;
   const label = running > 0 ? `Background tasks: ${running} running` : `Background tasks: ${visible.length}`;
   const shown = output?.taskId === taskId ? output : null;
-  return <span className="claude-bg-tasks" ref={node => { triggerRef.current = node?.querySelector("button") ?? null; }}>
+  return <span className="claude-bg-tasks" ref={setTrigger}>
     <IconButton label={label} pressed={open} className={`claude-bg-trigger${running > 0 ? " claude-bg-trigger-running" : ""}`}
       aria-expanded={open} aria-haspopup="dialog" onClick={() => { if (!open) setSelected(task?.taskId ?? null); setOpen(value => !value); setOpenFailed(false); }}
       icon={<>{running > 0 ? <IconSpinner size={14} className="icon-spin" /> : <IconSuccess size={14} />}<span className="claude-bg-count">{running > 0 ? running : visible.length}</span></>} />

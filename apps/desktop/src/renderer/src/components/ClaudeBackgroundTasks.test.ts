@@ -27,11 +27,11 @@ describe("Claude background tasks indicator", () => {
   it("shows the running count, lists the task and requests output by task id only", () => {
     setup([base, { ...base, taskId: "b", toolCallId: "other", kind: "monitor", description: "watch", status: "completed" }]);
     const view = mount(h(ClaudeBackgroundTasks));
-    const trigger = byRole(view.container, "button", "Background tasks: 1 running");
+    const trigger = byRole(document.body, "button", "Background tasks: 1 running");
     expect(trigger.textContent).toBe("1");
-    expect(view.container.querySelector(".ak-anchored")).toBeNull();
+    expect(document.body.querySelector(".ak-anchored")).toBeNull();
     click(trigger);
-    const panel = byRole(view.container, "dialog", "Background tasks");
+    const panel = byRole(document.body, "dialog", "Background tasks");
     expect(panel.classList.contains("ak-anchored")).toBe(true);
     expect(panel.getAttribute("aria-labelledby")).toBeTruthy();
     expect(panel.textContent).toContain("Bash: sleep 5");
@@ -45,14 +45,14 @@ describe("Claude background tasks indicator", () => {
     open.mockResolvedValue({ ok: true });
     setup([base]);
     const view = mount(h(ClaudeBackgroundTasks));
-    click(byRole(view.container, "button", /Background tasks/));
+    click(byRole(document.body, "button", /Background tasks/));
     const request = send.mock.lastCall![0];
     expect(request).toEqual({ type: "claude_task_output_request", taskId: "task-a", requestId: expect.any(String) });
     setup([base], { taskId: "task-a", requestId: request.requestId, sessionRef: "sess" });
     await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
     expect(read).toHaveBeenCalledWith({ taskId: "task-a", sessionRef: "sess", outputFile: "/tmp/claude-1/p/sess/tasks/task-a.output" });
-    expect(view.container.querySelector(".claude-bg-output")?.textContent).toBe("line 1\nline 2");
-    click(byRole(view.container, "button", "Open output file"));
+    expect(document.body.querySelector(".claude-bg-output")?.textContent).toBe("line 1\nline 2");
+    click(byRole(document.body, "button", "Open output file"));
     expect(open).toHaveBeenCalledWith({ taskId: "task-a", sessionRef: "sess", outputFile: "/tmp/claude-1/p/sess/tasks/task-a.output" });
   });
 
@@ -60,14 +60,14 @@ describe("Claude background tasks indicator", () => {
     read.mockResolvedValue({ ok: false, reason: "unavailable" });
     setup([{ ...base, status: "completed" }]);
     const view = mount(h(ClaudeBackgroundTasks));
-    const trigger = byRole(view.container, "button", "Background tasks: 1");
+    const trigger = byRole(document.body, "button", "Background tasks: 1");
     trigger.focus();
     click(trigger);
     setup([{ ...base, status: "completed" }], { taskId: "task-a", requestId: send.mock.lastCall![0].requestId });
     await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
-    expect(view.container.textContent).toContain("Output is not available yet.");
-    act(() => { byRole(view.container, "dialog", "Background tasks").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-    expect(view.container.querySelector(".ak-anchored")).toBeNull();
+    expect(document.body.textContent).toContain("Output is not available yet.");
+    act(() => { byRole(document.body, "dialog", "Background tasks").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(document.body.querySelector(".ak-anchored")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
@@ -75,7 +75,7 @@ describe("Claude background tasks indicator", () => {
     const openWithRef = async (tasks: unknown[]) => {
       setup(tasks);
       const view = mount(h(ClaudeBackgroundTasks));
-      click(byRole(view.container, "button", /Background tasks/));
+      click(byRole(document.body, "button", /Background tasks/));
       setup(tasks, { taskId: "task-a", requestId: send.mock.lastCall![0].requestId, sessionRef: "sess" });
       await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
       return view;
@@ -88,7 +88,7 @@ describe("Claude background tasks indicator", () => {
       expect(read).toHaveBeenCalledTimes(1);
       await advance(2100);
       expect(read).toHaveBeenCalledTimes(2);
-      click(byRole(view.container, "button", /Background tasks/));
+      click(byRole(document.body, "button", /Background tasks/));
       await advance(10000);
       expect(read).toHaveBeenCalledTimes(2);
     });
@@ -117,12 +117,12 @@ describe("Claude background tasks indicator", () => {
       const view = await openWithRef([done]);
       setup([done, { ...base, taskId: "task-b", toolCallId: "c2", description: "later" }], state.claudeTaskOutput);
       await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
-      expect(view.container.querySelector(".claude-bg-row[aria-pressed=true]")?.textContent).toContain("sleep 5");
-      click(byRole(view.container, "button", "Open output file"));
+      expect(document.body.querySelector(".claude-bg-row[aria-pressed=true]")?.textContent).toContain("sleep 5");
+      click(byRole(document.body, "button", "Open output file"));
       await act(async () => { await Promise.resolve(); });
-      expect(view.container.textContent).toContain("Could not open the file.");
-      click(byRole(view.container, "button", /later/));
-      expect(view.container.textContent).not.toContain("Could not open the file.");
+      expect(document.body.textContent).toContain("Could not open the file.");
+      click(byRole(document.body, "button", /later/));
+      expect(document.body.textContent).not.toContain("Could not open the file.");
     });
   });
 
