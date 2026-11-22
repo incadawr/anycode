@@ -248,6 +248,22 @@ describe("symlinked skills in home catalogs", () => {
     expect(results[0]!.notes.some((n) => n.includes("symlink"))).toBe(true);
   });
 
+  it("lists one skill dir reachable from several home catalogs only once, from the first catalog", async () => {
+    const home = await tmp("home-");
+    const ws = await tmp("ws-");
+    const real = await tmp("real-");
+    await seed(join(real, "SKILL.md"), "---\nname: shared\ndescription: linked twice\n---\nbody\n");
+    await seed(join(home, ".claude/skills/plain/SKILL.md"), "---\nname: plain\ndescription: real dir\n---\nbody\n");
+    await mkdir(join(home, ".codex/skills"), { recursive: true });
+    await mkdir(join(home, ".zcode/skills"), { recursive: true });
+    await symlink(real, join(home, ".claude/skills/shared"));
+    await symlink(real, join(home, ".codex/skills/shared"));
+    await symlink(join(home, ".claude/skills/plain"), join(home, ".zcode/skills/plain"));
+
+    const candidates = await scanHarnessSkills(fs, home, ws);
+    expect(candidates.map((c) => `${c.harness}:${c.name}`).sort()).toEqual(["claude:plain", "claude:shared"]);
+  });
+
   it("skips a broken symlink, a symlink to a file and a symlink to a dir without SKILL.md without throwing", async () => {
     const home = await tmp("home-");
     const ws = await tmp("ws-");

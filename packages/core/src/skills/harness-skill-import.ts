@@ -443,6 +443,8 @@ interface ScanContext {
   fs: FileSystemPort;
   ourNames: Set<string>;
   out: HarnessSkillCandidate[];
+  /** Real paths already offered: one skill dir reachable from several catalogs (e.g. a ~/.zcode/skills link to ~/.claude/skills) is listed once, from the first catalog scanned. */
+  seenDirs: Set<string>;
 }
 
 /** Reads + classifies one skill directory (a dir containing SKILL.md) into a candidate. */
@@ -503,6 +505,13 @@ async function readSkillDir(
 }
 
 /** Scans a `<catalog>/<name>/SKILL.md` catalog directory fail-soft. */
+/** Records a skill dir's real path; false when an earlier catalog already offered it. */
+function markSeen(ctx: ScanContext, realDir: string): boolean {
+  if (ctx.seenDirs.has(realDir)) return false;
+  ctx.seenDirs.add(realDir);
+  return true;
+}
+
 async function scanCatalog(
   ctx: ScanContext,
   harness: SkillHarnessKind,
@@ -545,13 +554,22 @@ async function scanCatalog(
         if (realSt.isSymbolicLink || !realSt.isDirectory) {
           continue;
         }
-        await readSkillDir(ctx, harness, real, name);
+        if (markSeen(ctx, real)) await readSkillDir(ctx, harness, real, name);
       } catch {
         // fail-soft
       }
       continue;
     }
     if (st.isSymbolicLink || !st.isDirectory) {
+      continue;
+    }
+    let key = skillDir;
+    try {
+      if (typeof ctx.fs.realpath === "function") key = await ctx.fs.realpath(skillDir);
+    } catch {
+      // keep the literal path as the key
+    }
+    if (!markSeen(ctx, key)) {
       continue;
     }
     await readSkillDir(ctx, harness, skillDir, name);
@@ -658,7 +676,7 @@ export async function scanHarnessSkills(
     // fail-soft: alreadyPresent falls back to false; apply-time re-checks anyway.
   }
 
-  const ctx: ScanContext = { fs, ourNames, out: [] };
+  const ctx: ScanContext = { fs, ourNames, out: [], seenDirs: new Set() };
 
   // Home-anchored catalogs — the user's own; a symlinked top-level skill dir is
   // followed (resolved via realpath).
