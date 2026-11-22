@@ -657,12 +657,14 @@ describe("Claude autonomous background turn through Session", () => {
     } finally { await h.session.shutdown(); h.close(); }
   }, 10_000);
 
-  it("fails an owner turn safely on a result with an unsolicited origin", async () => {
+  it("ends an owner turn safely on a result with an unsolicited origin", async () => {
     const transport = new FakeTransport({ frames: [{ ...foreignResultFrame("foreign"), origin: { kind: "task-notification", producer: "session-task", runId: "foreign" } } as ClaudeStreamMessage], contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const engine = engineWith(transport);
     try {
       const events = await collect(engine.runTurn("owner", { signal: new AbortController().signal }));
-      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "error" }));
+      // Not an engine failure: the turn ends unconfirmed with a warning.
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
       expect(events).not.toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
       expect(JSON.stringify(events)).not.toContain("foreign");
     } finally { await engine.dispose("session-close"); }
@@ -670,7 +672,7 @@ describe("Claude autonomous background turn through Session", () => {
   it("does not attribute an ambiguous result to an owner without its replayed input", async () => {
     const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash" } as unknown as ClaudeStreamMessage;
     const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
-    const engine = engineWith(transport);
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 20 } });
     try {
       await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
       for (const frame of [
@@ -681,7 +683,14 @@ describe("Claude autonomous background turn through Session", () => {
       const events = await collect(engine.runTurn("owner", { signal: new AbortController().signal }));
       expect(JSON.stringify(events.filter(event => event.type !== "claude_turn_preview"))).not.toContain("FOREIGN OUTPUT");
       expect(events).toContainEqual({ type: "claude_turn_preview", preview: null });
-      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "error" }));
+      // Unattributable, but not an engine failure: the output stays out and the engine lives on.
+      expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", level: "warning" }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
+      expect(events.some(event => event.type === "error")).toBe(false);
+      for (const frame of ownerFrames("after")) transport.enqueue(frame);
+      const next = await collect(engine.runTurn("after", { signal: new AbortController().signal }));
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT after");
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
     } finally { await engine.dispose("session-close"); }
   });
   it.each(["idle", "owner turn"])("keeps the next owner turn when a %s notification starts no native turn", async (when) => {
@@ -3965,4 +3974,355 @@ it("coalesces overlapping quota pulls and preserves the last successful snapshot
   await vi.waitFor(() => expect(calls).toBe(2));
   expect(engine.quotaSnapshot()?.limits[0]?.percent).toBe(25);
   expect(detached.filter(event => event.type === "engine_quota")).toHaveLength(1);
+});
+
+describe("Claude notification-driven turns (5370)", () => {
+  const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;
+  const report = "[SYSTEM NOTIFICATION - NOT USER INPUT]\n\n<task-notification>\n  <task-id>toolu_child</task-id>\n  <task-type>subagent_child</task-type>\n  <status>completed</status>\n  <summary>Mockup written.</summary>\n</task-notification>";
+  // CLI 2.1.330: a foreground Bash running past a few seconds is tracked as a
+  // task whose notification lands BEFORE the tool's own result.
+  const foregroundBash = (id: string): ClaudeStreamMessage[] => [
+    { type: "assistant", message: { id: `m-${id}`, model: "model-x", content: [{ type: "tool_use", id: `toolu_${id}`, name: "Bash", input: { command: "sleep 6" } }] } },
+    { type: "system", subtype: "task_started", task_id: id, run_id: `run-${id}`, tool_use_id: `toolu_${id}`, task_type: "local_bash", is_backgrounded: false, description: "sleep" },
+    { type: "system", subtype: "task_notification", task_id: id, run_id: `run-${id}`, tool_use_id: `toolu_${id}`, status: "completed", output_file: "", summary: "sleep" },
+    { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${id}`, content: "ok" }] } },
+  ] as unknown as ClaudeStreamMessage[];
+
+  it("answers a child report normally after a foreground command was tracked as a task", async () => {
+    const transport = new FakeTransport({ frames: [init, ...foregroundBash("fg"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      // The CLI does not replay a <task-notification> input and tags no origin on its result.
+      for (const frame of [init, foreignAssistantFrame("report", "MOCKUP READY"), foreignResultFrame("report")]) transport.enqueue(frame);
+      const accepted = vi.fn();
+      const events = await collect(engine.runTurn(report, { signal: new AbortController().signal, origin: "system", onInputAccepted: accepted }));
+      expect(events.filter(event => event.type === "error")).toEqual([]);
+      expect(JSON.stringify(events)).toContain("MOCKUP READY");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(events.filter(event => event.type === "claude_turn_preview")).toEqual([]);
+      expect(accepted).toHaveBeenCalled();
+      expect(adopted).not.toHaveBeenCalled();
+      // The engine stays alive for the next owner message.
+      for (const frame of [init, { type: "user", isReplay: true, message: { role: "user", content: "next" } }, ...ownerFrames("next")]) transport.enqueue(frame as ClaudeStreamMessage);
+      const next = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
+      expect(next.filter(event => event.type === "claude_turn_preview")).toEqual([]);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("answers an unreplayed child report while a background notification is still pending", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash", is_backgrounded: true } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [{ type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" }, init, foreignAssistantFrame("report", "MOCKUP READY"), foreignResultFrame("report")]) transport.enqueue(frame as ClaudeStreamMessage);
+      const events = await collect(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
+      expect(events.filter(event => event.type === "error")).toEqual([]);
+      expect(JSON.stringify(events.filter(event => event.type !== "claude_turn_preview"))).toContain("MOCKUP READY");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("streams a queued owner message as soon as its echo identifies the turn", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash", is_backgrounded: true } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const raw = engineWith(transport);
+    const rows: Parameters<ConstructorParameters<typeof ClaudeShadowTranscriptEngine>[1]["record"]>[1][number][] = [];
+    const shadow = new ClaudeShadowTranscriptEngine(raw, { record: (_ref, items) => { rows.push(...items); }, list: async () => rows }, "session-ref-1", []);
+    const h = createHarness({ steps: [], engine: shadow });
+    raw.onNativeTurn = turn => h.session.acceptClaudeNativeTurn(shadow, turn);
+    raw.onDetachedEvent = event => h.session.emitDetachedSubagentEvent(event);
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "initial", text: "launch" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      // The notification arrives inside the owner's next turn, so no autonomous turn ever consumes it.
+      h.send({ type: "user_message", requestId: "queued", text: "show me" });
+      await h.waitUntil(() => transport.sent.length === 2);
+      for (const frame of [
+        { type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" }, init,
+        { type: "user", isReplay: true, message: { role: "user", content: "show me" } },
+        foreignAssistantFrame("m-live", "LIVE OWNER OUTPUT"),
+      ]) transport.push(frame as ClaudeStreamMessage);
+      await h.waitUntil(() => h.received.some(m => m.type === "user_message_accepted" && m.requestId === "queued"));
+      await h.waitUntil(() => JSON.stringify(h.received.filter(m => m.type === "agent_event" && m.event.type !== "claude_turn_preview")).includes("LIVE OWNER OUTPUT"));
+      transport.push(foreignResultFrame("live"));
+      await h.waitUntil(() => h.received.filter(m => m.type === "agent_event" && m.event.type === "loop_end").length === 2);
+      expect(h.received.some(m => m.type === "agent_event" && m.event.type === "claude_turn_preview" && m.event.preview !== null)).toBe(false);
+      expect(h.received.some(m => m.type === "agent_event" && m.event.type === "error")).toBe(false);
+    } finally { await h.session.shutdown(); h.close(); }
+  }, 10_000);
+});
+
+describe("Claude notification-driven turns (5370 review follow-ups)", () => {
+  const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;
+  const report = "[SYSTEM NOTIFICATION - NOT USER INPUT]\n\n<task-notification>\n  <task-id>toolu_child</task-id>\n  <status>completed</status>\n  <summary>Mockup written.</summary>\n</task-notification>";
+  const echo = (text: string, extra: Record<string, unknown> = {}) => ({ type: "user", isReplay: true, message: { role: "user", content: text }, ...extra }) as unknown as ClaudeStreamMessage;
+  const backgroundBash = (id: string) => ({ type: "system", subtype: "task_started", task_id: id, run_id: `run-${id}`, tool_use_id: `toolu_${id}`, task_type: "local_bash", is_backgrounded: true }) as unknown as ClaudeStreamMessage;
+  const notified = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, run_id: `run-${id}`, tool_use_id: `toolu_${id}`, status: "completed" }) as unknown as ClaudeStreamMessage;
+  const tagged = (label: string, runId: string) => ({ ...foreignResultFrame(label), origin: { kind: "task-notification", producer: "session-task", runId } }) as unknown as ClaudeStreamMessage;
+  const pending = (engine: ClaudeEngine) => (engine as unknown as { pendingNotifications: unknown[] }).pendingNotifications;
+  /** Fails a turn that waits forever instead of hanging the suite. */
+  const collectWithin = async (stream: AsyncIterable<AgentEvent>, ms = 2_000): Promise<AgentEvent[]> => {
+    const events: AgentEvent[] = [];
+    const done = (async () => { for await (const event of stream) events.push(event); })();
+    await Promise.race([done, new Promise((_, reject) => setTimeout(() => reject(new Error(`turn did not settle: ${JSON.stringify(events.map(event => event.type))}`)), ms))]);
+    return events;
+  };
+
+  it("answers a system report while a native agent's notification is still unrecognised (untagged is never autonomous)", async () => {
+    const transport = new FakeTransport({ frames: ownerFrames("initial"), contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [
+        { type: "system", subtype: "task_notification", task_id: "agent", tool_use_id: "other", status: "completed" },
+        init, foreignAssistantFrame("report", "REPORT ANSWER"), foreignResultFrame("report"),
+      ]) transport.enqueue(frame as ClaudeStreamMessage);
+      const accepted = vi.fn();
+      const events = await collect(engine.runTurn(report, { signal: new AbortController().signal, origin: "system", onInputAccepted: accepted }));
+      expect(JSON.stringify(events.filter(event => event.type !== "claude_turn_preview"))).toContain("REPORT ANSWER");
+      expect(accepted).toHaveBeenCalled();
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      for (const frame of [init, echo("next"), ...ownerFrames("next")]) transport.enqueue(frame);
+      const next = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it.each(["after", "before"])("streams the owner turn that follows a foreground agent (w0-20), echo %s init", async (where) => {
+    const foregroundAgent = readFileSync(join(FIXTURES_DIR, "w0-20-foreground-agent.jsonl"), "utf8")
+      .split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line) as ClaudeStreamMessage);
+    const transport = new FakeTransport({ frames: foregroundAgent, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("run the agent", { signal: new AbortController().signal }));
+      for (const frame of where === "after" ? [init, echo("next"), ...ownerFrames("next")] : [echo("next"), init, ...ownerFrames("next")]) transport.enqueue(frame);
+      const accepted = vi.fn();
+      const next = await collect(engine.runTurn("next", { signal: new AbortController().signal, onInputAccepted: accepted }));
+      expect(next.filter(event => event.type === "claude_turn_preview")).toEqual([]);
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(accepted).toHaveBeenCalled();
+      // A child report after it is answered like any turn.
+      for (const frame of [init, foreignAssistantFrame("report", "MOCKUP READY"), foreignResultFrame("report")]) transport.enqueue(frame);
+      const answered = await collect(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
+      expect(answered.filter(event => event.type === "claude_turn_preview")).toEqual([]);
+      expect(answered).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(adopted).not.toHaveBeenCalled();
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("keeps run A pending when the CLI runs run B's turn first, and adopts A's own turn later", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), backgroundBash("b"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const native: Promise<AgentEvent[]>[] = []; engine.onNativeTurn = turn => native.push(collect(turn));
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notified("a"), notified("b"), init, foreignAssistantFrame("native-b", "NATIVE B"), tagged("native-b", "run-b")]) transport.push(frame);
+      await vi.waitFor(() => expect(native).toHaveLength(1));
+      expect(JSON.stringify(await native[0]!)).toContain("NATIVE B");
+      expect(pending(engine)).toEqual([expect.objectContaining({ taskId: "a", runId: "run-a" })]);
+      for (const frame of [init, foreignAssistantFrame("native-a", "NATIVE A"), tagged("native-a", "run-a")]) transport.push(frame);
+      await vi.waitFor(() => expect(native).toHaveLength(2));
+      expect(JSON.stringify(await native[1]!)).toContain("NATIVE A");
+      expect(pending(engine)).toEqual([]);
+      for (const frame of [init, ...ownerFrames("next")]) transport.enqueue(frame);
+      const next = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(next.some(event => event.type === "error")).toBe(false);
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("consumes a notification the CLI replays into an owner turn", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [init, echo("go"), assistantFrame("work"), notified("a"), echo("<task-notification>done</task-notification>", { origin: { kind: "task-notification", runId: "run-a" } }), ...ownerFrames("go")]) transport.enqueue(frame);
+      const events = await collect(engine.runTurn("go", { signal: new AbortController().signal }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(pending(engine)).toEqual([]);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("forgets pending notifications when the transport ends while idle", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      transport.push(notified("a"));
+      await vi.waitFor(() => expect(pending(engine)).toHaveLength(1));
+      await transport.close();
+      await vi.waitFor(() => expect(pending(engine)).toEqual([]));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("answers an owner input the CLI folds into a turn it started for a notification (init, background frames, echo, tagged result)", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notified("a"), init, foreignAssistantFrame("bg", "BACKGROUND PART"), echo("ping"), foreignAssistantFrame("owner", "PONG"), tagged("folded", "run-a")]) transport.enqueue(frame);
+      const accepted = vi.fn();
+      const events = await collectWithin(engine.runTurn("ping", { signal: new AbortController().signal, onInputAccepted: accepted }));
+      expect(JSON.stringify(events)).toContain("PONG");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(accepted).toHaveBeenCalled();
+      expect(adopted).not.toHaveBeenCalled();
+      expect(pending(engine)).toEqual([]);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("answers an owner input folded into an autonomous turn whose init arrived before the send (live CLI 2.1.330 order)", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      transport.push(notified("a")); transport.push(init);
+      await vi.waitFor(() => expect(pending(engine)).toEqual([]));
+      for (const frame of [foreignAssistantFrame("bg", "BACKGROUND PART"), userToolResultFrame("sleep"), echo("ping"), foreignAssistantFrame("owner", "PONG"), tagged("folded", "run-a")]) transport.enqueue(frame);
+      const events = await collectWithin(engine.runTurn("ping", { signal: new AbortController().signal }));
+      expect(JSON.stringify(events)).toContain("PONG");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(adopted).not.toHaveBeenCalled();
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("does not read a turn origin off the owner's echo", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notified("a"), init, echo("hi", { origin: { kind: "human" } }), ...ownerFrames("hi")]) transport.enqueue(frame);
+      const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(JSON.stringify(events)).toContain("OWNER OUTPUT hi");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("relies on autonomous results being tagged with their notification run (w0-19 evidence)", () => {
+    const frames = readFileSync(join(FIXTURES_DIR, "w0-19-background-agent.jsonl"), "utf8")
+      .split("\n").filter((line) => line.trim() !== "").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const results = frames.filter(frame => frame.type === "result");
+    const notification = frames.find(frame => frame.subtype === "task_notification")!;
+    // The owner turn's result is untagged; the autonomous turn's names the notification run.
+    expect(results[0]!.origin).toBeUndefined();
+    expect(results[1]!.origin).toEqual({ kind: "task-notification", producer: "session-task", runId: notification.run_id });
+  });
+
+  it.each(["moved by task_updated", "still foreground when its tool_result came first"])("classifies a foreground command %s", async (scenario) => {
+    const moved = scenario.startsWith("moved");
+    const frames = [
+      { type: "assistant", message: { id: "m-fg", model: "model-x", content: [{ type: "tool_use", id: "toolu_fg", name: "Bash", input: { command: "sleep 6" } }] } },
+      { type: "system", subtype: "task_started", task_id: "fg", run_id: "run-fg", tool_use_id: "toolu_fg", task_type: "local_bash", is_backgrounded: false },
+      ...(moved ? [{ type: "system", subtype: "task_updated", task_id: "fg", patch: { is_backgrounded: true } }] : []),
+      { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_fg", content: "ok" }] } },
+      ...(moved ? [] : [{ type: "system", subtype: "task_notification", task_id: "fg", run_id: "run-fg", tool_use_id: "toolu_fg", status: "completed" }]),
+      ...ownerFrames("initial"),
+    ] as unknown as ClaudeStreamMessage[];
+    const transport = new FakeTransport({ frames, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const native: Promise<AgentEvent[]>[] = []; engine.onNativeTurn = turn => native.push(collect(turn));
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      if (moved) {
+        for (const frame of [{ type: "system", subtype: "task_notification", task_id: "fg", run_id: "run-fg", tool_use_id: "toolu_fg", status: "completed" }, init, foreignAssistantFrame("native", "NATIVE FG"), tagged("native", "run-fg")]) transport.push(frame as ClaudeStreamMessage);
+        await vi.waitFor(() => expect(native).toHaveLength(1));
+        expect(JSON.stringify(await native[0]!)).toContain("NATIVE FG");
+      } else {
+        expect(pending(engine)).toEqual([]);
+      }
+      for (const frame of [init, ...ownerFrames("next")]) transport.enqueue(frame);
+      const next = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(next.some(event => event.type === "error")).toBe(false);
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("hands an oversized candidate to the idle classifier instead of failing the engine", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      const flood = Array.from({ length: 20_001 }, () => ({ type: "rate_limit_event" }) as unknown as ClaudeStreamMessage);
+      for (const frame of [notified("a"), init, ...flood, foreignAssistantFrame("native", "NATIVE"), tagged("native", "run-a"), init, ...ownerFrames("after")]) transport.enqueue(frame);
+      const events = await collectWithin(engine.runTurn("after", { signal: new AbortController().signal }), 10_000);
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(JSON.stringify(events)).toContain("OWNER OUTPUT after");
+      expect(JSON.stringify(events)).not.toContain("NATIVE");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  }, 20_000);
+it("ends a report folded into an autonomous turn once the CLI goes quiet, without killing the engine", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 50 } }); engine.onNativeTurn = turn => { void collect(turn); };
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      // The CLI takes the report into the turn it runs for run a: no echo, a tagged result, then nothing more.
+      for (const frame of [notified("a"), init, foreignAssistantFrame("folded", "FOLDED ANSWER"), tagged("folded", "run-a")]) transport.enqueue(frame);
+      const accepted = vi.fn();
+      const events = await collectWithin(engine.runTurn(report, { signal: new AbortController().signal, origin: "system", onInputAccepted: accepted }));
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(events).toContainEqual(expect.objectContaining({ type: "engine_notice", level: "warning" }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
+      expect(accepted).not.toHaveBeenCalled();
+      for (const frame of [init, echo("next"), ...ownerFrames("next")]) transport.enqueue(frame);
+      const next = await collectWithin(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("holds the next send until a late answer to an unconfirmed report has drained", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 150 } }); engine.onNativeTurn = turn => { void collect(turn); };
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notified("a"), init, foreignAssistantFrame("odd", "ODD OUTPUT"), { ...foreignResultFrame("odd"), origin: { kind: "unknown-producer" } }]) transport.enqueue(frame as ClaudeStreamMessage);
+      const first = await collectWithin(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
+      expect(first).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
+      const sent = transport.sent.length;
+      const accepted = vi.fn();
+      const run = collectWithin(engine.runTurn("next", { signal: new AbortController().signal, onInputAccepted: accepted }));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      // The report's real answer starts only now.
+      for (const frame of [init, foreignAssistantFrame("late", "LATE REPORT ANSWER"), foreignResultFrame("late")]) transport.push(frame);
+      await vi.waitFor(() => expect(transport.sent.length).toBe(sent + 1));
+      for (const frame of [init, echo("next"), ...ownerFrames("next")]) transport.push(frame);
+      const next = await run;
+      expect(JSON.stringify(next)).not.toContain("LATE REPORT ANSWER");
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("does not drop a pending notification when absorbing an unattributable turn", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 20 } });
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notified("a"), init, foreignAssistantFrame("odd", "ODD"), { ...foreignResultFrame("odd"), origin: { kind: "unknown-producer" } }]) transport.enqueue(frame as ClaudeStreamMessage);
+      await collectWithin(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
+      expect(pending(engine)).toEqual([expect.objectContaining({ taskId: "a", runId: "run-a" })]);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("counts a notification replay inside a candidate once", async () => {
+    const plain = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, tool_use_id: `toolu_${id}`, status: "completed" }) as unknown as ClaudeStreamMessage;
+    const bashNoRun = (id: string) => ({ type: "system", subtype: "task_started", task_id: id, tool_use_id: `toolu_${id}`, task_type: "local_bash", is_backgrounded: true }) as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [bashNoRun("a"), backgroundBash("b"), backgroundBash("c"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); engine.onNativeTurn = turn => { void collect(turn); };
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [plain("a"), notified("b"), notified("c")]) transport.push(frame);
+      await vi.waitFor(() => expect(pending(engine)).toHaveLength(3));
+      for (const frame of [init, echo("<task-notification>a</task-notification>", { origin: { kind: "task-notification" } }), foreignAssistantFrame("native-c", "NATIVE C"), tagged("native-c", "run-c"), init, echo("go"), ...ownerFrames("go")]) transport.enqueue(frame);
+      await collectWithin(engine.runTurn("go", { signal: new AbortController().signal }));
+      expect(pending(engine)).toEqual([expect.objectContaining({ taskId: "b", runId: "run-b" })]);
+    } finally { await engine.dispose("session-close"); }
+  });
 });
