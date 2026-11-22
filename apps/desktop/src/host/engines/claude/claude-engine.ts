@@ -38,7 +38,9 @@ import type { RuntimeNativeBase } from "@anycode/core";
 
 import { randomUUID } from "node:crypto";
 import type { AgentEvent, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort, ToolResultPresentation } from "@anycode/core";
-import { CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS, CLAUDE_POST_INTERRUPT_SETTLE_MS } from "../../../shared/claude-timeouts.js";
+import { CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS, CLAUDE_POST_INTERRUPT_SETTLE_MS, CLAUDE_TEARDOWN_TOTAL_BUDGET_MS } from "../../../shared/claude-timeouts.js";
+/** Past the client's own teardown budget (it has SIGKILLed and swept by then). */
+const CLAUDE_TEARDOWN_SLACK_MS = 1_000;
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
@@ -1396,11 +1398,19 @@ export class ClaudeEngine implements SessionEngine {
     const abort = this.replacementAbort = new AbortController();
     const current = () => !this.disposed && !abort.signal.aborted && generation === this.transportGeneration;
     const previousClose = this.closeTransport;
-    const timeout = setTimeout(() => abort.abort(new ClaudeTransportAbortError("claude_transport_timeout")), CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS);
+    // Two budgets: the old process gets the client's own escalating teardown
+    // (EOF, SIGTERM, SIGKILL, group sweep) plus slack; only then does the
+    // handshake clock start for the new one. A busy process that is slow to
+    // exit must not eat the new process's handshake time.
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const replacing = (async () => {
       try {
-        await previousClose();
+        let teardownTimer: ReturnType<typeof setTimeout> | undefined;
+        const teardownBound = new Promise<void>(resolve => { teardownTimer = setTimeout(resolve, CLAUDE_TEARDOWN_TOTAL_BUDGET_MS + CLAUDE_TEARDOWN_SLACK_MS); });
+        try { await Promise.race([previousClose(), teardownBound]); }
+        finally { clearTimeout(teardownTimer); }
         if (!current()) throw transportAbortError(abort.signal);
+        timeout = setTimeout(() => abort.abort(new ClaudeTransportAbortError("claude_transport_timeout")), CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS);
         const next = await factory(spawn, current, abort.signal);
         if (!current()) { await next.close(); throw transportAbortError(abort.signal); }
         this.idleFailure = null;
@@ -1418,7 +1428,7 @@ export class ClaudeEngine implements SessionEngine {
     catch (error) { this.terminalError = error instanceof Error ? error : new Error(String(error)); throw error; }
     finally {
       aborted.dispose();
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
       this.replacement = null;
       this.replacementAbort = null;
       if (current() && !this.terminalError) this.runIdleReader();
