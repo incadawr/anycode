@@ -5925,6 +5925,46 @@ button.environment-menu-row:hover,
   font-size: var(--fs-2xs);
 }
 
+/* Delivery status chips: wrap badges/actions inside the card instead of overflowing it. */
+.prompt-queue-item-delivery {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.prompt-queue-item-delivery .prompt-queue-text {
+  flex: 1 1 12em;
+}
+
+.prompt-queue-item-delivery .prompt-queue-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.prompt-queue-delivery-action {
+  flex: 0 1 auto;
+  max-width: 100%;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.prompt-queue-delivery-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.prompt-queue-delivery-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* System report chips: badges wrap to a second line and shrink instead of squeezing the message text out. */
 .prompt-queue-item-system {
   flex-wrap: wrap;

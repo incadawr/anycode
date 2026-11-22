@@ -5,6 +5,7 @@
  * is exercised only by the (owner) live-Electron smoke — this file covers the
  * pure functions the component's JSX calls into.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { deliveryChipTitle, queueImageBadge, shouldShowPromptQueue, systemReportBadge } from "./PromptQueue.js";
 
@@ -56,5 +57,23 @@ describe("deliveryChipTitle", () => {
   it("carries the full message text and the full badge text", () => {
     const title = deliveryChipTitle("Background subagent X finished", "Waiting for host response", systemReportBadge("pending"), null);
     expect(title).toBe("Background subagent X finished\nWaiting for host response\nSystem report · delivered after this turn");
+  });
+});
+
+describe("delivery status layout", () => {
+  const tsx = readFileSync(new URL("./PromptQueue.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+
+  it("gives every delivery action the shared styled class and wraps status text as a badge", () => {
+    for (const name of ["system-delivery-retry", "orchestration-delivery-restore", "orchestration-delivery-dismiss", "orchestration-delivery-reviewed"]) {
+      expect(tsx).toContain(`className="prompt-queue-delivery-action ${name}"`);
+    }
+    expect(tsx).toContain('<span className="prompt-queue-badge">Reviewed; delivery remains unconfirmed.</span>');
+  });
+
+  it("lets delivery rows wrap and shrink badges instead of overflowing the card", () => {
+    expect(css).toMatch(/\.prompt-queue-item-delivery\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.prompt-queue-item-delivery \.prompt-queue-badge\s*\{[^}]*overflow-wrap:\s*anywhere/);
+    expect(css).toMatch(/\.prompt-queue-delivery-action\s*\{[^}]*border-radius:\s*var\(--r-full\)/);
   });
 });
