@@ -102,6 +102,11 @@ export class ClaudeSubagentTasks {
    */
   constructor(private readonly detach: (event: AgentEvent) => void = () => {}) {}
 
+  /** Check before translating: translation consumes a terminal task. */
+  knowsNotification(frame: ClaudeStreamMessage): boolean {
+    return frame.type === "system" && frame.subtype === "task_notification" && this.taskFor(frame as Record<string, unknown>) !== undefined;
+  }
+
   /**
    * Feeds one frame; returns the subagent_* events it implies for the current
    * owner turn (usually none). Events of a detached task go to the detach sink

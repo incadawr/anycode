@@ -383,6 +383,50 @@ function ownerFrames(label: string, usage?: Record<string, unknown>): ClaudeStre
 }
 
 describe("Claude autonomous background turn through Session", () => {
+  it.each(["local_bash", "local_agent"])("consumes a %s notification replayed inside the autonomous turn", async (kind) => {
+    // Reconstructed from the incident's queue/attachment transcript and CLI
+    // 2.1.330 queued_command stream serializer (not a raw stream capture).
+    const frames = streamFrames("reconstructed-notification-inside-turn.jsonl");
+    const b = "a7c4d233f683b0b6a";
+    if (kind === "local_bash") (frames[1] as Record<string, unknown>).task_type = kind;
+    const transport = new FakeTransport({ frames: [frames[0]!, frames[1]!, ...ownerFrames("initial")] });
+    const engine = engineWith(transport); const native: Promise<AgentEvent[]>[] = []; const detached: AgentEvent[] = [];
+    engine.onNativeTurn = turn => native.push(collect(turn));
+    engine.onDetachedEvent = event => detached.push(event);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of frames.slice(2)) transport.push(frame);
+      await vi.waitFor(() => expect(native).toHaveLength(1));
+      const events = await native[0]!;
+      expect(JSON.stringify(events)).toContain("FINAL ANSWER");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      if (kind === "local_agent") expect(detached.filter(event => event.type === "subagent_end" && event.toolCallId === `tool-${b}`)).toHaveLength(1);
+      else expect(detached.filter(event => event.type === "claude_background_task" && event.taskId === b && event.status === "completed")).toHaveLength(1);
+      expect((engine as unknown as { pendingNotifications: unknown[] }).pendingNotifications).toEqual([]);
+      for (const frame of [frames[3]!, foreignAssistantFrame("foreign", "UNRELATED"), foreignResultFrame("foreign")]) transport.push(frame);
+      await vi.waitFor(() => expect((engine as unknown as { foreignTurn: unknown }).foreignTurn).toBeNull());
+      expect(native).toHaveLength(1);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("retains a notification after final text for its own autonomous turn", async () => {
+    const start = (id: string) => ({ type: "system", subtype: "task_started", task_id: id, run_id: `run-${id}`, tool_use_id: `tool-${id}`, task_type: "local_bash" }) as unknown as ClaudeStreamMessage;
+    const notify = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, run_id: `run-${id}`, tool_use_id: `tool-${id}`, status: "completed" }) as unknown as ClaudeStreamMessage;
+    const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;
+    const tagged = (id: string) => ({ ...foreignResultFrame(id), origin: { kind: "task-notification", producer: "session-task", runId: `run-${id}` } }) as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start("a"), start("b"), ...ownerFrames("initial")] });
+    const engine = engineWith(transport); const native: Promise<AgentEvent[]>[] = [];
+    engine.onNativeTurn = turn => native.push(collect(turn));
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notify("a"), init, foreignAssistantFrame("a", "ANSWER A"), notify("b"), tagged("a"), init, foreignAssistantFrame("b", "ANSWER B"), tagged("b")]) transport.push(frame);
+      await vi.waitFor(() => expect(native).toHaveLength(2));
+      expect(JSON.stringify(await native[0]!)).toContain("ANSWER A");
+      expect(JSON.stringify(await native[1]!)).toContain("ANSWER B");
+      expect((engine as unknown as { pendingNotifications: unknown[] }).pendingNotifications).toEqual([]);
+    } finally { await engine.dispose("session-close"); }
+  });
+
   it("preserves a second notification encountered while releasing buffered owner frames", async () => {
     const task = (id: string) => ({ type: "system", subtype: "task_started", task_id: id, tool_use_id: `tool-${id}`, task_type: "local_bash" }) as unknown as ClaudeStreamMessage;
     const notify = (id: string) => ({ type: "system", subtype: "task_notification", task_id: id, tool_use_id: `tool-${id}`, status: "completed" }) as unknown as ClaudeStreamMessage;

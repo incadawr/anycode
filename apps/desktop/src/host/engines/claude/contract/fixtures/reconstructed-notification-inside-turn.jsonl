@@ -1,0 +1,10 @@
+{"dir":"out","raw":{"type":"system","subtype":"task_started","task_id":"bbwcz41u1","run_id":"0mws8pcvw-4441bdf0","tool_use_id":"tool-bbwcz41u1","task_type":"local_bash","is_backgrounded":true}}
+{"dir":"out","raw":{"type":"system","subtype":"task_started","task_id":"a7c4d233f683b0b6a","run_id":"0mws8o3cl-21e7ec55","tool_use_id":"tool-a7c4d233f683b0b6a","task_type":"local_agent","is_backgrounded":true}}
+{"dir":"out","raw":{"type":"system","subtype":"task_notification","task_id":"bbwcz41u1","run_id":"0mws8pcvw-4441bdf0","tool_use_id":"tool-bbwcz41u1","status":"completed","summary":"report bbwcz41u1"}}
+{"dir":"out","raw":{"type":"system","subtype":"init","model":"default","permissionMode":"default","cwd":"/work","tools":[],"mcp_servers":[],"slash_commands":[],"skills":[],"capabilities":[]}}
+{"dir":"out","raw":{"type":"assistant","message":{"id":"work","model":"foreign-model","content":[{"type":"tool_use","id":"toolu_work","name":"Bash","input":{}}]}}}
+{"dir":"out","raw":{"type":"system","subtype":"task_notification","task_id":"a7c4d233f683b0b6a","run_id":"0mws8o3cl-21e7ec55","tool_use_id":"tool-a7c4d233f683b0b6a","status":"completed","summary":"report a7c4d233f683b0b6a"}}
+{"dir":"out","raw":{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_work","content":"ok"}]}}}
+{"dir":"out","raw":{"type":"user","isReplay":true,"origin":{"kind":"task-notification","producer":"session-task","runId":"0mws8o3cl-21e7ec55"},"message":{"role":"user","content":"<task-notification><task-id>a7c4d233f683b0b6a</task-id><result>report a7c4d233f683b0b6a</result></task-notification>"}}}
+{"dir":"out","raw":{"type":"assistant","message":{"id":"native","model":"foreign-model","content":[{"type":"text","text":"FINAL ANSWER"}]}}}
+{"dir":"out","raw":{"type":"result","subtype":"success","is_error":false,"result":"done","num_turns":1,"duration_ms":1,"duration_api_ms":1,"total_cost_usd":0,"origin":{"kind":"task-notification","producer":"session-task","runId":"0mws8pcvw-4441bdf0"}}}
