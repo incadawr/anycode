@@ -60,12 +60,15 @@ describe("Claude background tasks indicator", () => {
     read.mockResolvedValue({ ok: false, reason: "unavailable" });
     setup([{ ...base, status: "completed" }]);
     const view = mount(h(ClaudeBackgroundTasks));
-    click(byRole(view.container, "button", "Background tasks: 1"));
+    const trigger = byRole(view.container, "button", "Background tasks: 1");
+    trigger.focus();
+    click(trigger);
     setup([{ ...base, status: "completed" }], { taskId: "task-a", requestId: send.mock.lastCall![0].requestId });
     await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
     expect(view.container.textContent).toContain("Output is not available yet.");
-    act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    act(() => { byRole(view.container, "dialog", "Background tasks").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     expect(view.container.querySelector(".ak-anchored")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 
   describe("output polling", () => {

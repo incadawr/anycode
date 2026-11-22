@@ -9552,10 +9552,10 @@ dialog.role-picker-dialog {
 .claude-bg-trigger { width: auto; gap: var(--sp-1); padding: 0 var(--sp-2); color: var(--text-3); }
 .claude-bg-trigger-running { color: var(--text-2); }
 .claude-bg-count { font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }
-.claude-bg-panel { width: min(24rem, 80vw); }
+.claude-bg-panel { width: min(24rem, 80vw); max-width: min(24rem, 80vw); }
+.claude-bg-panel .ak-anchored__body { padding: var(--sp-2); }
 .claude-bg-status { color: var(--text-3); font-size: var(--fs-2xs); }
 .claude-bg-body { display: flex; flex-direction: column; gap: var(--sp-2); overflow-wrap: anywhere; font-size: var(--fs-xs); color: var(--text-2); }
-.claude-bg-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-2); }
 .claude-bg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .claude-bg-list .claude-bg-row { display: flex; white-space: normal; align-items: flex-start; justify-content: flex-start; gap: var(--sp-2); width: 100%; height: auto; padding: var(--sp-1) var(--sp-2); text-align: left; font-size: var(--fs-xs); color: var(--text-2); }
 .claude-bg-list .claude-bg-row[aria-pressed="true"] { background: var(--bg-selected); color: var(--text-1); }

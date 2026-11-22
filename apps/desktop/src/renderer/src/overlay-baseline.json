@@ -1,7 +1,7 @@
 {
  "legacy": [
   "app.css | .account-budget-floating | position: absolute + z-index",
-   "app.css | .ctx-popover | position: fixed",
+  "app.css | .ctx-popover | position: fixed",
   "app.css | .dock-panel-drawer | position: absolute + z-index",
   "app.css | .environment-menu | position: absolute + z-index",
   "app.css | .lsp-panel | position: absolute + z-index",
