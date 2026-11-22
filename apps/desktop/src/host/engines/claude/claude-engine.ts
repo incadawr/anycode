@@ -54,6 +54,8 @@ import { ClaudeClient, ClaudeClientError, type ClaudeClientOptions, type ClaudeS
 import { ClaudeTurnTranslator } from "./event-translator.js";
 import { ClaudeNativeBackgroundTasks } from "./native-background-tasks.js";
 import { NativeTurn } from "./native-turn.js";
+import { readClaudeSubagentTranscript } from "./subagent-transcript.js";
+import type { ClaudeSubagentTranscriptResult } from "../../../shared/claude-subagent-transcript.js";
 import { ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
@@ -872,6 +874,7 @@ async function connectClaudeEngine(
     const config = resolveClaudeConfigDir(options.profileDir) ?? path.join(childEnv.HOME ?? childEnv.USERPROFILE ?? os.homedir(), ".claude");
     engine.commandCatalog = createClaudeCommandCatalog(claudeCommandRoots(options.cwd, config, sources));
     engine.nativeMaterialized = resuming;
+    engine.transcriptLocation = { roots: [path.join(config, "projects")], cwd: options.cwd, cache: new Map() };
     // A resumed session's preset is only the persisted row until its first init.
     engine.presetProvisional = resuming;
     engine.offBootVerified = options.orchestrationRecovery !== undefined && recoveryProblem === undefined;
@@ -1230,6 +1233,13 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   commandCatalog?: ReturnType<typeof createClaudeCommandCatalog>;
+  /** Where the CLI keeps this session's files: the config dir the CLI really uses (not main's env) and the session cwd. */
+  transcriptLocation?: { roots: readonly string[]; cwd: string; cache: Map<string, string> };
+  /** Read-only transcript of the CLI's own subagent started by the Agent call `toolCallId`. */
+  readSubagentTranscript(toolCallId: string): Promise<ClaudeSubagentTranscriptResult> {
+    if (this.transcriptLocation === undefined) return Promise.resolve({ ok: false, reason: "unavailable" });
+    return readClaudeSubagentTranscript({ sessionRef: this.sessionRef, toolCallId }, this.transcriptLocation);
+  }
   async listClaudeCommands() {
     if (!this.settings?.slashPassthrough || this.disposed || this.terminalError || this.replacement || this.orchestrationState !== "off" || this.orchestrationRestricted?.()) return [];
     const generation = this.transportGeneration;

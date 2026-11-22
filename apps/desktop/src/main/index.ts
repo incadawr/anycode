@@ -1,4 +1,3 @@
-import { registerClaudeSubagentTranscriptIpc } from "./claude-subagent-transcript-ipc.js";
 import { registerClaudeTaskOutputIpc } from "./claude-task-output-ipc.js";
 import { registerChildWorktreeIpc } from "./child-worktree-ipc.js";
 import { ChildWorktreeResources } from "./child-worktree-resource.js";
@@ -3451,7 +3450,6 @@ void app.whenReady().then(async () => {
   });
   registerSetupIpc(settingsIpcDeps);
   registerClaudeTaskOutputIpc();
-  registerClaudeSubagentTranscriptIpc();
   // the per-tab workspace-trust answer. Main resolves folder + hash
   // from the tab's own record; the renderer sends a tab id and a decision only.
   // folder keys are realpath-canonical (symlink and target share

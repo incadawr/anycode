@@ -223,3 +223,29 @@ it.each([true, false])("waits for a pending model change before applying deferre
     await settle();
   } finally { await close(); }
 });
+
+it("answers a subagent transcript request from the Claude engine's own session folder, and 'unavailable' for other engines", async () => {
+  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const root = await mkdtemp(join(tmpdir(), "wire-subagent-"));
+  const { received, send, settle, close, session } = await wireFixture();
+  try {
+    const dir = join(root, "projects", "-work", "session", "subagents");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "agent-a1.meta.json"), JSON.stringify({ toolUseId: "toolu_x" }));
+    await writeFile(join(dir, "agent-a1.jsonl"), JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hello" }] } }) + "\n");
+    const engine = (session as unknown as { engine: ClaudeEngine }).engine;
+    engine.transcriptLocation = { roots: [join(root, "projects")], cwd: "/work", cache: new Map() };
+    send({ type: "claude_subagent_transcript_request", requestId: "r1", toolCallId: "toolu_x" });
+    send({ type: "claude_subagent_transcript_request", requestId: "r2", toolCallId: "toolu_missing" });
+    await settle();
+    expect(received).toContainEqual({ type: "claude_subagent_transcript", requestId: "r1", toolCallId: "toolu_x",
+      result: { ok: true, droppedEntries: 0, truncatedHead: false, entries: [{ kind: "text", title: "", text: "hello" }] } });
+    expect(received).toContainEqual({ type: "claude_subagent_transcript", requestId: "r2", toolCallId: "toolu_missing", result: { ok: false, reason: "not_found" } });
+    (session as unknown as { engine: unknown }).engine = { id: "codex", capabilities: {} };
+    send({ type: "claude_subagent_transcript_request", requestId: "r3", toolCallId: "toolu_x" });
+    await settle();
+    expect(received).toContainEqual({ type: "claude_subagent_transcript", requestId: "r3", toolCallId: "toolu_x", result: { ok: false, reason: "unavailable" } });
+  } finally { await close(); await rm(root, { recursive: true, force: true }); }
+});

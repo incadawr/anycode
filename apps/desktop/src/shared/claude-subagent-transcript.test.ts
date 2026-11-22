@@ -35,7 +35,7 @@ describe("parseClaudeSubagentTranscript", () => {
 
   it("keeps the newest entries when over the cap and counts the rest", () => {
     const text = Array.from({ length: 5 }, (_, i) => line({ type: "assistant", message: { content: [{ type: "text", text: `m${i}` }] } })).join("\n");
-    const { entries, droppedEntries } = parseClaudeSubagentTranscript(text, 2);
+    const { entries, droppedEntries } = parseClaudeSubagentTranscript(text, { maxEntries: 2 });
     expect(entries.map((e) => e.text)).toEqual(["m3", "m4"]);
     expect(droppedEntries).toBe(3);
   });
@@ -44,5 +44,40 @@ describe("parseClaudeSubagentTranscript", () => {
     expect(summarizeSubagentToolInput({ command: "ls -la", description: "list" })).toBe("ls -la");
     expect(summarizeSubagentToolInput({ foo: 1 })).toBe('{"foo":1}');
     expect(summarizeSubagentToolInput(null)).toBe("");
+  });
+
+  const user = (content: unknown, extra: object = {}) => line({ type: "user", message: { role: "user", content }, ...extra });
+
+  it("labels user-side text by role: first real line is the prompt, later ones are user messages, isMeta are notes", () => {
+    const text = [
+      user("<system-reminder> Your final report is delivered through SubagentHandback </system-reminder>", { isMeta: true }),
+      user("Review target: 92", { isMeta: true }),
+      user("Implement the thing"),
+      line({ type: "assistant", message: { content: [{ type: "text", text: "On it." }] } }),
+      user("The coordinator sent a message while you were working: fix X", { isMeta: true }),
+      user("This session is being continued from a previous conversation that ran out of context.", { isMeta: true }),
+      user([{ type: "text", text: "Also check Y" }]),
+    ].join("\n");
+    const { entries } = parseClaudeSubagentTranscript(text);
+    expect(entries.map((e) => [e.kind, e.text.slice(0, 20)])).toEqual([
+      ["note", "Review target: 92"],
+      ["prompt", "Implement the thing"],
+      ["text", "On it."],
+      ["note", "The coordinator sent"],
+      ["note", "This session is bein"],
+      ["message", "Also check Y"],
+    ]);
+  });
+
+  it("assigns no prompt when the window started mid-file", () => {
+    const { entries } = parseClaudeSubagentTranscript(user("a later user line"), { startedMidFile: true });
+    expect(entries).toEqual([{ kind: "message", title: "", text: "a later user line" }]);
+  });
+
+  it("shows [image] for an image-only tool result", () => {
+    const { entries } = parseClaudeSubagentTranscript(
+      user([{ type: "tool_result", tool_use_id: "t", content: [{ type: "image", source: { type: "base64", data: "AAAA" } }] }]),
+    );
+    expect(entries).toEqual([{ kind: "tool_result", title: "", text: "[image]" }]);
   });
 });

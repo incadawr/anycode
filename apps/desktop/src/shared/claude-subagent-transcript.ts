@@ -9,7 +9,13 @@
  * huge tool result cannot flood the renderer.
  */
 
-export type ClaudeSubagentEntryKind = "prompt" | "text" | "thinking" | "tool_use" | "tool_result";
+/**
+ * `prompt` is the task the agent was launched with (only ever the true first
+ * line of the file); `message` is any later user-side text (e.g. a follow-up);
+ * `note` is CLI/harness-injected user-side text (isMeta lines, context
+ * summaries); `text` is the agent's own speech.
+ */
+export type ClaudeSubagentEntryKind = "prompt" | "message" | "note" | "text" | "thinking" | "tool_use" | "tool_result";
 
 export interface ClaudeSubagentEntry {
   kind: ClaudeSubagentEntryKind;
@@ -48,32 +54,56 @@ export function summarizeSubagentToolInput(input: unknown): string {
 function resultText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  return content
-    .map((part) => (isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : ""))
-    .filter((part) => part.length > 0)
-    .join("\n");
+  const parts: string[] = [];
+  for (const part of content) {
+    if (!isRecord(part)) continue;
+    if (part.type === "text" && typeof part.text === "string" && part.text.length > 0) parts.push(part.text);
+    else if (part.type === "image") parts.push("[image]");
+  }
+  return parts.join("\n");
 }
 
-function lineEntries(line: unknown, seenFirstPrompt: { value: boolean }): ClaudeSubagentEntry[] {
+/** A user line that is nothing but harness `<system-reminder>` blocks carries no information for a reader. */
+function isPureSystemReminder(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("<system-reminder>") && trimmed.endsWith("</system-reminder>") && trimmed.indexOf("</system-reminder>") === trimmed.length - "</system-reminder>".length;
+}
+
+interface ParseState {
+  /** The true first line of the file has not been consumed yet. */
+  firstLineOpen: boolean;
+}
+
+function userTextEntry(text: string, meta: boolean, state: ParseState): ClaudeSubagentEntry[] {
+  if (text.trim().length === 0) return [];
+  if (meta) {
+    return isPureSystemReminder(text) ? [] : [{ kind: "note", title: "", text: cap(text) }];
+  }
+  const kind: ClaudeSubagentEntryKind = state.firstLineOpen ? "prompt" : "message";
+  state.firstLineOpen = false;
+  return [{ kind, title: "", text: cap(text) }];
+}
+
+function lineEntries(line: unknown, state: ParseState): ClaudeSubagentEntry[] {
   if (!isRecord(line) || (line.type !== "user" && line.type !== "assistant")) return [];
   const message = line.message;
   if (!isRecord(message)) return [];
   const content = message.content;
+  const isUser = line.type === "user";
+  const meta = line.isMeta === true;
   if (typeof content === "string") {
-    if (content.trim().length === 0) return [];
-    const kind: ClaudeSubagentEntryKind = line.type === "user" && !seenFirstPrompt.value ? "prompt" : "text";
-    if (line.type === "user") seenFirstPrompt.value = true;
-    return [{ kind, title: "", text: cap(content) }];
+    return isUser ? userTextEntry(content, meta, state) : content.trim().length > 0 ? [{ kind: "text", title: "", text: cap(content) }] : [];
   }
   if (!Array.isArray(content)) return [];
   const out: ClaudeSubagentEntry[] = [];
   for (const block of content) {
     if (!isRecord(block)) continue;
     if (block.type === "text" && typeof block.text === "string" && block.text.trim().length > 0) {
-      out.push({ kind: "text", title: "", text: cap(block.text) });
-    } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim().length > 0) {
+      if (isUser) out.push(...userTextEntry(block.text, meta, state));
+      else out.push({ kind: "text", title: "", text: cap(block.text) });
+    } else if (!isUser && block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim().length > 0) {
       out.push({ kind: "thinking", title: "", text: cap(block.thinking) });
-    } else if (block.type === "tool_use" && typeof block.name === "string") {
+    } else if (!isUser && block.type === "tool_use" && typeof block.name === "string") {
       out.push({ kind: "tool_use", title: block.name.slice(0, 80), text: summarizeSubagentToolInput(block.input) });
     } else if (block.type === "tool_result") {
       out.push({
@@ -90,14 +120,17 @@ function lineEntries(line: unknown, seenFirstPrompt: { value: boolean }): Claude
 /**
  * Parses JSONL `text` into display entries, oldest first. When more than
  * `maxEntries` survive, the NEWEST are kept (a running agent's tail matters
- * most) and `droppedEntries` counts the rest.
+ * most) and `droppedEntries` counts the rest. `startedMidFile` means `text` is
+ * a tail window: no entry may then be labelled `prompt`, since the real first
+ * line is not in view.
  */
 export function parseClaudeSubagentTranscript(
   text: string,
-  maxEntries: number = SUBAGENT_MAX_ENTRIES,
+  options: { maxEntries?: number; startedMidFile?: boolean } = {},
 ): { entries: ClaudeSubagentEntry[]; droppedEntries: number } {
+  const maxEntries = options.maxEntries ?? SUBAGENT_MAX_ENTRIES;
   const all: ClaudeSubagentEntry[] = [];
-  const seenFirstPrompt = { value: false };
+  const state: ParseState = { firstLineOpen: options.startedMidFile !== true };
   for (const raw of text.split("\n")) {
     if (raw.trim().length === 0) continue;
     let parsed: unknown;
@@ -106,7 +139,7 @@ export function parseClaudeSubagentTranscript(
     } catch {
       continue;
     }
-    all.push(...lineEntries(parsed, seenFirstPrompt));
+    all.push(...lineEntries(parsed, state));
   }
   const droppedEntries = Math.max(0, all.length - maxEntries);
   return { entries: droppedEntries > 0 ? all.slice(droppedEntries) : all, droppedEntries };

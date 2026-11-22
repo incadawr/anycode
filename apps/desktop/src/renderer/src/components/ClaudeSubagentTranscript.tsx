@@ -1,8 +1,7 @@
 /**
  * Read-only full run of a Claude CLI subagent, opened from the Agent card's
- * "Open" button. The CLI keeps each subagent's transcript in its own session
- * folder; the host supplies the session id, main resolves and reads the file
- * (bounded, containment-checked — main/claude-subagent-transcript-ipc.ts).
+ * "Open" button. The renderer sends only the tool call id; the host resolves
+ * and reads the CLI's own transcript file (host/engines/claude/subagent-transcript.ts).
  */
 import { useEffect, useRef, useState } from "react";
 import type { ClaudeSubagentEntry, ClaudeSubagentTranscriptResult } from "../../../shared/claude-subagent-transcript.js";
@@ -18,12 +17,12 @@ export type SubagentTranscriptState =
   | { phase: "ready"; entries: ClaudeSubagentEntry[]; droppedEntries: number; truncatedHead: boolean };
 
 /** User-facing line for a failed open; pure so the wording is testable. */
-export function transcriptErrorMessage(reason: "unavailable" | "not_found" | "no_session"): string {
+export function transcriptErrorMessage(reason: "unavailable" | "not_found" | "timeout"): string {
   if (reason === "not_found") {
     return "The Claude CLI has not written a transcript for this agent yet, or it was removed.";
   }
-  if (reason === "no_session") {
-    return "This tab has no Claude session to read the transcript from.";
+  if (reason === "timeout") {
+    return "No answer from the session. Try again.";
   }
   return "The transcript could not be read.";
 }
@@ -33,6 +32,10 @@ export function transcriptEntryLabel(entry: ClaudeSubagentEntry): string {
   switch (entry.kind) {
     case "prompt":
       return "Prompt";
+    case "message":
+      return "User";
+    case "note":
+      return "Note";
     case "thinking":
       return "Thinking";
     case "tool_use":
@@ -62,7 +65,7 @@ export function SubagentTranscriptFeed({ state }: { state: SubagentTranscriptSta
       {state.entries.map((entry, index) => (
         <li key={index} className={`subagent-transcript-entry subagent-transcript-${entry.kind}${entry.isError === true ? " subagent-transcript-error" : ""}`}>
           <div className="subagent-transcript-label">{transcriptEntryLabel(entry)}</div>
-          {entry.kind === "text" || entry.kind === "prompt" ? (
+          {entry.kind === "text" || entry.kind === "prompt" || entry.kind === "message" ? (
             <div className="subagent-transcript-body message-markdown"><Markdown text={entry.text} /></div>
           ) : (
             <pre className="subagent-transcript-body subagent-transcript-pre">{entry.text}</pre>
@@ -73,62 +76,95 @@ export function SubagentTranscriptFeed({ state }: { state: SubagentTranscriptSta
   );
 }
 
+/** How long the button waits for the host before giving up. */
+export const TRANSCRIPT_RESPONSE_TIMEOUT_MS = 15_000;
+
+/**
+ * Maps a host response onto view state, or null when it is not the answer to
+ * the request in flight (a stale or foreign response must change nothing).
+ */
+export function applyTranscriptResponse(
+  pendingRequestId: string | null,
+  toolCallId: string,
+  response: { requestId: string; toolCallId: string; result: ClaudeSubagentTranscriptResult } | null,
+): SubagentTranscriptState | null {
+  if (pendingRequestId === null || response === null) return null;
+  if (response.requestId !== pendingRequestId || response.toolCallId !== toolCallId) return null;
+  const { result } = response;
+  return result.ok
+    ? { phase: "ready", entries: result.entries, droppedEntries: result.droppedEntries, truncatedHead: result.truncatedHead }
+    : { phase: "error", message: transcriptErrorMessage(result.reason) };
+}
+
 export function ClaudeSubagentTranscriptButton({ toolCallId, title, subtitle }: { toolCallId: string; title: string; subtitle?: string }) {
   const send = useTabSend();
-  const response = useTabStore((state) => state.claudeSessionRef);
+  const response = useTabStore((state) => state.claudeSubagentTranscript);
   const [open, setOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [state, setState] = useState<SubagentTranscriptState>({ phase: "idle" });
   const pendingRequest = useRef<string | null>(null);
-  const sessionRef = useRef<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useOverlayFlag(open);
 
-  const read = (ref: string) => {
-    setState((current) => (current.phase === "ready" ? current : { phase: "loading" }));
-    void window.anycode.claudeSubagentTranscript
-      .read(ref, toolCallId)
-      .then((result: ClaudeSubagentTranscriptResult) =>
-        setState(
-          result.ok
-            ? { phase: "ready", entries: result.entries, droppedEntries: result.droppedEntries, truncatedHead: result.truncatedHead }
-            : { phase: "error", message: transcriptErrorMessage(result.reason) },
-        ),
-      )
-      .catch(() => setState({ phase: "error", message: transcriptErrorMessage("unavailable") }));
+  const clearTimer = () => {
+    if (timer.current !== null) clearTimeout(timer.current);
+    timer.current = null;
+  };
+  useEffect(() => clearTimer, []);
+
+  // Each call mints a new request id; only the latest id is ever applied, so a
+  // slow earlier answer cannot overwrite a newer one.
+  const request = (keepContent: boolean) => {
+    clearTimer();
+    const requestId = crypto.randomUUID();
+    pendingRequest.current = requestId;
+    if (keepContent) setRefreshing(true);
+    else setState({ phase: "loading" });
+    timer.current = setTimeout(() => {
+      if (pendingRequest.current !== requestId) return;
+      pendingRequest.current = null;
+      setRefreshing(false);
+      setState((current) => (current.phase === "ready" ? current : { phase: "error", message: transcriptErrorMessage("timeout") }));
+    }, TRANSCRIPT_RESPONSE_TIMEOUT_MS);
+    send({ type: "claude_subagent_transcript_request", requestId, toolCallId });
   };
 
   useEffect(() => {
-    if (pendingRequest.current === null || response === null || response.requestId !== pendingRequest.current) return;
+    const next = applyTranscriptResponse(pendingRequest.current, toolCallId, response);
+    if (next === null) return;
     pendingRequest.current = null;
-    if (response.sessionRef === undefined) {
-      setState({ phase: "error", message: transcriptErrorMessage("no_session") });
-      return;
-    }
-    sessionRef.current = response.sessionRef;
-    read(response.sessionRef);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [response]);
-
-  const openTranscript = () => {
-    setOpen(true);
-    setState({ phase: "loading" });
-    const requestId = crypto.randomUUID();
-    pendingRequest.current = requestId;
-    send({ type: "claude_session_ref_request", requestId });
-  };
+    clearTimer();
+    setRefreshing(false);
+    setState(next);
+  }, [response, toolCallId]);
 
   return (
     <>
-      <Button size="sm" variant="ghost" className="tool-call-open" title="Open the full agent transcript" onClick={openTranscript}>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="tool-call-open"
+        title="Open the full agent transcript"
+        onClick={() => {
+          setOpen(true);
+          request(false);
+        }}
+      >
         Open
       </Button>
       <Modal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => {
+          setOpen(false);
+          pendingRequest.current = null;
+          clearTimer();
+          setRefreshing(false);
+        }}
         title={title}
         {...(subtitle !== undefined ? { subtitle } : {})}
         size="lg"
         footer={
-          <Button size="sm" variant="ghost" onClick={() => { if (sessionRef.current !== null) read(sessionRef.current); }}>
+          <Button size="sm" variant="ghost" loading={refreshing} disabled={refreshing || state.phase === "loading"} onClick={() => request(state.phase === "ready")}>
             Refresh
           </Button>
         }

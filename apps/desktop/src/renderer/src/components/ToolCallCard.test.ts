@@ -3296,3 +3296,33 @@ describe("collapsed Agent card — live preview and header", () => {
     expect(html).not.toContain("(inherited)</span>");
   });
 });
+
+describe("Claude subagent transcript Open control gating", () => {
+  const OPEN_TITLE = "Open the full agent transcript";
+  const render = (engine: { id: string } | null, block: ToolCallBlock) => {
+    const store = createDesktopStore();
+    store.setState({ model: "opus", engine: engine as never });
+    return renderToStaticMarkup(
+      createElement(TabContext.Provider, { value: { tabId: "tab-1", store } satisfies TabContextValue }, createElement(ToolCallCard, { block })),
+    );
+  };
+
+  it("mounts on an Agent card with a subagent in a Claude tab", () => {
+    expect(render({ id: "claude" }, mkAgentBlock({ subagent: mkSubagent() }))).toContain(OPEN_TITLE);
+  });
+
+  it("does not mount in other engines, before the subagent exists, on non-Agent cards, or on session-child cards", () => {
+    expect(render({ id: "codex" }, mkAgentBlock({ subagent: mkSubagent() }))).not.toContain(OPEN_TITLE);
+    expect(render(null, mkAgentBlock({ subagent: mkSubagent() }))).not.toContain(OPEN_TITLE);
+    expect(render({ id: "claude" }, mkAgentBlock({ subagent: null }))).not.toContain(OPEN_TITLE);
+    expect(render({ id: "claude" }, mkAgentBlock({ toolName: "Bash", subagent: null }))).not.toContain(OPEN_TITLE);
+    expect(render({ id: "claude" }, mkAgentBlock({ subagent: mkSubagent({ sessionChild: true }) }))).not.toContain(OPEN_TITLE);
+  });
+
+  it("preview rows do not reuse the expanded feed's row class", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ final: null, activity: [{ toolName: "Bash", summary: "ls" }] }) });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(html).toContain("subagent-preview-row");
+    expect(html).not.toContain("subagent-activity-row");
+  });
+});

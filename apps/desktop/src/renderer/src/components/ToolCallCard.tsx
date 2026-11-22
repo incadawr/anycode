@@ -2420,7 +2420,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
       {!expanded && previewRows.length > 0 && (
         <ul className="subagent-collapsed-preview" aria-label="Latest agent activity">
           {previewRows.map((text, index) => (
-            <li key={`${previewRows.length}-${index}`} className="subagent-activity-row">
+            <li key={`${previewRows.length}-${index}`} className="subagent-preview-row">
               {text}
             </li>
           ))}

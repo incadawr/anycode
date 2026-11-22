@@ -1,6 +1,7 @@
 import { NetworkWaitState } from "./network-wait-state.js";
 import { runtimeSettingsSchema } from "@anycode/core";
 import { checkedNativeBase, savedNativeRecovery } from "./native-base.js";
+import type { ClaudeSubagentTranscriptResult } from "../shared/claude-subagent-transcript.js";
 import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
 import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
@@ -3861,10 +3862,12 @@ export class Session {
         this.outbound.sendDirect({ type: "claude_task_output", taskId: message.taskId, requestId: message.requestId, ...(sessionRef ? { sessionRef } : {}) });
         break;
       }
-      case "claude_session_ref_request": {
-        const engine = this.engine;
-        const ref = (engine as SessionEngine & { sessionRef?: unknown }).sessionRef;
-        this.outbound.sendDirect({ type: "claude_session_ref", requestId: message.requestId, ...(engine.id === "claude" && typeof ref === "string" && ref.length > 0 ? { sessionRef: ref } : {}) });
+      case "claude_subagent_transcript_request": {
+        const engine = this.engine as SessionEngine & { readSubagentTranscript?: (toolCallId: string) => Promise<ClaudeSubagentTranscriptResult> };
+        const { requestId, toolCallId } = message;
+        const reply = (result: ClaudeSubagentTranscriptResult) => this.outbound.sendDirect({ type: "claude_subagent_transcript", requestId, toolCallId, result });
+        if (engine.id !== "claude" || typeof engine.readSubagentTranscript !== "function") { reply({ ok: false, reason: "unavailable" }); break; }
+        void engine.readSubagentTranscript(toolCallId).then(reply, () => reply({ ok: false, reason: "unavailable" }));
         break;
       }
       case "task_kill_request":
