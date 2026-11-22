@@ -9545,6 +9545,8 @@ dialog.role-picker-dialog {
 .claude-bg-tasks { position: absolute; z-index: 5; top: var(--sp-2); right: var(--sp-2); -webkit-app-region: no-drag; }
 /* The icon owns the composer's top-right corner; whatever sits first on that line reserves its width, so nothing is covered and no row is added. */
 .composer:has(> .claude-bg-tasks) .background-agents-heading { padding-right: 2.5rem; }
+/* Centre the icon on the agents heading line (heading text is ~15px tall, the icon 28px). */
+.composer:has(> .background-agents) > .claude-bg-tasks { top: calc(var(--sp-3) - 6.5px); }
 .composer:has(> .claude-bg-tasks):not(:has(> .background-agents)) .prompt-queue { padding-right: 2.5rem; }
 .composer:has(> .claude-bg-tasks):not(:has(> .background-agents, > .prompt-queue)) .composer-textarea { padding-right: 2.5rem; }
 .claude-bg-trigger { width: auto; gap: var(--sp-1); padding: 0 var(--sp-2); color: var(--text-3); }
