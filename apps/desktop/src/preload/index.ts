@@ -1393,6 +1393,8 @@ contextBridge.exposeInMainWorld("anycode", {
   // URL would never pass CSP); `open` is the ONLY path to `shell.openPath`
   // and is gated main-side on the image allowlist.
   claudeTaskOutput: {
+    read: (request: { taskId: string; sessionRef: string; outputFile?: string }): Promise<{ ok: true; content: string; truncated: boolean } | { ok: false; reason: "unavailable" }> => ipcRenderer.invoke("anycode:claude-task-output-read", request),
+    open: (request: { taskId: string; sessionRef: string; outputFile?: string }): Promise<{ ok: boolean }> => ipcRenderer.invoke("anycode:claude-task-output-open", request),
     pick: (taskId: string, sessionRef: string): Promise<{ ok: true; content: string } | { ok: false; reason: "cancelled" | "unavailable" }> => ipcRenderer.invoke("anycode:claude-task-output-pick", { taskId, sessionRef }),
   },
   artifacts: {
