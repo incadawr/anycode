@@ -1,142 +1,124 @@
 import { expect, it } from "vitest";
 import ts from "typescript";
-import { baselineDiff, cssDeclarations, readRenderer, rendererFiles } from "./guard-utils.test-utils.js";
+import {
+  baselineDiff, contextName, createResolver, cssDeclarations, embeddedCss, parseSource, propertyKey, readBaselineJson, readRenderer, rendererFiles,
+} from "./guard-utils.test-utils.js";
 
 // Typography must come from the tokens in tokens.css (--fs-*, --lh-*). This guard
-// covers font-size, line-height and the font shorthand in all renderer CSS
-// (the UI kit included) and inline fontSize/lineHeight in TSX.
+// covers, in every renderer file (the UI kit included):
+//   - CSS: font-size, line-height and the font shorthand;
+//   - CSS strings / <style> text embedded in .ts/.tsx;
+//   - TS/TSX style objects (fontSize, lineHeight, font), in .ts and .tsx;
+//   - redefinition of --fs-* / --lh-* outside tokens.css (it would change what a
+//     "token" means); the cascade is not modeled, any such declaration counts.
 //
-// BASELINE lists legacy violations as "file | selector-or-component | property | value"
-// (no line numbers). New violations fail; entries that no longer occur also
-// fail, so the baseline can only shrink. Never add entries to admit new UI.
-// A permanent exception does not belong here: fix the value or use a token.
+// Legacy violations are named in typography-baseline.json as
+// "file | selector-or-component | property | value" (no line numbers). New
+// violations fail; entries that no longer occur also fail, so the baseline can
+// only shrink. CI (scripts/check-ui-baselines.mjs) additionally verifies the
+// baseline is a subset of the target branch's. Never add entries to admit new UI.
+//
+// Boundary: values built at runtime (non-literal expressions, props, function
+// results) are violations; a same-file const that resolves to an allowed token
+// string passes.
+
+const CANONICAL = "tokens.css";
 
 /** Typography tokens, read from tokens.css so the set cannot drift. */
-const TOKENS = (() => {
-  const names = [...readRenderer("tokens.css").matchAll(/(^|[;{\s])(--(?:fs|lh)-[a-z0-9]+)\s*:/gm)].map(match => match[2]!);
-  return new Set(names);
-})();
+const TOKENS = new Set(
+  [...readRenderer(CANONICAL).matchAll(/(^|[;{\s])(--(?:fs|lh)-[a-z0-9]+)\s*:/gm)].map(match => match[2]!),
+);
 
 /** Keyword values that carry no size of their own. */
 const KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "normal"]);
 
-const BASELINE: string[] = [
-  "app.css | .child-split-badge | line-height | 1",
-  "app.css | .connection-icon | font-size | 8.5px",
-  "app.css | .connection-icon | line-height | 1",
-  "app.css | .connection-icon-input-row .connection-icon | font-size | 10.5px",
-  "app.css | .engine-identity | line-height | 1",
-  "app.css | .environment-menu-diagnostics-preview | line-height | 1.45",
-  "app.css | .environment-menu-row | line-height | 1.4",
-  "app.css | .environment-menu-row-with-error > .environment-menu-row-error | line-height | 1.35",
-  "app.css | .lsp-setup-example | font-size | var(--fs-xs, var(--fs-sm))",
-  "app.css | .md-code-inline | font-size | 0.93em",
-  "app.css | .md-preview-mode-btn | font | 500 var(--fs-xs)/1 var(--font-ui)",
-  "app.css | .permission-modal-tool | font-size | 0.95em",
-  "app.css | .permission-risk-plaque | line-height | 1.45",
-  "app.css | .role-picker-entry-offline | line-height | 1.4",
-  "app.css | .role-picker-preset-note | line-height | 1.4",
-  "app.css | .role-picker-role-override | line-height | 1.4",
-  "app.css | .row-help-tooltip | line-height | 1.4",
-  "app.css | .session-extensions-details button.session-extensions-manage | font-size | 11px",
-  "app.css | .session-extensions-source | font-size | 11px",
-  "app.css | .session-extensions-status | line-height | 1.5",
-  "app.css | .session-extensions-trigger, .session-extensions-panel | font-size | 12px",
-  "app.css | .session-header-title-wrap | line-height | 1.25",
-  "app.css | .sessions-api-step-title | line-height | 1.5rem",
-  "app.css | .sidebar-project-menu-item-note | line-height | 1.3",
-  "app.css | .sidebar-row-agent, .session-header-agent | line-height | 1.2",
-  "app.css | .sidebar-row-worktree | line-height | 1.2",
-  "app.css | .speed-toggle-mult | line-height | 1",
-  "app.css | .start-model-note | line-height | 1.35",
-  "app.css | .todo-panel-stale | font-size | 0.85em",
-  "app.css | .working-hint kbd | font-size | 0.95em",
-  "settings.css | .codex-profile-default | line-height | 1.5",
-  "settings.css | .connection-drawer-band::before | line-height | 1.4",
-  "settings.css | .connection-drawer-help | line-height | 1",
-  "settings.css | .connection-quota | font-size | 12px",
-  "settings.css | .connection-tile .go-quota | font-size | 12px",
-  "settings.css | .consent-dialog-body code | font-size | 0.93em",
-  "settings.css | .lsp-install-command | font-size | 11px",
-  "settings.css | .lsp-pane-notices | font-size | 12px",
-  "settings.css | .lsp-scope-title | font-size | 12px",
-  "settings.css | .welcome-wordmark | font-size | calc(var(--fs-xl) * 1.6)",
-  "tool-cards.css | .workflow-map-label | font-size | 11px",
-  "transcript-follow.css | .jump-to-latest | font-size | 1rem",
-  "transcript-follow.css | .jump-to-latest | line-height | 1",
-  "ui/ui.css | .ak-anchored__body | line-height | 1.4",
-  "ui/ui.css | .ak-badge | line-height | 1",
-  "ui/ui.css | .ak-banner | line-height | 1.45",
-  "ui/ui.css | .ak-btn | line-height | 1",
-  "ui/ui.css | .ak-chip | line-height | 1",
-  "ui/ui.css | .ak-control | line-height | 1.2",
-  "ui/ui.css | .ak-empty__desc | line-height | 1.5",
-  "ui/ui.css | .ak-empty__title | line-height | 1.4",
-  "ui/ui.css | .ak-field__hint | line-height | 1.45",
-  "ui/ui.css | .ak-field__label | line-height | 1.3",
-  "ui/ui.css | .ak-popover__row | line-height | 1",
-  "ui/ui.css | .ak-seg__item | line-height | 1",
-  "ui/ui.css | .ak-toast | line-height | 1.4",
-  "ui/ui.css | .ak-toolcard__head | line-height | 1",
-];
+const BASELINE = readBaselineJson<string[]>("typography-baseline.json");
 
 const PROPERTIES = new Set(["font-size", "line-height", "font"]);
+const TOKEN_CALL = /^var\(\s*(--[a-z0-9-]+)\s*\)$/i;
+const WEIGHT_WORDS = /^(?:normal|italic|oblique|bold|bolder|lighter|small-caps)$/i;
 
-function tokenOnly(value: string): boolean {
-  const match = /^var\(\s*(--[a-z0-9-]+)\s*\)$/i.exec(value);
-  return !!match && TOKENS.has(match[1]!);
+function isToken(value: string, prefix: "fs" | "lh"): boolean {
+  const match = TOKEN_CALL.exec(value.trim());
+  return !!match && match[1]!.startsWith(`--${prefix}-`) && TOKENS.has(match[1]!);
+}
+
+/** Whitespace tokens at top level, with a top-level "/" as its own token. */
+function shorthandParts(value: string): string[] {
+  const parts: string[] = [];
+  let depth = 0, current = "";
+  const push = (): void => { if (current) parts.push(current); current = ""; };
+  for (const char of value) {
+    if (char === "(") depth++;
+    if (char === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && /\s/.test(char)) push();
+    else if (depth === 0 && char === "/") { push(); parts.push("/"); }
+    else current += char;
+  }
+  push();
+  return parts;
 }
 
 export function typographyValueAllowed(property: string, value: string): boolean {
   const v = value.trim();
   if (KEYWORDS.has(v.toLowerCase())) return true;
-  if (property !== "font") return tokenOnly(v);
-  // Shorthand: needs a size token, and nothing numeric outside var().
-  const vars = [...v.matchAll(/var\(\s*(--[a-z0-9-]+)\s*\)/gi)].map(match => match[1]!);
-  if (!vars.some(name => name.startsWith("--fs-")) || !vars.every(name => TOKENS.has(name) || /^--(?:font-(?:ui|mono)|w-[a-z0-9]+)$/.test(name))) return false;
-  const rest = v.replace(/var\([^)]*\)/gi, " ").replace(/\//g, " ").trim();
-  return rest === "" || /^(?:(?:italic|oblique|normal|bold|bolder|lighter|[1-9]00)\s*)+$/i.test(rest);
-}
-
-export function cssEntries(path: string, source: string): string[] {
-  return cssDeclarations(source)
-    .filter(decl => PROPERTIES.has(decl.property) && !typographyValueAllowed(decl.property, decl.value))
-    .map(decl => `${path} | ${decl.context} | ${decl.property} | ${decl.value}`);
-}
-
-function contextName(node: ts.Node): string {
-  for (let cur: ts.Node | undefined = node.parent; cur; cur = cur.parent) {
-    if ((ts.isFunctionDeclaration(cur) || ts.isClassDeclaration(cur)) && cur.name) return cur.name.text;
-    if (ts.isVariableDeclaration(cur) && ts.isIdentifier(cur.name)) return cur.name.text;
+  if (property === "font-size") return isToken(v, "fs");
+  if (property === "line-height") return isToken(v, "lh");
+  if (property !== "font") return false;
+  // font: [style/weight]* <--fs token> [/ <--lh token | normal>] <family...>
+  const parts = shorthandParts(v);
+  const size = parts.findIndex(part => isToken(part, "fs"));
+  if (size < 0) return false;
+  const prefixOk = parts.slice(0, size).every(part => WEIGHT_WORDS.test(part) || /^[1-9]00$/.test(part) || /^var\(\s*--w-[a-z0-9-]+\s*\)$/i.test(part));
+  if (!prefixOk) return false;
+  let next = size + 1;
+  if (parts[next] === "/") {
+    const height = parts[next + 1];
+    if (height === undefined || !(isToken(height, "lh") || height.toLowerCase() === "normal")) return false;
+    next += 2;
   }
-  return "<module>";
+  const family = parts.slice(next);
+  // Family names only: no numeric sizes may hide here.
+  return family.length > 0 && family.every(part => part !== "/" && !/^[+-]?[\d.]/.test(part) && !/^(?:calc|var\(\s*--(?:fs|lh)-)/i.test(part));
 }
 
-export function inlineEntries(path: string, source: string): string[] {
-  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const isTypographyVariable = (property: string): boolean => /^--(?:fs|lh)-/.test(property);
+
+export function cssEntries(path: string, source: string, prefix = ""): string[] {
+  return cssDeclarations(source).flatMap(decl => {
+    const name = `${path} | ${prefix}${decl.context} | ${decl.property} | ${decl.value}`;
+    if (PROPERTIES.has(decl.property) && !typographyValueAllowed(decl.property, decl.value)) return [name];
+    if (isTypographyVariable(decl.property) && path !== CANONICAL) return [name];
+    return [];
+  });
+}
+
+export function scriptEntries(path: string, source: string): string[] {
+  const file = parseSource(path, source);
+  const resolver = createResolver(file);
   const out: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isPropertyAssignment(node) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
-      const name = node.name.text;
-      if (name === "fontSize" || name === "lineHeight") {
-        const init = node.initializer;
-        const literal = ts.isStringLiteralLike(init) ? init.text : undefined;
-        const prop = name === "fontSize" ? "font-size" : "line-height";
-        if (literal === undefined || !typographyValueAllowed(prop, literal)) {
-          out.push(`${path} | ${contextName(node)} | ${name} | ${init.getText(file).replace(/\s+/g, " ")}`);
-        }
+    if (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) {
+      const key = propertyKey(node);
+      const init = ts.isPropertyAssignment(node) ? node.initializer : node.name;
+      const css = key === "fontSize" ? "font-size" : key === "lineHeight" ? "line-height" : key === "font" ? "font" : undefined;
+      if (key !== undefined && (css || isTypographyVariable(key))) {
+        const literal = resolver.string(init);
+        const ok = css !== undefined && literal !== undefined && typographyValueAllowed(css, literal);
+        if (!ok) out.push(`${path} | ${contextName(node)} | ${key} | ${literal ?? init.getText(file).replace(/\s+/g, " ")}`);
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(file);
+  for (const { css, context } of embeddedCss(file)) out.push(...cssEntries(path, css, `css-string in ${context} :: `));
   return out;
 }
 
 export function collectEntries(): string[] {
   return [
     ...rendererFiles(/\.css$/).flatMap(path => cssEntries(path, readRenderer(path))),
-    ...rendererFiles(/\.tsx$/).flatMap(path => inlineEntries(path, readRenderer(path))),
+    ...rendererFiles(/\.tsx?$/).flatMap(path => scriptEntries(path, readRenderer(path))),
   ].sort();
 }
 
@@ -151,24 +133,72 @@ it("accepts typography tokens and keywords and rejects everything else", () => {
   expect(typographyValueAllowed("font-size", "inherit")).toBe(true);
   expect(typographyValueAllowed("line-height", "normal")).toBe(true);
   expect(typographyValueAllowed("font-size", "var(--anything)")).toBe(false);
+  expect(typographyValueAllowed("font-size", "var(--lh-body)")).toBe(false);
   expect(typographyValueAllowed("font-size", "var(--bg)")).toBe(false);
   expect(typographyValueAllowed("font-size", "var(--fs-sm, 13px)")).toBe(false);
   expect(typographyValueAllowed("font-size", "13px")).toBe(false);
   expect(typographyValueAllowed("line-height", "1.4")).toBe(false);
   expect(typographyValueAllowed("font-size", "calc(var(--fs-sm) * 2)")).toBe(false);
-  expect(typographyValueAllowed("font", "12px/1.4 sans-serif")).toBe(false);
-  expect(typographyValueAllowed("font", "var(--fs-sm) / var(--lh-tight) var(--font-ui)")).toBe(true);
-  expect(typographyValueAllowed("font", "600 var(--fs-sm) var(--font-mono)")).toBe(true);
-  expect(typographyValueAllowed("font", "inherit")).toBe(true);
 });
 
-it("finds violations in CSS (nested at-rules included) and inline TSX styles", () => {
+it("parses font shorthand parts instead of stripping the slash", () => {
+  expect(typographyValueAllowed("font", "12px/1.4 sans-serif")).toBe(false);
+  expect(typographyValueAllowed("font", "var(--fs-sm) / var(--lh-tight) var(--font-ui)")).toBe(true);
+  expect(typographyValueAllowed("font", "var(--fs-sm)/var(--lh-tight) var(--font-ui)")).toBe(true);
+  expect(typographyValueAllowed("font", "600 var(--fs-sm) var(--font-mono)")).toBe(true);
+  expect(typographyValueAllowed("font", "var(--w-normal) var(--fs-xs)/var(--lh-tight) var(--font-ui)")).toBe(true);
+  expect(typographyValueAllowed("font", "inherit")).toBe(true);
+  // Review bypass: a numeric line-height was mistaken for a font-weight.
+  expect(typographyValueAllowed("font", "var(--fs-sm)/100 var(--font-ui)")).toBe(false);
+  expect(typographyValueAllowed("font", "var(--fs-sm)/1.2 var(--font-ui)")).toBe(false);
+  expect(typographyValueAllowed("font", "var(--fs-sm)/calc(1 + 1) var(--font-ui)")).toBe(false);
+  expect(typographyValueAllowed("font", "var(--fs-sm) var(--font-ui) 90px")).toBe(false);
+  expect(typographyValueAllowed("font", "var(--font-ui)")).toBe(false);
+});
+
+it("finds violations in CSS (nested at-rules included)", () => {
   expect(cssEntries("x.css", "@media (a) { .a { font-size: 12px; line-height: var(--lh-body) } } .b{font:12px x}")).toEqual([
     "x.css | @media (a) > .a | font-size | 12px",
     "x.css | .b | font | 12px x",
   ]);
-  expect(inlineEntries("x.tsx", 'const C = () => <i style={{ fontSize: 12, lineHeight: "var(--lh-body)", fontSize: "var(--fs-xs)" }} />;')).toEqual([
-    "x.tsx | C | fontSize | 12",
+});
+
+it("flags redefinition of typography tokens outside tokens.css, whatever the cascade", () => {
+  // Review bypass: .a { --fs-sm:90px; font-size:var(--fs-sm) } passed.
+  expect(cssEntries("x.css", ".a { --fs-sm:90px; font-size:var(--fs-sm) }")).toEqual(["x.css | .a | --fs-sm | 90px"]);
+  expect(cssEntries("tokens.css", ":root { --fs-sm: 0.8rem }")).toEqual([]);
+  expect(scriptEntries("x.tsx", 'const C = () => <i style={{ "--lh-body": 9 }} />;')).toEqual(["x.tsx | C | --lh-body | 9"]);
+});
+
+it("survives escaped quotes and later declarations in CSS", () => {
+  // Review bypass: content:"\"" desynchronised the quote tracking and hid the next rule.
+  expect(cssEntries("x.css", '.a { content:"\\"" } .b{font-size:90px}')).toEqual(["x.css | .b | font-size | 90px"]);
+  expect(cssEntries("x.css", ".a { font-size:90px !important } .a { font-size: inherit }")).toEqual(["x.css | .a | font-size | 90px"]);
+  expect(cssEntries("x.css", "/* .a{font-size:1px} */ .b{background:url(a;b.png);font-size:2px}")).toEqual(["x.css | .b | font-size | 2px"]);
+});
+
+it("checks inline font and style objects in .ts as well as .tsx", () => {
+  // Review bypasses: inline font was not checked; .ts files were skipped.
+  expect(scriptEntries("x.tsx", 'const C = () => <i style={{font: "90px sans-serif"}} />;')).toEqual(["x.tsx | C | font | 90px sans-serif"]);
+  expect(scriptEntries("x.ts", "export const style = { fontSize: 12, lineHeight: 1.5 };")).toEqual([
+    "x.ts | style | fontSize | 12",
+    "x.ts | style | lineHeight | 1.5",
+  ]);
+});
+
+it("resolves same-file constants and still rejects dynamic values", () => {
+  const source = 'const SIZE = "var(--fs-sm)"; const BAD = "9px"; const C = (p: { s: string }) => [{ fontSize: SIZE }, { fontSize: BAD }, { fontSize: p.s }, { lineHeight: SIZE }];';
+  expect(scriptEntries("x.tsx", source)).toEqual([
+    "x.tsx | C | fontSize | 9px",
+    "x.tsx | C | fontSize | p.s",
+    "x.tsx | C | lineHeight | var(--fs-sm)",
+  ]);
+});
+
+it("checks CSS embedded in strings and <style> text", () => {
+  expect(scriptEntries("x.tsx", "const css = `.a { font-size: 13px }`; const D = () => <style>{`.b{line-height:2}`}</style>;")).toEqual([
+    "x.tsx | css-string in css :: .a | font-size | 13px",
+    "x.tsx | css-string in D :: .b | line-height | 2",
   ]);
 });
 

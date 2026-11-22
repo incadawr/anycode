@@ -1,6 +1,6 @@
 # Pull request gate: typecheck and the unit suite (including the UI guards
 # typography-tokens, overlay-boundary, color-literals, raw-controls) must pass
-# before a change lands on next or master. Setup mirrors release.yml.
+# before a change lands on next or master, and UI baselines may only shrink. Setup mirrors release.yml.
 
 name: PR check
 
@@ -24,6 +24,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history: the baseline check reads files at the PR base commit.
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -35,6 +38,13 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
+
+      # Shrink-only UI baselines: the PR's own baseline files are not trusted;
+      # they must be a multiset subset of the base commit's.
+      - name: UI baselines may only shrink
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-ui-baselines.mjs --base "$BASE_SHA"
 
       - name: Install dependencies (frozen lockfile)
         run: pnpm install --frozen-lockfile
