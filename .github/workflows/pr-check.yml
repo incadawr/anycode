@@ -1,0 +1,46 @@
+# Pull request gate: typecheck and the unit suite (including the UI guards
+# typography-tokens, overlay-boundary, color-literals, raw-controls) must pass
+# before a change lands on next or master. Setup mirrors release.yml.
+
+name: PR check
+
+on:
+  pull_request:
+    branches:
+      - next
+      - master
+
+concurrency:
+  group: pr-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: typecheck and tests (linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.0.0"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck (workspace)
+        run: pnpm -w typecheck
+
+      - name: Unit tests (vitest)
+        run: pnpm test
