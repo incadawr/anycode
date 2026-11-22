@@ -443,6 +443,8 @@ interface ScanContext {
   fs: FileSystemPort;
   ourNames: Set<string>;
   out: HarnessSkillCandidate[];
+  /** Real paths already offered: one skill dir reachable from several catalogs (e.g. a ~/.zcode/skills link to ~/.claude/skills) is listed once, from the first catalog scanned. */
+  seenDirs: Set<string>;
 }
 
 /** Reads + classifies one skill directory (a dir containing SKILL.md) into a candidate. */
@@ -503,10 +505,18 @@ async function readSkillDir(
 }
 
 /** Scans a `<catalog>/<name>/SKILL.md` catalog directory fail-soft. */
+/** Records a skill dir's real path; false when an earlier catalog already offered it. */
+function markSeen(ctx: ScanContext, realDir: string): boolean {
+  if (ctx.seenDirs.has(realDir)) return false;
+  ctx.seenDirs.add(realDir);
+  return true;
+}
+
 async function scanCatalog(
   ctx: ScanContext,
   harness: SkillHarnessKind,
   catalogDir: string,
+  followTopLevelSymlinks = false,
 ): Promise<void> {
   if (!(await ctx.fs.exists(catalogDir))) {
     return;
@@ -518,7 +528,11 @@ async function scanCatalog(
     return;
   }
   // lstat (not stat) so a catalog entry that is a symlink to a directory is
-  // skipped rather than followed; readSkillDir re-verifies fail-closed.
+  // skipped rather than followed — EXCEPT in the user's own home catalogs
+  // (`followTopLevelSymlinks`), where a top-level entry symlinked to a real
+  // directory (how users install shared skills) is resolved to that directory and
+  // scanned as its real path. Workspace/plugin catalogs are untrusted: always
+  // skipped. readSkillDir re-verifies the (resolved) dir fail-closed.
   if (typeof ctx.fs.lstat !== "function") {
     return;
   }
@@ -530,7 +544,32 @@ async function scanCatalog(
     } catch {
       continue;
     }
+    if (st.isSymbolicLink && followTopLevelSymlinks && typeof ctx.fs.realpath === "function") {
+      // Broken link / link to a file / unresolvable ⇒ skipped silently. The
+      // resolved path is lstat-checked to be a REAL directory (nested links,
+      // support-tree links and SKILL.md links stay refused downstream).
+      try {
+        const real = await ctx.fs.realpath(skillDir);
+        const realSt = await ctx.fs.lstat(real);
+        if (realSt.isSymbolicLink || !realSt.isDirectory) {
+          continue;
+        }
+        if (markSeen(ctx, real)) await readSkillDir(ctx, harness, real, name);
+      } catch {
+        // fail-soft
+      }
+      continue;
+    }
     if (st.isSymbolicLink || !st.isDirectory) {
+      continue;
+    }
+    let key = skillDir;
+    try {
+      if (typeof ctx.fs.realpath === "function") key = await ctx.fs.realpath(skillDir);
+    } catch {
+      // keep the literal path as the key
+    }
+    if (!markSeen(ctx, key)) {
       continue;
     }
     await readSkillDir(ctx, harness, skillDir, name);
@@ -637,12 +676,13 @@ export async function scanHarnessSkills(
     // fail-soft: alreadyPresent falls back to false; apply-time re-checks anyway.
   }
 
-  const ctx: ScanContext = { fs, ourNames, out: [] };
+  const ctx: ScanContext = { fs, ourNames, out: [], seenDirs: new Set() };
 
-  // Home-anchored catalogs — always safe.
-  await scanCatalog(ctx, "claude", joinPath(h, ".claude/skills"));
-  await scanCatalog(ctx, "codex", joinPath(h, ".codex/skills"));
-  await scanCatalog(ctx, "zcode", joinPath(h, ".zcode/skills"));
+  // Home-anchored catalogs — the user's own; a symlinked top-level skill dir is
+  // followed (resolved via realpath).
+  await scanCatalog(ctx, "claude", joinPath(h, ".claude/skills"), true);
+  await scanCatalog(ctx, "codex", joinPath(h, ".codex/skills"), true);
+  await scanCatalog(ctx, "zcode", joinPath(h, ".zcode/skills"), true);
   await scanClaudePlugins(ctx, h);
 
   // Workspace-scoped catalog — only when a real workspace resolved.
