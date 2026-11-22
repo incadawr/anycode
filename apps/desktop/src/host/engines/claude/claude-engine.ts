@@ -1165,14 +1165,11 @@ export class ClaudeEngine implements SessionEngine {
     // A foreground task (a long Bash command, a foreground Agent) completes
     // inside the owner's own tool call: no autonomous turn follows it.
     if (this.nativeBackgroundTasks.takeForegroundCompletion(frame)) return;
-    // The CLI attaches notifications arriving during an autonomous turn to
-    // that turn; they do not schedule another turn.
-    if (this.nativeTurn) {
-      if (!settledKnownTask && !this.nativeBackgroundTasks.knowsNotification(frame)) console.error("[claude] background turn received an unrecognised task notification");
-      return;
-    }
     if (settledKnownTask || this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
-    else this.unmatchedNotification = true;
+    else {
+      this.unmatchedNotification = true;
+      console.error("[claude] unrecognised task notification");
+    }
   }
 
   private trackTranslatedNotification(frame: ClaudeStreamMessage, events: readonly AgentEvent[], knownSubagent: boolean): void {
@@ -3216,21 +3213,17 @@ export class ClaudeEngine implements SessionEngine {
         // sets lastTurnTokenUsage; the owner's numbers must stay its own).
         const native = this.nativeTurn;
         if (!native && this.nativeArmed) this.nativeArmed = false;
-        // Once an admitted turn ends, its armed notification cannot wake it
-        // again, even if the CLI omitted the result's origin.
-        if (native && taskNotificationRunId(frame) === undefined && this.armedNotification) this.removeNotification(this.armedNotification);
-        this.settleNotificationResult(frame);
+        const resultRun = taskNotificationRunId(frame);
+        const knownResult = resultRun !== undefined && this.pendingNotifications.some(entry => entry.runId === resultRun || entry.runId === undefined);
+        if (!native || knownResult) this.settleNotificationResult(frame);
+        else this.armedNotification = null;
         if (native) {
           if (native.cancelTimer) clearTimeout(native.cancelTimer);
           const origin = (frame as Record<string, unknown>).origin;
           const fields = origin && typeof origin === "object" ? origin as Record<string, unknown> : undefined;
           if (native.cancelled) {
             for (const event of native.translator.finishTerminal("cancelled")) native.stream.push(event);
-          } else if ((frame as Record<string, unknown>).subtype === "success" || (!this.unmatchedNotification && fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0)) {
-            if (fields?.kind !== "task-notification" || fields.producer !== "session-task" || typeof fields.runId !== "string" || !fields.runId) {
-              if (this.turnActive) this.nativeAmbiguous = true;
-              console.error("[claude] autonomous turn result did not identify a task notification");
-            }
+          } else if (knownResult && fields?.kind === "task-notification" && fields.producer === "session-task" && typeof fields.runId === "string" && fields.runId.length > 0) {
             native.events.push(...native.translator.onMessage(frame));
             for (const event of native.events) native.stream.push(event);
             // This turn ran independently of runTurn's post-turn refresh.
