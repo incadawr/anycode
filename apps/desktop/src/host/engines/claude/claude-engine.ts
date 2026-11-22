@@ -1362,7 +1362,22 @@ export class ClaudeEngine implements SessionEngine {
 
   /** Caller supplies the same native identity, choosing fresh or persisted resume. */
   async replaceTransport(spawn: TransportSpawn): Promise<void> {
-    if (!this.transportReady() || this.orchestrationState === "on" || this.orchestrationState === "quarantined") {
+    return this.swapTransport(spawn, false);
+  }
+
+  /**
+   * `retire`: the old process is discarded, not handed over. Its open
+   * requests do not block the swap: inbound permission prompts are denied
+   * (as Stop does) and outbound requests are rejected when the old client
+   * closes. Everything up to the first await runs synchronously, so the
+   * reservation (`replacement`) and the stopped idle reader take effect
+   * before any frame of the old process can be read again.
+   */
+  private async swapTransport(spawn: TransportSpawn, retire: boolean): Promise<void> {
+    const ready = retire
+      ? !!this.transportFactory && !this.disposed && !this.terminalError && !this.replacement && !this.turnActive
+      : this.transportReady();
+    if (!ready || this.orchestrationState === "on" || this.orchestrationState === "quarantined") {
       throw new Error("Claude transport is not ready for replacement");
     }
     if ((spawn.sessionId ?? spawn.resume) !== this.sessionRef || (spawn.sessionId !== undefined && spawn.resume !== undefined)) throw new Error("Claude native identity changed");
@@ -1372,6 +1387,11 @@ export class ClaudeEngine implements SessionEngine {
     this.frameConsumed();
     this.approvals?.denyAll("Claude transport is restarting", "turn_cancelled");
     this.settleOrphanedTasks();
+    if (retire) {
+      const open = this.foreignTurn;
+      this.foreignTurn = null;
+      open?.done.resolve();
+    }
     const factory = this.transportFactory!;
     const abort = this.replacementAbort = new AbortController();
     const current = () => !this.disposed && !abort.signal.aborted && generation === this.transportGeneration;
@@ -1640,19 +1660,19 @@ export class ClaudeEngine implements SessionEngine {
    * still running for that input dies with it.
    */
   private async retireUnconfirmedTransport(): Promise<void> {
+    // No await before the swap reserves the transport: a frame the old
+    // process emits from here on is never read, and open requests (a quota
+    // read, a pending permission prompt) are cancelled with it instead of
+    // being waited out.
     const open = this.foreignTurn;
     this.foreignTurn = null;
     open?.done.resolve();
     this.failNativeTurn();
-    await this.awaitContextUsageInFlight();
-    // A control request still in flight (a quota read) settles quickly; the
-    // replacement refuses a busy transport.
-    for (let waited = 0; this.client.hasPendingRequests && waited < CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS; waited += 25) await new Promise(resolve => setTimeout(resolve, 25));
     this.idleFailure = new Error("Claude turn ended unconfirmed; resuming on a new process");
-    await this.resumeIdleTransport();
+    await this.resumeIdleTransport(true);
   }
 
-  private async resumeIdleTransport(): Promise<void> {
+  private async resumeIdleTransport(retire = false): Promise<void> {
     // Only an idle stream death qualifies. Never replay an in-flight prompt,
     // foreign turn, orchestration transition, or protocol failure mid-turn.
     if (!this.idleFailure || this.terminalError || this.disposed) return;
@@ -1663,10 +1683,10 @@ export class ClaudeEngine implements SessionEngine {
       return;
     }
     try {
-      await this.replaceTransport({
+      await this.swapTransport({
         ...(this.nativeMaterialized ? { resume: this.sessionRef } : { sessionId: this.sessionRef }),
         ...(this.settings?.effort ? { effort: this.settings.effort } : {}),
-      });
+      }, retire);
     } catch (error) {
       // Replacement may fail for a different reason from the original exit.
       // Do not log raw CLI/provider text: it can contain credentials or paths.
