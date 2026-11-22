@@ -259,7 +259,6 @@ export class ClaudeTurnTranslator {
       const task = this.options.nativeBackgroundTasks?.onFrame(message);
       return [...(this.options.subagents?.onFrame(message) ?? []), ...(task ? [task] : [])];
     }
-    if (message.type === "user") this.options.nativeBackgroundTasks?.observeToolResults(message);
     switch (message.type) {
       case "system":
         return this.onSystem(message);

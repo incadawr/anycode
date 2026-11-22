@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Claude sessions show a subagent's report and the reply to it as a normal answer after a long-running command, instead of a false "agent request failed" error. Messages sent afterwards stream live and are marked delivered as soon as Claude takes them.
+- Claude sessions show a subagent's report and the reply to it as a normal answer after a long-running command, instead of a false "agent request failed" error. Messages sent afterwards stream live and are marked delivered as soon as Claude takes them, including a message Claude folds into a turn it started on its own.
 
 ## [0.0.106] - 2026-11-22
 

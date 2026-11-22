@@ -65,21 +65,32 @@ describe("native background task correlation", () => {
     expect(tasks.knowsNotification(frame("task_notification", { task_id: "a", tool_use_id: "tb", status: "completed" }))).toBe(false);
     expect(tasks.onFrame(frame("task_notification", { task_id: "b", status: "failed" }))).toMatchObject({ taskId: "b", status: "failed" });
   });
-  it("tells a foreground command's completion from a backgrounded one (CLI 2.1.330 ordering)", () => {
+  it("tells a foreground task's completion from a backgrounded one, whatever the tool_result order (CLI 2.1.330)", () => {
     const tasks = new ClaudeNativeBackgroundTasks();
-    const toolResult = (id: string) => ({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }) as unknown as ClaudeStreamMessage;
+    // Foreground Bash: notification before its tool_result (live CLI order).
     tasks.onFrame(frame("task_started", { task_id: "fg", tool_use_id: "tfg", task_type: "local_bash", is_backgrounded: false }));
     const fgDone = frame("task_notification", { task_id: "fg", tool_use_id: "tfg", status: "completed" });
     tasks.onFrame(fgDone);
-    expect(tasks.isForegroundCompletion(fgDone)).toBe(true);
+    expect(tasks.takeForegroundCompletion(fgDone)).toBe(true);
+    // Consumed: the same id is never classified twice, so the set cannot leak.
+    expect(tasks.takeForegroundCompletion(fgDone)).toBe(false);
+    // Background Bash.
     tasks.onFrame(frame("task_started", { task_id: "bg", tool_use_id: "tbg", task_type: "local_bash", is_backgrounded: true }));
-    tasks.observeToolResults(toolResult("tbg"));
     const bgDone = frame("task_notification", { task_id: "bg", tool_use_id: "tbg", status: "completed" });
     tasks.onFrame(bgDone);
-    expect(tasks.isForegroundCompletion(bgDone)).toBe(false);
+    expect(tasks.takeForegroundCompletion(bgDone)).toBe(false);
+    // Foreground Agent (w0-20): not a tracked task kind, still foreground.
+    expect(tasks.onFrame(frame("task_started", { task_id: "agent", tool_use_id: "tagent", task_type: "local_agent", is_backgrounded: false }))).toBeUndefined();
+    tasks.onFrame(frame("task_updated", { task_id: "agent", patch: { status: "completed" } }));
+    expect(tasks.takeForegroundCompletion(frame("task_notification", { task_id: "agent", tool_use_id: "tagent", status: "completed" }))).toBe(true);
+    // Moved to the background by a task_updated patch: its completion starts a turn.
     tasks.onFrame(frame("task_started", { task_id: "moved", tool_use_id: "tmoved", task_type: "local_bash", is_backgrounded: false }));
-    tasks.observeToolResults(toolResult("tmoved"));
-    expect(tasks.isForegroundCompletion(frame("task_notification", { task_id: "moved", tool_use_id: "tmoved", status: "completed" }))).toBe(false);
+    tasks.onFrame(frame("task_updated", { task_id: "moved", patch: { is_backgrounded: true } }));
+    expect(tasks.takeForegroundCompletion(frame("task_notification", { task_id: "moved", tool_use_id: "tmoved", status: "completed" }))).toBe(false);
+    // Observation ending forgets every foreground id.
+    tasks.onFrame(frame("task_started", { task_id: "lost", tool_use_id: "tlost", task_type: "local_bash", is_backgrounded: false }));
+    tasks.abandonAll();
+    expect(tasks.takeForegroundCompletion(frame("task_notification", { task_id: "lost", tool_use_id: "tlost", status: "completed" }))).toBe(false);
   });
   it("does not infer tasks from unrelated or incomplete frames", () => {
     const tasks = new ClaudeNativeBackgroundTasks();
