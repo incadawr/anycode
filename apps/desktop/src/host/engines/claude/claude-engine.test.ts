@@ -39,6 +39,7 @@ import {
 import { ClaudeModelCatalog } from "./models.js";
 import { findClaudePreset } from "./presets.js";
 import { ClaudeClientError } from "./claude-client.js";
+import { CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS } from "../../../shared/claude-timeouts.js";
 import type { ClaudeStreamMessage } from "./protocol.js";
 
 const FIXTURES_DIR = fileURLToPath(new URL("./contract/fixtures/", import.meta.url));
@@ -4346,6 +4347,26 @@ describe("Claude notification-driven turns (5370 review follow-ups)", () => {
       expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
     } finally { await engine.dispose("session-close"); }
   });
+
+  it("gives a slow-exiting old process its own teardown budget before the new handshake clock starts", async () => {
+    const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const after = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport, { timeouts: { unconfirmedInputQuietMs: 20 }, next: [after] }); engine.onNativeTurn = turn => { void collect(turn); };
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [notified("a"), init, foreignAssistantFrame("odd", "ODD OUTPUT"), { ...foreignResultFrame("odd"), origin: { kind: "unknown-producer" } }]) transport.enqueue(frame as ClaudeStreamMessage);
+      await collectWithin(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
+      // A busy CLI that ignores stdin EOF: the real client escalates to
+      // SIGTERM only after 6s, past the 5s handshake timeout.
+      const close = transport.close.bind(transport);
+      transport.close = async () => { await new Promise(resolve => setTimeout(resolve, CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS + 300)); await close(); };
+      for (const frame of [init, echo("next"), ...ownerFrames("next")]) after.enqueue(frame);
+      const next = await collectWithin(engine.runTurn("next", { signal: new AbortController().signal }), CLAUDE_INIT_HANDSHAKE_TIMEOUT_MS + 3_000);
+      expect(after.sent).toEqual(["next"]);
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
+      expect(next).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  }, 15_000);
 
   it("does not drop a pending notification when absorbing an unattributable turn", async () => {
     const transport = new FakeTransport({ frames: [backgroundBash("a"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
