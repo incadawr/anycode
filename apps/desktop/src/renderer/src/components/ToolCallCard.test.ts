@@ -24,6 +24,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ChildBadgeKind } from "../child-layout.js";
 import {
   activityRowText,
+  collapsedActivityPreview,
+  subagentIdentityBadge,
   activityRows,
   activityVerb,
   AgentCardBody,
@@ -1975,7 +1977,8 @@ describe("ToolCallCard (SSR component render) — generic non-Agent path stays u
     const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
     // Collapsed one-liner grammar (F16, unchanged) present...
     expect(html).toContain("subagent-collapsed-line");
-    expect(html).toContain("SubAgent");
+    // ...with the agent type (not a generic "SubAgent" label) leading it...
+    expect(html).toContain('class="subagent-persona"');
     // ...and the W3 expanded-body sections are NOT mounted (card is collapsed by default).
     expect(html).not.toContain("subagent-activity-feed");
     expect(html).not.toContain("subagent-prompt-plaque");
@@ -2222,11 +2225,12 @@ describe("identity display — inherited parent model/engine (SSR static renders
         parentEngine: "codex",
       }),
     );
-    expect(html).toContain('class="subagent-collapsed-model subagent-collapsed-model-inherited"');
-    expect(html).toContain("parent-model (inherited)");
-    expect(html).toContain("codex (inherited)");
-    expect(html).toContain('title="parent-model (inherited)"');
-    expect(html).toContain('title="codex (inherited)"');
+    // One muted badge; the "(inherited)" provenance lives in its tooltip, not its text.
+    expect(html).toContain('class="subagent-collapsed-badge"');
+    expect(html).toContain(">parent-model · codex</span>");
+    expect(html).toContain("Model: parent-model (inherited from the parent session)");
+    expect(html).toContain("Engine: codex (inherited from the parent session)");
+    expect(html).not.toContain("parent-model (inherited)</span>");
   });
 
   it("collapsed row keeps an explicit child model winning over a different parent", () => {
@@ -2241,13 +2245,13 @@ describe("identity display — inherited parent model/engine (SSR static renders
         parentEngine: "codex",
       }),
     );
-    expect(html).toContain('class="subagent-collapsed-model"');
+    expect(html).toContain('class="subagent-collapsed-badge"');
     expect(html).toContain(">glm-5.3</span>");
     // Explicit engine while RUNNING renders as the counters' "claude · " prefix
-    // (dedup rule), not as a collapsed engine pill.
+    // (dedup rule), not inside the badge.
     expect(html).toContain(">claude · turn");
-    expect(html).not.toContain("subagent-collapsed-engine");
-    expect(html).not.toContain("(inherited)");
+    expect(html).not.toContain("Engine:");
+    expect(html).not.toContain("(inherited");
   });
 
   it("collapsed row shows a SETTLED explicit engine pill (counters drop the engine prefix once settled)", () => {
@@ -2265,9 +2269,8 @@ describe("identity display — inherited parent model/engine (SSR static renders
         parentEngine: "codex",
       }),
     );
-    expect(html).toContain('class="subagent-collapsed-engine"');
-    expect(html).toContain(">claude</span>");
-    expect(html).not.toContain("(inherited)");
+    expect(html).toContain(">glm-5.3 · claude</span>");
+    expect(html).not.toContain("(inherited");
   });
 
   it("a running card does NOT duplicate the explicit engine: counters prefix it, so no engine pill", () => {
@@ -2284,8 +2287,8 @@ describe("identity display — inherited parent model/engine (SSR static renders
     );
     // The running counters line carries "codex · " as its prefix...
     expect(html).toContain("codex · ");
-    // ...so the collapsed engine pill is suppressed (no "codex (inherited)" either).
-    expect(html).not.toContain("subagent-collapsed-engine");
+    // ...so the badge omits the engine (no "Engine:" tooltip line either).
+    expect(html).not.toContain("Engine:");
   });
 
   it("expanded body shows the inherited parent model and engine with the -inherited classes", () => {
@@ -2343,13 +2346,12 @@ describe("identity display — inherited parent model/engine (SSR static renders
         createElement(ToolCallCard, { block }),
       ),
     );
-    expect(html).toContain("glm-5.3 (inherited)");
-    expect(html).toContain("core (inherited)");
     // A running Agent card renders collapsed by default, so the inherited
-    // identity surfaces in the COLLAPSED row's pills (the expanded body's
+    // identity surfaces in the COLLAPSED row's badge (the expanded body's
     // own -inherited classes are covered by the direct AgentCardBody tests).
-    expect(html).toContain("subagent-collapsed-model-inherited");
-    expect(html).toContain("subagent-collapsed-engine-inherited");
+    expect(html).toContain(">glm-5.3 · core</span>");
+    expect(html).toContain("Model: glm-5.3 (inherited from the parent session)");
+    expect(html).toContain("Engine: core (inherited from the parent session)");
   });
 });
 
@@ -3216,5 +3218,81 @@ describe("background controls subscription", () => {
         createElement(ToolCallCard, { block: mkAgentBlock({ toolName, status }) })));
       expect(reads > 0).toBe(expected);
     }
+  });
+});
+
+describe("collapsed Agent card — live preview and header", () => {
+  const entries = (n: number) => Array.from({ length: n }, (_, i) => ({ toolName: "Bash", summary: `step ${i + 1}` }));
+
+  it("collapsedActivityPreview returns the newest three rows of a running agent, oldest first", () => {
+    expect(collapsedActivityPreview(mkSubagent({ final: null, activity: entries(5) }))).toEqual([
+      "Ran step 3",
+      "Ran step 4",
+      "Ran step 5",
+    ]);
+    expect(collapsedActivityPreview(mkSubagent({ final: null, activity: entries(1) }))).toEqual(["Ran step 1"]);
+    expect(collapsedActivityPreview(mkSubagent({ final: null, activity: [] }))).toEqual([]);
+    expect(collapsedActivityPreview(null)).toEqual([]);
+  });
+
+  it("a settled agent shows no preview", () => {
+    expect(
+      collapsedActivityPreview(mkSubagent({ final: { status: "completed", durationMs: 10 }, activity: entries(4) })),
+    ).toEqual([]);
+  });
+
+  it("a collapsed running card renders the preview rows without expanding", () => {
+    const block = mkAgentBlock({ status: "running", subagent: mkSubagent({ final: null, activity: entries(5) }) });
+    const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
+    expect(html).toContain("subagent-collapsed-preview");
+    expect(html).toContain("Ran step 5");
+    expect(html).toContain("Ran step 3");
+    expect(html).not.toContain("Ran step 2<");
+  });
+
+  it("a settled collapsed card renders no preview list", () => {
+    const block = mkAgentBlock({
+      status: "success",
+      subagent: mkSubagent({ final: { status: "completed", durationMs: 10 }, activity: entries(3) }),
+    });
+    expect(renderToStaticMarkup(createElement(ToolCallCard, { block }))).not.toContain("subagent-collapsed-preview");
+  });
+
+  it("subagentIdentityBadge strips (inherited) from the text and explains it in the tooltip", () => {
+    const badge = subagentIdentityBadge(
+      resolveSubagentIdentity(null, null, "opus", "claude"),
+      true,
+    );
+    expect(badge).toEqual({
+      text: "opus · claude",
+      title: "Model: opus (inherited from the parent session)\nEngine: claude (inherited from the parent session)",
+    });
+    expect(badge?.text).not.toContain("inherited");
+    expect(subagentIdentityBadge(resolveSubagentIdentity("glm", "claude", undefined, undefined), false)).toEqual({
+      text: "glm",
+      title: "Model: glm",
+    });
+    expect(subagentIdentityBadge(resolveSubagentIdentity(null, null, undefined, undefined), true)).toBeNull();
+  });
+
+  it("the header leads with agent type and description, not the identity string", () => {
+    const block = mkAgentBlock({
+      status: "running",
+      subagent: mkSubagent({ agentType: "Explore", model: null, engine: null }),
+    });
+    const html = renderToStaticMarkup(
+      createElement(ToolCallHeaderRow, {
+        block,
+        expanded: false,
+        bodyId: "b",
+        onToggleExpanded: () => {},
+        parentModel: "opus",
+        parentEngine: "claude",
+      }),
+    );
+    expect(html).toContain('<span class="subagent-persona">Explore</span>');
+    expect(html.indexOf("Explore")).toBeLessThan(html.indexOf("survey the repo"));
+    expect(html).toContain(">opus · claude</span>");
+    expect(html).not.toContain("(inherited)</span>");
   });
 });
