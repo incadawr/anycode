@@ -143,11 +143,19 @@ export interface ClaudeEngineTimeouts {
   postInterruptSettleMs: number;
   /** minimum spacing between mid-turn `get_context_usage` refreshes. */
   midTurnContextUsageIntervalMs: number;
+  /**
+   * How long the CLI must stay quiet before an input whose own turn could not
+   * be identified counts as settled: a report turn ends once the CLI goes quiet
+   * after absorbing the turn that may have folded it in, and the next send waits
+   * this long for a late answer to an unconfirmed input to start.
+   */
+  unconfirmedInputQuietMs: number;
 }
 
 export const DEFAULT_CLAUDE_ENGINE_TIMEOUTS: ClaudeEngineTimeouts = {
   postInterruptSettleMs: CLAUDE_POST_INTERRUPT_SETTLE_MS,
   midTurnContextUsageIntervalMs: 30_000,
+  unconfirmedInputQuietMs: 5_000,
 };
 
 /** The narrow transport seam, so lifecycle tests need no real child process. */
@@ -1080,6 +1088,14 @@ export class ClaudeEngine implements SessionEngine {
   private readonly pendingNotifications: { taskId: string; runId?: string }[] = [];
   private unmatchedNotification = false;
   private nativeArmed = false;
+  /** The pending entry whose turn the last idle init started; settled by that turn's result. */
+  private armedNotification: { taskId: string; runId?: string } | null = null;
+  /**
+   * An input whose turn ended without its own result being identified: its
+   * answer may still be on the way, so the next send first waits for the CLI
+   * to go quiet (or for that answer to be absorbed).
+   */
+  private unconfirmedInput = false;
   private nativeTurn: { stream: NativeTurn; translator: ClaudeTurnTranslator; events: AgentEvent[]; cancelled?: boolean; cancelTimer?: ReturnType<typeof setTimeout> } | null = null;
   private nativeAmbiguous = false;
 
@@ -1090,16 +1106,37 @@ export class ClaudeEngine implements SessionEngine {
     }
   }
 
-  /** The oldest notification's turn started (its init arrived). */
+  /** Oldest entry, for a consumption that names no run. */
   private consumeNotification(): void {
-    this.pendingNotifications.shift();
+    const removed = this.pendingNotifications.shift();
+    if (removed === this.armedNotification) this.armedNotification = null;
   }
 
-  /** A result or replay that names its notification run settles exactly that entry. */
+  private removeNotification(entry: { taskId: string; runId?: string }): void {
+    const index = this.pendingNotifications.indexOf(entry);
+    if (index >= 0) this.pendingNotifications.splice(index, 1);
+    if (entry === this.armedNotification) this.armedNotification = null;
+  }
+
+  /**
+   * A result or replay naming its notification run settles exactly that entry.
+   * Only when no entry carries that run (an older CLI without `run_id`) does it
+   * fall back to the armed, else the oldest, entry without a run id.
+   */
   private consumeNotificationRun(runId: unknown): void {
     if (typeof runId !== "string" || !runId) return;
-    const index = this.pendingNotifications.findIndex(entry => entry.runId === runId);
-    if (index >= 0) this.pendingNotifications.splice(index, 1);
+    const named = this.pendingNotifications.find(entry => entry.runId === runId);
+    if (named) { this.removeNotification(named); return; }
+    const fallback = this.armedNotification?.runId === undefined && this.armedNotification ? this.armedNotification : this.pendingNotifications.find(entry => entry.runId === undefined);
+    if (fallback) this.removeNotification(fallback);
+  }
+
+  /** A turn the idle classifier saw end settles its own notification. */
+  private settleNotificationResult(frame: ClaudeStreamMessage): void {
+    // An untagged result never ends an autonomous turn, so it consumes nothing.
+    const runId = taskNotificationRunId(frame);
+    if (runId !== undefined) this.consumeNotificationRun(runId);
+    this.armedNotification = null;
   }
 
   /** A notification the CLI fed into a turn as a replayed user frame has been consumed by that turn. */
@@ -1117,6 +1154,8 @@ export class ClaudeEngine implements SessionEngine {
     this.pendingNotifications.length = 0;
     this.unmatchedNotification = false;
     this.nativeArmed = false;
+    this.armedNotification = null;
+    this.unconfirmedInput = false;
   }
 
   /** Records a task notification seen by the engine. */
@@ -1696,9 +1735,16 @@ export class ClaudeEngine implements SessionEngine {
     let ownerCommittedEarly = false;
     let absorbingCandidate = false;
     let absorbedOwnerEcho = false;
+    /** A report is never replayed, so nothing shows the CLI folding it into an autonomous turn. */
+    const awaitsUnreplayedTurn = options.origin === "system";
+    /** Armed after an absorbed autonomous turn while an unreplayed input still waits for its answer. */
+    let reportReconcile: SettleDeadline | null = null;
+    const cancelReconcile = (): void => { reportReconcile?.cancel(); reportReconcile = null; };
     /** Ends this turn without the input's own result: not an engine failure. */
     const unattributedTurnEnd = (): AgentEvent[] => {
       console.error("[claude] a turn result could not be attributed to the sent input");
+      cancelReconcile();
+      this.unconfirmedInput = true;
       return [
         warning("Claude answered in a turn AnyCode could not attribute to this message, so its output is not shown here. The message may still have reached Claude."),
         ...translator.finishTerminal("cancelled"),
@@ -1918,6 +1964,38 @@ export class ClaudeEngine implements SessionEngine {
           // foreign turns re-enter the wait above) before any send.
           continue barrier;
         }
+        // (c) An earlier input ended without its own result being identified:
+        //     its answer may still start. Hold the send until the CLI has been
+        //     quiet for a bounded window, absorbing whatever arrives as foreign,
+        //     so a late answer can never acknowledge or complete this input.
+        if (this.unconfirmedInput) {
+          const disposal = this.ensureDisposalWait();
+          const quiet = deadline(this.bounds.unconfirmedInputQuietMs);
+          let raced;
+          try {
+            raced = await Promise.race([
+              disposal.then(() => ({ kind: "dispose" as const })),
+              abort.promise.then(() => ({ kind: "abort" as const })),
+              quiet.promise,
+              this.takeFrame().then(
+                (value) => ({ kind: "frame" as const, value }),
+                (error: unknown) => ({ kind: "rejected" as const, error }),
+              ),
+            ]);
+          } finally { quiet.cancel(); }
+          if (raced.kind === "dispose" || raced.kind === "abort") { sendCancelled = true; break barrier; }
+          if (raced.kind === "settle-timeout") { this.unconfirmedInput = false; continue barrier; }
+          if (raced.kind === "rejected") {
+            if (this.disposed) { sendCancelled = true; break barrier; }
+            throw this.terminalError ?? (raced.error instanceof Error ? raced.error : new Error(String(raced.error)));
+          }
+          // A stream end stays in the read slot for the drain above to handle.
+          if (!raced.value.done) {
+            this.frameConsumed();
+            this.absorbIdleFrame(raced.value.value);
+          }
+          continue barrier;
+        }
         // FINAL SEGMENT — no await or yield from here to the send: readiness,
         // disposal and Stop are re-inspected synchronously. A frame that
         // landed during the last checkpoint's microtask gap is classified
@@ -1970,7 +2048,20 @@ export class ClaudeEngine implements SessionEngine {
           // (dispose, or a swept turn) is harmlessly skipped below.
           this.nextBridgeEvent().then((event) => ({ kind: "bridge-event" as const, event })),
           ...settleRacers(),
+          ...(reportReconcile !== null ? [reportReconcile.promise.then(() => ({ kind: "report-quiet" as const }))] : []),
         ]);
+        if (raced.kind === "report-quiet") {
+          // The CLI went quiet after an autonomous turn without starting one
+          // for this unreplayed input: it was folded into that turn, or its
+          // answer is still to come (the send barrier fences that answer).
+          reportReconcile = null;
+          (settle as SettleDeadline | null)?.cancel();
+          for (const event of unattributedTurnEnd()) {
+            if (event.type === "loop_end") terminal = true;
+            yield event;
+          }
+          continue;
+        }
         if (raced.kind === "bridge-event") {
           // Consume the cached slot EXACTLY once, before touching raced.value
           // — same discipline as the `usage` arm above. A `null` here is a
@@ -2040,6 +2131,7 @@ export class ClaudeEngine implements SessionEngine {
         // next iteration's takeFrame() re-parks. Exactly one read in flight.
         this.frameConsumed();
         const frame = raced.value.value;
+        cancelReconcile();
         const ownerEcho = frame.type === "user" && frame.isReplay === true && (frame.session_id === undefined || frame.session_id === this.sessionRef) && matchesUserReplay(frame.message?.content, sentContent);
         if (ownerEcho) ownerEchoSeen = true;
         this.observeNotificationReplay(frame);
@@ -2047,11 +2139,14 @@ export class ClaudeEngine implements SessionEngine {
         // classifier; it keeps every frame up to that turn's result.
         if (absorbingCandidate) {
           if (ownerEcho) absorbedOwnerEcho = true;
-          this.absorbIdleFrame(frame);
+          this.absorbIdleFrame(frame, true);
           if (frame.type !== "result") continue;
           absorbingCandidate = false;
           this.nativeAmbiguous = false;
-          if (taskNotificationRunId(frame) !== undefined && !absorbedOwnerEcho) continue;
+          if (taskNotificationRunId(frame) !== undefined && !absorbedOwnerEcho) {
+            if (awaitsUnreplayedTurn) reportReconcile = deadline(this.bounds.unconfirmedInputQuietMs);
+            continue;
+          }
           for (const event of unattributedTurnEnd()) {
             if (event.type === "loop_end") terminal = true;
             yield event;
@@ -2105,11 +2200,14 @@ export class ClaudeEngine implements SessionEngine {
             continue;
           }
           if (previewVisible) { previewVisible = false; yield { type: "claude_turn_preview", preview: null }; }
-          // A report sent by AnyCode (system origin) is never replayed when it
-          // carries a <task-notification> block, so an untagged result is its
-          // identity, but only while every notification in flight is one whose
-          // autonomous turn is known to end tagged (see taskNotificationRunId).
-          const untaggedIsOwner = ownerEchoSeen || (options.origin === "system" && !this.unmatchedNotification);
+          // The CLI tags every autonomous turn's result and never tags the turn
+          // of an input written to stdin (see taskNotificationRunId), and the
+          // send barrier fences any earlier input whose answer is still owed
+          // (unconfirmedInput). So an untagged result is this input's answer: a
+          // human input is also identified by its echo, while a report sent by
+          // AnyCode (system origin) carries a <task-notification> block, which
+          // the CLI never replays.
+          const untaggedIsOwner = ownerEchoSeen || options.origin === "system";
           let decision: "owner" | "background" | "unattributed";
           if (ownerIdentified) decision = "owner";
           // Outgrown buffer: only the owner's own echo may claim it before its result.
@@ -2121,6 +2219,7 @@ export class ClaudeEngine implements SessionEngine {
           candidateFrames = null;
           if (decision === "owner") {
             this.nativeArmed = false;
+            this.armedNotification = null;
             if (frame.type !== "result") ownerCommittedEarly = true;
             for (const candidate of candidates) {
               if (candidate.type === "assistant" || candidate.type === "stream_event" || (candidate.type === "system" && candidate.subtype === "init")) options.onInputAccepted?.();
@@ -2131,26 +2230,28 @@ export class ClaudeEngine implements SessionEngine {
                 yield event;
               }
             }
-            if (frame.type === "result" && taskNotificationRunId(frame) !== undefined) this.consumeNotificationRun(taskNotificationRunId(frame));
           } else if (decision === "background" && frame.type !== "result") {
             // Too long to keep buffering, with no sign of the owner: the idle
             // classifier takes it from here until its result.
             console.error("[claude] candidate turn exceeded the frame buffer; classifying it as background");
-            for (const candidate of candidates) this.absorbIdleFrame(candidate);
+            for (const candidate of candidates) this.absorbIdleFrame(candidate, true);
             absorbingCandidate = true;
           } else if (decision === "background") {
-            for (const candidate of candidates) this.absorbIdleFrame(candidate);
-            if (this.nativeAmbiguous) {
-              this.nativeAmbiguous = false;
-              throw new Error("Claude returned an ambiguous background turn result");
-            }
+            for (const candidate of candidates) this.absorbIdleFrame(candidate, true);
+            // The native turn already reported its own failure; the owner input is unaffected.
+            if (this.nativeAmbiguous) console.error("[claude] background turn result was ambiguous");
+            this.nativeAmbiguous = false;
+            // An unreplayed input may have been folded into the turn that just
+            // ended: if the CLI now goes quiet, its answer was that turn's.
+            if (awaitsUnreplayedTurn) reportReconcile = deadline(this.bounds.unconfirmedInputQuietMs);
           } else {
-            // Neither tagged as autonomous nor identifiable as this input's
-            // turn. Not an engine failure: keep the output out of this
-            // transcript, leave the input unconfirmed, and keep the engine.
+            // A result with an origin this engine does not know. Not an engine
+            // failure: keep the output out of this transcript, leave the input
+            // unconfirmed, and keep the engine.
             for (const candidate of candidates) {
-              this.absorbIdleFrame(candidate);
+              this.absorbIdleFrame(candidate, true);
               this.nativeArmed = false;
+              this.armedNotification = null;
             }
             this.nativeAmbiguous = false;
             for (const event of unattributedTurnEnd()) {
@@ -2165,8 +2266,14 @@ export class ClaudeEngine implements SessionEngine {
           const origin = (frame as Record<string, unknown>).origin as Record<string, unknown>;
           // An owner turn identified by its echo may still end tagged as the
           // notification turn the CLI folded the owner's input into.
-          if (!(ownerCommittedEarly && origin.kind === "task-notification")) {
-            throw new Error("Claude returned a turn result with an unrecognised origin");
+          if (!((ownerCommittedEarly || ownerEchoSeen) && origin.kind === "task-notification")) {
+            // Frames of this turn already streamed; end it without its result
+            // instead of failing the engine, and fence any answer still owed.
+            for (const event of unattributedTurnEnd()) {
+              if (event.type === "loop_end") terminal = true;
+              yield event;
+            }
+            continue;
           }
           this.consumeNotificationRun(origin.runId);
         }
@@ -3020,14 +3127,17 @@ export class ClaudeEngine implements SessionEngine {
   /** classification applied by BOTH idle and pre-send drains. Returns
    *  nothing; mutates engine state only. Foreign frames NEVER reach an owner
    *  turn's translator. */
-  private absorbIdleFrame(frame: ClaudeStreamMessage): void {
+  private absorbIdleFrame(frame: ClaudeStreamMessage, observed = false): void {
     try {
-      this.observeNotificationReplay(frame);
+      // runTurn observes every frame as it arrives; a candidate replayed here must not count twice.
+      if (!observed) this.observeNotificationReplay(frame);
       if (frame.type === "system" && (frame as { subtype?: string }).subtype === "init") {
         if (this.pendingNotifications.length > 0 && this.foreignTurn === null) {
           this.nativeArmed = !this.unmatchedNotification;
           if (this.unmatchedNotification) console.error("[claude] background turn has an unrecognised task notification");
-          this.consumeNotification();
+          // The entry stays pending until this turn's result names its run:
+          // the CLI may run a later notification's turn first.
+          this.armedNotification = this.pendingNotifications[0] ?? null;
         }
         if (!this.nativeTurn) this.unmatchedNotification = false;
         // Live posture is state, not transcript: reconcile even mid-foreign-turn.
@@ -3063,7 +3173,10 @@ export class ClaudeEngine implements SessionEngine {
         // sets lastTurnTokenUsage; the owner's numbers must stay its own).
         const native = this.nativeTurn;
         if (!native && this.nativeArmed) this.nativeArmed = false;
-        this.consumeNotificationRun(taskNotificationRunId(frame));
+        this.settleNotificationResult(frame);
+        // An untagged result outside an owner turn is the late answer to an
+        // unconfirmed input (autonomous turns are always tagged).
+        if (taskNotificationRunId(frame) === undefined) this.unconfirmedInput = false;
         if (native) {
           if (native.cancelTimer) clearTimeout(native.cancelTimer);
           const origin = (frame as Record<string, unknown>).origin;

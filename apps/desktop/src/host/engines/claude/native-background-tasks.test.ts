@@ -92,6 +92,14 @@ describe("native background task correlation", () => {
     tasks.abandonAll();
     expect(tasks.takeForegroundCompletion(frame("task_notification", { task_id: "lost", tool_use_id: "tlost", status: "completed" }))).toBe(false);
   });
+  it("keys foreground state by run, so a stale update for an earlier run of the same task id is ignored", () => {
+    const tasks = new ClaudeNativeBackgroundTasks();
+    tasks.onFrame(frame("task_started", { task_id: "x", run_id: "r1", tool_use_id: "t1", task_type: "local_bash", is_backgrounded: false }));
+    tasks.onFrame(frame("task_started", { task_id: "x", run_id: "r2", tool_use_id: "t2", task_type: "local_bash", is_backgrounded: false }));
+    tasks.onFrame(frame("task_updated", { task_id: "x", run_id: "r1", patch: { is_backgrounded: true } }));
+    expect(tasks.takeForegroundCompletion(frame("task_notification", { task_id: "x", run_id: "r1", tool_use_id: "t1", status: "completed" }))).toBe(false);
+    expect(tasks.takeForegroundCompletion(frame("task_notification", { task_id: "x", run_id: "r2", tool_use_id: "t2", status: "completed" }))).toBe(true);
+  });
   it("does not infer tasks from unrelated or incomplete frames", () => {
     const tasks = new ClaudeNativeBackgroundTasks();
     expect(tasks.onFrame(frame("task_started", { task_id: "x", tool_use_id: "t", task_type: "local_agent" }))).toBeUndefined();
