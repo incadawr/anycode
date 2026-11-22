@@ -1,8 +1,7 @@
 {
  "legacy": [
   "app.css | .account-budget-floating | position: absolute + z-index",
-  "app.css | .claude-task-details | position: absolute + z-index",
-  "app.css | .ctx-popover | position: fixed",
+   "app.css | .ctx-popover | position: fixed",
   "app.css | .dock-panel-drawer | position: absolute + z-index",
   "app.css | .environment-menu | position: absolute + z-index",
   "app.css | .lsp-panel | position: absolute + z-index",
@@ -73,6 +72,7 @@
   "settings.css | .update-banner | position: fixed"
  ],
  "exceptions": {
+  "app.css | .claude-bg-tasks | position: absolute + z-index": "Corner indicator button pinned inside the composer box; an inline control placement, the popover itself is an AnchoredPanel.",
   "app.css | .window-controls | position: fixed": "Window chrome pinned to the viewport corner; not an overlay.",
   "app.css | .welcome-titlebar | position: fixed": "Draggable titlebar strip of the welcome screen; window chrome, not an overlay.",
   "app.css | .dock-split-pane | position: absolute + z-index": "Pane stacking inside the dock split layout; layout, not an overlay.",

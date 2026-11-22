@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Button, IconButton, IconDanger, IconInfo, IconSpinner, IconSuccess } from "../ui/index.js";
+import { AnchoredPanel, Button, IconButton, IconDanger, IconInfo, IconSpinner, IconSuccess } from "../ui/index.js";
 import type { TranscriptBlock } from "../store.js";
 import { backgroundCardStatus, backgroundTaskKindLabel, formatTaskElapsed, outputFileFromResult, visibleBackgroundTasks, type ClaudeBackgroundTask } from "../claude-background-tasks.js";
 
@@ -60,19 +60,13 @@ export function ClaudeBackgroundTasks() {
   const [openFailed, setOpenFailed] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
   const requestId = useRef<string | null>(null);
-  const panel = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
   useOverlayFlag(open);
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.stopPropagation(); close(); triggerRef.current?.focus(); } };
-    const onPointer = (event: MouseEvent) => {
-      const node = event.target as Node;
-      if (!panel.current?.contains(node) && !triggerRef.current?.contains(node)) close();
-    };
     document.addEventListener("keydown", onKey);
-    document.addEventListener("mousedown", onPointer);
-    return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onPointer); };
+    return () => { document.removeEventListener("keydown", onKey); };
   }, [open, close]);
 
   // Until one is picked, show the first running task (else the latest one), so the output is visible on open.
@@ -120,8 +114,8 @@ export function ClaudeBackgroundTasks() {
     <IconButton label={label} pressed={open} className={`claude-bg-trigger${running > 0 ? " claude-bg-trigger-running" : ""}`}
       aria-expanded={open} aria-haspopup="dialog" onClick={() => { if (!open) setSelected(task?.taskId ?? null); setOpen(value => !value); setOpenFailed(false); }}
       icon={<>{running > 0 ? <IconSpinner size={14} className="icon-spin" /> : <IconSuccess size={14} />}<span className="claude-bg-count">{running > 0 ? running : visible.length}</span></>} />
-    {open && <div ref={panel} className="claude-bg-popover" role="dialog" aria-label="Background tasks">
-      <div className="claude-bg-head"><span>Background tasks</span><span>{running > 0 ? `${running} running` : "all finished"}</span></div>
+    <AnchoredPanel open={open} onClose={close} anchorRef={triggerRef} title="Background tasks" side="top" align="end" className="claude-bg-panel"
+      headerActions={<span className="claude-bg-status">{running > 0 ? `${running} running` : "all finished"}</span>}>
       <div className="claude-bg-body">
         <ul className="claude-bg-list">
           {visible.map(item => {
@@ -147,6 +141,6 @@ export function ClaudeBackgroundTasks() {
               : <pre className="claude-bg-output" tabIndex={0} aria-label="Task output">{`${shown.truncated ? "[earlier output omitted]\n" : ""}${tail(shown.content)}`}</pre>)}
       </div>
       {task && ref && <div className="claude-bg-foot"><Button size="sm" variant="secondary" onClick={() => void window.anycode.claudeTaskOutput.open({ taskId: task.taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) }).then(result => setOpenFailed(!result.ok), () => setOpenFailed(true))}>Open output file</Button>{openFailed && <span className="claude-bg-note" role="alert">Could not open the file.</span>}</div>}
-    </div>}
+    </AnchoredPanel>
   </span>;
 }

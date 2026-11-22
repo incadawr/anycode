@@ -29,9 +29,11 @@ describe("Claude background tasks indicator", () => {
     const view = mount(h(ClaudeBackgroundTasks));
     const trigger = byRole(view.container, "button", "Background tasks: 1 running");
     expect(trigger.textContent).toBe("1");
-    expect(view.container.querySelector(".claude-bg-popover")).toBeNull();
+    expect(view.container.querySelector(".ak-anchored")).toBeNull();
     click(trigger);
     const panel = byRole(view.container, "dialog", "Background tasks");
+    expect(panel.classList.contains("ak-anchored")).toBe(true);
+    expect(panel.getAttribute("aria-labelledby")).toBeTruthy();
     expect(panel.textContent).toContain("Bash: sleep 5");
     expect(panel.textContent).toContain("Monitor: watch");
     expect(panel.textContent).toContain("Running in background");
@@ -63,7 +65,7 @@ describe("Claude background tasks indicator", () => {
     await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
     expect(view.container.textContent).toContain("Output is not available yet.");
     act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-    expect(view.container.querySelector(".claude-bg-popover")).toBeNull();
+    expect(view.container.querySelector(".ak-anchored")).toBeNull();
   });
 
   describe("output polling", () => {
