@@ -71,6 +71,19 @@ describe("Claude background tasks indicator", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("closes when the task list empties and does not reopen by itself", () => {
+    setup([base]);
+    const view = mount(h(ClaudeBackgroundTasks));
+    click(byRole(document.body, "button", /Background tasks/));
+    expect(document.body.querySelector(".ak-anchored")).not.toBeNull();
+    setup([]);
+    act(() => { view.render(h(ClaudeBackgroundTasks)); });
+    expect(document.body.querySelector(".ak-anchored")).toBeNull();
+    setup([base]);
+    act(() => { view.render(h(ClaudeBackgroundTasks)); });
+    expect(document.body.querySelector(".ak-anchored")).toBeNull();
+  });
+
   describe("output polling", () => {
     const openWithRef = async (tasks: unknown[]) => {
       setup(tasks);

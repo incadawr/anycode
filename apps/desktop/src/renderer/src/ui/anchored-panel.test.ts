@@ -84,3 +84,10 @@ it("AnchoredPanel: portaled to body so a containing-block ancestor cannot offset
   expect(view.container.contains(panel)).toBe(false);
   button.remove();
 });
+it("AnchoredPanel: mousedown inside the portaled panel does not close it", () => {
+  const { onClose, button } = setup({ children: h("p", { id: "inner" }, "Body") });
+  document.body.querySelector("#inner")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  document.body.querySelector(".ak-anchored__header")!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  expect(onClose).not.toHaveBeenCalled();
+  button.remove();
+});

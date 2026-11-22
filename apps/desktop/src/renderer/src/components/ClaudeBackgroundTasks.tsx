@@ -63,7 +63,9 @@ export function ClaudeBackgroundTasks() {
   // Stable callback ref: an inline one is detached and re-attached on every render, after the panel placed itself.
   const setTrigger = useCallback((node: HTMLElement | null) => { triggerRef.current = node?.querySelector("button") ?? null; }, []);
   const close = useCallback(() => setOpen(false), []);
-  useOverlayFlag(open);
+  const hasTasks = visible.length > 0;
+  useEffect(() => { if (!hasTasks) setOpen(false); }, [hasTasks]);
+  useOverlayFlag(open && hasTasks);
   // Until one is picked, show the first running task (else the latest one), so the output is visible on open.
   const task = visible.find(item => item.taskId === selected) ?? visible.find(item => item.status === "running") ?? visible[visible.length - 1];
   const taskId = task?.taskId;
@@ -110,8 +112,9 @@ export function ClaudeBackgroundTasks() {
       aria-expanded={open} aria-haspopup="dialog" onClick={() => { if (!open) setSelected(task?.taskId ?? null); setOpen(value => !value); setOpenFailed(false); }}
       icon={<>{running > 0 ? <IconSpinner size={14} className="icon-spin" /> : <IconSuccess size={14} />}<span className="claude-bg-count">{running > 0 ? running : visible.length}</span></>} />
     <AnchoredPanel open={open} onClose={close} anchorRef={triggerRef} title="Background tasks" side="top" align="end" className="claude-bg-panel"
-      headerActions={<>{openFailed && <span className="claude-bg-note" role="alert">Could not open the file.</span>}<span className="claude-bg-status">{running > 0 ? `${running} running` : "all finished"}</span>{task && ref && <Button size="sm" variant="secondary" onClick={() => void window.anycode.claudeTaskOutput.open({ taskId: task.taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) }).then(result => setOpenFailed(!result.ok), () => setOpenFailed(true))}>Open output file</Button>}</>}>
+      headerActions={<><span className="claude-bg-status">{running > 0 ? `${running} running` : "all finished"}</span>{task && ref && <Button size="sm" variant="secondary" onClick={() => void window.anycode.claudeTaskOutput.open({ taskId: task.taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) }).then(result => setOpenFailed(!result.ok), () => setOpenFailed(true))}>Open output file</Button>}</>}>
       <div className="claude-bg-body">
+        {openFailed && <div className="claude-bg-note" role="alert">Could not open the file.</div>}
         <ul className="claude-bg-list">
           {visible.map(item => {
             const state = backgroundCardStatus(item);
