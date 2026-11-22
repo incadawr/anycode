@@ -1074,6 +1074,9 @@ export class ClaudeEngine implements SessionEngine {
 
   private trackTranslatedNotification(frame: ClaudeStreamMessage, events: readonly AgentEvent[]): void {
     if (frame.type !== "system" || frame.subtype !== "task_notification") return;
+    // A foreground command the CLI tracked as a task (one running longer than
+    // a few seconds) completes inside the owner's tool call: no turn follows.
+    if (this.nativeBackgroundTasks.isForegroundCompletion(frame)) return;
     if (events.some(event => event.type === "claude_background_task" && event.status !== "running") || this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
     else this.unmatchedNotification = true;
   }
@@ -1639,6 +1642,7 @@ export class ClaudeEngine implements SessionEngine {
     let previewVisible = false;
     const previewTools = new Map<string, { id: string; name: string; status: "preparing" | "requested" | "completed" | "failed" }>();
     let ownerEchoSeen = false;
+    let ownerCommittedEarly = false;
     const sentContent = userMessageContent(options.origin === "system" ? neutralizeSystemOriginSlashes(input) : input, options.attachments);
     // the run-turn-local PENDING COMPLETION slot for a mid-turn
     // context refresh. Distinct from the engine-level physical in-flight guard
@@ -1975,7 +1979,8 @@ export class ClaudeEngine implements SessionEngine {
         // next iteration's takeFrame() re-parks. Exactly one read in flight.
         this.frameConsumed();
         const frame = raced.value.value;
-        if (frame.type === "user" && frame.isReplay === true && (frame.session_id === undefined || frame.session_id === this.sessionRef) && matchesUserReplay(frame.message?.content, sentContent)) ownerEchoSeen = true;
+        const ownerEcho = frame.type === "user" && frame.isReplay === true && (frame.session_id === undefined || frame.session_id === this.sessionRef) && matchesUserReplay(frame.message?.content, sentContent);
+        if (ownerEcho) ownerEchoSeen = true;
         // A task-triggered CLI turn can begin after the owner's input was
         // sent. Its init and result do not settle that owner input.
         if (candidateFrames !== null || (frame.type === "system" && frame.subtype === "init" && (this.pendingNotifications.length > 0 || this.unmatchedNotification)) || this.nativeArmed) {
@@ -1987,7 +1992,11 @@ export class ClaudeEngine implements SessionEngine {
           }
           candidateFrames.push(frame);
           if (candidateFrames.length > 20_000) throw new Error("Claude background turn exceeded the frame buffer limit");
-          if (frame.type !== "result") {
+          // The CLI replays the owner's input as the turn consuming it starts:
+          // an echo after this candidate's own init identifies the owner turn
+          // now, so it streams instead of waiting for the terminal origin.
+          const ownerIdentified = ownerEcho && candidateFrames.some(candidate => candidate.type === "system" && candidate.subtype === "init");
+          if (frame.type !== "result" && !ownerIdentified) {
             let changed = false;
             if (frame.type === "stream_event" && frame.event.type === "content_block_start") {
               const block = frame.event.content_block;
@@ -2026,8 +2035,12 @@ export class ClaudeEngine implements SessionEngine {
               this.nativeAmbiguous = false;
               throw new Error("Claude returned an ambiguous background turn result");
             }
-          } else if ((origin === undefined || origin === null) && ownerEchoSeen) {
+          } else if ((origin === undefined || origin === null) && (ownerEchoSeen || options.origin === "system")) {
+            // A system-origin input (a child report) is never replayed by the
+            // CLI when it carries a <task-notification> block, so an untagged
+            // result is the only identity it gets; autonomous turns are tagged.
             this.nativeArmed = false;
+            if (frame.type !== "result") ownerCommittedEarly = true;
             for (const candidate of candidateFrames) {
               if (candidate.type === "assistant" || candidate.type === "stream_event" || (candidate.type === "system" && candidate.subtype === "init")) options.onInputAccepted?.();
               const translated = translator.onMessage(candidate);
@@ -2044,7 +2057,13 @@ export class ClaudeEngine implements SessionEngine {
           continue;
         }
         if (frame.type === "result" && (frame as Record<string, unknown>).origin != null) {
-          throw new Error("Claude returned a turn result with an unrecognised origin");
+          const origin = (frame as Record<string, unknown>).origin as Record<string, unknown>;
+          // An owner turn identified by its echo may still end tagged as the
+          // notification turn the CLI folded the owner's input into.
+          if (!(ownerCommittedEarly && origin.kind === "task-notification" && origin.producer === "session-task")) {
+            throw new Error("Claude returned a turn result with an unrecognised origin");
+          }
+          this.consumeNotification();
         }
         // at user/tool-result and assistant boundaries, kick off a
         // throttled, non-overlapping mid-turn context refresh. Never awaited
@@ -2928,8 +2947,8 @@ export class ClaudeEngine implements SessionEngine {
         const task = this.nativeBackgroundTasks.onFrame(frame);
         if (task) {
           this.emitDetached(task);
-          if (frame.subtype === "task_notification" && task.status !== "running") this.noteNotification(frame);
-        } else if (frame.type === "system" && frame.subtype === "task_notification") {
+          if (frame.subtype === "task_notification" && task.status !== "running" && !this.nativeBackgroundTasks.isForegroundCompletion(frame)) this.noteNotification(frame);
+        } else if (frame.type === "system" && frame.subtype === "task_notification" && !this.nativeBackgroundTasks.isForegroundCompletion(frame)) {
           if (this.nativeBackgroundTasks.knowsNotification(frame)) this.noteNotification(frame);
           else this.unmatchedNotification = true;
         }

@@ -7,6 +7,31 @@ type Task = Extract<AgentEvent, { type: "claude_background_task" }>;
 export class ClaudeNativeBackgroundTasks {
   private readonly tasks = new Map<string, Task>();
   private readonly runs = new Map<string, string>();
+  /**
+   * Tasks the CLI tracks for a FOREGROUND command (`is_backgrounded:false`):
+   * their notification arrives before the owner's own tool_result and starts
+   * no turn. Cleared once the tool call returns (moved to the background).
+   */
+  private readonly foreground = new Set<string>();
+
+  /** A completion that settles the running tool call itself; no autonomous turn follows it. */
+  isForegroundCompletion(frame: ClaudeStreamMessage): boolean {
+    if (frame.type !== "system" || frame.subtype !== "task_notification") return false;
+    const id = (frame as Record<string, unknown>).task_id;
+    return typeof id === "string" && this.foreground.has(id);
+  }
+
+  /** A returned tool call leaves its still-running command in the background. */
+  observeToolResults(frame: ClaudeStreamMessage): void {
+    if (frame.type !== "user" || this.foreground.size === 0) return;
+    const content = (frame as { message?: { content?: unknown } }).message?.content;
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      const id = block && typeof block === "object" && (block as Record<string, unknown>).type === "tool_result" ? (block as Record<string, unknown>).tool_use_id : undefined;
+      if (typeof id !== "string") continue;
+      for (const taskId of this.foreground) if (this.tasks.get(taskId)?.toolCallId === id) this.foreground.delete(taskId);
+    }
+  }
 
   /** Transport loss does not establish whether the native command stopped. */
   abandonAll(): Task[] {
@@ -41,6 +66,8 @@ export class ClaudeNativeBackgroundTasks {
       const task: Task = { type: "claude_background_task", taskId: id, toolCallId: f.tool_use_id, kind,
         description: typeof f.description === "string" ? f.description : "", startedAt: Date.now(), status: "running" };
       this.tasks.set(id, task);
+      if (f.is_backgrounded === false) this.foreground.add(id);
+      else this.foreground.delete(id);
       if (typeof f.run_id === "string") this.runs.set(id, f.run_id);
       else this.runs.delete(id);
       return task;
@@ -49,6 +76,11 @@ export class ClaudeNativeBackgroundTasks {
     if (!old || (old.status !== "running" && !(old.status === "unknown" && f.subtype === "task_notification")) || (typeof f.tool_use_id === "string" && f.tool_use_id !== old.toolCallId)) return undefined;
     const run = this.runs.get(id);
     if (run && typeof f.run_id === "string" && run !== f.run_id) return undefined;
+    if (f.subtype === "task_updated") {
+      const patch = f.patch && typeof f.patch === "object" ? f.patch as Record<string, unknown> : undefined;
+      if (patch?.is_backgrounded === true) this.foreground.delete(id);
+      return undefined;
+    }
     if (f.subtype === "task_progress") {
       if (typeof f.description !== "string" || f.description === old.description) return undefined;
       const task = { ...old, description: f.description };

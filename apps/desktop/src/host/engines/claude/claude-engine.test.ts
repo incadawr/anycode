@@ -3966,3 +3966,83 @@ it("coalesces overlapping quota pulls and preserves the last successful snapshot
   expect(engine.quotaSnapshot()?.limits[0]?.percent).toBe(25);
   expect(detached.filter(event => event.type === "engine_quota")).toHaveLength(1);
 });
+
+describe("Claude notification-driven turns (5370)", () => {
+  const init = { type: "system", subtype: "init", model: "default", permissionMode: "default", cwd: "/work", tools: [], mcp_servers: [], slash_commands: [], skills: [], capabilities: [] } as unknown as ClaudeStreamMessage;
+  const report = "[SYSTEM NOTIFICATION - NOT USER INPUT]\n\n<task-notification>\n  <task-id>toolu_child</task-id>\n  <task-type>subagent_child</task-type>\n  <status>completed</status>\n  <summary>Mockup written.</summary>\n</task-notification>";
+  // CLI 2.1.330: a foreground Bash running past a few seconds is tracked as a
+  // task whose notification lands BEFORE the tool's own result.
+  const foregroundBash = (id: string): ClaudeStreamMessage[] => [
+    { type: "assistant", message: { id: `m-${id}`, model: "model-x", content: [{ type: "tool_use", id: `toolu_${id}`, name: "Bash", input: { command: "sleep 6" } }] } },
+    { type: "system", subtype: "task_started", task_id: id, run_id: `run-${id}`, tool_use_id: `toolu_${id}`, task_type: "local_bash", is_backgrounded: false, description: "sleep" },
+    { type: "system", subtype: "task_notification", task_id: id, run_id: `run-${id}`, tool_use_id: `toolu_${id}`, status: "completed", output_file: "", summary: "sleep" },
+    { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${id}`, content: "ok" }] } },
+  ] as unknown as ClaudeStreamMessage[];
+
+  it("answers a child report normally after a foreground command was tracked as a task", async () => {
+    const transport = new FakeTransport({ frames: [init, ...foregroundBash("fg"), ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport); const adopted = vi.fn(); engine.onNativeTurn = adopted;
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      // The CLI does not replay a <task-notification> input and tags no origin on its result.
+      for (const frame of [init, foreignAssistantFrame("report", "MOCKUP READY"), foreignResultFrame("report")]) transport.enqueue(frame);
+      const accepted = vi.fn();
+      const events = await collect(engine.runTurn(report, { signal: new AbortController().signal, origin: "system", onInputAccepted: accepted }));
+      expect(events.filter(event => event.type === "error")).toEqual([]);
+      expect(JSON.stringify(events)).toContain("MOCKUP READY");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+      expect(events.filter(event => event.type === "claude_turn_preview")).toEqual([]);
+      expect(accepted).toHaveBeenCalled();
+      expect(adopted).not.toHaveBeenCalled();
+      // The engine stays alive for the next owner message.
+      for (const frame of [init, { type: "user", isReplay: true, message: { role: "user", content: "next" } }, ...ownerFrames("next")]) transport.enqueue(frame as ClaudeStreamMessage);
+      const next = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+      expect(JSON.stringify(next)).toContain("OWNER OUTPUT next");
+      expect(next.filter(event => event.type === "claude_turn_preview")).toEqual([]);
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("answers an unreplayed child report while a background notification is still pending", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash", is_backgrounded: true } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    try {
+      await collect(engine.runTurn("launch", { signal: new AbortController().signal }));
+      for (const frame of [{ type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" }, init, foreignAssistantFrame("report", "MOCKUP READY"), foreignResultFrame("report")]) transport.enqueue(frame as ClaudeStreamMessage);
+      const events = await collect(engine.runTurn(report, { signal: new AbortController().signal, origin: "system" }));
+      expect(events.filter(event => event.type === "error")).toEqual([]);
+      expect(JSON.stringify(events.filter(event => event.type !== "claude_turn_preview"))).toContain("MOCKUP READY");
+      expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "completed" }));
+    } finally { await engine.dispose("session-close"); }
+  });
+
+  it("streams a queued owner message as soon as its echo identifies the turn", async () => {
+    const start = { type: "system", subtype: "task_started", task_id: "bg", tool_use_id: "bash", task_type: "local_bash", is_backgrounded: true } as unknown as ClaudeStreamMessage;
+    const transport = new FakeTransport({ frames: [start, ...ownerFrames("initial")], contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const raw = engineWith(transport);
+    const rows: Parameters<ConstructorParameters<typeof ClaudeShadowTranscriptEngine>[1]["record"]>[1][number][] = [];
+    const shadow = new ClaudeShadowTranscriptEngine(raw, { record: (_ref, items) => { rows.push(...items); }, list: async () => rows }, "session-ref-1", []);
+    const h = createHarness({ steps: [], engine: shadow });
+    raw.onNativeTurn = turn => h.session.acceptClaudeNativeTurn(shadow, turn);
+    raw.onDetachedEvent = event => h.session.emitDetachedSubagentEvent(event);
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "initial", text: "launch" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      // The notification arrives inside the owner's next turn, so no autonomous turn ever consumes it.
+      h.send({ type: "user_message", requestId: "queued", text: "show me" });
+      await h.waitUntil(() => transport.sent.length === 2);
+      for (const frame of [
+        { type: "system", subtype: "task_notification", task_id: "bg", tool_use_id: "bash", status: "completed" }, init,
+        { type: "user", isReplay: true, message: { role: "user", content: "show me" } },
+        foreignAssistantFrame("m-live", "LIVE OWNER OUTPUT"),
+      ]) transport.push(frame as ClaudeStreamMessage);
+      await h.waitUntil(() => h.received.some(m => m.type === "user_message_accepted" && m.requestId === "queued"));
+      await h.waitUntil(() => JSON.stringify(h.received.filter(m => m.type === "agent_event" && m.event.type !== "claude_turn_preview")).includes("LIVE OWNER OUTPUT"));
+      transport.push(foreignResultFrame("live"));
+      await h.waitUntil(() => h.received.filter(m => m.type === "agent_event" && m.event.type === "loop_end").length === 2);
+      expect(h.received.some(m => m.type === "agent_event" && m.event.type === "claude_turn_preview" && m.event.preview !== null)).toBe(false);
+      expect(h.received.some(m => m.type === "agent_event" && m.event.type === "error")).toBe(false);
+    } finally { await h.session.shutdown(); h.close(); }
+  }, 10_000);
+});
