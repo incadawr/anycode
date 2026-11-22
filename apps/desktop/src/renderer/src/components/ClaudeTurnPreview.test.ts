@@ -6,7 +6,7 @@ import { ClaudeTurnPreview } from "./ClaudeTurnPreview.js";
 describe("Claude provisional response", () => {
   it("renders unassigned text and tool status and disappears on clear", () => {
     const markup = renderToStaticMarkup(createElement(ClaudeTurnPreview, { preview: { text: "live <answer>", tools: [{ id: "call", name: "Bash", status: "requested" }] } }));
-    expect(markup).toContain("Response being identified");
+    expect(markup).toContain("Claude is responding");
     expect(markup).toContain("live &lt;answer&gt;");
     expect(markup).toContain("Bash: ");
     expect(markup).toContain("requested");

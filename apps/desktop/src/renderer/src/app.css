@@ -129,8 +129,10 @@ body {
 }
 .claude-native-task { display: inline-flex; align-items: center; color: var(--text-3); }
 .claude-native-task-spinner { display: inline-block; width: 10px; height: 10px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; }
-.claude-turn-preview { flex: 0 1 auto; max-height: 30vh; overflow: auto; margin: 8px 16px; padding: 10px 12px; border: 1px dashed var(--text-3); border-radius: 6px; color: var(--text-2); overflow-wrap: anywhere; }
-.claude-turn-preview-text { white-space: pre-wrap; margin-top: 6px; }
+.claude-turn-preview { flex: 0 1 auto; box-sizing: border-box; width: min(100% - 2 * var(--sp-4), calc(var(--content-measure) + 6rem)); max-height: 30vh; overflow: auto; margin: var(--sp-2) auto; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-sidebar); color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.claude-turn-preview-title { color: var(--text-3); font-size: var(--fs-2xs); }
+.claude-turn-preview-text { white-space: pre-wrap; margin-top: var(--sp-1); font-size: var(--fs-sm); color: var(--text-2); }
+.claude-turn-preview-tool { margin-top: var(--sp-1); color: var(--text-3); font-size: var(--fs-2xs); }
 
 /* Shimmer text treatment (R3 — first consumer of the R2 shimmer keyframe).
    A --text-1 highlight sweeps over a --text-2 base in reading direction
@@ -5923,6 +5925,46 @@ button.environment-menu-row:hover,
   flex-shrink: 0;
   color: var(--text-3);
   font-size: var(--fs-2xs);
+}
+
+/* Delivery status chips: wrap badges/actions inside the card instead of overflowing it. */
+.prompt-queue-item-delivery {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.prompt-queue-item-delivery .prompt-queue-text {
+  flex: 1 1 12em;
+}
+
+.prompt-queue-item-delivery .prompt-queue-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.prompt-queue-delivery-action {
+  flex: 0 1 auto;
+  max-width: 100%;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-medium);
+  cursor: pointer;
+}
+
+.prompt-queue-delivery-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.prompt-queue-delivery-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* System report chips: badges wrap to a second line and shrink instead of squeezing the message text out. */

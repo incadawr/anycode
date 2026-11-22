@@ -105,9 +105,9 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
         <span className="prompt-queue-badge">{statusText}</span>
         {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
         {systemText !== null && <span className="prompt-queue-badge">{systemText}</span>}
-        {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="system-delivery-retry" disabled={connection !== "ready" || !systemRetrySafe(deliveries,item.requestId)} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
-        {item.origin === "system" && item.retryQueued && item.status === "rejected" && <span>Retry requested.</span>}
-        {item.origin !== "system" && !item.payloadOmitted && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
+        {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="prompt-queue-delivery-action system-delivery-retry" disabled={connection !== "ready" || !systemRetrySafe(deliveries,item.requestId)} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
+        {item.origin === "system" && item.retryQueued && item.status === "rejected" && <span className="prompt-queue-badge">Retry requested.</span>}
+        {item.origin !== "system" && !item.payloadOmitted && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="prompt-queue-delivery-action orchestration-delivery-restore" onClick={() => {
           const state = tabStore.getState();
           const current = state.orchestrationDeliveries.find(entry => entry.requestId === item.requestId);
           if (!current || state.restoredComposerDraft?.deliveryRequestId === current.requestId || (current.status !== "unknown" && current.status !== "rejected" && current.status !== "conflict")) return;
@@ -115,7 +115,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
             tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === current.requestId ? {...entry,restored:true} : entry)}));
           }
         }}>Restore for review</button>}
-        {item.origin !== "system" && (item.status === "rejected" || item.status === "finished") && !item.payloadOmitted && <button type="button" className="orchestration-delivery-dismiss" onClick={() => {
+        {item.origin !== "system" && (item.status === "rejected" || item.status === "finished") && !item.payloadOmitted && <button type="button" className="prompt-queue-delivery-action orchestration-delivery-dismiss" onClick={() => {
           const state = tabStore.getState();
           if (!canDismissRejectedDelivery(state, item.requestId)) {
             state.setNotice({ kind: "slash_command_rejected", text: "Finish or discard the linked draft and dependent attempts before dismissing this message." });
@@ -123,10 +123,10 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
           }
           state.dismissRejectedDelivery(item.requestId);
         }}>{item.status === "finished" ? "Dismiss finished message" : "Dismiss rejected message"}</button>}
-        {!item.reviewed && (item.status === "unknown" || item.status === "conflict") && <button type="button" className="orchestration-delivery-reviewed" onClick={() => {
+        {!item.reviewed && (item.status === "unknown" || item.status === "conflict") && <button type="button" className="prompt-queue-delivery-action orchestration-delivery-reviewed" onClick={() => {
           tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === item.requestId && (entry.status === "unknown" || entry.status === "conflict") ? {...entry,reviewed:true} : entry)}));
         }}>Mark delivery reviewed</button>}
-        {item.reviewed && (item.status === "unknown" || item.status === "conflict") && <span>Reviewed; delivery remains unconfirmed.</span>}
+        {item.reviewed && (item.status === "unknown" || item.status === "conflict") && <span className="prompt-queue-badge">Reviewed; delivery remains unconfirmed.</span>}
       </div>;
       })}
       {queuePaused && (
