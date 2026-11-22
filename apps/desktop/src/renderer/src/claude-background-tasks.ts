@@ -7,20 +7,16 @@ export function visibleBackgroundTasks(tasks: readonly ClaudeBackgroundTask[]): 
   return tasks.filter(task => task.foreground !== true);
 }
 
-export function backgroundTaskForToolCall(tasks: readonly ClaudeBackgroundTask[], toolCallId: string): ClaudeBackgroundTask | undefined {
-  return tasks.find(task => task.toolCallId === toolCallId && task.foreground !== true);
-}
-
-/** `exit code 2` / `exit code: 2` as the CLI words it in the completion summary. */
+/** Exit code from the CLI's closing wording: `... completed (exit code 0)` / `... failed with exit code 144`. Anchored to the end: the description may mention "exit 3". */
 export function backgroundExitCode(summary: string | undefined): number | undefined {
-  const match = summary?.match(/exit(?:ed)?(?: with)?(?: code|status)?[:\s]+(-?\d{1,4})\b/i);
-  return match ? Number(match[1]) : undefined;
+  const match = summary?.trim().match(/(?:\(exit code (-?\d{1,4})\)|exit code (-?\d{1,4}))\.?$/i);
+  const value = match?.[1] ?? match?.[2];
+  return value === undefined ? undefined : Number(value);
 }
 
-/** The path the CLI names in the launch result: "Output is being written to: <path>". */
+/** The path the CLI names in the launch result, which continues on the same line ("…ID.output. You will be notified…"). */
 export function outputFileFromResult(text: string | null | undefined): string | undefined {
-  const match = text?.match(/(?:output (?:is being )?written to|output file)\s*:\s*(\/[^\r\n]+)/i);
-  return match?.[1]?.trim().replace(/[.)\]]+$/, "") || undefined;
+  return text?.match(/written to:\s*(\/\S+?\.output)(?=[.\s,;]|$)/i)?.[1];
 }
 
 export type BackgroundCardTone = "running" | "success" | "error" | "unknown";

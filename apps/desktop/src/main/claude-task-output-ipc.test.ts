@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile, symlink, link, rm } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-vi.mock("electron", () => ({ dialog: {}, shell: {}, ipcMain: {} }));
-import { findClaudeTaskOutputHint, openClaudeTaskOutput, pickClaudeTaskOutput, readClaudeTaskOutput } from "./claude-task-output-ipc.js";
+vi.mock("electron", () => ({ shell: {}, ipcMain: {} }));
+import { claudeTmpRoot, clearClaudeTaskOutputCache, findClaudeTaskOutputHint, openClaudeTaskOutput, readClaudeTaskOutput } from "./claude-task-output-ipc.js";
 
-describe("explicit Claude task output selection", () => {
+describe("Claude task output lookup", () => {
   it("suggests a unique conventional task file without following symlinks", async () => {
     const root = await mkdtemp(join(tmpdir(), "task-hint-test-"));
     try {
@@ -23,35 +23,6 @@ describe("explicit Claude task output selection", () => {
       expect(await findClaudeTaskOutputHint(root, "task-a", "session-a")).toBeUndefined();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
-  it("reads only the selected matching task in its own session and refuses other paths", async () => {
-    const root = await mkdtemp(join(tmpdir(), "task-output-test-"));
-    try {
-      const folder = join(root, "session-a", "tasks");
-      await mkdir(folder, { recursive: true });
-      const file = join(folder, "task-a.output");
-      await writeFile(file, "fixture output");
-      const pick = (path: string) => ({ showOpenDialog: async () => ({ canceled: false, filePaths: [path] }) });
-      expect(await pickClaudeTaskOutput({ taskId: "task-a", sessionRef: "session-a" }, pick(file))).toEqual({ ok: true, content: "fixture output" });
-      await writeFile(file, "x".repeat(65537));
-      const capped = await pickClaudeTaskOutput({ taskId: "task-a", sessionRef: "session-a" }, pick(file));
-      expect(capped.ok && capped.content).toHaveLength(65536 + "\n[Output truncated]".length);
-      await link(file, join(folder, "hardlink.output"));
-      expect(await pickClaudeTaskOutput({ taskId: "task-a", sessionRef: "session-a" }, pick(file))).toEqual({ ok: false, reason: "unavailable" });
-      expect(await pickClaudeTaskOutput({ taskId: "task-b", sessionRef: "session-a" }, pick(file))).toEqual({ ok: false, reason: "unavailable" });
-      expect(await pickClaudeTaskOutput({ taskId: "task-a", sessionRef: "session-b" }, pick(file))).toEqual({ ok: false, reason: "unavailable" });
-      expect(await pickClaudeTaskOutput({ taskId: "../task-a", sessionRef: "session-a" }, pick(file))).toEqual({ ok: false, reason: "unavailable" });
-      const other = join(root, "other", "tasks");
-      await mkdir(other, { recursive: true });
-      await writeFile(join(other, "task-a.output"), "private fixture");
-      const linkFolder = join(root, "session-b", "tasks");
-      await mkdir(linkFolder, { recursive: true });
-      const symlinkPath = join(linkFolder, "task-a.output");
-      await symlink(join(other, "task-a.output"), symlinkPath);
-      expect(await pickClaudeTaskOutput({ taskId: "task-a", sessionRef: "session-b" }, pick(symlinkPath))).toEqual({ ok: false, reason: "unavailable" });
-      expect(await pickClaudeTaskOutput({ taskId: "task-a", sessionRef: "session-a" }, { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) })).toEqual({ ok: false, reason: "cancelled" });
-    } finally { await rm(root, { recursive: true, force: true }); }
-  });
-
   describe("direct read of a running task's output", () => {
     const setup = async () => {
       const base = await mkdtemp(join(tmpdir(), "task-read-test-"));
@@ -66,10 +37,11 @@ describe("explicit Claude task output selection", () => {
       try {
         await writeFile(file, "small");
         expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: true, content: "small", truncated: false });
-        await writeFile(file, `HEAD${"x".repeat(70000)}TAIL`);
+        await writeFile(file, `HEAD\n${"xxxxxxxxx\n".repeat(7000)}TAIL`);
         const big = await readClaudeTaskOutput(req, root);
         expect(big.ok && big.truncated).toBe(true);
-        expect(big.ok && big.content.length).toBe(65536);
+        expect(big.ok && big.content.length).toBeLessThanOrEqual(65536);
+        expect(big.ok && big.content.startsWith("xxxxxxxxx\n")).toBe(true);
         expect(big.ok && big.content.endsWith("TAIL")).toBe(true);
         expect(big.ok && big.content.startsWith("HEAD")).toBe(false);
       } finally { await rm(base, { recursive: true, force: true }); }
@@ -82,11 +54,11 @@ describe("explicit Claude task output selection", () => {
         const stray = join(base, "stray", "session-a", "tasks");
         await mkdir(stray, { recursive: true });
         await writeFile(join(stray, "task-a.output"), "secret");
-        expect(await readClaudeTaskOutput({ ...req, outputFile: join(stray, "task-a.output") }, root)).toEqual({ ok: false, reason: "unavailable" });
+        expect(await readClaudeTaskOutput({ ...req, outputFile: join(stray, "task-a.output") }, root)).not.toMatchObject({ content: "secret" });
         await writeFile(join(base, "passwd"), "secret");
-        expect(await readClaudeTaskOutput({ ...req, outputFile: "/etc/passwd" }, root)).toEqual({ ok: false, reason: "unavailable" });
-        expect(await readClaudeTaskOutput({ ...req, outputFile: join(folder, "..", "..", "..", "..", "passwd") }, root)).toEqual({ ok: false, reason: "unavailable" });
-        expect(await readClaudeTaskOutput({ ...req, outputFile: "relative.output" }, root)).toEqual({ ok: false, reason: "unavailable" });
+        expect(await readClaudeTaskOutput({ ...req, outputFile: "/etc/passwd" }, root)).not.toMatchObject({ content: "secret" });
+        expect(await readClaudeTaskOutput({ ...req, outputFile: join(folder, "..", "..", "..", "..", "passwd") }, root)).not.toMatchObject({ content: "secret" });
+        expect(await readClaudeTaskOutput({ ...req, outputFile: "relative.output" }, root)).not.toMatchObject({ content: "secret" });
         expect(await readClaudeTaskOutput({ ...req, taskId: "../task-a" }, root)).toEqual({ ok: false, reason: "unavailable" });
         expect(await readClaudeTaskOutput({ ...req, extra: 1 }, root)).toEqual({ ok: false, reason: "unavailable" });
         await rm(file);
@@ -94,6 +66,52 @@ describe("explicit Claude task output selection", () => {
         expect(await readClaudeTaskOutput({ ...req, outputFile: file }, root)).toEqual({ ok: false, reason: "unavailable" });
         expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: false, reason: "unavailable" });
       } finally { await rm(base, { recursive: true, force: true }); }
+    });
+    it("falls back to the conventional scan when the hint is wrong, as with the CLI's trailing sentence", async () => {
+      const { base, root, file } = await setup();
+      try {
+        await writeFile(file, "found");
+        const hint = `${file}. You will be notified when it completes`;
+        expect(await readClaudeTaskOutput({ ...req, outputFile: hint }, root)).toMatchObject({ ok: true, content: "found" });
+      } finally { await rm(base, { recursive: true, force: true }); }
+    });
+    it("refuses directories, executables and other-owner roots, for read and open", async () => {
+      const { base, root, folder, file } = await setup();
+      try {
+        await mkdir(file);
+        const openPath = vi.fn(async () => "");
+        expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: false, reason: "unavailable" });
+        expect(await openClaudeTaskOutput(req, root, { openPath })).toEqual({ ok: false });
+        await rm(file, { recursive: true });
+        await writeFile(file, "#!/bin/sh");
+        await chmod(file, 0o755);
+        expect(await readClaudeTaskOutput({ ...req, outputFile: file }, root)).toEqual({ ok: false, reason: "unavailable" });
+        expect(await openClaudeTaskOutput({ ...req, outputFile: file }, root, { openPath })).toEqual({ ok: false });
+        await chmod(file, 0o644);
+        await chmod(root, 0o777);
+        expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: false, reason: "unavailable" });
+        expect(openPath).not.toHaveBeenCalled();
+        void folder;
+      } finally { await rm(base, { recursive: true, force: true }); }
+    });
+    it("strips terminal escapes, collapses carriage-return progress and caches the resolved path", async () => {
+      const { base, root, file } = await setup();
+      try {
+        await writeFile(file, "\u001b[32mgreen\u001b[0m\n10%\r50%\r100%\nwin\r\nend");
+        clearClaudeTaskOutputCache();
+        const first = await readClaudeTaskOutput(req, root);
+        expect(first).toEqual({ ok: true, content: "green\n100%\nwin\nend", truncated: false });
+        expect(await readClaudeTaskOutput(req, root)).toEqual(first);
+      } finally { await rm(base, { recursive: true, force: true }); }
+    });
+    it("honours CLAUDE_CODE_TMPDIR for the task root", () => {
+      const previous = process.env.CLAUDE_CODE_TMPDIR;
+      try {
+        process.env.CLAUDE_CODE_TMPDIR = "/var/tmp/custom/";
+        expect(claudeTmpRoot()).toBe(`/var/tmp/custom/claude-${process.getuid?.()}`);
+        delete process.env.CLAUDE_CODE_TMPDIR;
+        expect(claudeTmpRoot()).toBe(`/tmp/claude-${process.getuid?.()}`);
+      } finally { if (previous === undefined) delete process.env.CLAUDE_CODE_TMPDIR; else process.env.CLAUDE_CODE_TMPDIR = previous; }
     });
     it("opens only a validated output file", async () => {
       const { base, root, file } = await setup();
@@ -103,8 +121,9 @@ describe("explicit Claude task output selection", () => {
         expect(await openClaudeTaskOutput(req, root, { openPath })).toEqual({ ok: true });
         expect(openPath).toHaveBeenCalledWith(expect.stringMatching(/task-a\.output$/));
         openPath.mockClear();
-        expect(await openClaudeTaskOutput({ ...req, outputFile: "/etc/hosts" }, root, { openPath })).toEqual({ ok: false });
-        expect(openPath).not.toHaveBeenCalled();
+        await openClaudeTaskOutput({ ...req, outputFile: "/etc/hosts" }, root, { openPath });
+        expect(openPath).not.toHaveBeenCalledWith("/etc/hosts");
+        expect(openPath).toHaveBeenCalledWith(expect.stringMatching(/task-a\.output$/));
       } finally { await rm(base, { recursive: true, force: true }); }
     });
   });

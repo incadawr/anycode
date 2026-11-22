@@ -40,6 +40,7 @@ describe("Claude background tasks indicator", () => {
 
   it("shows the output tail directly, with the launch-result path as a hint, and opens the file", async () => {
     read.mockResolvedValue({ ok: true, content: "line 1\nline 2", truncated: false });
+    open.mockResolvedValue({ ok: true });
     setup([base]);
     const view = mount(h(ClaudeBackgroundTasks));
     click(byRole(view.container, "button", /Background tasks/));
@@ -63,6 +64,59 @@ describe("Claude background tasks indicator", () => {
     expect(view.container.textContent).toContain("Output is not available yet.");
     act(() => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     expect(view.container.querySelector(".claude-bg-popover")).toBeNull();
+  });
+
+  describe("output polling", () => {
+    const openWithRef = async (tasks: unknown[]) => {
+      setup(tasks);
+      const view = mount(h(ClaudeBackgroundTasks));
+      click(byRole(view.container, "button", /Background tasks/));
+      setup(tasks, { taskId: "task-a", requestId: send.mock.lastCall![0].requestId, sessionRef: "sess" });
+      await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
+      return view;
+    };
+    const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+    it("polls a running task without overlapping and stops when the popover closes", async () => {
+      vi.useFakeTimers();
+      read.mockResolvedValue({ ok: true, content: "x", truncated: false });
+      const view = await openWithRef([base]);
+      expect(read).toHaveBeenCalledTimes(1);
+      await advance(2100);
+      expect(read).toHaveBeenCalledTimes(2);
+      click(byRole(view.container, "button", /Background tasks/));
+      await advance(10000);
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+    it("stops polling on unmount", async () => {
+      vi.useFakeTimers();
+      read.mockResolvedValue({ ok: true, content: "x", truncated: false });
+      const view = await openWithRef([base]);
+      view.unmount();
+      await advance(10000);
+      expect(read).toHaveBeenCalledTimes(1);
+    });
+    it("does one final read when the task completes, then stops", async () => {
+      vi.useFakeTimers();
+      read.mockResolvedValue({ ok: true, content: "x", truncated: false });
+      const view = await openWithRef([base]);
+      setup([{ ...base, status: "completed" }], state.claudeTaskOutput);
+      await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
+      expect(read).toHaveBeenCalledTimes(2);
+      await advance(10000);
+      expect(read).toHaveBeenCalledTimes(2);
+    });
+    it("keeps the picked task selected when another one starts running, and reports a failed open", async () => {
+      read.mockResolvedValue({ ok: true, content: "x", truncated: false });
+      open.mockResolvedValue({ ok: false });
+      const done = { ...base, status: "completed" as const };
+      const view = await openWithRef([done]);
+      setup([done, { ...base, taskId: "task-b", toolCallId: "c2", description: "later" }], state.claudeTaskOutput);
+      await act(async () => { view.render(h(ClaudeBackgroundTasks)); await Promise.resolve(); });
+      expect(view.container.querySelector(".claude-bg-row[aria-pressed=true]")?.textContent).toContain("sleep 5");
+      click(byRole(view.container, "button", "Open output file"));
+      await act(async () => { await Promise.resolve(); });
+      expect(view.container.textContent).toContain("Could not open the file.");
+    });
   });
 
   it("prefers the notification's output file over the launch result", () => {

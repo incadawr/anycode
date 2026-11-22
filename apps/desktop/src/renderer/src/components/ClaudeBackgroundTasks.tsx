@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTabSend, useTabStore } from "../tab-context.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Button, IconButton, IconDanger, IconSpinner, IconSuccess } from "../ui/index.js";
+import { Button, IconButton, IconDanger, IconInfo, IconSpinner, IconSuccess } from "../ui/index.js";
 import type { TranscriptBlock } from "../store.js";
 import { backgroundCardStatus, backgroundTaskKindLabel, formatTaskElapsed, outputFileFromResult, visibleBackgroundTasks, type ClaudeBackgroundTask } from "../claude-background-tasks.js";
 
@@ -32,7 +32,8 @@ function tail(content: string): string {
 
 function StatusIcon({ status }: { status: Task["status"] }) {
   if (status === "running") return <IconSpinner size={12} className="icon-spin" />;
-  return status === "completed" ? <IconSuccess size={12} /> : <IconDanger size={12} />;
+  if (status === "completed") return <IconSuccess size={12} />;
+  return status === "failed" ? <IconDanger size={12} /> : <IconInfo size={12} />;
 }
 
 type Output = { taskId: string; content: string; truncated: boolean } | { taskId: string; content: null };
@@ -56,6 +57,7 @@ export function ClaudeBackgroundTasks() {
   const [selected, setSelected] = useState<string | null>(null);
   const [sessionRef, setSessionRef] = useState<{ taskId: string; ref: string | null } | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
+  const [openFailed, setOpenFailed] = useState(false);
   const triggerRef = useRef<HTMLElement | null>(null);
   const requestId = useRef<string | null>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -98,12 +100,17 @@ export function ClaudeBackgroundTasks() {
     if (ref === null) { setOutput({ taskId, content: null }); return; }
     if (ref === undefined) return;
     let stale = false;
-    const read = () => void window.anycode.claudeTaskOutput.read({ taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) })
-      .then(result => { if (!stale) setOutput(result.ok ? { taskId, content: result.content, truncated: result.truncated } : { taskId, content: null }); })
-      .catch(() => { if (!stale) setOutput({ taskId, content: null }); });
-    read();
-    const timer = status === "running" ? setInterval(read, POLL_MS) : undefined;
-    return () => { stale = true; if (timer) clearInterval(timer); };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Chained, not an interval: a slow read never overlaps the next one.
+    const tick = async () => {
+      try {
+        const result = await window.anycode.claudeTaskOutput.read({ taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) });
+        if (!stale) setOutput(result.ok ? { taskId, content: result.content, truncated: result.truncated } : { taskId, content: null });
+      } catch { if (!stale) setOutput({ taskId, content: null }); }
+      if (!stale && status === "running") timer = setTimeout(() => void tick(), POLL_MS);
+    };
+    void tick();
+    return () => { stale = true; if (timer) clearTimeout(timer); };
   }, [open, taskId, ref, status, hint]);
 
   if (visible.length === 0) return null;
@@ -111,7 +118,7 @@ export function ClaudeBackgroundTasks() {
   const shown = output?.taskId === taskId ? output : null;
   return <span className="claude-bg-tasks" ref={node => { triggerRef.current = node?.querySelector("button") ?? null; }}>
     <IconButton label={label} pressed={open} className={`claude-bg-trigger${running > 0 ? " claude-bg-trigger-running" : ""}`}
-      aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(value => !value)}
+      aria-expanded={open} aria-haspopup="dialog" onClick={() => { if (!open) setSelected(task?.taskId ?? null); setOpen(value => !value); setOpenFailed(false); }}
       icon={<>{running > 0 ? <IconSpinner size={14} className="icon-spin" /> : <IconSuccess size={14} />}<span className="claude-bg-count">{running > 0 ? running : visible.length}</span></>} />
     {open && <div ref={panel} className="claude-bg-popover" role="dialog" aria-label="Background tasks">
       <div className="claude-bg-head"><span>Background tasks</span><span>{running > 0 ? `${running} running` : "all finished"}</span></div>
@@ -139,7 +146,7 @@ export function ClaudeBackgroundTasks() {
               ? <div className="claude-bg-note" role="status">No output yet.</div>
               : <pre className="claude-bg-output" tabIndex={0} aria-label="Task output">{`${shown.truncated ? "[earlier output omitted]\n" : ""}${tail(shown.content)}`}</pre>)}
       </div>
-      {task && ref && <div className="claude-bg-foot"><Button size="sm" variant="secondary" onClick={() => void window.anycode.claudeTaskOutput.open({ taskId: task.taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) })}>Open output file</Button></div>}
+      {task && ref && <div className="claude-bg-foot"><Button size="sm" variant="secondary" onClick={() => void window.anycode.claudeTaskOutput.open({ taskId: task.taskId, sessionRef: ref, ...(hint ? { outputFile: hint } : {}) }).then(result => setOpenFailed(!result.ok), () => setOpenFailed(true))}>Open output file</Button>{openFailed && <span className="claude-bg-note" role="alert">Could not open the file.</span>}</div>}
     </div>}
   </span>;
 }

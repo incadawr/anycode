@@ -43,7 +43,7 @@ import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, isBackgroundAgent, isOutcomeLost, settledStatus, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
 import { Button } from "../ui/index.js";
-import { backgroundCardStatus, backgroundTaskForToolCall, type ClaudeBackgroundTask } from "../claude-background-tasks.js";
+import { backgroundCardStatus, type ClaudeBackgroundTask } from "../claude-background-tasks.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -1239,7 +1239,7 @@ function useLinkedBackgroundTask(toolCallId: string): ClaudeBackgroundTask | und
   const ctx = useContext(TabContext);
   const subscribe = useCallback((onChange: () => void) => (ctx === null ? () => {} : ctx.store.subscribe(onChange)), [ctx]);
   const snapshot = useCallback(
-    () => (ctx === null ? undefined : backgroundTaskForToolCall(ctx.store.getState().claudeBackgroundTasks, toolCallId)),
+    () => (ctx === null ? undefined : ctx.store.getState().claudeTaskByToolCall[toolCallId]),
     [ctx, toolCallId],
   );
   return useSyncExternalStore(subscribe, snapshot, snapshot);

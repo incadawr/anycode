@@ -101,6 +101,10 @@ describe("native background task correlation", () => {
     expect(moved).not.toHaveProperty("foreground");
     expect(tasks.onFrame(frame("task_notification", { task_id: "fg", status: "completed" }))).not.toHaveProperty("foreground");
     expect(tasks.onFrame(frame("task_started", { task_id: "bg", tool_use_id: "tbg", task_type: "local_bash", is_backgrounded: true }))).not.toHaveProperty("foreground");
+    // A late move patch after the task ended must not resurrect it as a background task.
+    tasks.onFrame(frame("task_started", { task_id: "done", tool_use_id: "td", task_type: "local_bash", is_backgrounded: false }));
+    tasks.onFrame(frame("task_notification", { task_id: "done", status: "completed" }));
+    expect(tasks.onFrame(frame("task_updated", { task_id: "done", patch: { is_backgrounded: true } }))).toBeUndefined();
     // A foreground task's own terminal notification stays flagged so it never surfaces.
     tasks.onFrame(frame("task_started", { task_id: "fg2", tool_use_id: "t2", task_type: "local_bash", is_backgrounded: false }));
     expect(tasks.onFrame(frame("task_notification", { task_id: "fg2", status: "completed" }))).toMatchObject({ status: "completed", foreground: true });

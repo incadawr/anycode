@@ -9542,14 +9542,14 @@ dialog.role-picker-dialog {
 .sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-open { padding-right: calc(var(--sp-2) + 42px); }
 .sidebar-row-wrap:has(> .sidebar-row-menu-button) .sidebar-row-resumable { padding-right: 44px; }
 
-.claude-bg-tasks { position: absolute; z-index: 5; top: var(--sp-2); right: var(--sp-2); -webkit-app-region: no-drag; }
+.claude-bg-tasks { position: relative; align-self: flex-end; flex: none; margin-bottom: calc(-1 * var(--sp-1)); -webkit-app-region: no-drag; }
 .claude-bg-trigger { width: auto; gap: var(--sp-1); padding: 0 var(--sp-2); color: var(--text-3); }
 .claude-bg-trigger-running { color: var(--text-2); }
 .claude-bg-count { font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }
 .claude-bg-popover { position: absolute; z-index: 30; right: 0; bottom: calc(100% + var(--sp-1)); display: flex; flex-direction: column; box-sizing: border-box; width: min(24rem, 80vw); max-height: min(60vh, 30rem); background: var(--bg-overlay); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow-popup); color: var(--text-2); font-size: var(--fs-xs); }
 .claude-bg-head { display: flex; justify-content: space-between; gap: var(--sp-2); flex: none; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); color: var(--text-3); font-size: var(--fs-2xs); }
 .claude-bg-body { display: flex; flex-direction: column; gap: var(--sp-2); flex: 1 1 auto; min-height: 0; overflow: auto; padding: var(--sp-2); overflow-wrap: anywhere; }
-.claude-bg-foot { display: flex; justify-content: flex-end; flex: none; padding: var(--sp-2); border-top: 1px solid var(--border); }
+.claude-bg-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-2); flex: none; padding: var(--sp-2); border-top: 1px solid var(--border); }
 .claude-bg-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .claude-bg-list .claude-bg-row { display: flex; white-space: normal; align-items: flex-start; justify-content: flex-start; gap: var(--sp-2); width: 100%; height: auto; padding: var(--sp-1) var(--sp-2); text-align: left; font-size: var(--fs-xs); color: var(--text-2); }
 .claude-bg-list .claude-bg-row[aria-pressed="true"] { background: var(--bg-selected); color: var(--text-1); }

@@ -84,7 +84,7 @@ export class ClaudeNativeBackgroundTasks {
       if (this.foregroundRunMatches(id, f)) this.foreground.delete(id);
       const current = this.tasks.get(id);
       const run = this.runs.get(id);
-      if (!current?.foreground || (run && typeof f.run_id === "string" && run !== f.run_id)) return undefined;
+      if (!current?.foreground || current.status !== "running" || (run && typeof f.run_id === "string" && run !== f.run_id)) return undefined;
       // Moved to the background: from now on it is a background task for display.
       const { foreground: _foreground, ...moved } = current;
       this.tasks.set(id, moved);
