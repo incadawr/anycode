@@ -79,14 +79,14 @@ describe("Claude task output lookup", () => {
       const { base, root, folder, file } = await setup();
       try {
         await mkdir(file);
-        const openPath = vi.fn(async () => "");
+        const openPath = vi.fn(async () => ""); const showItemInFolder = vi.fn();
         expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: false, reason: "unavailable" });
-        expect(await openClaudeTaskOutput(req, root, { openPath })).toEqual({ ok: false });
+        expect(await openClaudeTaskOutput(req, root, { openPath, showItemInFolder })).toEqual({ ok: false });
         await rm(file, { recursive: true });
         await writeFile(file, "#!/bin/sh");
         await chmod(file, 0o755);
         expect(await readClaudeTaskOutput({ ...req, outputFile: file }, root)).toEqual({ ok: false, reason: "unavailable" });
-        expect(await openClaudeTaskOutput({ ...req, outputFile: file }, root, { openPath })).toEqual({ ok: false });
+        expect(await openClaudeTaskOutput({ ...req, outputFile: file }, root, { openPath, showItemInFolder })).toEqual({ ok: false });
         await chmod(file, 0o644);
         await chmod(root, 0o777);
         expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: false, reason: "unavailable" });
@@ -104,6 +104,28 @@ describe("Claude task output lookup", () => {
         expect(await readClaudeTaskOutput(req, root)).toEqual(first);
       } finally { await rm(base, { recursive: true, force: true }); }
     });
+    it("reveals the file when no app opens it, and fails only when both fail", async () => {
+      const { base, root, file } = await setup();
+      try {
+        await writeFile(file, "x");
+        const showItemInFolder = vi.fn();
+        expect(await openClaudeTaskOutput(req, root, { openPath: async () => "No application knows how to open it", showItemInFolder })).toEqual({ ok: true });
+        expect(showItemInFolder).toHaveBeenCalledWith(expect.stringMatching(/task-a\.output$/));
+        expect(await openClaudeTaskOutput(req, root, { openPath: async () => { throw new Error("x"); }, showItemInFolder: () => { throw new Error("y"); } })).toEqual({ ok: false });
+      } finally { await rm(base, { recursive: true, force: true }); }
+    });
+    it("does not rescan the root on every poll while the file is missing, then finds it after the TTL", async () => {
+      const { base, root, file } = await setup();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: false, reason: "unavailable" });
+        await writeFile(file, "late");
+        expect(await readClaudeTaskOutput(req, root)).toEqual({ ok: false, reason: "unavailable" });
+        vi.setSystemTime(Date.now() + 11_000);
+        expect(await readClaudeTaskOutput(req, root)).toMatchObject({ ok: true, content: "late" });
+        // A path hint always bypasses the negative cache.
+      } finally { vi.useRealTimers(); await rm(base, { recursive: true, force: true }); }
+    });
     it("honours CLAUDE_CODE_TMPDIR for the task root", () => {
       const previous = process.env.CLAUDE_CODE_TMPDIR;
       try {
@@ -117,11 +139,11 @@ describe("Claude task output lookup", () => {
       const { base, root, file } = await setup();
       try {
         await writeFile(file, "x");
-        const openPath = vi.fn(async () => "");
-        expect(await openClaudeTaskOutput(req, root, { openPath })).toEqual({ ok: true });
+        const openPath = vi.fn(async () => ""); const showItemInFolder = vi.fn();
+        expect(await openClaudeTaskOutput(req, root, { openPath, showItemInFolder })).toEqual({ ok: true });
         expect(openPath).toHaveBeenCalledWith(expect.stringMatching(/task-a\.output$/));
         openPath.mockClear();
-        await openClaudeTaskOutput({ ...req, outputFile: "/etc/hosts" }, root, { openPath });
+        await openClaudeTaskOutput({ ...req, outputFile: "/etc/hosts" }, root, { openPath, showItemInFolder });
         expect(openPath).not.toHaveBeenCalledWith("/etc/hosts");
         expect(openPath).toHaveBeenCalledWith(expect.stringMatching(/task-a\.output$/));
       } finally { await rm(base, { recursive: true, force: true }); }

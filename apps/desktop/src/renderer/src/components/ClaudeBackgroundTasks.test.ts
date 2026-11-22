@@ -116,6 +116,8 @@ describe("Claude background tasks indicator", () => {
       click(byRole(view.container, "button", "Open output file"));
       await act(async () => { await Promise.resolve(); });
       expect(view.container.textContent).toContain("Could not open the file.");
+      click(byRole(view.container, "button", /later/));
+      expect(view.container.textContent).not.toContain("Could not open the file.");
     });
   });
 

@@ -127,7 +127,7 @@ export function ClaudeBackgroundTasks() {
           {visible.map(item => {
             const state = backgroundCardStatus(item);
             return <li key={item.taskId}>
-              <Button variant="ghost" size="sm" className={`claude-bg-row claude-bg-row-${item.status}`} aria-pressed={item.taskId === taskId} onClick={() => setSelected(item.taskId)}>
+              <Button variant="ghost" size="sm" className={`claude-bg-row claude-bg-row-${item.status}`} aria-pressed={item.taskId === taskId} onClick={() => { setSelected(item.taskId); setOpenFailed(false); }}>
                 <span className="claude-bg-row-icon"><StatusIcon status={item.status} /></span>
                 <span className="claude-bg-row-main">
                   <span className="claude-bg-row-title">{backgroundTaskKindLabel(item)}: {taskDescription(item, transcript)}</span>

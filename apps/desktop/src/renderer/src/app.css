@@ -9542,7 +9542,11 @@ dialog.role-picker-dialog {
 .sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-open { padding-right: calc(var(--sp-2) + 42px); }
 .sidebar-row-wrap:has(> .sidebar-row-menu-button) .sidebar-row-resumable { padding-right: 44px; }
 
-.claude-bg-tasks { position: relative; align-self: flex-end; flex: none; margin-bottom: calc(-1 * var(--sp-1)); -webkit-app-region: no-drag; }
+.claude-bg-tasks { position: absolute; z-index: 5; top: var(--sp-2); right: var(--sp-2); -webkit-app-region: no-drag; }
+/* The icon owns the composer's top-right corner; whatever sits first on that line reserves its width, so nothing is covered and no row is added. */
+.composer:has(> .claude-bg-tasks) .background-agents-heading { padding-right: 2.5rem; }
+.composer:has(> .claude-bg-tasks):not(:has(> .background-agents)) .prompt-queue { padding-right: 2.5rem; }
+.composer:has(> .claude-bg-tasks):not(:has(> .background-agents, > .prompt-queue)) .composer-textarea { padding-right: 2.5rem; }
 .claude-bg-trigger { width: auto; gap: var(--sp-1); padding: 0 var(--sp-2); color: var(--text-3); }
 .claude-bg-trigger-running { color: var(--text-2); }
 .claude-bg-count { font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }

@@ -20,7 +20,16 @@ export function claudeTmpRoot(): string | undefined {
 /** Resolved paths per (session, task): polling must not rescan the root. Always re-validated before use. */
 const resolvedCache = new Map<string, string>();
 const CACHE_LIMIT = 200;
-export function clearClaudeTaskOutputCache(): void { resolvedCache.clear(); }
+/** Keys that resolved to nothing recently: a poll of a not-yet-existing file must not rescan the root every time. */
+const missingUntil = new Map<string, number>();
+const MISSING_TTL_MS = 10_000;
+export function clearClaudeTaskOutputCache(): void { resolvedCache.clear(); missingUntil.clear(); }
+function remember(key: string, path: string): void {
+  resolvedCache.delete(key);
+  if (resolvedCache.size >= CACHE_LIMIT) resolvedCache.delete(resolvedCache.keys().next().value as string);
+  resolvedCache.set(key, path);
+  missingUntil.delete(key);
+}
 
 const ownedPlainFile = (info: { isFile(): boolean; nlink: number; uid: number; mode: number }): boolean => {
   const uid = process.getuid?.();
@@ -54,18 +63,20 @@ export async function resolveClaudeTaskOutput(raw: unknown, root: string | undef
     const realRoot = await realpath(root);
     const key = `${realRoot}\0${sessionRef}\0${taskId}`;
     const hinted = outputFile ? await validate(outputFile, taskId, sessionRef, realRoot) : undefined;
-    if (hinted) { resolvedCache.set(key, hinted); return hinted; }
+    if (hinted) { remember(key, hinted); return hinted; }
     const cached = resolvedCache.get(key);
     if (cached) {
       const again = await validate(cached, taskId, sessionRef, realRoot);
       if (again) return again;
       resolvedCache.delete(key);
     }
+    if ((missingUntil.get(key) ?? 0) > Date.now()) return undefined;
     const found = await findClaudeTaskOutputHint(realRoot, taskId, sessionRef);
     const resolved = found ? await validate(found, taskId, sessionRef, realRoot) : undefined;
-    if (resolved) {
-      if (resolvedCache.size >= CACHE_LIMIT) resolvedCache.delete(resolvedCache.keys().next().value as string);
-      resolvedCache.set(key, resolved);
+    if (resolved) remember(key, resolved);
+    else {
+      if (missingUntil.size >= CACHE_LIMIT) missingUntil.delete(missingUntil.keys().next().value as string);
+      missingUntil.set(key, Date.now() + MISSING_TTL_MS);
     }
     return resolved;
   } catch { return undefined; }
@@ -102,10 +113,12 @@ export async function readClaudeTaskOutput(raw: unknown, root?: string): Promise
   } catch { return { ok: false, reason: "unavailable" }; }
 }
 
-export async function openClaudeTaskOutput(raw: unknown, root?: string, opener: { openPath(path: string): Promise<string> } = shell): Promise<{ ok: boolean }> {
+/** Open with the OS handler; a `.output` file often has none, so fall back to revealing it in the file manager. */
+export async function openClaudeTaskOutput(raw: unknown, root?: string, opener: { openPath(path: string): Promise<string>; showItemInFolder(path: string): void } = shell): Promise<{ ok: boolean }> {
   const resolved = await resolveClaudeTaskOutput(raw, root);
   if (!resolved) return { ok: false };
-  try { return { ok: (await opener.openPath(resolved)) === "" }; } catch { return { ok: false }; }
+  try { if ((await opener.openPath(resolved)) === "") return { ok: true }; } catch { /* fall through to reveal */ }
+  try { opener.showItemInFolder(resolved); return { ok: true }; } catch { return { ok: false }; }
 }
 
 /** Find the file in Claude's conventional temporary directory. Never grants access by itself: the result is re-validated. */
