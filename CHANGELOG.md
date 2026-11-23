@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Newer models from Z.AI (GLM 5.3 and later), MiniMax (M3 Flash versions) and DeepSeek (V-series Pro and Flash) keep reasoning effort before AnyCode's model list has been updated. The effort picker appears and effort and thinking settings are sent for these models. A model listed by the provider's own model list, and any explicit setting you made, take priority.
+- Newer Z.AI (GLM-5.3 and later), MiniMax (M3.x Flash) and DeepSeek (Pro/Flash) models that AnyCode does not list yet now get the effort picker, and their effort and thinking settings are sent. AnyCode's own model entry, reasoning details reported by the provider and your explicit settings still take priority.
 
 ## [0.0.109] - 2026-11-23
 
