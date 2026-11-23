@@ -4,7 +4,7 @@
  * live facts take priority, and providers without a profile behave as before.
  */
 import { describe, expect, it } from "vitest";
-import type { ModelRequest } from "../types/model.js";
+import type { ModelRequest } from "../ports/model.js";
 import { findCatalogEntry } from "./catalog-data.js";
 import { buildChildModelSettingsResolver } from "./child-model-settings.js";
 import { resolveEffortLevels, resolveChildReasoningEffort, resolveReasoningEffort, unknownModelProfileRow } from "./capabilities.js";
