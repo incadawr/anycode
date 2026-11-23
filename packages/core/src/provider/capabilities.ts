@@ -19,7 +19,7 @@
  * and its additive-only semantics are unchanged.
  */
 
-import type { CatalogProviderEntry } from "./catalog.js";
+import type { CatalogModel, CatalogProviderEntry } from "./catalog.js";
 import { DEFAULT_MAX_OUTPUT_TOKENS, type ReasoningEffort } from "../types/config.js";
 
 /** Explicit user override for image input, sourced from ANYCODE_IMAGE_INPUT. */
@@ -186,6 +186,7 @@ export function resolveReasoningEffort(
   live?: LiveModelCapabilities,
   explicitLevels?: readonly ReasoningEffort[],
 ): ReasoningEffort | undefined {
+  entry = withProfileRow(modelId, entry, live);
   const catalogModel = entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId);
   if (catalogModel?.thinkingAlwaysOn !== true) {
     if (override === "off") {
@@ -309,6 +310,56 @@ function effectiveDefaultEffort(
   return highest;
 }
 
+/**
+ * Synthetic catalog row for a model the catalog does not list, built from the
+ * provider's `unknownModelReasoning` profile. `undefined` when the model is
+ * listed (models or retiredModels), the provider has no profile, the id does
+ * not match the profile's pattern, or a live fact already speaks for the model
+ * (`live.reasoning` declared either way — live wins over the profile).
+ */
+export function unknownModelProfileRow(
+  modelId: string,
+  entry: CatalogProviderEntry | undefined,
+  live?: LiveModelCapabilities,
+): CatalogModel | undefined {
+  const profile = entry?.unknownModelReasoning;
+  if (profile === undefined || entry === undefined || live?.reasoning !== undefined) return undefined;
+  const lower = modelId.toLowerCase();
+  if (entry.models.some((m) => m.id.toLowerCase() === lower) || entry.retiredModels?.some((m) => m.id.toLowerCase() === lower)) return undefined;
+  if (!cachedPattern(profile.idPattern).test(modelId)) return undefined;
+  const noDefault = profile.noDefaultIdPattern !== undefined && cachedPattern(profile.noDefaultIdPattern).test(modelId);
+  return {
+    id: modelId,
+    contextWindow: 0,
+    reasoning: true,
+    effortLevels: [...profile.effortLevels],
+    ...(profile.defaultEffort !== undefined && !noDefault ? { defaultEffort: profile.defaultEffort } : {}),
+    ...(profile.thinkingAlwaysOn === true ? { thinkingAlwaysOn: true } : {}),
+  };
+}
+
+const PATTERN_CACHE = new Map<string, RegExp>();
+
+/** Case-insensitive RegExp for a profile pattern, compiled once per source. */
+function cachedPattern(source: string): RegExp {
+  let regex = PATTERN_CACHE.get(source);
+  if (regex === undefined) {
+    regex = new RegExp(source, "i");
+    PATTERN_CACHE.set(source, regex);
+  }
+  return regex;
+}
+
+/** The entry with the profile row appended for `modelId`, or the entry itself. */
+function withProfileRow(
+  modelId: string,
+  entry: CatalogProviderEntry | undefined,
+  live: LiveModelCapabilities | undefined,
+): CatalogProviderEntry | undefined {
+  const row = unknownModelProfileRow(modelId, entry, live);
+  return row === undefined || entry === undefined ? entry : { ...entry, models: [...entry.models, row] };
+}
+
 /** The canonical effort order — "highest" is the last one listed here. */
 const EFFORT_ORDER: readonly ReasoningEffort[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
@@ -331,6 +382,7 @@ export function resolveEffortLevels(
   live?: LiveModelCapabilities,
   explicitLevels?: readonly ReasoningEffort[],
 ): ReasoningEffort[] | undefined {
+  entry = withProfileRow(modelId, entry, live);
   const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (explicitLevels !== undefined) return matched?.thinkingAlwaysOn ? explicitLevels.filter((level) => level !== "off") : [...explicitLevels];
   if (matched === undefined) return liveEffortLevels(live); // catalog miss ⇒ live

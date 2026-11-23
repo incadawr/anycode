@@ -597,3 +597,59 @@ it("retains native catalog thinking policy for explicit levels and clipped defau
   const offCaps = modelCapabilitiesFor({ ...base, reasoningEffort: "off" }, id);
   expect(startModelDefaultEffort("minimax", id, catalog, offCaps, ["low", "high"])).toBe("high");
 });
+
+describe("startModelEffortLevels — unknownModelReasoning profile", () => {
+  const profileCatalog: CatalogSummary = [
+    {
+      id: "z-ai",
+      name: "Z.AI (GLM)",
+      authKind: "api_key",
+      models: [{ id: "glm-5.4", name: "GLM-5.4", reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" }],
+      unknownModelReasoning: { idPattern: "^glm-(?:5\\.(?:[3-9]|\\d{2,})|[6-9])(?:[.-]|$)", effortLevels: ["low", "high", "max"], defaultEffort: "max" },
+    },
+    { id: "openai", name: "OpenAI", authKind: "api_key", models: [] },
+  ];
+  it("offers the profile levels and default for an unlisted matching model", () => {
+    expect(startModelEffortLevels("z-ai", "glm-5.5", profileCatalog)).toEqual(["low", "high", "max"]);
+    expect(startModelDefaultEffort("z-ai", "glm-5.5", profileCatalog)).toBe("max");
+  });
+  it("keeps the old result for listed, non-matching and profile-less models", () => {
+    expect(startModelEffortLevels("z-ai", "glm-4.7", profileCatalog)).toBeUndefined();
+    expect(startModelEffortLevels("openai", "gpt-9", profileCatalog)).toBeUndefined();
+    expect(startModelEffortLevels("z-ai", "glm-5.4", profileCatalog)).toEqual(["low", "high", "max"]);
+  });
+  it("lets live facts take priority", () => {
+    expect(startModelEffortLevels("z-ai", "glm-5.5", profileCatalog, { reasoning: false })).toBeUndefined();
+    expect(startModelEffortLevels("z-ai", "glm-5.5", profileCatalog, { reasoning: true, effortLevels: ["low", "medium"] })).toEqual(["low", "medium"]);
+  });
+  const richCatalog: CatalogSummary = [
+    {
+      id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key",
+      models: [{ id: "glm-5.3-flash", name: "GLM-5.3 Flash", reasoning: true, effortLevels: ["low", "high", "max"] }],
+      retiredModelIds: ["glm-5-turbo"],
+      unknownModelReasoning: { idPattern: "^glm-(?:5\\.(?:[3-9]|\\d{2,})|[6-9]|[1-9]\\d+)(?:\\.\\d+)?(?:-(?:flash|flashx|air))?$", effortLevels: ["low", "high", "max"], defaultEffort: "max", noDefaultIdPattern: "-(?:flash|flashx|air)$" },
+    },
+    { id: "minimax", name: "MiniMax", authKind: "api_key", models: [], unknownModelReasoning: { idPattern: "^MiniMax-M3\\.\\d+-Flash(?:-|$)", effortLevels: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "max", thinkingAlwaysOn: true } },
+    { id: "deepseek", name: "DeepSeek", authKind: "api_key", models: [], unknownModelReasoning: { idPattern: "^deepseek-(?:v\\d+(?:\\.\\d+)?-)?(?:pro|flash)(?:-|$)", effortLevels: ["low", "high", "max"], defaultEffort: "high" } },
+  ];
+  it("glm-5.10, glm-10, flash without default, vision excluded", () => {
+    expect(startModelEffortLevels("z-ai", "glm-5.10", richCatalog)).toEqual(["low", "high", "max"]);
+    expect(startModelEffortLevels("z-ai", "glm-10", richCatalog)).toEqual(["low", "high", "max"]);
+    expect(startModelEffortLevels("z-ai", "glm-5.4-flash", richCatalog)).toEqual(["low", "high", "max"]);
+    expect(startModelDefaultEffort("z-ai", "glm-5.4-flash", richCatalog)).toBeUndefined();
+    expect(startModelEffortLevels("z-ai", "glm-5.4-vision", richCatalog)).toBeUndefined();
+  });
+  it("matches listed and retired ids case-insensitively", () => {
+    expect(startModelEffortLevels("z-ai", "GLM-5.3-FLASH", richCatalog)).toBeUndefined();
+    expect(startModelDefaultEffort("z-ai", "GLM-5.3-FLASH", richCatalog)).toBeUndefined();
+    expect(startModelEffortLevels("z-ai", "GLM-5-TURBO", richCatalog)).toBeUndefined();
+  });
+  it("MiniMax: always-on thinking, levels and default; DeepSeek: levels and high default", () => {
+    expect(startModelEffortLevels("minimax", "MiniMax-M3.2-Flash", richCatalog)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(startModelDefaultEffort("minimax", "MiniMax-M3.2-Flash", richCatalog)).toBe("max");
+    expect(startModelEffortLevels("minimax", "MiniMax-M3", richCatalog)).toBeUndefined();
+    expect(startModelEffortLevels("deepseek", "deepseek-v5-pro", richCatalog)).toEqual(["low", "high", "max"]);
+    expect(startModelDefaultEffort("deepseek", "deepseek-v5-pro", richCatalog)).toBe("high");
+    expect(startModelEffortLevels("deepseek", "deepseek-chat", richCatalog)).toBeUndefined();
+  });
+});

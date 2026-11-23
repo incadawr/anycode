@@ -1093,6 +1093,10 @@ export type CatalogAuthKind = "api_key" | "oauth";
  */
 export interface CatalogSummaryEntry {
   catalogBaseUrl?: string;
+  /** Reasoning scheme for newer models the catalog does not list yet; the renderer's copy of core's `unknownModelProfileRow` rule reads it. */
+  unknownModelReasoning?: { idPattern: string; effortLevels: string[]; defaultEffort?: string; noDefaultIdPattern?: string; thinkingAlwaysOn?: boolean };
+  /** Ids of retired catalog models; the profile never applies to them (mirrors core). */
+  retiredModelIds?: string[];
   id: string;
   name: string;
   /**
