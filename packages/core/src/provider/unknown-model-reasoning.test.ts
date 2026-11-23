@@ -87,4 +87,28 @@ describe("unknownModelReasoning profile", () => {
     }
     expect(unknownModelProfileRow("glm-5.5", undefined)).toBeUndefined();
   });
+
+  it("Z.AI: two-digit majors and minors are covered", () => {
+    expect(resolveEffortLevels("glm-5.10", zai)).toEqual(["low", "high", "max"]);
+    expect(resolveEffortLevels("glm-10", zai)).toEqual(["low", "high", "max"]);
+    expect(resolveEffortLevels("glm-12.1", zai)).toEqual(["low", "high", "max"]);
+  });
+
+  it("Z.AI: flash/air variants get the levels but no default; vision and suffixed ids are excluded", () => {
+    for (const id of ["glm-5.4-flash", "glm-5.4-flashx", "glm-5.4-air"]) {
+      expect(resolveEffortLevels(id, zai)).toEqual(["low", "high", "max"]);
+      expect(resolveReasoningEffort(id, zai, undefined)).toBeUndefined();
+      expect(resolveReasoningEffort(id, zai, "high")).toBe("high");
+    }
+    for (const id of ["glm-5.4-vision", "glm-5.4v", "glm-5.4-flash-vision", "glm-5.4-0301"]) {
+      expect(resolveEffortLevels(id, zai)).toBeUndefined();
+    }
+  });
+
+  it("matches listed and retired ids case-insensitively, so they never fall into the profile", () => {
+    expect(unknownModelProfileRow("GLM-5.3-FLASH", zai)).toBeUndefined();
+    expect(resolveReasoningEffort("GLM-5.3-FLASH", zai, undefined)).toBeUndefined();
+    expect(resolveEffortLevels("GLM-5.4", zai)).toBeUndefined();
+    expect(unknownModelProfileRow("DeepSeek-Flash", deepseek)).toBeUndefined();
+  });
 });

@@ -270,7 +270,8 @@ const ENTRIES: CatalogProviderEntry[] = [
       { id: "glm-4.6", pricing: { basisId: "glm-4.6-zai-2026-10-27", input: 0.6, cachedInput: 0.11, cacheWrite: 0.6, output: 2.2 }, name: "GLM-4.6", contextWindow: 200_000, maxOutputTokens: 131_072 },
     ],
     unknownModelReasoning: {
-      idPattern: "^glm-(?:5\\.(?:[3-9]|\\d{2,})|[6-9])(?:[.-]|$)",
+      idPattern: "^glm-(?:5\\.(?:[3-9]|\\d{2,})|[6-9]|[1-9]\\d+)(?:\\.\\d+)?(?:-(?:flash|flashx|air))?$",
+      noDefaultIdPattern: "-(?:flash|flashx|air)$",
       effortLevels: ["low", "high", "max"],
       defaultEffort: "max",
     },

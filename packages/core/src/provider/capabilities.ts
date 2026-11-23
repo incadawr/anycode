@@ -324,17 +324,30 @@ export function unknownModelProfileRow(
 ): CatalogModel | undefined {
   const profile = entry?.unknownModelReasoning;
   if (profile === undefined || entry === undefined || live?.reasoning !== undefined) return undefined;
-  if (entry.models.some((m) => m.id === modelId) || entry.retiredModels?.some((m) => m.id === modelId)) return undefined;
-  if (!new RegExp(profile.idPattern, "i").test(modelId)) return undefined;
+  const lower = modelId.toLowerCase();
+  if (entry.models.some((m) => m.id.toLowerCase() === lower) || entry.retiredModels?.some((m) => m.id.toLowerCase() === lower)) return undefined;
+  if (!cachedPattern(profile.idPattern).test(modelId)) return undefined;
+  const noDefault = profile.noDefaultIdPattern !== undefined && cachedPattern(profile.noDefaultIdPattern).test(modelId);
   return {
     id: modelId,
     contextWindow: 0,
     reasoning: true,
     effortLevels: [...profile.effortLevels],
-    ...(profile.defaultEffort !== undefined ? { defaultEffort: profile.defaultEffort } : {}),
+    ...(profile.defaultEffort !== undefined && !noDefault ? { defaultEffort: profile.defaultEffort } : {}),
     ...(profile.thinkingAlwaysOn === true ? { thinkingAlwaysOn: true } : {}),
-    ...(profile.supportsExplicitOff === true ? { supportsExplicitOff: true } : {}),
   };
+}
+
+const PATTERN_CACHE = new Map<string, RegExp>();
+
+/** Case-insensitive RegExp for a profile pattern, compiled once per source. */
+function cachedPattern(source: string): RegExp {
+  let regex = PATTERN_CACHE.get(source);
+  if (regex === undefined) {
+    regex = new RegExp(source, "i");
+    PATTERN_CACHE.set(source, regex);
+  }
+  return regex;
 }
 
 /** The entry with the profile row appended for `modelId`, or the entry itself. */

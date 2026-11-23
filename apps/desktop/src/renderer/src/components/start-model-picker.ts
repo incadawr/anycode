@@ -390,14 +390,29 @@ function profileModel(
 ): { reasoning: true; effortLevels: string[]; defaultEffort?: string; thinkingAlwaysOn?: boolean } | undefined {
   const profile = entry?.unknownModelReasoning;
   if (profile === undefined || entry === undefined || liveCaps?.reasoning !== undefined) return undefined;
-  if (entry.models.some((model) => model.id === modelId)) return undefined;
-  if (!new RegExp(profile.idPattern, "i").test(modelId)) return undefined;
+  const lower = modelId.toLowerCase();
+  if (entry.models.some((model) => model.id.toLowerCase() === lower)) return undefined;
+  if (entry.retiredModelIds?.some((id) => id.toLowerCase() === lower)) return undefined;
+  if (!profilePattern(profile.idPattern).test(modelId)) return undefined;
+  const noDefault = profile.noDefaultIdPattern !== undefined && profilePattern(profile.noDefaultIdPattern).test(modelId);
   return {
     reasoning: true,
     effortLevels: [...profile.effortLevels],
-    ...(profile.defaultEffort !== undefined ? { defaultEffort: profile.defaultEffort } : {}),
+    ...(profile.defaultEffort !== undefined && !noDefault ? { defaultEffort: profile.defaultEffort } : {}),
     ...(profile.thinkingAlwaysOn === true ? { thinkingAlwaysOn: true } : {}),
   };
+}
+
+const PROFILE_PATTERNS = new Map<string, RegExp>();
+
+/** Case-insensitive RegExp for a profile pattern, compiled once per source. */
+function profilePattern(source: string): RegExp {
+  let regex = PROFILE_PATTERNS.get(source);
+  if (regex === undefined) {
+    regex = new RegExp(source, "i");
+    PROFILE_PATTERNS.set(source, regex);
+  }
+  return regex;
 }
 
 /** The closed effort vocabulary a live-declared level must map to by exact name. */

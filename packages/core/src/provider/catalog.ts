@@ -127,8 +127,9 @@ export interface UnknownModelReasoningProfile {
   idPattern: string;
   effortLevels: ReasoningEffort[];
   defaultEffort?: ReasoningEffort;
+  /** Ids matching this pattern are offered the levels but no default (as the listed Flash rows). */
+  noDefaultIdPattern?: string;
   thinkingAlwaysOn?: boolean;
-  supportsExplicitOff?: boolean;
 }
 
 /**

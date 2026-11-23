@@ -385,3 +385,16 @@ it("keeps manual connection rates ahead of live catalog rates", () => {
   expect(settings.imageInputFor("a")).toBe("off");
   expect(settings.imageInputFor("b")).toBe("on");
 });
+
+it("keeps the provider reasoning profile when live context facts insert a row for an unlisted model", () => {
+  const catalogEntry = findCatalogEntry("z-ai")!;
+  const model = "glm-5.5";
+  const live = { contextWindow: 900_000, maxOutputTokens: 100_000 };
+  const settings = createConnectionModelSettings({ catalogEntry, connection: { modelCapabilities: { [model]: live } }, liveCapabilitiesFor: () => undefined });
+  const entry = settings.entryFor(model);
+  expect(resolveEffortLevels(model, entry, settings.capabilitiesFor(model))).toEqual(["low", "high", "max"]);
+  expect(resolveReasoningEffort(model, entry, undefined, settings.capabilitiesFor(model))).toBe("max");
+  expect(entry?.models.find(row => row.id === model)).toMatchObject({ contextWindow: 900_000, maxOutputTokens: 100_000, reasoning: true });
+  const plain = createConnectionModelSettings({ catalogEntry, connection: { modelCapabilities: { "glm-4.6v": live } }, liveCapabilitiesFor: () => undefined });
+  expect(resolveEffortLevels("glm-4.6v", plain.entryFor("glm-4.6v"), plain.capabilitiesFor("glm-4.6v"))).toBeUndefined();
+});

@@ -655,7 +655,8 @@ export interface CatalogEntryShape {
   auth: { kind: string };
   baseUrl: string;
   /** `reasoning`/`effortLevels` `maxOutputTokens` and `imageInput` ride along for the draft-time effort picker / ceiling display / vision-model suggestions; `string[]`-typed to keep this module core-import-free. */
-  unknownModelReasoning?: { idPattern: string; effortLevels: readonly string[]; defaultEffort?: string; thinkingAlwaysOn?: boolean };
+  unknownModelReasoning?: { idPattern: string; effortLevels: readonly string[]; defaultEffort?: string; noDefaultIdPattern?: string; thinkingAlwaysOn?: boolean };
+  retiredModels?: { id: string }[];
   models: {
     id: string;
     name?: string;
@@ -727,6 +728,9 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     ...(entry.isCustom === true ? { isCustom: true } : {}),
     ...(entry.unknownModelReasoning !== undefined
       ? { unknownModelReasoning: { ...entry.unknownModelReasoning, effortLevels: [...entry.unknownModelReasoning.effortLevels] } }
+      : {}),
+    ...(entry.unknownModelReasoning !== undefined && entry.retiredModels !== undefined && entry.retiredModels.length > 0
+      ? { retiredModelIds: entry.retiredModels.map((m) => m.id) }
       : {}),
     // Replay defaults on; explicit catalog exceptions are evaluated by core.
     // only when declared, same conditional-spread
