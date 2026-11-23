@@ -115,6 +115,24 @@ export interface CatalogModel {
 }
 
 /**
+ * Reasoning profile for model ids the catalog does not list yet. A provider
+ * whose newer versions share one thinking scheme declares it here so a model
+ * released after the catalog was built still gets its effort picker and
+ * request parameters, without waiting for a new catalog row. It applies only
+ * when the id matches `idPattern`, is absent from `models` and `retiredModels`,
+ * and no live capability fact exists for it. A listed row always wins.
+ */
+export interface UnknownModelReasoningProfile {
+  /** Case-insensitive regular expression source an unlisted model id must match. */
+  idPattern: string;
+  effortLevels: ReasoningEffort[];
+  defaultEffort?: ReasoningEffort;
+  /** Ids matching this pattern are offered the levels but no default (as the listed Flash rows). */
+  noDefaultIdPattern?: string;
+  thinkingAlwaysOn?: boolean;
+}
+
+/**
  * Declarative auth block of a catalog entry (slice 2.5 §3.1). `oauth` describes a
 
  * ships `api_key` only; the OAuth engine (wave 2.5.2) is validated against a
@@ -200,6 +218,8 @@ export interface CatalogProviderEntry {
   models: CatalogModel[];
   /** Historical capability hints for saved connections, excluded from suggestions. */
   retiredModels?: CatalogModel[];
+  /** Reasoning scheme for newer, not yet listed models of this provider. */
+  unknownModelReasoning?: UnknownModelReasoningProfile;
   /**
    * True when this endpoint legitimately runs with no credential at all (a
    * local vLLM/Ollama-style server, W5) — readiness does not require a

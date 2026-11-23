@@ -22,6 +22,8 @@ import { ConversationHistory } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { ProfilePermissionEngine } from "../permissions/rules.js";
+import { ModePermissionEngine } from "../permissions/engine.js";
+import { SafeCommandPermissionEngine } from "../permissions/safe-command-engine.js";
 import { ToolRegistry, createDefaultToolRegistry, limitSubagentBashOutput } from "../tools/registry.js";
 import { createListConnectionsTool, type ConnectionTargets } from "../tools/list-connections.js";
 import { resolveInlineRoute } from "../routing/inline-route.js";
@@ -32,6 +34,7 @@ import {
   buildSubagentSystemPrompt,
 } from "../prompts/subagent.js";
 import type { SystemPromptEnv } from "../prompts/system.js";
+import { withCodeModeReminder } from "../prompts/code-mode-reminder.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { capUtf8Bytes } from "../util/bytes.js";
@@ -349,7 +352,28 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
+  const restrictions = sessionRestrictionsForPersona(effectivePersona);
+  if (parent.registry?.has("REPL") && (restrictions === null || restrictions.tools.includes("REPL"))) {
+    const repl = parent.registry.get("REPL");
+    if (repl) registry.register(repl, { silentDuplicateWarning: true });
+  }
   limitSubagentBashOutput(registry);
+  const inheritedPermissions = persona.permissions !== undefined
+    ? new ProfilePermissionEngine(parent.permissionEngine, persona.permissions)
+    : parent.permissionEngine;
+  const readOnlyGate = new SafeCommandPermissionEngine(new ModePermissionEngine());
+  const childPermissions = restrictions?.readOnly && registry.has("REPL") ? {
+    check(request: Parameters<typeof inheritedPermissions.check>[0]) {
+      if (!request.metadata.readOnly && request.toolName !== "TodoWrite") {
+        const ruling = readOnlyGate.check({ ...request, mode: "plan" });
+        if (ruling.decision === "deny") return ruling;
+        const inherited = inheritedPermissions.check(request);
+        return ruling.resolvedCommand !== undefined && inherited.decision === "allow"
+          ? { ...inherited, resolvedCommand: ruling.resolvedCommand } : inherited;
+      }
+      return inheritedPermissions.check(request);
+    },
+  } : inheritedPermissions;
   if (extras?.readConnectionTargets && effectivePersona.tools.some(name => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name))) {
     const readTargets = extras.readConnectionTargets;
     registry.register(createListConnectionsTool(() => {
@@ -397,10 +421,7 @@ export function buildChildConfig(
     // that declares `permissions.allow`/`permissions.deny` wraps the inherited
     // engine in the profile overlay — it can only narrow (deny refuses without
     // a prompt, allow only resolves an existing ask), never widen.
-    permissionEngine:
-      persona.permissions !== undefined
-        ? new ProfilePermissionEngine(parent.permissionEngine, persona.permissions)
-        : parent.permissionEngine,
+    permissionEngine: childPermissions,
     permissionBroker: parent.permissionBroker,
     // the ask-zone classifier is inherited too — with the ROOT's
     // human-derived userContext thunk, never the child's own (model-authored)
@@ -1528,7 +1549,7 @@ export function createSubagentRunner(
           // The signal is already linked by the parent dispatcher to the turn
           // signal, so threading it here completes the parent->child->grandchild
           // SIGTERM/SIGKILL cascade through the existing chain — no new kill path.
-          for await (const event of loop.runTurn(req.prompt, { signal })) {
+          for await (const event of loop.runTurn(childConfig.registry.has("REPL") ? withCodeModeReminder(req.prompt) : req.prompt, { signal })) {
             switch (event.type) {
               case "waiting_for_network":
               case "network_wait_end":
@@ -1583,6 +1604,21 @@ export function createSubagentRunner(
                   toolName: event.toolName,
                   input: event.input,
                 });
+                break;
+              case "repl_call_end":
+                stallClock?.noteProgress("REPL");
+                if (event.outcome.status !== "invalid_input") {
+                  if (activityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS) {
+                    activityEmitted += 1;
+                    onProgress?.({
+                      kind: "tool",
+                      toolName: event.outcome.toolName,
+                      summary: summarizeChildToolCall(event.outcome.toolName, event.outcome.input.fields),
+                    });
+                  } else {
+                    activitySuppressed += 1;
+                  }
+                }
                 break;
               case "tool_result": {
                 stepHadTools = true;

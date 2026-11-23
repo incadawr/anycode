@@ -64,6 +64,35 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+it("limits concurrent workers and removes cancelled waiters", async () => {
+  const { runCodeMode } = await import("./runtime.js");
+  const gate = deferred<void>();
+  const threeStarted = deferred<void>();
+  let active = 0;
+  let peak = 0;
+  let started = 0;
+  const dispatch = async () => {
+    active++;
+    peak = Math.max(peak, active);
+    if (++started === 3) threeStarted.resolve();
+    await gate.promise;
+    active--;
+    return { status: "ok" as const, output: 1 };
+  };
+  const controller = new AbortController();
+  const run = (signal?: AbortSignal) => runCodeMode('return await call("Read", {});', "/", { dispatch, signal });
+  const first = [run(), run(), run()];
+  await threeStarted.promise;
+  const cancelled = run(controller.signal);
+  const queued = run();
+  controller.abort();
+  expect((await cancelled).endReason).toBe("cancelled");
+  expect(started).toBe(3);
+  gate.resolve();
+  expect((await Promise.all([...first, queued])).map(r => r.endReason)).toEqual(["ok", "ok", "ok", "ok"]);
+  expect(peak).toBe(3);
+}, 20_000);
+
 it("asyncDrainAndTerminalLatch", async () => {
   const { runCodeMode } = await import("./runtime.js");
   const dispatch = vi.fn(async (_tool: string, input: unknown) => ({

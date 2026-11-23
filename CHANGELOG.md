@@ -5,6 +5,13 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.110] - 2026-11-23
+
+### Changed
+
+- Newer Z.AI (GLM-5.3 and later), MiniMax (M3.x Flash) and DeepSeek (Pro/Flash) models that AnyCode does not list yet now get the effort picker, and their effort and thinking settings are sent. AnyCode's own model entry, reasoning details reported by the provider and your explicit settings still take priority.
+- Native subagents can use Code Mode when it is enabled in Settings and their tool list allows it.
+
 ## [0.0.109] - 2026-11-23
 
 ### Added

@@ -2,6 +2,7 @@ import {
   modelDictionaryEntry,
   mapForeignEffortLevels,
   resolveEffortLevels,
+  unknownModelProfileRow,
   resolveReasoningEffort,
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
   type CatalogProviderEntry,
@@ -56,7 +57,9 @@ export function createConnectionModelSettings(deps: {
     const live = connection?.modelCapabilities?.[model];
     if (entry && (live?.contextWindow || live?.maxOutputTokens)) {
       const previous = entry.models.find(row => row.id === model);
-      entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow ?? previous?.contextWindow ?? UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
+      // An unlisted model keeps the provider's reasoning profile on the synthetic row.
+      const base = previous ?? unknownModelProfileRow(model, entry, live);
+      entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...base, id: model, contextWindow: live.contextWindow ?? previous?.contextWindow ?? UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
     }
     if (entry && (entry !== deps.catalogEntry || override?.reasoningSupported === false)) {
       const live = capabilitiesFor(model);

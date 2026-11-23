@@ -107,6 +107,8 @@ export function summarizeChildToolCall(name: string, input: unknown): string {
       return cap(str(input, "pattern"));
     case "Agent":
       return cap(str(input, "description"));
+    case "REPL":
+      return cap(str(input, "description") || firstLine(str(input, "code")));
     case "TodoWrite":
       return cap(summarizeTodoWrite(input));
     default:

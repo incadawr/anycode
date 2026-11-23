@@ -405,6 +405,7 @@ import {
   buildResolveApiKey,
   childRetryPolicy,
   createNativeBootRegistry,
+  nativeCodeModeTelemetry,
   createPreviewRpcClient,
   createReplayDiagnosticSink,
   isChildSessionBoot,
@@ -4131,7 +4132,7 @@ async function boot(): Promise<void> {
       port.record({
         v: 1, ts: Date.now(), session: sessionMeta.id, t: "session_start",
         model: envConfig.model, provider: catalogEntry?.name ?? "custom", mode,
-        ...(registry.has("REPL") ? { codeMode: true } : {}),
+        ...nativeCodeModeTelemetry(registry, args),
         // §2.1: session-tier child back-reference
         // the same field the codex/claude boots stamp at their own
         // session_start above — the core path just never had it wired.

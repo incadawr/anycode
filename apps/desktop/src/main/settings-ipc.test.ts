@@ -1148,6 +1148,17 @@ describe("projectCatalogSummary — value-only projection", () => {
     // Only public catalog endpoint URLs are projected.
   });
 
+  it("projects the unknown-model reasoning profile and retired ids, only when declared", () => {
+    const profile = { idPattern: "^glm-5\\.\\d$", effortLevels: ["low", "high", "max"] as const, defaultEffort: "max", noDefaultIdPattern: "-flash$" };
+    const summary = projectCatalogSummary([
+      { id: "z-ai", name: "Z.AI", auth: { kind: "api_key" }, baseUrl: "https://z", models: [], unknownModelReasoning: profile, retiredModels: [{ id: "glm-5-turbo" }] },
+      { id: "plain", name: "Plain", auth: { kind: "api_key" }, baseUrl: "https://p", models: [], retiredModels: [{ id: "old" }] },
+    ]);
+    expect(summary[0]).toMatchObject({ unknownModelReasoning: { ...profile, effortLevels: ["low", "high", "max"] }, retiredModelIds: ["glm-5-turbo"] });
+    expect(summary[1]).not.toHaveProperty("unknownModelReasoning");
+    expect(summary[1]).not.toHaveProperty("retiredModelIds");
+  });
+
   it("projects each model's own reasoning/effortLevels, and only when declared", () => {
     const summary = projectCatalogSummary([
       {

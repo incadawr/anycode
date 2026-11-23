@@ -354,9 +354,8 @@ export function startModelEffortLevels(
   liveCaps?: ModelCapabilitiesDto,
   manualLevels?: readonly string[],
 ): readonly string[] | undefined {
-  const matched = catalog
-    ?.find((entry) => entry.id === providerId)
-    ?.models.find((model) => model.id === modelId);
+  const catalogEntry = catalog?.find((entry) => entry.id === providerId);
+  const matched = catalogEntry?.models.find((model) => model.id === modelId) ?? profileModel(catalogEntry, modelId, liveCaps);
   if (manualLevels !== undefined) return (liveCaps?.goRoutePolicy ? liveCaps.thinkingAlwaysOn : matched?.thinkingAlwaysOn ?? liveCaps?.thinkingAlwaysOn) ? manualLevels.filter((level) => level !== "off") : manualLevels;
   if (liveCaps?.goRoutePolicy) return liveCaps.reasoning === true ? liveCaps.effortLevels ?? [] : undefined;
   if (((providerId === "opencode" || providerId === "opencode-openai") && liveCaps?.reasoning !== undefined) || matched === undefined) {
@@ -377,6 +376,43 @@ export function startModelEffortLevels(
     return undefined;
   }
   return matched.effortLevels ?? START_MODEL_DEFAULT_EFFORTS;
+}
+
+/**
+ * The renderer's copy of core's `unknownModelProfileRow`: the profile row for a
+ * model the catalog entry does not list, or `undefined` (listed model, no
+ * profile, id outside the pattern, or a live reasoning fact that takes priority).
+ */
+function profileModel(
+  entry: CatalogSummary[number] | undefined,
+  modelId: string,
+  liveCaps: ModelCapabilitiesDto | undefined,
+): { reasoning: true; effortLevels: string[]; defaultEffort?: string; thinkingAlwaysOn?: boolean } | undefined {
+  const profile = entry?.unknownModelReasoning;
+  if (profile === undefined || entry === undefined || liveCaps?.reasoning !== undefined) return undefined;
+  const lower = modelId.toLowerCase();
+  if (entry.models.some((model) => model.id.toLowerCase() === lower)) return undefined;
+  if (entry.retiredModelIds?.some((id) => id.toLowerCase() === lower)) return undefined;
+  if (!profilePattern(profile.idPattern).test(modelId)) return undefined;
+  const noDefault = profile.noDefaultIdPattern !== undefined && profilePattern(profile.noDefaultIdPattern).test(modelId);
+  return {
+    reasoning: true,
+    effortLevels: [...profile.effortLevels],
+    ...(profile.defaultEffort !== undefined && !noDefault ? { defaultEffort: profile.defaultEffort } : {}),
+    ...(profile.thinkingAlwaysOn === true ? { thinkingAlwaysOn: true } : {}),
+  };
+}
+
+const PROFILE_PATTERNS = new Map<string, RegExp>();
+
+/** Case-insensitive RegExp for a profile pattern, compiled once per source. */
+function profilePattern(source: string): RegExp {
+  let regex = PROFILE_PATTERNS.get(source);
+  if (regex === undefined) {
+    regex = new RegExp(source, "i");
+    PROFILE_PATTERNS.set(source, regex);
+  }
+  return regex;
 }
 
 /** The closed effort vocabulary a live-declared level must map to by exact name. */
@@ -408,9 +444,8 @@ export function startModelDefaultEffort(
   liveCaps?: ModelCapabilitiesDto,
   overrideLevels?: readonly string[],
 ): string | undefined {
-  const matched = catalog
-    ?.find((entry) => entry.id === providerId)
-    ?.models.find((model) => model.id === modelId);
+  const catalogEntry = catalog?.find((entry) => entry.id === providerId);
+  const matched = catalogEntry?.models.find((model) => model.id === modelId) ?? profileModel(catalogEntry, modelId, liveCaps);
   const policyFirst = liveCaps?.goRoutePolicy === true || ((providerId === "opencode" || providerId === "opencode-openai") && liveCaps?.reasoning !== undefined);
   const recorded = policyFirst ? liveCaps?.defaultEffort : matched?.defaultEffort ?? liveCaps?.defaultEffort;
   if (recorded === undefined) {

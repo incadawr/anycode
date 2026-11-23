@@ -11,6 +11,10 @@ import {
 } from "./summarize-tool.js";
 
 describe("summarizeChildToolCall", () => {
+  it("summarizes REPL descriptions and the first code line", () => {
+    expect(summarizeChildToolCall("REPL", { description: "inspect", code: "ignored" })).toBe("inspect");
+    expect(summarizeChildToolCall("REPL", { code: "\n call(\"Read\", {});\nreturn 1;" })).toBe('call("Read", {});');
+  });
   it("Bash → first non-empty line of command", () => {
     expect(summarizeChildToolCall("Bash", { command: "npm run build" })).toBe("npm run build");
     // Multi-line command collapses to the first meaningful line.

@@ -557,8 +557,38 @@ interface RuntimeWorker {
 }
 
 let idleWorker: RuntimeWorker | undefined;
+const MAX_ACTIVE_WORKERS = 3;
+let activeWorkers = 0;
+const workerWaiters: Array<() => void> = [];
 
-async function acquireWorker(): Promise<RuntimeWorker> {
+async function acquireWorkerSlot(signal?: AbortSignal): Promise<() => void> {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  if (activeWorkers >= MAX_ACTIVE_WORKERS) {
+    await new Promise<void>((resolve, reject) => {
+      const grant = () => { signal?.removeEventListener("abort", abort); resolve(); };
+      const abort = () => {
+        const index = workerWaiters.indexOf(grant);
+        if (index >= 0) workerWaiters.splice(index, 1);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      workerWaiters.push(grant);
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  } else {
+    activeWorkers++;
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const next = workerWaiters.shift();
+    if (next) next();
+    else activeWorkers--;
+  };
+}
+
+async function acquireWorker(signal?: AbortSignal): Promise<RuntimeWorker> {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   if (idleWorker) {
     const worker = idleWorker;
     idleWorker = undefined;
@@ -590,14 +620,19 @@ async function acquireWorker(): Promise<RuntimeWorker> {
     if (runtime === idleWorker) idleWorker = undefined;
   });
   return new Promise((resolve, reject) => {
-    const onExit = () => reject(new Error("Code Mode worker failed to start"));
+    const onAbort = () => { void worker.terminate(); };
+    const onExit = () => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(new Error("Code Mode worker failed to start"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     worker.once("exit", onExit);
     worker.once("message", (event: WorkerEvent) => {
       worker.off("exit", onExit);
+      signal?.removeEventListener("abort", onAbort);
       if (event.type === "ready") resolve(runtime);
       else {
-        void worker.terminate();
-        reject(new Error("Code Mode worker failed to initialize"));
+        void worker.terminate().then(() => reject(new Error("Code Mode worker failed to initialize")));
       }
     });
   });
@@ -614,7 +649,8 @@ function releaseWorker(runtime: RuntimeWorker): void {
 
 // Used by the stress probe to exclude module and worker startup from elapsed time.
 export async function warmCodeModeWorker(): Promise<void> {
-  releaseWorker(await acquireWorker());
+  const release = await acquireWorkerSlot();
+  try { releaseWorker(await acquireWorker()); } finally { release(); }
 }
 
 export async function runCodeMode(
@@ -629,14 +665,23 @@ export async function runCodeMode(
     };
   }
   if (signal?.aborted) return failed("cancelled", "script cancelled");
+  let releaseSlot: () => void;
+  try {
+    releaseSlot = await acquireWorkerSlot(signal);
+  } catch {
+    return failed("cancelled", "script cancelled");
+  }
   let runtime: RuntimeWorker;
   try {
-    runtime = await acquireWorker();
+    runtime = await acquireWorker(signal);
   } catch {
+    releaseSlot();
+    if (signal?.aborted) return failed("cancelled", "script cancelled");
     return { ...failed("uncaught", RUNTIME_UNAVAILABLE), unavailable: true };
   }
   if (signal?.aborted) {
     await runtime.worker.terminate();
+    releaseSlot();
     return failed("cancelled", "script cancelled");
   }
 
@@ -672,10 +717,11 @@ export async function runCodeMode(
       signal?.removeEventListener("abort", onAbort);
       if (reusable) {
         releaseWorker(runtime);
+        releaseSlot();
         resolve(result);
       } else {
         // The caller observes a terminal result only after its worker has exited.
-        void worker.terminate().then(() => resolve(result));
+        void worker.terminate().then(() => { releaseSlot(); resolve(result); });
       }
     }
     function onExit(): void {

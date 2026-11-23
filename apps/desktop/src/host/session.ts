@@ -5407,13 +5407,12 @@ export class Session {
     // Code Mode reminder (mirror of cli/main.ts): appended once per accepted
     // user turn, right after the plan reminder and before background notices.
     // Only the Native (core) engine whose registry actually offers REPL gets it;
-    // child boots never register REPL, Codex/Claude tabs are excluded by the
+    // Codex/Claude tabs are excluded by the
     // engine check, and an orchestrate parent keeps its delegation-only
     // discipline. Continue/replay turns never reach this accept path.
     if (
       this.engine.id === "core" &&
       this.engine.capabilities.supportsCorePermissions &&
-      this.child === undefined &&
       !this.orchestrate &&
       this.codeModeReminderActive?.() === true
     ) {
