@@ -55,13 +55,17 @@ import { migrateModelOverrides } from "../shared/model-overrides.js";
 import {
   CHILD_NETWORK_RETRY_BUDGET_MS,
   ConversationHistory,
+  createDefaultToolRegistry,
   DEFAULT_RETRY_POLICY,
   DEFAULT_SUBAGENT_MAX_TURNS,
+  loadArchMapEnabled,
+  loadCodeModeEnabled,
   PERMISSION_MODES,
   SessionPermissionRules,
 } from "@anycode/core";
 import type {
   DiagnosticSink,
+  FileSystemPort,
   HistoryItem,
   HistorySink,
   PermissionMode,
@@ -334,6 +338,22 @@ export function isChildSessionBoot(args: HostArgs, meta: SessionMeta): boolean {
   return args.child !== undefined || meta.parentSessionId !== undefined;
 }
 
+export async function createNativeBootRegistry(
+  fs: FileSystemPort,
+  settingsPath: string,
+  env: NodeJS.ProcessEnv,
+  args: HostArgs,
+  meta: SessionMeta,
+) {
+  const archMap = await loadArchMapEnabled(fs, settingsPath, env);
+  const codeMode = !isChildSessionBoot(args, meta) && await loadCodeModeEnabled(fs, settingsPath, env);
+  return createDefaultToolRegistry({
+    ...(args.child === undefined ? { agent: { sessionTier: true } } : {}),
+    ...(archMap ? { archMap: true } : {}),
+    ...(codeMode ? { codeMode: true } : {}),
+  });
+}
+
 /**
  * Retry policy for a session's model port: a child session
  * (detached or in-process) keeps retrying a transient network outage for
@@ -457,9 +477,10 @@ export async function repairDanglingToolCalls(
   history: ConversationHistory,
   sink: HistorySink,
 ): Promise<number> {
+  const replRepaired = await history.repairInterruptedReplCalls();
   const dangling = history.unansweredToolCallIds();
   if (dangling.length === 0) {
-    return 0;
+    return replRepaired;
   }
 
   const names = new Map<string, string>();
@@ -491,7 +512,7 @@ export async function repairDanglingToolCalls(
 
   // Drain the write-behind queue so the repair is durable before the first turn.
   await sink.flush();
-  return dangling.length;
+  return replRepaired + dangling.length;
 }
 
 // ── always-allow persistence: boot-time seed from settings.json (design §5) ──

@@ -48,6 +48,37 @@ function collect(
 const NOCOLOR = createCliTheme({ color: false });
 const COLOR = createCliTheme({ color: true });
 
+it("cliShowsChildrenAndOneNdjsonStream", () => {
+  const code = 'const edit = await call("Edit", input);\nreturn "done";';
+  const toolCallId = "parent";
+  const edit = {
+    toolName: "Edit" as const, callId: "parent.1",
+    input: { fields: { file_path: "retry.js", old_string: "retry = 3", new_string: "retry = 5" } },
+  };
+  const bash = { toolName: "Bash" as const, callId: "parent.2", input: { fields: { command: "npm test" } } };
+  const events: AgentEvent[] = [
+    { type: "tool_execution_start", toolCallId, toolName: "REPL", input: { code, description: "Update retries" } },
+    { type: "repl_call_start", toolCallId, ...edit, input: { fields: { ...edit.input.fields, new_string: "retry = 4" } } },
+    { type: "repl_call_end", toolCallId, callId: edit.callId, outcome: { ...edit, status: "success", durationMs: 14 } },
+    { type: "repl_call_start", toolCallId, ...bash },
+    { type: "repl_call_end", toolCallId, callId: bash.callId, outcome: { ...bash, status: "cancelled", durationMs: 50 } },
+  ];
+  const childLines = [
+    "  ↳ Edit (success, 14ms)",
+    "    [tool] Edit retry.js",
+    "      - retry = 3",
+    "      + retry = 5",
+    '  ↳ Bash {"command":"npm test"} (cancelled, 50ms)',
+    "",
+  ].join("\n");
+  expect(collect(events, NOCOLOR, {})).toBe(`\n● REPL Update retries\n${childLines}`);
+  expect(collect(events, NOCOLOR, { verbose: true })).toBe(`\n● REPL Update retries\n${code}\n${childLines}`);
+  expect(collect([{ type: "tool_execution_start", toolCallId, toolName: "REPL", input: { code } }]))
+    .toBe('\n● REPL const edit = await call("Edit", input);\n');
+  expect(collect([{ type: "tool_execution_start", toolCallId, toolName: "Read", input: { file_path: "retry.js" } }], NOCOLOR, { verbose: true }))
+    .toBe('\n[tool] Read {"file_path":"retry.js"}\n');
+});
+
 describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => {
   it("surfaces output and turn limits explicitly", () => {
     expect(collect([{ type: "turn_end", turn: 1, finishReason: "length" }])).toContain("output truncated");

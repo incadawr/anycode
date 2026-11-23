@@ -609,6 +609,8 @@ export interface AnycodeSettings {
      * settings.json with no `archMap` key round-trips byte-identically.
      */
     archMap?: boolean;
+    /** Experimental Code Mode for newly launched Native root hosts. The explicit env value takes precedence at boot. */
+    codeMode?: boolean;
   };
   /** Persisted always-allow rules seeded into every new host session (§5). */
   permissions: { alwaysAllow: AlwaysAllowRule[]; classifier?: PermissionClassifierSettings };

@@ -49,6 +49,8 @@ export interface TranscriptOptions {
   collapse?: boolean;
   /** Render the model's reasoning stream (default on in interactive, off in print/non-TTY). */
   reasoning?: boolean;
+  /** Show Code Mode script source below its summary. */
+  verbose?: true;
   /**
    * `--print` is headless-by-contract: there is no REPL waiting for a next
    * message, so the turn-limit stop line states the fact only (
@@ -179,6 +181,13 @@ function stripOneTrailingNewline(text: string): string {
 function firstLine(text: string): string {
   const newline = text.indexOf("\n");
   return newline === -1 ? text : text.slice(0, newline);
+}
+
+function toolInputPreview(input: unknown, collapse: boolean | undefined): string {
+  const json = JSON.stringify(input) ?? "undefined";
+  return collapse && json.length > CLI_INPUT_PREVIEW_MAX_CHARS
+    ? `${json.slice(0, CLI_INPUT_PREVIEW_MAX_CHARS)}…`
+    : json;
 }
 
 interface BashDuck {
@@ -406,6 +415,15 @@ export function renderEvent(
       write(event.text);
       break;
     case "tool_execution_start": {
+      if (event.toolName === "REPL") {
+        const input = event.input as { code?: unknown; description?: unknown } | undefined;
+        const code = typeof input?.code === "string" ? input.code : "";
+        const description = typeof input?.description === "string" ? input.description.trim() : "";
+        const heading = firstLine(description || code.trimStart());
+        write(`\n● ${paint("toolName", "REPL")}${heading ? ` ${heading}` : ""}\n`);
+        if (transcript?.verbose && code) write(code.endsWith("\n") ? code : `${code}\n`);
+        break;
+      }
       // design §3.1: Edit/Write get a diff block instead of the raw JSON input
       // line, but ONLY when diffs are on AND the input duck-validates —
       // malformed input (a model can send garbage) falls through to the same
@@ -440,12 +458,29 @@ export function renderEvent(
         write(`\n[tool] ${paint("toolName", event.toolName)}\n`);
         break;
       }
-      const inputJson = JSON.stringify(event.input);
-      const preview =
-        transcript?.collapse && inputJson.length > CLI_INPUT_PREVIEW_MAX_CHARS
-          ? `${inputJson.slice(0, CLI_INPUT_PREVIEW_MAX_CHARS)}…`
-          : inputJson;
+      const preview = toolInputPreview(event.input, transcript?.collapse);
       write(`\n[tool] ${paint("toolName", event.toolName)} ${preview}\n`);
+      break;
+    }
+    case "repl_call_start":
+      break;
+    case "repl_call_end": {
+      const child = event.outcome;
+      const { input } = child;
+      const status = paint(child.status === "success" ? "toolResultOk" : "toolResultError", `(${child.status}, ${child.durationMs}ms)`);
+      const heading = `  ↳ ${paint("toolName", child.toolName)}`;
+      if (child.toolName === "Edit" && isEditInput(input.fields)) {
+        write(`${heading} ${status}\n`);
+        const diff = formatEditDiff({
+          filePath: input.fields.file_path, oldString: input.fields.old_string,
+          newString: input.fields.new_string, replaceAll: input.fields.replace_all, theme,
+        });
+        write(diff.trimStart().replace(/^(?=.)/gm, "    "));
+        if (input.truncated) write(`    ${TRUNCATION_MARKER}\n`);
+      } else {
+        const truncated = input.truncated ? ` ${TRUNCATION_MARKER}` : "";
+        write(`${heading} ${toolInputPreview(input.fields, true)}${truncated} ${status}\n`);
+      }
       break;
     }
     case "tool_result": {

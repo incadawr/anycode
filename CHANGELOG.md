@@ -5,6 +5,12 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Experimental Code Mode, off by default. Turn it on in Settings → Experimental → Code Mode. When enabled, native sessions can combine several tool calls into one REPL script and receive a short per-message reminder to use it. Subagent sessions, Codex tabs and Claude tabs are not affected, and the reminder never appears in the conversation or in session titles.
+
 ## [0.0.107] - 2026-11-22
 
 ### Fixed

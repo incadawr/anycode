@@ -122,7 +122,11 @@ export function archMapEnabledFromEnv(env: NodeJS.ProcessEnv): boolean | undefin
  * anything else (absent, wrong type, unparseable file) reads as "not enabled";
  * a corrupt file must never keep a session from booting. Never throws.
  */
-export async function archMapEnabledFromSettings(fs: FileSystemPort, settingsPath: string): Promise<boolean> {
+export function archMapEnabledFromSettings(fs: FileSystemPort, settingsPath: string): Promise<boolean> {
+  return readToolOptIn(fs, settingsPath, "archMap");
+}
+
+async function readToolOptIn(fs: FileSystemPort, settingsPath: string, key: string): Promise<boolean> {
   let text: string;
   try {
     text = await fs.readFile(settingsPath);
@@ -134,7 +138,7 @@ export async function archMapEnabledFromSettings(fs: FileSystemPort, settingsPat
     if (!json || typeof json !== "object" || Array.isArray(json)) return false;
     const tools = (json as { tools?: unknown }).tools;
     if (!tools || typeof tools !== "object" || Array.isArray(tools)) return false;
-    return (tools as { archMap?: unknown }).archMap === true;
+    return (tools as Record<string, unknown>)[key] === true;
   } catch {
     return false;
   }
@@ -154,6 +158,18 @@ export async function loadArchMapEnabled(
   const fromEnv = archMapEnabledFromEnv(env);
   if (fromEnv !== undefined) return fromEnv;
   return archMapEnabledFromSettings(fs, settingsPath);
+}
+
+/** Code Mode reads its boot flag from the environment and user settings. */
+export function loadCodeModeEnabled(
+  fs: FileSystemPort,
+  settingsPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const explicit = env.ANYCODE_EXPERIMENTAL_CODE_MODE;
+  return explicit === undefined
+    ? readToolOptIn(fs, settingsPath, "codeMode")
+    : Promise.resolve(explicit === "1");
 }
 
 export const archMapInputSchema = z.object({

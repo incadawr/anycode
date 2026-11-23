@@ -33,7 +33,13 @@ export default defineConfig(({ command }) => {
     // workspace dependency as external and the host crashes at runtime with
     // ERR_MODULE_NOT_FOUND on core's .js-suffixed imports. Its npm deps
     // (ai, @ai-sdk/anthropic, zod) stay external — they resolve from node_modules.
-      plugins: [externalizeDepsPlugin({ exclude: ["@anycode/core"] })],
+      plugins: [externalizeDepsPlugin({
+        exclude: [
+          "@anycode/core",
+          "quickjs-emscripten-core",
+          "@jitl/quickjs-singlefile-mjs-release-sync",
+        ],
+      })],
       define: {
         __ANYCODE_DEV_AUTOMATION__: JSON.stringify(devAutomationBuild),
       },
@@ -42,6 +48,7 @@ export default defineConfig(({ command }) => {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
             host: resolve(__dirname, "src/host/index.ts"),
+            "runtime-worker": resolve(__dirname, "../../packages/core/src/codemode/runtime-worker.ts"),
             "builtin-policy-worker": resolve(__dirname, "src/host/skills/builtin-policy-worker.ts"),
             // Input key IS the output filename (`host` -> `host.js`) — the
             // literal here must match main/index.ts's own path resolution

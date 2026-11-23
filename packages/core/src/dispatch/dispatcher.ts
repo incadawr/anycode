@@ -73,6 +73,8 @@ import { consultAskClassifier } from "../permissions/ask-classifier-consult.js";
 export interface DispatchContext {
   admitSubagent?: () => boolean;
   foregroundRuns?: import("../subagents/foreground-runs.js").ForegroundRuns;
+  /** Persist the parent assistant call before any REPL child can execute. */
+  flushReplHistory?: () => Promise<void>;
   registry: ToolRegistry;
   hooks: HookRunner;
   permissionEngine: PermissionEngine;
@@ -233,6 +235,7 @@ export async function executeToolCall(
   call: ProposedToolCall,
   parentSignal?: AbortSignal,
   emit?: (event: ToolEmittedEvent) => void,
+  captured?: { input: unknown },
 ): Promise<ToolCallOutcome> {
   const startedAt = Date.now();
   const toolCallId = call.id;
@@ -404,6 +407,7 @@ export async function executeToolCall(
       const controller = new AbortController();
       const dispose = parentSignal ? linkAbortSignal(parentSignal, controller) : () => {};
       const timeoutMs = resolveTimeoutMs(metadata, input);
+      let replHistoryFlush: Promise<void> | undefined;
       const handlerCtx: ToolContext = {
         toolCallId,
         admitSubagent: ctx.admitSubagent,
@@ -426,6 +430,26 @@ export async function executeToolCall(
         artifacts: ctx.artifacts,
         // §3.3: present-only copy, same discipline as the ports.
         ...(ctx.orchestrate === true ? { orchestrate: true } : {}),
+        ...(toolName === "REPL" ? {
+          dispatchNested: async (child: ProposedToolCall) => {
+            if (ctx.flushReplHistory !== undefined) {
+              try {
+                await (replHistoryFlush ??= Promise.resolve().then(ctx.flushReplHistory));
+              } catch {
+                return {
+                  toolCallId: child.id,
+                  toolName: child.name,
+                  status: "error",
+                  modelText: "Code Mode could not save the parent call. Tool execution was blocked.",
+                  durationMs: 0,
+                };
+              }
+            }
+            const captured = { input: child.input };
+            const nestedOutcome = await executeToolCall({ ...ctx, artifacts: undefined, tasks: undefined }, child, controller.signal, emit, captured);
+            return { ...nestedOutcome, effectiveInput: captured.input };
+          },
+        } : {}),
         emit,
       };
 
@@ -448,6 +472,8 @@ export async function executeToolCall(
           } finally {
             clearTimeout(timer);
           }
+        } else if (metadata.composite === true) {
+          result = await handlerPromise;
         } else {
           const race = await raceWithTimeout(
             handlerPromise,
@@ -509,6 +535,7 @@ export async function executeToolCall(
   };
 
   const finalOutcome = await pipeline();
+  if (captured !== undefined) captured.input = effectiveInput;
   await runPostToolUseObservers(
     ctx,
     { toolCallId, toolName, input: effectiveInput, outcome: finalOutcome },

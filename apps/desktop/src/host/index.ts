@@ -256,13 +256,11 @@ import {
   buildTelemetryTap,
   createCommandHook,
   createDefaultTokenizer,
-  createDefaultToolRegistry,
   ToolRegistry,
   createListConnectionsTool,
   createSessionPeerTools,
   createMediaProjectionPort,
   createWebSearchTool,
-  loadArchMapEnabled,
   discoverAgentProfiles,
   diagnosticsEditTool,
   diagnosticsWriteTool,
@@ -406,6 +404,7 @@ import {
 import {
   buildResolveApiKey,
   childRetryPolicy,
+  createNativeBootRegistry,
   createPreviewRpcClient,
   createReplayDiagnosticSink,
   isChildSessionBoot,
@@ -3371,32 +3370,12 @@ async function boot(): Promise<void> {
     const fsAdapter = new NodeFileSystemAdapter();
     const execAdapter = new NodeExecutionAdapter();
 
-    // ArchMap opt-in, mirror of cli/main.ts: ANYCODE_ARCHMAP=1
-    // wins, else `tools.archMap: true` in the same ~/.anycode/settings.json
-    // seedAlwaysAllowRules reads (the dev-profile override env var included),
-    // else OFF — the default registry and the host's tool-discipline section
-    // stay byte-identical to the pre-ArchMap baseline. Fail-soft:
-    // loadArchMapEnabled never throws, so a corrupt settings file only costs
-    // the flag, never the boot.
-    const archMapEnabled = await loadArchMapEnabled(
-      fsAdapter,
-      hostSettingsPathOverride() ?? defaultSettingsPath(),
-      process.env,
-    );
-
-    const registry =
-      args.child === undefined
-        ? createDefaultToolRegistry({ agent: { sessionTier: true }, ...(archMapEnabled ? { archMap: true } : {}) })
-        : createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
-
     const readConnectionTargets = () => {
       const raw = JSON.parse(readFileSync(hostSettingsPathOverride() ?? defaultSettingsPath(), "utf8"));
       const parsed = parseSettings(raw);
       if (parsed.status !== "ok") throw new Error("Invalid settings");
       return listConnectionTargets(parsed.settings, process.env[ENV_CONNECTION_ID] || parsed.settings.provider.activeConnectionId, currentModel, process.env.ANYCODE_ROUTING_ENV_OVERRIDE === "1");
     };
-    registry.register(createListConnectionsTool(readConnectionTargets));
-
     // adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
     // `tools.adaptiveTurnBudget`). OFF => no ceiling key, no subagentBudget,
     // no history file touched — the pre-4721 boot, byte-identical. ON => the
@@ -3422,6 +3401,14 @@ async function boot(): Promise<void> {
     });
     let sessionMeta = resolvedSession.sessionMeta;
     const { initialHistory, resumedMissing } = resolvedSession;
+    const registry = await createNativeBootRegistry(
+      fsAdapter,
+      hostSettingsPathOverride() ?? defaultSettingsPath(),
+      process.env,
+      args,
+      sessionMeta,
+    );
+    registry.register(createListConnectionsTool(readConnectionTargets));
     // part A: tools see their session id. Main stamps the pair into
     // the fork env, so this only fills a bare/legacy boot (dev harness) where it
     // is absent; `??=` never overrides main's value.
@@ -4144,6 +4131,7 @@ async function boot(): Promise<void> {
       port.record({
         v: 1, ts: Date.now(), session: sessionMeta.id, t: "session_start",
         model: envConfig.model, provider: catalogEntry?.name ?? "custom", mode,
+        ...(registry.has("REPL") ? { codeMode: true } : {}),
         // §2.1: session-tier child back-reference
         // the same field the codex/claude boots stamp at their own
         // session_start above — the core path just never had it wired.
@@ -4701,6 +4689,7 @@ async function boot(): Promise<void> {
     }
     if (childSessionPortHandle) bindRuntimeOrchestration(engine,{ownerSessionId:sessionId,port:childSessionPortHandle,baseMode:() => engine.mode()});
     session = new Session({
+      codeModeReminderActive: () => registry.has("REPL"),
       ...(fileActivity ? { observeFileActivity: fileActivity.observe } : {}),
       ...coreServices.callbacks,
       engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),

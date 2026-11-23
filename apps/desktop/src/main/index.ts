@@ -4386,9 +4386,14 @@ void app.whenReady().then(async () => {
     win!.webContents.on("render-process-gone", (_event, details) => console.error(`[self-check] renderer exited (${details.reason})`));
     try {
       await checkBuiltinPolicyWorker(selfCheckProfile);
+      const { runCodeMode } = await import("../../../../packages/core/src/codemode/runtime.js");
+      const runtime = await runCodeMode("return 42;", selfCheckProfile);
+      if (runtime.endReason !== "ok" || runtime.value !== "42") {
+        throw new Error(`Self-check code-mode-runtime failed: ${runtime.error?.message ?? runtime.endReason}`);
+      }
       await runSelfCheck(win!, selfCheckProfile, process.platform === "linux" && process.argv.includes("--self-check-allow-unavailable-capture"));
       await checkReloadProtection(win!, Menu.getApplicationMenu(), process.platform);
-      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["builtin-policy-worker", "renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes", "reload-shortcuts"] })}`);
+      console.log(`ANYCODE_SELF_CHECK ${JSON.stringify({ ok: true, packaged: app.isPackaged, profile: selfCheckProfile, checks: ["builtin-policy-worker", "code-mode-runtime", "renderer", "preload", "settings-ipc", "first-run-choices", "engine-panes", "api-required-fields", "settings-escape", "settings-panes", "reload-shortcuts"] })}`);
       await shutdownEverything();
       app.exit(0);
     } catch (error) {

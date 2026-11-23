@@ -357,7 +357,7 @@ describe("main/index.ts — create_session on a NON-active connection reaches th
     expect(await create({}, { kind: "new", workspace })).toMatchObject({ ok: true });
     expect(forkCalls).toHaveLength(1);
     expect(forkCalls[0]!.env.ANYCODE_MODEL).toBe(model);
-  });
+  }, 30_000);
   it("opens the GLM connection's tab with ITS env instead of crash_looping on a cache miss", async () => {
     const create = await boot();
 

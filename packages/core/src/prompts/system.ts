@@ -75,8 +75,12 @@ export function renderToolDisciplineSection(toolNames?: readonly string[]): stri
     return SECTION_TOOL_DISCIPLINE_GENERIC;
   }
   const sorted = [...toolNames].sort();
-  return `${SECTION_TOOL_DISCIPLINE_TEMPLATE}\n${sorted.join(", ")}`;
+  const discipline = `${SECTION_TOOL_DISCIPLINE_TEMPLATE}\n${sorted.join(", ")}`;
+  return sorted.includes("REPL") ? `${discipline}\n\n${REPL_DISCIPLINE}` : discipline;
 }
+
+const REPL_DISCIPLINE = `Use REPL when one tool call needs another's result. For example, search with Grep and read the matching files in one script.
+Return only what you need. Call standalone tools directly.`;
 
 /**
  * `<env>` block from the injected facts. Returns "" when no env was provided

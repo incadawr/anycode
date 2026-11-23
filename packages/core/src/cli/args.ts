@@ -59,6 +59,8 @@ export interface CliArgs {
   images: string[];
   /** --tui (slice 1): opt in to the Ink composer UI in interactive mode. Silently ignored without a TTY or with --print — the gate lives in main.ts. Default false. */
   tui: boolean;
+  /** Print the source of Code Mode scripts in the terminal transcript. */
+  verbose?: true;
 }
 
 export function isPermissionMode(value: string): value is PermissionMode {
@@ -127,6 +129,7 @@ function parseArgv(argv: string[]): ParsedArgv {
   let model: string | undefined;
   let noCheckpoints = false;
   let tui = false;
+  let verbose = false;
   const images: string[] = [];
   const unknownFlags: string[] = [];
 
@@ -189,6 +192,10 @@ function parseArgv(argv: string[]): ParsedArgv {
     }
     if (arg === "--no-color") {
       noColor = true;
+      continue;
+    }
+    if (arg === "--verbose") {
+      verbose = true;
       continue;
     }
     if (arg === "--no-checkpoints") {
@@ -292,6 +299,7 @@ function parseArgv(argv: string[]): ParsedArgv {
       noCheckpoints,
       images,
       tui,
+      ...(verbose ? { verbose: true } : {}),
     },
     unknownFlags,
   };
@@ -352,6 +360,7 @@ export function formatUsage(): string {
     "  --print [prompt], -p [prompt]        run one prompt non-interactively and exit (no prompt: read it from stdin; place -p last)",
     "  --output-format <fmt>                -p output: text | json | stream-json (default: text)",
     "  --no-color                           disable ANSI colour output",
+    "  --verbose                            show Code Mode script source in the transcript",
     "  --no-reasoning                       hide the model's reasoning stream (shown by default in interactive mode)",
     "  --no-checkpoints                     disable automatic workspace checkpoints for this session",
     "  --image <path>                       attach an image to the next prompt; repeatable (print: this run's prompt; interactive: pre-staged, also /image)",

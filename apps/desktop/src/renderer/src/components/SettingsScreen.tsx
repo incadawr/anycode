@@ -130,7 +130,7 @@ import type { ScopeWorkspaceEntry, ScopeWorkspacesListResult } from "../../../sh
 import { ProfilePane } from "./ProfilePane.js";
 import { VisionPane } from "./VisionPane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
-import { BrandMark, Check, Chevron, Code, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Package, Person, Plug, Plus, Robot, Route, Search, ServerStack, Sliders, Sparkle, Terminal, X } from "./icons.js";
+import { BrandMark, Check, Chevron, Code, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Lightning, Package, Person, Plug, Plus, Robot, Route, Search, ServerStack, Sliders, Sparkle, Terminal, X } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { parseSettingsPaneSelection, type SettingsPaneRequest } from "./settings-extensions-navigation.js";
 import { SETTINGS_ADD_CONNECTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
@@ -143,7 +143,7 @@ const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 /** the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
-export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "language-servers" | "skills" | "subagents" | "roles" | "plugins" | "sessions-api" | "environment" | "appearance" | "shortcuts" | "about";
+export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "language-servers" | "skills" | "subagents" | "roles" | "plugins" | "sessions-api" | "environment" | "appearance" | "shortcuts" | "about" | "experimental";
 
 type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -244,6 +244,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
     icon: Globe,
   },
   { id: "environment", section: "system", label: "Environment", description: "Telemetry and repo-map status for this workspace.", icon: Info },
+  { id: "experimental", section: "system", label: "Experimental", description: "Opt-in features for new sessions.", icon: Lightning },
 ];
 
 /**
@@ -283,6 +284,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsPaneId, readonly string[]> = 
   plugins: ["plugin", "plugins", "extension", "update", "install", "marketplace", "official", "third-party"],
   "sessions-api": ["sessions api", "communication", "mcp", "external agent", "claude code", "codex", "supervisor", "send message", "token", "local server"],
   environment: ["telemetry", "repo map", "environment"],
+  experimental: ["code mode", "repl"],
   appearance: ["theme", "density", "notifications", "dark", "light", "compact"],
   shortcuts: ["shortcut", "shortcuts", "keyboard", "keybinding", "hotkey", "combo", "record"],
   about: ["version", "update", "acknowledgements", "license"],
@@ -2156,6 +2158,23 @@ export function SettingsScreen({
             )}
 
             {activePane === "vision" && <VisionPane store={store} />}
+
+            {activePane === "experimental" && (
+              <section className="settings-section">
+                <div className="settings-field">
+                  <Switch
+                    label="Code Mode"
+                    checked={snapshot.settings.tools.codeMode === true}
+                    describedBy="settings-code-mode-hint"
+                    disabled={readOnly}
+                    onCheckedChange={(codeMode) => void store.getState().setPatch({ tools: { codeMode } })}
+                  />
+                  <span id="settings-code-mode-hint" className="settings-field-hint">
+                    Applies the next time a Native session launches. The ANYCODE_EXPERIMENTAL_CODE_MODE environment variable takes precedence.
+                  </span>
+                </div>
+              </section>
+            )}
 
             {/* the app rung — the bottom of every ladder — sits above
                 the registry it picks from, so "what does this app use by

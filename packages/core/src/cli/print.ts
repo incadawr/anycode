@@ -35,7 +35,7 @@ import type { McpManager } from "../mcp/index.js";
 import type { AgentEvent } from "../types/events.js";
 import type { ImageAttachment } from "../types/images.js";
 import type { PermissionMode } from "../types/permissions.js";
-import { renderEvent } from "./render.js";
+import { renderEvent, type TranscriptOptions } from "./render.js";
 import type { CliTheme } from "./theme.js";
 
 /** The three `-p` output formats (design slice-4.5-cut.md §2.2). */
@@ -68,6 +68,7 @@ export interface PrintModeOptions {
   /** Banners / warn / tool / usage / progress diagnostics (design §3.3). */
   stderr: NodeJS.WritableStream;
   theme: CliTheme;
+  verbose?: true;
   /**
    * Structured output selector (design §2.2). Absent ⇒ text path, byte-for-byte
    * identical to print-v0. Present ⇒ json / stream-json envelope + NDJSON.
@@ -131,6 +132,7 @@ function projectStreamError(
  */
 export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
   const { prompt, loop, mcpManager, historySink, persistence, stdout, stderr, theme, structured, attachments } = opts;
+  const transcript: TranscriptOptions = { headless: true, ...(opts.verbose ? { verbose: true } : {}) };
 
   const writeErr = (text: string): void => {
     stderr.write(text);
@@ -223,7 +225,7 @@ export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
           stdout.write(event.text);
         }
       } else {
-        renderEvent(event, writeErr, theme, { headless: true });
+        renderEvent(event, writeErr, theme, transcript);
       }
       if (event.type === "error") {
         sawErrorEvent = true;

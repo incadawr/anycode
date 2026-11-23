@@ -2193,6 +2193,7 @@ export function ToolCallHeaderRow({
   parentEngine,
   backgroundTask,
   transcriptAction,
+  replChild,
 }: {
   block: ToolCallBlock;
   expanded: boolean;
@@ -2208,6 +2209,7 @@ export function ToolCallHeaderRow({
   /** Parent session identity, resolved by ToolCallCard and passed as plain props (same static-render rationale as `childAction`). */
   parentModel?: string | null | undefined;
   parentEngine?: string | undefined;
+  replChild?: ReplChildPresentation | undefined;
 }) {
   const isAgent = block.toolName === "Agent";
   const collapsedIdentity =
@@ -2263,6 +2265,10 @@ export function ToolCallHeaderRow({
             lands renders no empty strip. */}
         {block.workflow !== null && !expanded && block.workflow.steps.length > 0 && (
           <WorkflowCollapsedTicks workflow={block.workflow} />
+        )}
+        {replChild?.inputTruncated && <span className="tool-call-summary">Input preview truncated</span>}
+        {replChild?.durationMs !== undefined && (
+          <span className="tool-call-name">{Math.round(replChild.durationMs)} ms</span>
         )}
         <span className="tool-call-status-badge" title={invalidInputDetail(block) ?? undefined}>{backgroundTask !== undefined && block.status === "success" ? backgroundCardStatus(backgroundTask).label : statusLabel(block)}</span>
         {/* CUT-S2 §2.5 (C3): the session-child badge lives in the
@@ -2343,14 +2349,75 @@ function BackgroundAgentControls({ block, ctx }: { block: ToolCallBlock; ctx: Ta
   return <BackgroundAgentButtons ids={ids} current={block.toolCallId} move={(spawnToolCallIds) => tabRegistry.sendToTab(ctx.tabId, { type: "background_agent_request", spawnToolCallIds })} />;
 }
 
-export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; enter?: boolean }) {
+interface ReplChildPresentation {
+  inputTruncated?: true | undefined;
+  durationMs?: number | undefined;
+}
+
+interface ToolCallCardProps {
+  block: ToolCallBlock;
+  enter?: boolean;
+  replChild?: ReplChildPresentation | undefined;
+}
+
+export function ToolCallCard(props: ToolCallCardProps) {
+  return props.block.toolName === "REPL" ? <ReplCard {...props} /> : <StandardToolCallCard {...props} />;
+}
+
+function ReplCard({ block, enter = false }: ToolCallCardProps) {
+  const input = block.input !== null && typeof block.input === "object" ? block.input as Record<string, unknown> : {};
+  const code = block.repl?.code ?? (typeof input.code === "string" ? input.code.slice(0, 32 * 1024) : "");
+  const description = typeof input.description === "string" ? input.description.trim() : "";
+  const summary = flattenSummary(description || code.trimStart().split("\n", 1)[0] || "");
+  const calls = block.repl?.calls ?? [];
+  return (
+    <div className={`tool-call-card tool-call-status-${statusTone(block)}${enter ? " message-enter" : ""}`} data-tool-call-id={block.toolCallId}>
+      <div className="tool-call-toggle-row tool-call-input">
+        <span className="tool-call-name">Code</span>
+        {summary && <span className="tool-call-summary"> · {summary}</span>}
+        <span className="tool-call-name"> · {calls.length} {calls.length === 1 ? "call" : "calls"} · </span>
+        <span className="tool-call-status-badge">{statusLabel(block)}</span>
+      </div>
+      <div className="tool-call-body">
+        {code && <details>
+          <summary className="tool-call-input">Script source</summary>
+          <pre className="tool-call-result">{code}</pre>
+        </details>}
+        {calls.map((call) => {
+          const terminal = "status" in call ? call : undefined;
+          const { fields, truncated } = call.input;
+          const { old_string, new_string } = fields;
+          const edit = call.toolName === "Edit" && terminal?.status === "success" &&
+            typeof old_string === "string" && typeof new_string === "string";
+          const child: ToolCallBlock = {
+            kind: "tool_call", id: call.callId, toolCallId: call.callId, toolName: call.toolName,
+            input: fields, status: terminal?.status ?? "running", modelText: terminal?.outputPreview ?? null,
+            snapshots: {
+              before: edit ? { content: old_string, truncated: truncated === true } : null,
+              after: edit ? { content: new_string, truncated: truncated === true } : null,
+            },
+            subagent: null, workflow: null,
+          };
+          return <ToolCallCard key={call.callId} block={child} replChild={{ inputTruncated: truncated, durationMs: terminal?.durationMs }} />;
+        })}
+        {block.modelText && <details open={block.status !== "success"}>
+          <summary className="tool-call-input">Script result</summary>
+          <pre className="tool-call-result">{block.modelText}</pre>
+        </details>}
+      </div>
+    </div>
+  );
+}
+
+function StandardToolCallCard({ block, enter = false, replChild }: ToolCallCardProps) {
   // Default-unless-user-overrode disclosure (design §1.A): the default is
   // derived from status every render, so an untouched card auto-collapses on
   // settle with no effect/resync; a manual toggle sticks for this mount.
   // Pure derivation — StrictMode-safe. onClick negates the DERIVED value:
   // the first click always flips away from whatever the default shows.
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
-  const expanded = userExpanded ?? defaultExpanded(block.toolName, block.status);
+  const hasSnapshot = block.snapshots.before !== null || block.snapshots.after !== null;
+  const expanded = userExpanded ?? ((replChild !== undefined && hasSnapshot) || defaultExpanded(block.toolName, block.status));
   // Result cap (design §1.D) — survives card collapse/expand cycles because
   // it lives here, not in the unmounting body.
   const [resultExpanded, setResultExpanded] = useState(false);
@@ -2392,7 +2459,6 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   const cardTone = backgroundTask !== undefined ? backgroundCardStatus(backgroundTask).tone : statusTone(block);
 
   const isDiffable = block.toolName === "Write" || block.toolName === "Edit";
-  const hasSnapshot = block.snapshots.before !== null || block.snapshots.after !== null;
   const isAgent = block.toolName === "Agent";
   // The newest few activity lines of a RUNNING agent, visible without
   // expanding the card (the full feed stays in the expanded body).
@@ -2438,6 +2504,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
             />
           ) : undefined
         }
+        replChild={replChild}
       />
       {!expanded && previewRows.length > 0 && (
         <ul className="subagent-collapsed-preview" aria-label="Latest agent activity">

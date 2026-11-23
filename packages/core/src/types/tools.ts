@@ -16,12 +16,12 @@ import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
 import type { ImageAttachment } from "./images.js";
 import type { PlanModeControl } from "./permissions.js";
-import type { AgentEvent } from "./events.js";
+import type { AgentEvent, ProposedToolCall } from "./events.js";
 import type { WorkspaceTransition, WorktreeControlPort } from "../ports/worktrees.js";
 import type { PreviewPort } from "../ports/preview.js";
 import type { ArtifactContext, ArtifactRetention } from "../ports/artifacts.js";
 import type { ResultPreviewDirection } from "../util/result-budget.js";
-import type { ToolResultPresentation } from "./subagent-card.js";
+import type { ReplMetrics, ToolResultPresentation } from "./subagent-card.js";
 
 /**
  * Read-only image-registry lookup handed to tool handlers (plan §2,
@@ -54,6 +54,8 @@ export interface ToolMetadata {
   concurrentSafe: boolean;
   /** Successful handler result terminates this loop segment (always solo). */
   terminalControl?: boolean;
+  /** Wait for the handler and let its nested calls enforce their own deadlines. */
+  composite?: boolean;
   riskLevel: RiskLevel;
   sideEffectScope: SideEffectScope;
   /** Baseline approval requirement; the permission engine combines it with the session mode. */
@@ -142,11 +144,13 @@ export interface PersistedRenderContext<Out = unknown> {
  */
 export type ToolEmittedEvent = Extract<
   AgentEvent,
-  { type: `subagent_${string}` | `workflow_${string}` | `checkpoint_${string}` | `permission_${string}` | "waiting_for_network" | "network_wait_end" }
+  { type: `subagent_${string}` | `workflow_${string}` | `checkpoint_${string}` | `permission_${string}` | `repl_${string}` | "waiting_for_network" | "network_wait_end" }
 >;
 
 export interface ToolContext {
   toolCallId: string;
+  /** Dispatch a REPL child and report the validated input after any hook or approval rewrite. */
+  dispatchNested?: (call: ProposedToolCall) => Promise<ToolCallOutcome & { effectiveInput?: unknown }>;
   /** Per-turn fresh-child admission guard. */
   admitSubagent?: () => boolean;
   /** Ownership belongs to the outer turn, not this tool call. */
@@ -302,6 +306,8 @@ export interface ToolResult<Out = unknown> {
    * only.
    */
   presentation?: ToolResultPresentation;
+  /** Host-generated measurements for the enclosing REPL call. */
+  replMetrics?: ReplMetrics;
 }
 
 /**

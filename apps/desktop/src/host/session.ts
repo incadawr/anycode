@@ -93,6 +93,7 @@ import {
   withBackgroundTaskNotices,
   withPlanModeReminder,
   withOrchestrateReminder,
+  withCodeModeReminder,
 } from "@anycode/core";
 import { createHash, randomUUID } from "node:crypto";
 import { OrchestrationAdmission, type AdmissionResponse } from "./orchestration-admission.js";
@@ -835,6 +836,8 @@ export interface SwitchRuntime {
 }
 
 export interface SessionOptions {
+  /** Live check that the REPL tool is offered; gates the Code Mode user-turn reminder. */
+  codeModeReminderActive?: () => boolean;
   outbound: Outbound;
   /** The host-selected agent runtime; Session never imports an external engine. */
   engine: SessionEngine;
@@ -1411,6 +1414,7 @@ export class Session {
   private readonly uiTaskOutputCursors = new Map<string, number>();
   /** slice 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private backgroundChildren: SessionOptions["backgroundChildren"];
+  private readonly codeModeReminderActive: SessionOptions["codeModeReminderActive"];
   /** §3.7: host callback on every orchestrate transition (loop-config copy). */
   private onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
   /** §3.6: turn-start orchestrator-route health check (host-owned health cache). */
@@ -2006,6 +2010,7 @@ export class Session {
     this.shell = options.shell;
     this.tasks = options.tasks;
     this.backgroundChildren = options.backgroundChildren;
+    this.codeModeReminderActive = options.codeModeReminderActive;
     this.onOrchestrateChanged = options.onOrchestrateChanged;
     this.orchestratorRouteCheck = options.orchestratorRouteCheck;
     this.supervisorIdle = options.supervisorIdle;
@@ -5398,6 +5403,21 @@ export class Session {
       turnInput = this.orchestrate
         ? withOrchestrateReminder(turnInput)
         : withPlanModeReminder(turnInput);
+    }
+    // Code Mode reminder (mirror of cli/main.ts): appended once per accepted
+    // user turn, right after the plan reminder and before background notices.
+    // Only the Native (core) engine whose registry actually offers REPL gets it;
+    // child boots never register REPL, Codex/Claude tabs are excluded by the
+    // engine check, and an orchestrate parent keeps its delegation-only
+    // discipline. Continue/replay turns never reach this accept path.
+    if (
+      this.engine.id === "core" &&
+      this.engine.capabilities.supportsCorePermissions &&
+      this.child === undefined &&
+      !this.orchestrate &&
+      this.codeModeReminderActive?.() === true
+    ) {
+      turnInput = withCodeModeReminder(turnInput);
     }
     // §3.6/§2.6: the orchestrator role resolves at turn START
     // only (never mid-turn). While orchestrate is on and the configured

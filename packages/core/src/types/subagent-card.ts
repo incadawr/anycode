@@ -82,6 +82,40 @@ export interface SubagentCardSnapshotV1 {
   attention?: "waiting_permission";
 }
 
+export type ReplToolName = "Read" | "Write" | "Edit" | "Glob" | "Grep" | "Bash";
+
+export interface ReplCallInput {
+  /** Bounded input fields. A truncated Edit/Write can still render a partial diff. */
+  fields: Record<string, unknown>;
+  truncated?: true;
+}
+
+export interface ReplCallStart {
+  callId: string;
+  toolName: ReplToolName;
+  input: ReplCallInput;
+}
+
+export interface ReplCallSnapshot extends ReplCallStart {
+  status: "success" | "error" | "invalid_input" | "denied" | "timed_out" | "cancelled" | "max_turns";
+  durationMs: number;
+  outputPreview?: string;
+}
+
+export interface ReplSnapshot {
+  code: string;
+  calls: ReplCallSnapshot[];
+}
+
+export type ReplEndReason = "ok" | "syntax" | "uncaught" | "denied" | "cancelled" | "limit" | "stalled";
+
+export interface ReplMetrics {
+  nestedCalls: number;
+  nestedByTool: Partial<Record<ReplToolName, number>>;
+  endReason: ReplEndReason;
+  activeJsMs: number;
+}
+
 /** Envelope on a tool result. Extensible: other presentation kinds (e.g. workflow cards) add sibling keys later. */
 export interface ToolResultPresentation {
   subagent?: SubagentCardSnapshotV1;
@@ -102,4 +136,5 @@ export interface ToolResultPresentation {
   };
   /** slice S5: the workflow tool's own persisted card, riding the same envelope. */
   workflow?: WorkflowCardSnapshotV1;
+  repl?: ReplSnapshot;
 }

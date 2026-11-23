@@ -124,6 +124,7 @@ import {
   imageCapableReadTool,
   loadArchMapEnabled,
 } from "../tools/index.js";
+import { loadCodeModeEnabled } from "../tools/arch-map.js";
 
 // createDefaultToolRegistry and NOT in the tools barrel, so the desktop prompt
 // and every child registry stay byte-identical. Imported directly past the barrel
@@ -160,6 +161,7 @@ import {
   SESSIONS_PICKER_LIMIT,
 } from "./sessions.js";
 import { withPlanModeReminder } from "../prompts/plan-reminder.js";
+import { withCodeModeReminder } from "../prompts/code-mode-reminder.js";
 import { withBackgroundTaskNotices } from "./background-notice.js";
 import { applyStatus, createStatusLine, withStatusClear } from "./status.js";
 import { createCliTheme, detectColorEnabled } from "./theme.js";
@@ -599,9 +601,12 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // bytes. The object is mutable — /reasoning flips transcript.reasoning at
   // runtime (main owns it). When non-interactive it is undefined ⇒ renderEvent's
   // 4th param is absent ⇒ every branch is byte-identical to today.
+  // An explicit --verbose outside a TTY uses the --print entry shape so the
+  // source reaches a redirected stdout; other non-interactive runs stay undefined.
   const transcript: TranscriptOptions | undefined = interactive
-    ? { diffs: true, collapse: true, reasoning: !parsedArgs.noReasoning }
-    : undefined;
+    ? { diffs: true, collapse: true, reasoning: !parsedArgs.noReasoning,
+        ...(parsedArgs.verbose ? { verbose: true } : {}) }
+    : parsedArgs.verbose ? { headless: true, verbose: true } : undefined;
   // Standalone reasoning state for the non-interactive path (transcript===undefined):
   // /reasoning still reports an honest on/off even though nothing renders it.
   let reasoningEnabled = !parsedArgs.noReasoning;
@@ -894,6 +899,16 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   const fs = new NodeFileSystemAdapter();
   const exec = new NodeExecutionAdapter();
   const tokenizer = await createDefaultTokenizer();
+  const historySink = new WriteBehindHistorySink(persistence, sessionId);
+  const history = new ConversationHistory({ initial: resumedHistory, sink: historySink, tokenizer });
+  if (resumedSession) {
+    try {
+      await history.repairInterruptedReplCalls();
+    } catch {
+      errWrite("Cannot resume: could not save interrupted Code Mode calls.\n");
+      return 1;
+    }
+  }
 
 
   // the port is never constructed and the three tools below are never
@@ -916,13 +931,16 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // prompt's tool-discipline section) stays byte-identical to the pre-ArchMap
   // baseline. Fail-soft by construction: loadArchMapEnabled never throws, so a
   // corrupt settings file only costs the flag, never the boot.
-  const archMapEnabled = await loadArchMapEnabled(
-    fs,
-    options?.settingsFilePath ?? env.ANYCODE_SETTINGS_PATH ?? defaultSettingsFilePath(),
-    env,
-  );
-
-  const registry = createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
+  const settingsFilePath = options?.settingsFilePath ?? env.ANYCODE_SETTINGS_PATH ?? defaultSettingsFilePath();
+  const [archMapEnabled, codeModeEnabled] = await Promise.all([
+    loadArchMapEnabled(fs, settingsFilePath, env),
+    loadCodeModeEnabled(fs, settingsFilePath, env),
+  ]);
+  const registry = createDefaultToolRegistry({
+    ...(archMapEnabled ? { archMap: true } : {}),
+    ...(codeModeEnabled ? { codeMode: true } : {}),
+  });
+  if (codeModeEnabled) bootWrite("Code Mode (experimental) is on\n");
   const readConnectionTargets = () => cliConnectionTargets(envConfig, catalogEntry, providerTransport, currentModel);
   registry.register(createListConnectionsTool(readConnectionTargets));
 
@@ -1054,7 +1072,6 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // appends to `~/.anycode/settings.json`'s `permissions.alwaysAllow` — the same
   // file/section desktop main reads/writes — and boot seeds the store from
   // whatever is already there before the first request is handled.
-  const settingsFilePath = options?.settingsFilePath ?? env.ANYCODE_SETTINGS_PATH ?? defaultSettingsFilePath();
   const permissionRules = new PersistingSessionPermissionRules(
     (rule) => appendAlwaysAllowRule(settingsFilePath, rule),
     (rule, reason) => bootWrite(`[allow] warning: rule not persisted (${reason}) — session-only\n`),
@@ -1330,13 +1347,6 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   let pendingTitleText: string | null = null;
   let titleWork: Promise<void> | null = null;
 
-  const initialHistoryItems = resumedHistory;
-  const historySink = new WriteBehindHistorySink(persistence, session.id);
-  const history = new ConversationHistory({
-    initial: initialHistoryItems,
-    sink: historySink,
-    tokenizer,
-  });
   // ===========================================================================
 
 
@@ -1424,6 +1434,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
       model: currentModel,
       provider: catalogEntry?.name ?? "custom",
       mode,
+      ...(codeModeEnabled ? { codeMode: true } : {}),
       ...(appVersion !== undefined ? { appVersion } : {}),
     });
   }
@@ -1738,7 +1749,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
     // session_end + dispose run AFTER runPrintMode's own exit path (which
     // never touches telemetry) without editing cli/print.ts at all (L6).
     const printExit = await runPrintMode({
-      prompt: printPrompt!,
+      prompt: codeModeEnabled ? withCodeModeReminder(printPrompt!) : printPrompt!,
       loop,
       mcpManager,
       historySink,
@@ -1746,6 +1757,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
       stdout: output,
       stderr: errorOutput,
       theme,
+      ...(parsedArgs.verbose ? { verbose: true } : {}),
       ...(printAttachments.length ? { attachments: printAttachments } : {}),
       ...(fmt !== "text"
         ? { structured: { format: fmt, sessionId: session.id, model: envConfig.model, mode, cwd } }
@@ -1986,7 +1998,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
           // reads it live from the next event). Non-interactive: flip the
           // standalone state so the command still reports an honest on/off.
           toggleReasoning: () => {
-            if (transcript !== undefined) {
+            if (interactive && transcript !== undefined) {
               const next = !transcript.reasoning;
               transcript.reasoning = next;
               return next;
@@ -2212,6 +2224,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
         // exit the loop already advanced it, so the next turn drops the reminder).
         let turnInput =
           loopConfig.mode === "plan" ? withPlanModeReminder(trimmed) : trimmed;
+        if (codeModeEnabled) turnInput = withCodeModeReminder(turnInput);
 
         // injected AFTER the plan-mode reminder (both tags coexist, order
         // plan -> notices) and strictly AFTER title derivation above (from RAW

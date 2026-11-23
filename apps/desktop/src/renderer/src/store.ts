@@ -117,6 +117,8 @@ import type {
   McpServerStatus,
   PermissionMode,
   ReasoningEffort,
+  ReplCallSnapshot,
+  ReplSnapshot,
   TokenUsage,
   ToolCallStatus,
   ToolResultPart,
@@ -207,6 +209,24 @@ export type ToolCallCardStatus = "proposed" | "running" | ToolCallStatus;
 export interface ToolCallSnapshot {
   content: string | null;
   truncated: boolean;
+}
+
+type ReplChildCall = Pick<ReplCallSnapshot, "callId" | "toolName" | "input"> | ReplCallSnapshot;
+
+const REPL_CHILD_TOOLS = new Set(["Read", "Write", "Edit", "Glob", "Grep", "Bash"]);
+const REPL_CHILD_STATUSES = new Set(["success", "error", "invalid_input", "denied", "timed_out", "cancelled", "max_turns"]);
+
+function decodeReplSnapshot(toolName: string, value: ReplSnapshot | undefined): ReplSnapshot | undefined {
+  if (toolName !== "REPL" || typeof value?.code !== "string" || !Array.isArray(value.calls)) return undefined;
+  const calls = new Map<string, ReplCallSnapshot>();
+  for (const call of value.calls.slice(0, 64)) {
+    if (typeof call?.callId !== "string" || !REPL_CHILD_TOOLS.has(call.toolName) ||
+      !REPL_CHILD_STATUSES.has(call.status) || !Number.isFinite(call.durationMs) || call.durationMs < 0 ||
+      (call.outputPreview !== undefined && typeof call.outputPreview !== "string") ||
+      !call.input?.fields || typeof call.input.fields !== "object" || Array.isArray(call.input.fields)) continue;
+    calls.set(call.callId, call);
+  }
+  return { code: value.code.slice(0, 32 * 1024), calls: [...calls.values()] };
 }
 
 /**
@@ -509,6 +529,8 @@ export type TranscriptBlock =
       subagentOutcomeUnknown?: true;
       /** Null until a `workflow_start` for this toolCallId arrives (only ever set for the Workflow tool). */
       workflow: WorkflowSubStatus | null;
+      /** Children are presentation of this REPL, outside the transcript and model history. */
+      repl?: { code?: string; calls: ReplChildCall[] };
     }
   /**
    * `retry` (W8) mirrors the core AgentEvent's additive-optional
@@ -705,6 +727,7 @@ export interface PermissionUiRequest {
   workspaceWriteInside?: boolean;
   deadline?: number;
   requestId: string;
+  toolCallId?: string;
   toolName: string;
   input: unknown;
   mode: PermissionMode;
@@ -2213,6 +2236,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
       const workflowSnap = result?.presentation?.workflow !== undefined
         ? decodeWorkflowCardSnapshot(result.presentation.workflow, { toolCallId: part.toolCallId, toolName: part.toolName })
         : null;
+      const repl = decodeReplSnapshot(part.toolName, result?.presentation?.repl);
       blocks.push({
         kind: "tool_call",
         id,
@@ -2229,6 +2253,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         ...(isSubagentHandoff(result?.presentation?.subagentHandoff, part.toolCallId, part.toolName)
           ? { subagentDispatched: true as const } : {}),
         workflow: workflowSnap !== null ? projectWorkflowCard(workflowSnap) : null,
+        ...(repl === undefined ? {} : { repl }),
       });
     });
   }
@@ -3091,6 +3116,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         transcript: state.transcript.map((block) =>
           block.kind === "tool_call" && block.toolCallId === toolCallId ? { ...block, ...patch } : block,
         ),
+      }));
+    }
+
+    function patchReplChild(toolCallId: string, child: ReplChildCall): void {
+      set((state) => ({
+        transcript: state.transcript.map((block) => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || block.toolName !== "REPL" ||
+            (block.status !== "proposed" && block.status !== "running")) return block;
+          const calls = block.repl?.calls ?? [];
+          const index = calls.findIndex((call) => call.callId === child.callId);
+          if (index >= 0 && !("status" in child)) return block;
+          const updated = index < 0 ? [...calls, child] : calls.map((call, i) => i === index ? child : call);
+          return { ...block, repl: { ...block.repl, calls: updated } };
+        }),
       }));
     }
 
@@ -4338,6 +4377,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           const decodedWorkflow = presentedWorkflow !== undefined
             ? decodeWorkflowCardSnapshot(presentedWorkflow, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
             : null;
+          const repl = decodeReplSnapshot(event.outcome.toolName, event.outcome.result?.presentation?.repl);
           patchToolCall(event.outcome.toolCallId, {
             status: event.outcome.status,
             modelText: event.outcome.modelText,
@@ -4345,6 +4385,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               ? { subagentDispatched: true as const } : {}),
             ...(decodedSubagent !== null ? { subagent: projectSubagentCard(decodedSubagent) } : {}),
             ...(decodedWorkflow !== null ? { workflow: projectWorkflowCard(decodedWorkflow) } : {}),
+            ...(repl === undefined ? {} : { repl }),
           });
           return;
         }
@@ -5206,6 +5247,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         }
 
+        case "repl_call_start": {
+          const { toolCallId, callId, toolName, input } = event;
+          patchReplChild(toolCallId, { callId, toolName, input });
+          return;
+        }
+        case "repl_call_end":
+          if (event.callId === event.outcome.callId) patchReplChild(event.toolCallId, event.outcome);
+          return;
+
         default: {
           const _exhaustive: never = event;
           void _exhaustive;
@@ -5830,6 +5880,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({
               permission: {
                 requestId: message.requestId,
+                ...(message.toolCallId === undefined ? {} : { toolCallId: message.toolCallId }),
                 deadline: message.deadline,
                 toolName: message.toolName,
                 input: message.input,
@@ -5970,17 +6021,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 uiSteerPending: restored.map((entry) => entry.requestId),
               }));
             }
-            set({
+            set((state) => ({
               ...(message.sessionTokens !== undefined ? { sessionTokens: message.sessionTokens } : {}),
               ...(message.contextUsage !== undefined ? { contextUsage: message.contextUsage } : {}),
               // REPLACE-merge the durable audit slice
               // — lastStep/totals/totalSteps from the host win; `list`
               // survives (served separately by usage_audit).
-              ...(message.usageAudit !== undefined ? { usageAudit: { ...get().usageAudit, ...message.usageAudit } } : {}),
+              ...(message.usageAudit !== undefined ? { usageAudit: { ...state.usageAudit, ...message.usageAudit } } : {}),
               ...(message.permission !== undefined
                 ? {
                     permission: {
                       requestId: message.permission.requestId,
+                      // An audit refresh can resend the checkpoint after approval_state.
+                      ...(state.permission?.requestId === message.permission.requestId && state.permission.toolCallId !== undefined
+                        ? { toolCallId: state.permission.toolCallId } : {}),
                       deadline: message.permission.deadline,
                       toolName: message.permission.toolName,
                       input: message.permission.input,
@@ -5991,7 +6045,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     },
                   }
                 : {}),
-            });
+            }));
             return;
           case "permission_settled": {
             // Settlements from outside the UI (timeout/cancel/disconnect/
@@ -6124,9 +6178,22 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               (block) => snapshotBlockAnchor(block, itemTimes, turnStarts),
             );
             const seenNotices = new Set(savedNotices.map((block) => block.kind === "usage_limit" ? JSON.stringify(block.notice) : ""));
+            const durableRepls = new Map<string, ToolResultPart>();
+            for (const item of message.items) {
+              if (item.message.role !== "tool" || item.turnId === undefined || !known.has(item.turnId)) continue;
+              for (const result of item.message.content) {
+                if (result.toolName === "REPL") durableRepls.set(result.toolCallId, result);
+              }
+            }
             const transcript = snapshotBlocks.filter((block) => {
               if (block.kind !== "usage_limit" || savedNotices.includes(block)) return true;
               return !seenNotices.has(JSON.stringify(block.notice));
+            }).map((block) => {
+              if (block.kind !== "tool_call" || block.toolName !== "REPL") return block;
+              const result = durableRepls.get(block.toolCallId);
+              if (!result) return block;
+              const repl = decodeReplSnapshot(block.toolName, result.presentation?.repl);
+              return { ...block, status: result.status, modelText: stripReminderBlocks(result.text), ...(repl === undefined ? {} : { repl }) };
             });
             for (const block of transcript) {
               const match = /^(?:text|reason):(\d+):/.exec(block.id);

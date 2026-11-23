@@ -6,6 +6,10 @@
 
 import type { AgentEvent } from "../types/events.js";
 import type { TelemetryEventRecord, TelemetryPort } from "../ports/telemetry.js";
+import type { ReplEndReason, ReplToolName } from "../types/subagent-card.js";
+
+const REPL_TOOLS: readonly ReplToolName[] = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
+const REPL_END_REASONS: readonly ReplEndReason[] = ["ok", "syntax", "uncaught", "denied", "cancelled", "limit", "stalled"];
 
 /** Pure whitelist projection AgentEvent -> telemetry record (slice 6.6).
  *  Fields are copied ONE BY ONE and never spread from the event; every event
@@ -27,13 +31,26 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         // never a 0% cache hit.
         ...(event.usage.cachedInputTokens !== undefined ? { cachedInputTokens: event.usage.cachedInputTokens } : {}),
       };
-    case "tool_result":
-      return {
+    case "tool_result": {
+      const record: Extract<TelemetryEventRecord, { t: "tool" }> = {
         t: "tool",
         tool: event.outcome.toolName,
         status: event.outcome.status,
         durationMs: event.outcome.durationMs,
       };
+      const metrics = event.outcome.result?.replMetrics;
+      if (record.tool === "REPL" && metrics !== undefined && REPL_END_REASONS.includes(metrics.endReason)) {
+        record.nestedCalls = metrics.nestedCalls;
+        record.nestedByTool = {};
+        for (const tool of REPL_TOOLS) {
+          const count = metrics.nestedByTool[tool];
+          if (count !== undefined) record.nestedByTool[tool] = count;
+        }
+        record.endReason = metrics.endReason;
+        record.activeJsMs = metrics.activeJsMs;
+      }
+      return record;
+    }
     case "loop_end":
       return { t: "loop_end", reason: event.reason, turns: event.turns };
     case "compaction_start":

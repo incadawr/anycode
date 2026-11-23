@@ -926,7 +926,7 @@ export type HostToUiMessage =
   | {
       type: "approval_state";
       unattended: boolean;
-      pending: { orchestrate?: boolean; requestId: string; toolName: string; input: unknown; mode: PermissionMode; metadata: WireToolMeta; deadline?: number; workspaceWriteInside?: boolean } | null;
+      pending: { orchestrate?: boolean; requestId: string; toolCallId?: string; toolName: string; input: unknown; mode: PermissionMode; metadata: WireToolMeta; deadline?: number; workspaceWriteInside?: boolean } | null;
     }
   | {
       type: "permission_request";
@@ -934,6 +934,7 @@ export type HostToUiMessage =
       workspaceWriteInside?: boolean;
       deadline?: number;
       requestId: string;
+      toolCallId?: string;
       toolName: string;
       input: unknown;
       mode: PermissionMode;
