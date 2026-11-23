@@ -5,7 +5,7 @@ const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
 const coreRoot = fileURLToPath(new URL("../../../packages/core/src", import.meta.url));
 await build({
   entryPoints: {
-    // Keep the CLI and Ink TUI in separate entries (rework, defect 3). The Ink
+    // Keep the CLI and Ink TUI in separate entries. The Ink
     // TUI stays lazy because main.ts loads it via a dynamic
     // `await import("./tui.js")`; with code splitting that specifier maps to
     // the emitted dist/cli/tui.js, so ink/react are fetched+parsed ONLY on
