@@ -5,6 +5,12 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [0.0.109] - 2026-11-23
+
+### Added
+
+- GLM-5.4 in the Z.AI model list, with reasoning effort (low, high, max), image input and a 1M context. New Z.AI connections now suggest GLM-5.4 first; it is available on the GLM Coding Plan.
+
 ## [0.0.108] - 2026-11-23
 
 ### Added

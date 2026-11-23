@@ -270,9 +270,16 @@ describe("resolveContextWindow (slice 6.4 §2-B1, mirror of resolveImageInput)",
 
   it("the shipped GLM-5.x rows budget at 300k, not their advertised 1M (owner, 2026-10-07)", () => {
     const zai = findCatalogEntry("z-ai");
-    for (const id of ["glm-5.3", "glm-5.3-flash", "glm-5.2"]) {
+    for (const id of ["glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5.2"]) {
       expect(resolveContextWindow(id, zai, undefined)).toBe(300_000);
     }
+  });
+
+  it("glm-5.4 carries the 5.x reasoning levels, so a stored effort reaches the wire", () => {
+    const zai = findCatalogEntry("z-ai");
+    expect(resolveReasoningEffort("glm-5.4", zai, "high")).toBe("high");
+    expect(resolveChildReasoningEffort("glm-5.4", zai, undefined)).toBe("max");
+    expect(resolveMaxOutputTokens("glm-5.4", zai, undefined)).toBe(131_072);
   });
 
   it("without override, an unknown model id resolves the ASSUMED 128000 fallback", () => {
