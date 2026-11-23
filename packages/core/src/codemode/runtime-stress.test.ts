@@ -17,7 +17,7 @@ const probes: Probe[] = [
   { name: "allocation", source: "return new ArrayBuffer(1024 ** 3);", endReason: "limit" },
   { name: "stalled", source: "await new Promise(() => {});", endReason: "stalled" },
   { name: "stack", source: "function recurse() { recurse(); } recurse();", endReason: "limit" },
-  { name: "busy-abort", source: "while(true){}", endReason: "cancelled" },
+  { name: "busy-abort", source: 'await call("Bash", {}); while(true){}', endReason: "cancelled" },
   { name: "abort", source: 'await call("Bash", {});', endReason: "cancelled" },
 ];
 
@@ -90,8 +90,10 @@ const childProgram = () => `
     if (probe.name === "abort") options = abortedRun();
     if (probe.name === "busy-abort") {
       const controller = new AbortController();
-      options = { signal: controller.signal };
-      setTimeout(() => controller.abort(), 50);
+      options = { signal: controller.signal, dispatch: async () => {
+        setTimeout(() => controller.abort(), 50);
+        return { status: "ok", output: null };
+      } };
     }
     if (probe.name === "long-dispatch") {
       options = {
