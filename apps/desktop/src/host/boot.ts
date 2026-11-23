@@ -346,7 +346,7 @@ export async function createNativeBootRegistry(
   meta: SessionMeta,
 ) {
   const archMap = await loadArchMapEnabled(fs, settingsPath, env);
-  const codeMode = !isChildSessionBoot(args, meta) && await loadCodeModeEnabled(fs, settingsPath, env);
+  const codeMode = await loadCodeModeEnabled(fs, settingsPath, env);
   return createDefaultToolRegistry({
     ...(args.child === undefined ? { agent: { sessionTier: true } } : {}),
     ...(archMap ? { archMap: true } : {}),

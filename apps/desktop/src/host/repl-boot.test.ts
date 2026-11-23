@@ -11,7 +11,7 @@ import {
 } from "@anycode/core";
 import { createNativeBootRegistry, repairDanglingToolCalls } from "./boot.js";
 
-it("rootOnlyAndRepairBeforeGenericPass", async () => {
+it("registers Code Mode for root and child boots and repairs interrupted calls", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "anycode-desktop-repl-boot-"));
   const persistence = new SqlitePersistenceAdapter(":memory:");
   try {
@@ -27,11 +27,11 @@ it("rootOnlyAndRepairBeforeGenericPass", async () => {
       const root = await createNativeBootRegistry(fs, settings, env, rootArgs, meta);
       expect(root.has("REPL")).toBe(experimental !== "0");
       const childRegistry = await createNativeBootRegistry(fs, settings, env, { ...rootArgs, child }, meta);
-      expect(childRegistry.has("REPL")).toBe(false);
+      expect(childRegistry.has("REPL")).toBe(experimental !== "0");
       const resumedChild = await createNativeBootRegistry(fs, settings, env, rootArgs, {
         ...meta, parentSessionId: "parent",
       });
-      expect(resumedChild.has("REPL")).toBe(false);
+      expect(resumedChild.has("REPL")).toBe(experimental !== "0");
 
       const prompt = () => buildSystemPrompt({ toolNames: root.list() });
       const discipline = "Use REPL when one tool call";

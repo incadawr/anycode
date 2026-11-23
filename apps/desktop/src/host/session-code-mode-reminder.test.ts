@@ -115,7 +115,7 @@ describe("Session — Code Mode user-turn reminder", () => {
     } finally { h.close(); }
   });
 
-  it("is not added for a child session", async () => {
+  it("adds the reminder for a child session with REPL", async () => {
     const inputs: string[] = [];
     const channel = new MessageChannel();
     const received: HostToUiMessage[] = [];
@@ -136,7 +136,7 @@ describe("Session — Code Mode user-turn reminder", () => {
       await new Promise((r) => setTimeout(r, 20));
       channel.port1.postMessage({ type: "user_message", requestId: "r1", text: "child task" });
       for (let i = 0; i < 100 && inputs.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
-      expect(inputs).toEqual(["child task"]);
+      expect(inputs).toEqual([`child task\n${REMINDER}`]);
     } finally { channel.port1.close(); channel.port2.close(); }
   });
 
