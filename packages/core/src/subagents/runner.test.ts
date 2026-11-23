@@ -304,6 +304,20 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     const events = await collect(new AgentLoop(child).runTurn("test"));
     expect(events).toContainEqual(expect.objectContaining({ type: "tool_result", outcome: expect.objectContaining({ toolName: "REPL", status: "error", modelText: expect.stringContaining("Unknown tool: Write") }) }));
   });
+
+  it.each([
+    ['Write', '{file_path:"blocked.txt",content:"bad"}'],
+    ['Bash', '{command:"touch blocked.txt"}'],
+  ])("enforces a read-only profile on nested %s even when explicitly listed", async (name, args) => {
+    let step = 0;
+    const model = new ScriptedModelPort(() => ++step === 1
+      ? toolStep("r", "REPL", { code: `await call("${name}", ${args});` }) : textStep("done"));
+    const parent = makeParent({ modelPort: model, mode: "yolo", registry: createDefaultToolRegistry({ codeMode: true }) });
+    const profile = { ...getPersona("reviewer"), toolsExplicit: true, tools: ["REPL", "Write", "Bash"] };
+    const child = buildChildConfig(parent, profile, REQ);
+    const events = await collect(new AgentLoop(child).runTurn("test"));
+    expect(events).toContainEqual(expect.objectContaining({ type: "repl_call_end", outcome: expect.objectContaining({ toolName: name, status: "denied" }) }));
+  });
   it("derives every row exactly (general-purpose)", () => {
     const tokenizer = new HeuristicTokenizer();
     const context = { contextWindowTokens: 12_345 };
@@ -656,7 +670,8 @@ describe("createSubagentRunner — parent spawns child", () => {
       permissionEngine: { check: request => { checks.push(request.toolName); return { decision: request.toolName === "Write" ? "ask" : "allow" }; } },
       permissionBroker: { requestPermission: async request => { brokerCalls.push(request.toolName); return { behavior: "deny", reason: "child denied" }; } },
     });
-    const outcome = await createSubagentRunner(parent).run(REQ, {});
+    const activity: SubagentProgress[] = [];
+    const outcome = await createSubagentRunner(parent).run(REQ, { onProgress: event => activity.push(event) });
     expect(outcome.status).toBe("completed");
     expect(model.requests[0]?.tools.map(t => t.name)).toContain("REPL");
     expect(JSON.stringify(model.requests[0]?.messages)).toContain(CODE_MODE_REMINDER);
@@ -664,6 +679,8 @@ describe("createSubagentRunner — parent spawns child", () => {
     expect(checks).toContain("Write");
     expect(brokerCalls).toEqual(["Write"]);
     expect(hookCalls).toEqual(["REPL", "Write"]);
+    expect(activity).toContainEqual(expect.objectContaining({ kind: "tool", toolName: "Write", summary: expect.stringContaining("blocked.txt") }));
+    expect(activity).toContainEqual(expect.objectContaining({ kind: "tool", toolName: "REPL", summary: expect.stringContaining('await call("Write"') }));
   });
   it("records each completed inline child request through its own recorder", async () => {
     const model = new ScriptedModelPort(() => [{ type: "start" }, { type: "text_delta", id: "t", text: "child done" }, { type: "finish", finishReason: "stop", usage: { inputTokens: 100, cachedInputTokens: 40, outputTokens: 10 } }]);
@@ -4252,6 +4269,32 @@ function stalledReports(calls: SubagentProgress[]): Extract<SubagentProgress, { 
 }
 
 describe("stall clock wiring — inline tier (slice 1)", () => {
+  it("re-arms on nested REPL completions while the script keeps running", async () => {
+    vi.useFakeTimers();
+    try {
+      let step = 0;
+      const model = new ScriptedModelPort(() => ++step === 1 ? toolStep("r", "REPL", { code: "return 1" }) : textStep("done"));
+      const registry = createDefaultToolRegistry({ codeMode: true });
+      const repl = registry.get("REPL")!;
+      registry.unregister("REPL");
+      registry.register({ ...repl, handler: async (_input, ctx) => {
+        for (let i = 0; i < 4; i++) {
+          await delay(60);
+          const toolName = i % 2 === 0 ? "Edit" as const : "Bash" as const;
+          ctx.emit?.({ type: "repl_call_end", toolCallId: ctx.toolCallId, callId: `r.${i}`, outcome: { callId: `r.${i}`, toolName, status: "success", durationMs: 1, input: { fields: toolName === "Edit" ? { file_path: "a.ts" } : { command: "npm test" } } } });
+        }
+        return { ok: true };
+      } });
+      const progress: SubagentProgress[] = [];
+      const runner = createSubagentRunner(makeParent({ modelPort: model, registry, mode: "yolo", subagentStallTimeoutMs: 100 }));
+      const result = runner.run(REQ, { onProgress: event => progress.push(event) });
+      await vi.runAllTimersAsync();
+      expect((await result).status).toBe("completed");
+      expect(stalledReports(progress)).toHaveLength(0);
+      expect(progress).toContainEqual({ kind: "tool", toolName: "Edit", summary: "a.ts" });
+      expect(progress).toContainEqual({ kind: "tool", toolName: "Bash", summary: "npm test" });
+    } finally { vi.useRealTimers(); }
+  });
   it("silence past SUBAGENT_STALL_TIMEOUT_MS emits exactly one stalled progress, and the child is still running afterward (no end, no loop_end)", async () => {
     vi.useFakeTimers();
     try {

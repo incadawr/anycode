@@ -22,6 +22,8 @@ import { ConversationHistory } from "../context/history.js";
 import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { ProfilePermissionEngine } from "../permissions/rules.js";
+import { ModePermissionEngine } from "../permissions/engine.js";
+import { SafeCommandPermissionEngine } from "../permissions/safe-command-engine.js";
 import { ToolRegistry, createDefaultToolRegistry, limitSubagentBashOutput } from "../tools/registry.js";
 import { createListConnectionsTool, type ConnectionTargets } from "../tools/list-connections.js";
 import { resolveInlineRoute } from "../routing/inline-route.js";
@@ -356,6 +358,22 @@ export function buildChildConfig(
     if (repl) registry.register(repl, { silentDuplicateWarning: true });
   }
   limitSubagentBashOutput(registry);
+  const inheritedPermissions = persona.permissions !== undefined
+    ? new ProfilePermissionEngine(parent.permissionEngine, persona.permissions)
+    : parent.permissionEngine;
+  const readOnlyGate = new SafeCommandPermissionEngine(new ModePermissionEngine());
+  const childPermissions = restrictions?.readOnly && registry.has("REPL") ? {
+    check(request: Parameters<typeof inheritedPermissions.check>[0]) {
+      if (!request.metadata.readOnly && request.toolName !== "TodoWrite") {
+        const ruling = readOnlyGate.check({ ...request, mode: "plan" });
+        if (ruling.decision === "deny") return ruling;
+        const inherited = inheritedPermissions.check(request);
+        return ruling.resolvedCommand !== undefined && inherited.decision === "allow"
+          ? { ...inherited, resolvedCommand: ruling.resolvedCommand } : inherited;
+      }
+      return inheritedPermissions.check(request);
+    },
+  } : inheritedPermissions;
   if (extras?.readConnectionTargets && effectivePersona.tools.some(name => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name))) {
     const readTargets = extras.readConnectionTargets;
     registry.register(createListConnectionsTool(() => {
@@ -403,10 +421,7 @@ export function buildChildConfig(
     // that declares `permissions.allow`/`permissions.deny` wraps the inherited
     // engine in the profile overlay — it can only narrow (deny refuses without
     // a prompt, allow only resolves an existing ask), never widen.
-    permissionEngine:
-      persona.permissions !== undefined
-        ? new ProfilePermissionEngine(parent.permissionEngine, persona.permissions)
-        : parent.permissionEngine,
+    permissionEngine: childPermissions,
     permissionBroker: parent.permissionBroker,
     // the ask-zone classifier is inherited too — with the ROOT's
     // human-derived userContext thunk, never the child's own (model-authored)
@@ -1589,6 +1604,21 @@ export function createSubagentRunner(
                   toolName: event.toolName,
                   input: event.input,
                 });
+                break;
+              case "repl_call_end":
+                stallClock?.noteProgress("REPL");
+                if (event.outcome.status !== "invalid_input") {
+                  if (activityEmitted < SUBAGENT_ACTIVITY_MAX_EVENTS) {
+                    activityEmitted += 1;
+                    onProgress?.({
+                      kind: "tool",
+                      toolName: event.outcome.toolName,
+                      summary: summarizeChildToolCall(event.outcome.toolName, event.outcome.input.fields),
+                    });
+                  } else {
+                    activitySuppressed += 1;
+                  }
+                }
                 break;
               case "tool_result": {
                 stepHadTools = true;
