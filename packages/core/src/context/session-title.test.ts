@@ -128,6 +128,15 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(exact)).toBe(exact);
   });
 
+  it.each([
+    ["🚀".repeat(60), "🚀".repeat(39) + "…"],
+    ["x".repeat(77) + "🚀more", "x".repeat(77) + "🚀…"],
+    ["x".repeat(78) + "🚀more", "x".repeat(78) + "…"],
+    ["x".repeat(78) + "🚀", "x".repeat(78) + "🚀"],
+  ])("keeps whole emoji at the title limit (%#)", (input, expected) => {
+    expect(deriveSessionTitle(input)).toBe(expected);
+  });
+
   it("caps the derived title at 80 characters (first line only)", () => {
     expect(deriveSessionTitle("short")).toBe("short");
     expect(deriveSessionTitle("  padded  \nrest")).toBe("padded");

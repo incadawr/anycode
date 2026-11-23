@@ -9,6 +9,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Sessions API settings group token details under Advanced and show the service status beside its switch. Session access, peer projects and tool cards avoid repeated warnings.
+- Long session titles and Codex import previews keep emoji intact at the truncation boundary.
+
 - The sidebar keeps a session spinner visible while its child agents are working, including after the parent turn finishes.
 - Claude sessions can set a supported effort level on the start screen, including when using the CLI default model. The selection applies to the first prompt.
 - Stable Codex CLI versions newer than the tested range can start sessions, orchestrate agents, and install or upgrade normally. Settings shows the tested range. The minimum remains 0.144.0.

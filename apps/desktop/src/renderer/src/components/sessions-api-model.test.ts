@@ -147,7 +147,7 @@ describe("effective Sessions API state in the environment menu", () => {
     expect(sessionEffectiveAccess(true, true)).toEqual({ detail: sessionSwitchDetail(true), blockedByProject: false });
   });
   it("shared + project off says the project blocks it and offers the project action", () => {
-    expect(sessionEffectiveAccess(true, false)).toEqual({ detail: "Shared, but “Allow agents to open tasks here” is off", blockedByProject: true });
+    expect(sessionEffectiveAccess(true, false)).toEqual({ detail: null, blockedByProject: true });
   });
   it("not shared never reports a project block, whatever the project switch says", () => {
     expect(sessionEffectiveAccess(false, false)).toEqual({ detail: sessionSwitchDetail(false), blockedByProject: false });

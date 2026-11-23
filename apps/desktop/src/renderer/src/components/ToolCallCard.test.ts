@@ -686,6 +686,8 @@ describe("summarizeInput", () => {
     const block = mkAgentBlock({ status: "invalid_input", input: { subagent_type: 5 }, modelText: "Agent: subagent_type must be a string\nmore" });
     expect(invalidInputDetail(block)).toBe("Agent: subagent_type must be a string");
     expect(invalidInputDetail({ status: "invalid_input", modelText: "Invalid input for Agent: prompt: Required" })).toBe("prompt: Required");
+    expect(invalidInputDetail({ status: "invalid_input", modelText: "Invalid input" })).toBeNull();
+    expect(invalidInputDetail({ status: "invalid_input", modelText: "Invalid input: missing path" })).toBe("missing path");
     expect(invalidInputDetail({ status: "success", modelText: "x" })).toBeNull();
     const html = renderToStaticMarkup(
       createElement(ToolCallHeaderRow, { block, expanded: false, bodyId: "b", onToggleExpanded: () => {} }),
@@ -694,6 +696,14 @@ describe("summarizeInput", () => {
     expect(html).not.toContain("{&quot;subagent_type");
     // the badge stays the last element of the row
     expect(html.indexOf("subagent_type must be a string")).toBeLessThan(html.indexOf("tool-call-status-badge"));
+  });
+
+  it("shows the invalid-input badge once and names each rejected field", () => {
+    const block = mkAgentBlock({ status: "invalid_input", modelText:
+      "Invalid input for Agent: description: Invalid input: expected string, received undefined; settings.limit: Invalid input: expected number, received string" });
+    const html = renderToStaticMarkup(createElement(ToolCallHeaderRow, { block, expanded: false, bodyId: "b", onToggleExpanded: () => {} }));
+    expect(html.match(/Invalid input/g)).toHaveLength(1);
+    expect(invalidInputDetail(block)).toBe("description: expected string, received undefined; settings.limit: expected number, received string");
   });
 
   it("falls back to JSON for an unknown tool", () => {

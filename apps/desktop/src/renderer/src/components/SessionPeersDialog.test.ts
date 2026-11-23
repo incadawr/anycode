@@ -135,7 +135,8 @@ it("keeps a saved grant revocable while it is inactive", async () => {
   const granted = peer("/w/other", { granted: true, enabled: false });
   const { host, onChange, unmount } = await mount({ view: view({ enabled: false }, [granted]) });
   try {
-    expect(host.textContent).toContain("Currently inactive: Native session access is off for this folder");
+    expect(host.textContent?.match(/Native session access is off for this folder/g)).toHaveLength(1);
+    expect(rows(host)[0]?.textContent).toContain("Currently inactive: Native session access is off for this folder");
     expect(switches(host)[0]?.disabled).toBe(false);
     await act(async () => switches(host)[0]!.click());
     expect(onChange).toHaveBeenCalledWith("/w/other", false);

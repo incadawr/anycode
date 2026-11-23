@@ -187,6 +187,7 @@ describe("allowed folders migration", () => {
     const f = setup();
     f.sessions.set("s1", f.b);
     expect(await f.run([], ["s1"], f.projects, undefined, { settingsLoaded: false })).toEqual({ migrated: [], ran: false });
+    expect(f.warnings).toEqual([expect.stringContaining("migration deferred because settings could not be read")]);
     expect(existsSync(f.markerFile)).toBe(false);
     expect(f.projects.allowedKeys()).toEqual([]);
     expect(await f.run([f.a])).toEqual({ migrated: [f.a], ran: true });

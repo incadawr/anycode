@@ -7,8 +7,6 @@ import {
   filterPeers,
   grantedSummary,
   grantBlockedReason,
-  inactiveGrantNote,
-  inactiveGrants,
   peersDialogText,
   revokeBlockedReason,
   rowBlockedReason,
@@ -118,26 +116,6 @@ describe("revoking", () => {
     const other = { ...peer("/w/other", { granted: true }), enabled: false };
     expect(rowReason(project, other)).toBe("current_off");
     expect(rowReason(project, other, true)).toBe("busy");
-  });
-});
-
-describe("inactiveGrants", () => {
-  it("lists the saved grants that cannot be used right now and explains them", () => {
-    const project = peer("/w/current");
-    const peers = [
-      peer("/w/alpha", { granted: true }),
-      peer("/w/beta", { granted: true, enabled: false }),
-      peer("/w/gamma"),
-    ];
-    expect(inactiveGrants(project, peers).map(entry => entry.peer.key)).toEqual(["/w/beta"]);
-    expect(inactiveGrantNote(project, peers)).toContain("1 allowed project is not active right now");
-    expect(inactiveGrantNote(project, peers)).toContain(peersDialogText.reason.peer_off);
-  });
-
-  it("says nothing when every configured grant is usable", () => {
-    const project = peer("/w/current");
-    const peers = [peer("/w/alpha", { granted: true })];
-    expect(inactiveGrantNote(project, peers)).toBeUndefined();
   });
 });
 

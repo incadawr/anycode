@@ -115,6 +115,11 @@ describe("truncateRolloutPreview", () => {
     expect(result?.endsWith("…")).toBe(true);
     expect(result?.length).toBeLessThan(long.length);
   });
+
+  it("keeps whole emoji at the preview limit", () => {
+    expect(truncateRolloutPreview("x".repeat(95) + "🚀more")).toBe("x".repeat(95) + "…");
+    expect(truncateRolloutPreview("🚀".repeat(60))).toBe("🚀".repeat(48) + "…");
+  });
 });
 
 // ── deriveRolloutRowLabel (the list row's PRIMARY, human-readable name) ──
@@ -136,6 +141,15 @@ describe("deriveRolloutRowLabel", () => {
     expect(result).toBe(`${"x".repeat(79)}…`);
     const words = deriveRolloutRowLabel({ firstUserMessage: "Fixture answer paragraph. Lorem ipsum dolor sit amet, consectetur adipiscing elit sed do eiusmod", mtimeMs });
     expect(words).toBe("Fixture answer paragraph. Lorem ipsum dolor sit amet, consectetur adipiscing…");
+  });
+
+  it.each([
+    ["🚀".repeat(60), "🚀".repeat(39) + "…"],
+    ["x".repeat(77) + "🚀more", "x".repeat(77) + "🚀…"],
+    ["x".repeat(78) + "🚀more", "x".repeat(78) + "…"],
+    ["x".repeat(78) + "🚀", "x".repeat(78) + "🚀"],
+  ])("keeps whole emoji at the title limit (%#)", (input, expected) => {
+    expect(deriveRolloutRowLabel({ firstUserMessage: input, mtimeMs })).toBe(expected);
   });
 
   it("falls back to the formatted timestamp when firstUserMessage is absent", () => {

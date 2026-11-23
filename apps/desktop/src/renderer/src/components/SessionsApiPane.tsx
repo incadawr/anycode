@@ -256,9 +256,8 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
             </div>
           )}
         </div>
+        <p className="settings-field-hint sessions-api-footer">{SESSIONS_API_FOOTER}</p>
       </details>
-
-      <p className="settings-field-hint sessions-api-footer">{SESSIONS_API_FOOTER}</p>
     </section>
   );
 }

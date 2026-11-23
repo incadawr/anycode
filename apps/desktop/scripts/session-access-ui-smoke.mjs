@@ -125,7 +125,7 @@ try {
     await d.evaluate(`document.querySelector('.session-peers-row[data-granted=true] [role=switch]')?.click()`); await delay();
     const after=await d.invoke('sessionPeers.get',a.tabId); console.log(`${after.view.peers.filter(p=>p.granted).length===count-1?'PASS':'FAIL'} revoke while project off: ${count} -> ${after.view.peers.filter(p=>p.granted).length}`);
     console.log('PROJECT OFF HEIGHTS',JSON.stringify(await d.evaluate(`(()=>{const rows=[...document.querySelectorAll('.session-peers-row')];return {granted:rows.filter(e=>e.dataset.granted==='true').map(e=>e.getBoundingClientRect().height),other:rows.filter(e=>e.dataset.granted!=='true').map(e=>e.getBoundingClientRect().height)}})()`)));
-    await shot('project-off-dialog',`document.querySelector('.session-peers-dialog')?.innerText.includes('not active right now')`);
+    await shot('project-off-dialog',`document.querySelector('.session-peers-row[data-granted=true] .session-peers-row-reason')?.innerText.includes('Currently inactive')`);
     await d.evaluate(`document.querySelector('.session-peers-search input')?.focus()`);
     await key('Escape','Escape',27);
     await check('project-off dialog closed',`!document.querySelector('.session-peers-dialog')`);

@@ -2052,8 +2052,7 @@ button.environment-menu-row:hover,
   gap: var(--sp-2);
 }
 
-.session-peers-summary,
-.session-peers-note {
+.session-peers-summary {
   margin: 0;
   color: var(--text-3);
   font-size: var(--fs-2xs);
@@ -9222,11 +9221,7 @@ dialog.role-picker-dialog {
    control reuses a settings-* / connection-drawer-* class. ── */
 
 .sessions-api-enable-row {
-  width: 100%;
-}
-
-.sessions-api-status {
-  margin-left: auto;
+  flex-wrap: wrap;
 }
 
 .sessions-api-connect {

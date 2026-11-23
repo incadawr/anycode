@@ -71,7 +71,10 @@ function writeState(file: string, state: MigrationState): boolean {
 
 export async function migrateAllowedFolders(deps: WorkspacesMigrationDeps): Promise<{ migrated: string[]; ran: boolean }> {
   // Unreadable settings look like an empty list; recording a finished pass now would lose the list for good.
-  if (deps.settingsLoaded === false) return { migrated: [], ran: false };
+  if (deps.settingsLoaded === false) {
+    deps.warn?.("Sessions API folder migration deferred because settings could not be read. It will be retried on the next start.");
+    return { migrated: [], ran: false };
+  }
   const existing = readState(deps.markerFile);
   if (existing !== null && (!Array.isArray(existing.pending) || existing.pending.length === 0)) return { migrated: [], ran: false };
   const isDirectory = deps.isDirectory ?? existsSync;

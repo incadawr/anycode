@@ -116,20 +116,6 @@ export function rowReason(
   return grantBlockedReason(project, peer, false);
 }
 
-/** Grants that are saved but cannot be used at the moment. */
-export function inactiveGrants(
-  project: NativeProjectView,
-  peers: readonly NativeProjectView[],
-): Array<{ peer: NativeProjectView; reason: PeerBlockedReason }> {
-  const inactive: Array<{ peer: NativeProjectView; reason: PeerBlockedReason }> = [];
-  for (const peer of peers) {
-    if (!peer.granted) continue;
-    const reason = grantBlockedReason(project, peer, false);
-    if (reason) inactive.push({ peer, reason });
-  }
-  return inactive;
-}
-
 /**
  * The reason every not-yet-granted row shares, when there are at least two of
  * them and they all agree. The dialog shows it once above the list instead of
@@ -176,16 +162,4 @@ export function grantedSummary(peers: readonly NativeProjectView[]): string {
   return granted === 0
     ? `None of the ${total} projects are allowed to communicate with this one.`
     : `${granted} of ${total} projects are allowed to communicate with this one.`;
-}
-
-/** Explains an allowed project that is inactive right now (and why). */
-export function inactiveGrantNote(
-  project: NativeProjectView,
-  peers: readonly NativeProjectView[],
-): string | undefined {
-  const inactive = inactiveGrants(project, peers);
-  if (!inactive.length) return undefined;
-  const reasons = [...new Set(inactive.map(entry => peersDialogText.reason[entry.reason]))];
-  const count = inactive.length;
-  return `${count} allowed ${count === 1 ? "project is" : "projects are"} not active right now (${reasons.join("; ")}).`;
 }

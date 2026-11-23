@@ -151,9 +151,11 @@ describe("SessionsApiPaneView", () => {
     expect(asked).toMatch(/restart the external client/);
   });
 
-  it("the footer line is printed once and states where the token lives", () => {
+  it("keeps the token storage note inside the Advanced disclosure", () => {
     const html = render(props());
-    expect(html).toContain("The token is stored only in a private file on this computer");
+    const note = "The token is stored only in a private file on this computer";
+    expect(html.split(note)).toHaveLength(2);
+    expect(html.match(/<details\b[^>]*>[\s\S]*?<\/details>/)?.[0]).toContain(note);
   });
 
   it("no token-shaped text appears in any rendered state", () => {

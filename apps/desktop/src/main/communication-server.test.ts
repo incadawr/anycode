@@ -2017,6 +2017,7 @@ describe("Sessions API create_session", () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(errorText(result)).toMatch(/^create_session not_allowed: /);
     // The tab ids are never lost: the error names the created session and tab.
+    expect(errorText(result)).toContain("workspace excluded by the Sessions API configuration");
     expect(errorText(result)).toContain("orphan-1");
     expect(errorText(result)).toContain("tab-1");
     expect(request.mock.calls.filter((c) => c[1] === "send_message")).toHaveLength(0);

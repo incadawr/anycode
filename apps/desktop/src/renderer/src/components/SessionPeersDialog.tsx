@@ -18,7 +18,6 @@ import {
   commonRowReason,
   filterPeers,
   grantedSummary,
-  inactiveGrantNote,
   peersDialogText,
   rowBlockedReason,
   rowReason,
@@ -77,7 +76,6 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
   // One line in the header: the tail of the path, like the rows; the full key
   // is the tooltip.
   const subtitle = project ? `Current project: ${project.name} — ${shortenPath(project.key)}` : undefined;
-  const note = project ? inactiveGrantNote(project, knownPeers) : undefined;
   const common = project ? commonRowReason(project, rows, busy) : undefined;
 
   return (
@@ -90,7 +88,6 @@ export function SessionPeersDialog({ open, onClose, tabId, view, busy, error, on
             placeholder={peersDialogText.searchPlaceholder} />
         </div>
         {view && knownPeers.length > 0 && <p className="session-peers-summary">{grantedSummary(knownPeers)}</p>}
-        {note && <p className="session-peers-note">{note}</p>}
         {common && (
           <div className="session-peers-common">
             <p id={commonId} className="session-peers-common-reason">{commonReasonLine(common.reason, common.count)}</p>

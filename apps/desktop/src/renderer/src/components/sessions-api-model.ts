@@ -130,8 +130,8 @@ export const SESSION_PROJECT_ENABLE_LABEL = "Enable";
  * `blockedByProject` means the session switch is on but agents still cannot
  * reach it because the project switch is off (the row then offers Enable).
  */
-export function sessionEffectiveAccess(enabled: boolean, projectEnabled: boolean): { detail: string; blockedByProject: boolean } {
-  if (enabled && !projectEnabled) return { detail: `Shared, but ${SESSION_PROJECT_OFF_TITLE}`, blockedByProject: true };
+export function sessionEffectiveAccess(enabled: boolean, projectEnabled: boolean): { detail: string | null; blockedByProject: boolean } {
+  if (enabled && !projectEnabled) return { detail: null, blockedByProject: true };
   return { detail: sessionSwitchDetail(enabled), blockedByProject: false };
 }
 

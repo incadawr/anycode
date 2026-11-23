@@ -1929,7 +1929,9 @@ export function invalidInputDetail(block: Pick<ToolCallBlock, "status" | "modelT
     return null;
   }
   // The badge already says "Invalid input"; keep only what failed.
-  const detail = line.trim().replace(/^Invalid input for [^:]+:\s*/, "");
+  const detail = line.trim()
+    .replace(/^Invalid input(?: for [^:\n]+)?(?:\s*:\s*|$)/i, "")
+    .replace(/: Invalid input: (?=expected\b)/g, ": ");
   return detail === "" ? null : flattenSummary(detail);
 }
 

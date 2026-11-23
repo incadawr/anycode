@@ -117,7 +117,7 @@ export function truncateRolloutPreview(text: string | undefined): string | undef
   if (text === undefined) return undefined;
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (collapsed.length <= FIRST_MESSAGE_PREVIEW_CAP) return collapsed;
-  return `${collapsed.slice(0, FIRST_MESSAGE_PREVIEW_CAP)}…`;
+  return collapsed.slice(0, FIRST_MESSAGE_PREVIEW_CAP).replace(/[\uD800-\uDBFF]$/, "") + "…";
 }
 
 /**
@@ -136,7 +136,8 @@ function capRowLabel(title: string): string {
   const head = title.slice(0, room);
   const boundary = /\s/.test(title.charAt(room)) ? head.length : head.search(/\s\S*$/);
   const cut = boundary >= room / 2 ? head.slice(0, boundary) : head;
-  return `${cut.trimEnd()}…`;
+  // The UTF-16 budget can end between an emoji's two code units.
+  return cut.trimEnd().replace(/[\uD800-\uDBFF]$/, "") + "…";
 }
 
 export function deriveRolloutRowLabel(entry: { firstUserMessage?: string; mtimeMs: number }): string {

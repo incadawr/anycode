@@ -114,7 +114,8 @@ function capTitle(title: string): string {
   // URL/path must not collapse the title to that word).
   const boundary = /\s/.test(title.charAt(room)) ? head.length : head.search(/\s\S*$/);
   const cut = boundary >= room / 2 ? head.slice(0, boundary) : head;
-  return `${cut.trimEnd()}…`;
+  // The UTF-16 budget can end between an emoji's two code units.
+  return cut.trimEnd().replace(/[\uD800-\uDBFF]$/, "") + "…";
 }
 
 /**

@@ -597,7 +597,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
             let landed: string;
             try { landed = await resolvePath(tabWorkspace); } catch { landed = tabWorkspace; }
             if (restricted && !(await isAllowed(landed))) {
-              throw new Error(`create_session not_allowed: the new session landed outside the Sessions API folders list, so firstMessage cannot be delivered; the tab exists — sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
+              throw new Error(`create_session not_allowed: the new session opened in a workspace excluded by the Sessions API configuration, so firstMessage cannot be delivered; the tab exists — sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
             }
           }
           const deadline = Date.now() + (options.readyTimeoutMs ?? 10_000);
