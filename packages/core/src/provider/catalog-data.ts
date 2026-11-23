@@ -100,6 +100,16 @@ const MINIMAX_MODELS: CatalogProviderEntry["models"] = [
   { id: "MiniMax-M3", name: "MiniMax M3", contextWindow: 1_000_000, imageInput: true, reasoning: false },
 ];
 
+// Newer Flash versions of the M3.x line are assumed to keep M3.1-Flash's
+// tunable-thinking scheme. Plain `MiniMax-M3` is listed as non-reasoning and
+// other families are not matched, so neither receives an effort parameter.
+const MINIMAX_UNKNOWN_PROFILE: NonNullable<CatalogProviderEntry["unknownModelReasoning"]> = {
+  idPattern: "^MiniMax-M3\\.\\d+-Flash(?:-|$)",
+  effortLevels: ["low", "medium", "high", "xhigh", "max"],
+  defaultEffort: "max",
+  thinkingAlwaysOn: true,
+};
+
 // DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,
 // checked 2026-10-27): 01:00–04:00 and 06:00–10:00 UTC on weekdays carry the
 // full (peak) rates listed below; every other minute of the week — including
@@ -172,7 +182,10 @@ const ENTRIES: CatalogProviderEntry[] = [
     // The z.ai effort mapping itself is provider-level, not per-model
     // (`reasoningRequestOptions`, providerName "Z.AI (GLM)": effort high/max +
     // a thinking budget), so a missing `reasoning: true` here is what silently
-    // drops a connection's stored effort — the model list is the only gate.
+    // drops a connection's stored effort. A model the list does not know yet is
+    // covered by `unknownModelReasoning` below, so a new 5.x release keeps
+    // reasoning before the catalog gains its row; older or unconfirmed lines
+    // (4.x, 5/5.1, vision-only ids) stay outside that profile.
     // GLM-5.3's id is owner-confirmed live on the coding plan (works via manual
     // entry); docs.z.ai carries the page but no code sample yet ("API coming
     // soon"). 4.5/4.5-air numbers predate this pass and are kept as-is.
@@ -256,6 +269,11 @@ const ENTRIES: CatalogProviderEntry[] = [
       // GLM-4.6: $0.6 in / $0.11 cached / $2.2 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
       { id: "glm-4.6", pricing: { basisId: "glm-4.6-zai-2026-10-27", input: 0.6, cachedInput: 0.11, cacheWrite: 0.6, output: 2.2 }, name: "GLM-4.6", contextWindow: 200_000, maxOutputTokens: 131_072 },
     ],
+    unknownModelReasoning: {
+      idPattern: "^glm-(?:5\\.(?:[3-9]|\\d{2,})|[6-9])(?:[.-]|$)",
+      effortLevels: ["low", "high", "max"],
+      defaultEffort: "max",
+    },
     retiredModels: [
       { id: "glm-5-turbo", name: "GLM-5 Turbo", contextWindow: 200_000, maxOutputTokens: 131_072 },
       { id: "glm-4.5", name: "GLM-4.5", contextWindow: 128_000, maxOutputTokens: 32_768 },
@@ -291,6 +309,13 @@ const ENTRIES: CatalogProviderEntry[] = [
       // cache hit / $3.96 out per 1M tokens; off-peak is $0.66 / $0.022 / $1.98.
       { id: "deepseek-v4-pro", pricing: { basisId: "deepseek-v4-pro-deepseek-peak-2026-10-27", input: 1.32, cachedInput: 0.044, output: 3.96, tariff: DEEPSEEK_TARIFF }, name: "DeepSeek-V4-Pro", contextWindow: 1_048_576, maxOutputTokens: 393_216, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "high", todoReminderEvery: 20 },
     ],
+    // Both V4 rows share low/high/max with a documented default of high; newer
+    // pro/flash versions are assumed to keep it. Legacy chat ids do not match.
+    unknownModelReasoning: {
+      idPattern: "^deepseek-(?:v\\d+(?:\\.\\d+)?-)?(?:pro|flash)(?:-|$)",
+      effortLevels: ["low", "high", "max"],
+      defaultEffort: "high",
+    },
   },
   {
     id: "xiaomi-mimo-api",
@@ -478,6 +503,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: MINIMAX_MODELS,
+    unknownModelReasoning: MINIMAX_UNKNOWN_PROFILE,
   },
   {
     // MiniMax, China region — the same Anthropic-compatible protocol on a
@@ -493,6 +519,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: MINIMAX_MODELS,
+    unknownModelReasoning: MINIMAX_UNKNOWN_PROFILE,
   },
   {
     // OpenCode Go subscription (opencode.ai): one subscription key, two

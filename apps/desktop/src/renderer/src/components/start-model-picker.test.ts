@@ -597,3 +597,29 @@ it("retains native catalog thinking policy for explicit levels and clipped defau
   const offCaps = modelCapabilitiesFor({ ...base, reasoningEffort: "off" }, id);
   expect(startModelDefaultEffort("minimax", id, catalog, offCaps, ["low", "high"])).toBe("high");
 });
+
+describe("startModelEffortLevels — unknownModelReasoning profile", () => {
+  const profileCatalog: CatalogSummary = [
+    {
+      id: "z-ai",
+      name: "Z.AI (GLM)",
+      authKind: "api_key",
+      models: [{ id: "glm-5.4", name: "GLM-5.4", reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" }],
+      unknownModelReasoning: { idPattern: "^glm-(?:5\\.(?:[3-9]|\\d{2,})|[6-9])(?:[.-]|$)", effortLevels: ["low", "high", "max"], defaultEffort: "max" },
+    },
+    { id: "openai", name: "OpenAI", authKind: "api_key", models: [] },
+  ];
+  it("offers the profile levels and default for an unlisted matching model", () => {
+    expect(startModelEffortLevels("z-ai", "glm-5.5", profileCatalog)).toEqual(["low", "high", "max"]);
+    expect(startModelDefaultEffort("z-ai", "glm-5.5", profileCatalog)).toBe("max");
+  });
+  it("keeps the old result for listed, non-matching and profile-less models", () => {
+    expect(startModelEffortLevels("z-ai", "glm-4.7", profileCatalog)).toBeUndefined();
+    expect(startModelEffortLevels("openai", "gpt-9", profileCatalog)).toBeUndefined();
+    expect(startModelEffortLevels("z-ai", "glm-5.4", profileCatalog)).toEqual(["low", "high", "max"]);
+  });
+  it("lets live facts take priority", () => {
+    expect(startModelEffortLevels("z-ai", "glm-5.5", profileCatalog, { reasoning: false })).toBeUndefined();
+    expect(startModelEffortLevels("z-ai", "glm-5.5", profileCatalog, { reasoning: true, effortLevels: ["low", "medium"] })).toEqual(["low", "medium"]);
+  });
+});
