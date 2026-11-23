@@ -113,7 +113,7 @@ import {
 import type { SessionSummary, WorkspacePickResult } from "../../../shared/tabs.js";
 import { activeProviderView, connectionById } from "../../../shared/settings.js";
 import type { EngineId } from "../../../shared/engines.js";
-import { resolveClaudeDraftModel } from "../claude-draft-models.js";
+import { claudeDraftModelChoices, resolveClaudeDraftModel } from "../claude-draft-models.js";
 import { useClaudeDraftModels } from "../use-claude-draft-models.js";
 import type { EngineModelChoice, EnginePermissionPreset } from "../../../shared/protocol.js";
 import type { ToastKind } from "../toasts.js";
@@ -1122,8 +1122,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const claudeDraft = draft.engine === "claude";
   const claudeDraftPreset = draft.enginePreset ?? DEFAULT_CLAUDE_DRAFT_PRESET;
   const claudeDraftModel = resolveClaudeDraftModel(draft.model, claudeDraftModels);
-  // Effort choices follow the confirmed model catalog.
-  const claudeDraftEfforts = draftModelEfforts(claudeDraftModel, claudeDraftModels);
+  const claudeMenuModels = claudeDraftModelChoices(claudeDraftModels);
+  const claudeDraftEfforts = draftModelEfforts(claudeDraftModel, claudeMenuModels);
   const claudeDraftEffort = resolveDraftEngineEffort(draft.engineEffort, claudeDraftEfforts);
   const showProjectHint = draft.workspace !== null && (projectHintVisible || projectHintHovered);
 
@@ -1824,7 +1824,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   onPick={(id) => useTabsStore.getState().setDraftEnginePreset(id)}
                 />
                 <EngineModelMenu
-                  model={{ current: claudeDraftModel, available: [{ id: "", label: "CLI default" }, ...claudeDraftModels] }}
+                  model={{ current: claudeDraftModel, available: claudeMenuModels }}
                   pendingModel={undefined}
                   disabled={false}
                   onPick={(id) => useTabsStore.getState().setDraftModel(id || null)}

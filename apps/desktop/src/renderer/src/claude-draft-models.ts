@@ -26,3 +26,8 @@ export function resolveClaudeDraftModel(draftModel: string | null, available: re
     ?? models.find(model => model.resolvedId === draftModel);
   return exact?.id ?? resolved?.id ?? "";
 }
+
+/** The unpinned CLI choice shares the confirmed default entry's capabilities. */
+export function claudeDraftModelChoices(models: readonly EngineModelChoice[]): EngineModelChoice[] {
+  return [{ ...models.find(model => model.id === "default"), id: "", label: "CLI default" }, ...models];
+}

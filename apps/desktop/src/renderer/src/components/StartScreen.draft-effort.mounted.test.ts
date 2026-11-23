@@ -223,6 +223,40 @@ describe("StartScreen — Codex draft effort menu", () => {
 });
 
 describe("StartScreen — Claude draft effort menu", () => {
+  it.each([null, "opus"])("selects an advertised Claude effort by keyboard and sends it with the first prompt (%s)", async model => {
+    const models = ["default", "opus"].map(id => ({ id, label: "Opus", efforts: ["low", "high"] }));
+    useTabsStore.setState({
+      draft: { workspace: "/ws", prompt: "hello", engine: "claude", model, mode: "build" },
+      claudeModels: models,
+    });
+    const queue = vi.spyOn(tabRegistry, "queueInitialPrompt");
+    const { container, root } = await mountStartScreen();
+    try {
+      const page = await openEffortPage(container);
+      expect(document.activeElement).toBe(page.querySelector('[data-effort="low"]'));
+      for (const key of ["ArrowDown", "Enter"]) {
+        await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+      }
+      expect(useTabsStore.getState().draft?.engineEffort).toBe("high");
+      await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!.click());
+      expect(queue.mock.calls[0]?.[4]).toBe("high");
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("returns to the model menu if a refreshed catalog withdraws effort while the page is open", async () => {
+    useTabsStore.setState({
+      draft: { workspace: "/ws", prompt: "", engine: "claude", model: "opus", mode: "build" },
+      claudeModels: [{ id: "opus", label: "Opus", efforts: ["high"] }],
+    });
+    const { container, root } = await mountStartScreen();
+    try {
+      await openEffortPage(container);
+      await act(async () => useTabsStore.getState().setClaudeModels([{ id: "opus", label: "Opus" }]));
+      expect(container.querySelector('[data-model-pill-page="effort"]')).toBeNull();
+      expect(container.querySelector('[data-model-pill-page="root"]')).not.toBeNull();
+    } finally { await act(async () => root.unmount()); }
+  });
+
   it("offers no effort page at all, because the draft catalog declares no levels", async () => {
     // Without a confirmed catalog, the fallback has no effort vocabulary.
     useTabsStore.setState({

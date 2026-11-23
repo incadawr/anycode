@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Claude sessions can set a supported effort level on the start screen, including when using the CLI default model. The selection applies to the first prompt.
 - Stable Codex CLI versions newer than the tested range can start sessions, orchestrate agents, and install or upgrade normally. Settings shows the tested range. The minimum remains 0.144.0.
 
 ## [0.0.110] - 2026-11-23

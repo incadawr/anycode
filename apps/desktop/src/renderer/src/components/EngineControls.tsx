@@ -313,7 +313,7 @@ function EngineMenuChip({ label, tooltip, ariaLabel, disabled, open, chipRef, on
  * (ModeMenu.tsx and ModelPill.tsx each hand-roll this because they predate
  * each other; this file does not repeat that a third time).
  */
-function useEngineMenuState(itemCount: number, currentIndex: number, disabled: boolean) {
+function useEngineMenuState(itemCount: number, currentIndex: number, disabled: boolean, page = "root") {
   const [open, setOpen] = useState(false);
   const [focusIndex, setFocusIndex] = useState(0);
   const [anchor, setAnchor] = useState<{ left: number; bottom: number } | null>(null);
@@ -366,15 +366,15 @@ function useEngineMenuState(itemCount: number, currentIndex: number, disabled: b
       setFocusIndex(Math.max(0, currentIndex));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-seed on
-    // an open transition (ModeMenu/ModelPill precedent) — recomputing on
+    // an open or page transition — recomputing on
     // every store tick would fight the user's roving-arrow input.
-  }, [open]);
+  }, [open, page]);
 
   useEffect(() => {
     if (open) {
       itemRefs.current[focusIndex]?.focus();
     }
-  }, [open, focusIndex]);
+  }, [open, page, focusIndex]);
 
   function onChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (disabled) {
@@ -467,13 +467,14 @@ export function EngineModelMenu({ model, pendingModel, disabled, modelDisabled =
   // effort the next turn will use (see the item rendering below).
   const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(engineSelectedEffort(effort) ?? "")) : 0;
 
-  const menu = useEngineMenuState(itemCount, currentIndex, disabled);
+  const menu = useEngineMenuState(itemCount, currentIndex, disabled, page);
   const chipLabel = engineMenuChipLabel(model, pendingModel, effort) + (fast ? " · Fast" : "");
   const effortSummary = engineEffortSummary(effort);
   useEffect(() => {
-    if (!menu.open || (modelDisabled && page === "model")) setPage("root");
-    if (modelDisabled && page === "model") menu.setFocusIndex(0);
-  }, [menu.open, modelDisabled, page, menu.setFocusIndex]);
+    if (!menu.open || (modelDisabled && page === "model") || (!showEffort && page === "effort")) {
+      setPage("root");
+    }
+  }, [menu.open, modelDisabled, showEffort, page]);
 
   function pick(id: string): void {
     if (disabled || modelDisabled) {

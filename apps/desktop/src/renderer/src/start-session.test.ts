@@ -441,6 +441,18 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, "high", undefined);
   });
 
+  it("drops a Claude effort if the selected model no longer advertises it at submit time", async () => {
+    const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("hello");
+    tabsStore.getState().setDraftEngine("claude");
+    tabsStore.getState().setClaudeModels([{ id: "opus", efforts: ["low"] }]);
+    tabsStore.getState().setDraftModel("opus");
+    tabsStore.getState().setDraftEngineEffort("high");
+    await submitStartDraft(deps);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, undefined, undefined);
+  });
+
   it("a Codex effort pick never leaks into a Core session — the engine switch drops it", async () => {
     const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
