@@ -2440,6 +2440,20 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
     expect(findByToolCallId(store, "call-a")).toMatchObject({ subagent: { turns: 1, toolCalls: 1, final: { status: "completed", durationMs: 10 } } });
   });
 
+  it("discards live starts after a disconnect with a missing end; rehydration never starts a spinner", () => {
+    const store = createDesktopStore(createManualScheduler().scheduler);
+    beginAgentToolCall(store, "turn-1", "call-a");
+    const start = { type: "subagent_start", toolCallId: "call-a", agentType: "executor", description: "first" } as const;
+    for (let i = 0; i < 2; i++) store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-1", event: start });
+    expect([...store.getState().liveSubagents]).toEqual(["call-a"]);
+    store.getState().setPortClosed();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "session_history", sessionId: "s1", truncated: false, items: [
+      { id: "old", createdAt: 1, message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call-a", toolName: "Agent", input: {} }] } },
+    ] });
+    expect(store.getState().liveSubagents.size).toBe(0);
+  });
+
   it("applies a detached agent's activity rows after the parent turn (the Claude CLI's own background agents)", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -4094,6 +4108,7 @@ describe("desktop store — persisted subagent card (slice S1 W5, CUT-S1 §3 W5)
       },
     });
 
+    expect(store.getState().liveSubagents.size).toBe(0);
     const after = requireSubagent(findByToolCallId(store, "call-1"));
     expect(after).toEqual(hydrated);
 
@@ -4113,6 +4128,20 @@ describe("desktop store — persisted subagent card (slice S1 W5, CUT-S1 §3 W5)
     // already hydrated. Idempotent append is therefore neither asserted nor
     // required by this test.
     expect(store.getState().transcript.filter((b) => b.kind === "tool_call" && b.toolCallId === "call-1")).toHaveLength(1);
+  });
+
+  it("settles live activity and approval from the terminal tool result when subagent_end was lost", () => {
+    const store = createDesktopStore(createManualScheduler().scheduler);
+    const turnId = "turn-1";
+    beginAgentToolCall(store, turnId, "call-1");
+    const send = (event: Extract<HostToUiMessage, { type: "agent_event" }>["event"]) => store.getState().applyHostMessage({ type: "agent_event", turnId, event });
+    send({ type: "subagent_start", toolCallId: "call-1", agentType: "explore", description: "scan" });
+    send({ type: "subagent_attention", toolCallId: "call-1", waiting: true });
+    expect(store.getState().liveSubagents.size).toBe(1);
+    send({ type: "tool_result", outcome: { toolCallId: "call-1", toolName: "Agent", status: "success", modelText: "done", durationMs: 1,
+      result: { ok: true, presentation: { subagent: presentation() } } } });
+    expect(store.getState().liveSubagents.size).toBe(0);
+    expect(store.getState().waitingSubagents.size).toBe(0);
   });
 
   it("8. a duplicate subagent_start delivered AFTER subagent_end does not reset the terminal snapshot (terminal guard); a duplicate progress/activity/end after settle are no-ops too", () => {

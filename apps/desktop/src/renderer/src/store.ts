@@ -1458,6 +1458,8 @@ export interface DesktopState {
    * clears it alongside the blocks it indexes.
    */
   waitingSubagents: ReadonlySet<string>;
+  /** Only starts observed on this host connection count. History alone never proves liveness. */
+  liveSubagents: ReadonlySet<string>;
   /** Transient toast-channel notice; null when nothing is pending. Fed by the reducer, rendered by MVP.5. */
   notice: Notice | null;
   /**
@@ -1906,6 +1908,8 @@ interface SessionSlice {
   unattended: boolean;
   /** S1: see `DesktopState.waitingSubagents`'s own doc comment. */
   waitingSubagents: ReadonlySet<string>;
+  /** Only starts observed on this host connection count. History alone never proves liveness. */
+  liveSubagents: ReadonlySet<string>;
   notice: Notice | null;
   /** see DesktopState.waitingForNetwork. */
   waitingForNetwork: boolean;
@@ -1993,6 +1997,7 @@ function initialSessionSlice(): SessionSlice {
     permission: null,
     unattended: false,
     waitingSubagents: new Set<string>(),
+    liveSubagents: new Set<string>(),
     notice: null,
     waitingForNetwork: false,
     // GitHub #6: cleared by every respawn/reset — a folder that came back and
@@ -3109,10 +3114,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       set((state) => ({ transcript: [...state.transcript, block] }));
     }
 
+    function settledSubagent(state: DesktopState, toolCallId: string) {
+      if (!state.liveSubagents.has(toolCallId) && !state.waitingSubagents.has(toolCallId)) return {};
+      const liveSubagents = new Set(state.liveSubagents);
+      const waitingSubagents = new Set(state.waitingSubagents);
+      liveSubagents.delete(toolCallId);
+      waitingSubagents.delete(toolCallId);
+      return { liveSubagents, waitingSubagents };
+    }
+
     /** Patches the tool_call block matching `toolCallId` in place (no-op if it isn't in the transcript yet). */
     function patchToolCall(toolCallId: string, patch: Partial<ToolCallBlock>): void {
       flushDeltas();
       set((state) => ({
+        ...(patch.subagent?.final ? settledSubagent(state, toolCallId) : {}),
         transcript: state.transcript.map((block) =>
           block.kind === "tool_call" && block.toolCallId === toolCallId ? { ...block, ...patch } : block,
         ),
@@ -3178,28 +3193,21 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       parentModel?: string,
     ): void {
       flushDeltas();
-      set((state) => ({
-        transcript: state.transcript.map((block) =>
-          block.kind === "tool_call" && block.toolCallId === toolCallId && (block.subagent === null || block.subagent.final === null)
-            ? {
-                ...block,
-                subagent: {
-                  agentType,
-                  description,
-                  model,
-                  ...(parentModel === undefined ? {} : { parentModel }),
-                  engine,
-                  turns: 0,
-                  toolCalls: 0,
-                  lastTool: null,
-                  activity: [],
-                  activityDropped: 0,
-                  final: null,
-                },
-              }
-            : block,
-        ),
-      }));
+      set(state => {
+        const index = state.transcript.findIndex(block => block.kind === "tool_call" && block.toolCallId === toolCallId);
+        const block = state.transcript[index];
+        if (block?.kind !== "tool_call" || block.subagent?.final || state.liveSubagents.has(toolCallId)) return state;
+        const transcript = state.transcript.slice();
+        transcript[index] = {
+          ...block,
+          subagent: block.subagent ?? {
+            agentType, description, model, engine,
+            ...(parentModel === undefined ? {} : { parentModel }),
+            turns: 0, toolCalls: 0, lastTool: null, activity: [], activityDropped: 0, final: null,
+          },
+        };
+        return { transcript, liveSubagents: new Set(state.liveSubagents).add(toolCallId) };
+      });
     }
 
     /**
@@ -3412,12 +3420,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     ): void {
       flushDeltas();
       set((state) => {
-        let matched = false;
         const transcript = state.transcript.map((block) => {
           if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
             return block;
           }
-          matched = true;
           const settled: SubagentSubStatus = {
             ...block.subagent,
             turns,
@@ -3442,12 +3448,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           delete settled.stalled;
           return { ...block, subagent: settled };
         });
-        if (!matched) {
-          return { transcript };
-        }
-        const waitingSubagents = new Set(state.waitingSubagents);
-        waitingSubagents.delete(toolCallId);
-        return { transcript, waitingSubagents };
+        return { transcript, ...settledSubagent(state, toolCallId) };
       });
     }
 
@@ -3962,7 +3963,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       if (message.conversationRestored) {
         drainPendingDeltas();
-        set({ transcript: [], waitingSubagents: new Set(), contextUsage: null });
+        set({ transcript: [], waitingSubagents: new Set(), liveSubagents: new Set(), contextUsage: null });
       }
       const shortId = message.safetyCheckpointId?.slice(0, 8);
       set({
@@ -5315,7 +5316,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ todoReminderState: message.state });
             return;
           case "claude_restart_state":
-            set({ claudeRestartAvailable: message.available });
+            // The CLI process has stopped. Its native agents cannot send a final event.
+            set({ claudeRestartAvailable: message.available, ...(message.available ? { liveSubagents: new Set<string>(), waitingSubagents: new Set<string>() } : {}) });
             return;
           case "host_ready":
             // A `host_ready` on a store that already has session state only
@@ -6499,6 +6501,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // cross-review F2: the ceiling summary is patched by
             // the same branch (it is the detached child's only terminal channel).
             const childTerminal = message.childTerminal;
+            if (get().liveSubagents.has(message.id)) set(state => settledSubagent(state, message.id));
             if (childTerminal?.status === "error" && childTerminal.failureReason) {
               set((state) => {
                 const failed = recordFailedChild(

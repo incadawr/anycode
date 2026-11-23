@@ -29,8 +29,8 @@ function deriveInput(
   connection: DesktopState["connection"],
   permission: DesktopState["permission"],
   waitingSubagents: ReadonlySet<string> = new Set(),
-): Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents"> {
-  return { turn: { status: turn, turnId: null, requestId: null }, connection, permission, waitingSubagents };
+) {
+  return { turn: { status: turn, turnId: null, requestId: null }, connection, permission, waitingSubagents, liveSubagents: new Set<string>(), backgroundChildren: [] };
 }
 
 /** A stand-in non-null permission request — deriveCoarse only checks `!== null`. */
@@ -221,6 +221,21 @@ describe("tab-status-store — pure projections", () => {
     expect(deriveCoarse(deriveInput("running", "host_exited", null)).live).toBe(false);
     expect(deriveCoarse(deriveInput("idle", "awaiting_host_ready", null)).live).toBe(false);
     expect(deriveCoarse(deriveInput("idle", "ready", null)).needsApproval).toBe(false);
+  });
+
+  it("shows activity after the parent finishes and marks completion only after the last child settles", () => {
+    const store = createTabStatusStore();
+    const idle = deriveInput("idle", "ready", null);
+    const child = { childSessionId: "child", agentType: "test", description: "test", startedAt: 1 };
+    for (const state of [
+      { ...idle, liveSubagents: new Set(["native"]), backgroundChildren: [child] },
+      { ...idle, backgroundChildren: [child] },
+    ]) {
+      store.getState().applyCoarse("tab", deriveCoarse(state), true);
+      expect(store.getState().statuses.get("tab")).toMatchObject({ running: true, attention: false });
+    }
+    store.getState().applyCoarse("tab", deriveCoarse(idle), true);
+    expect(store.getState().statuses.get("tab")).toMatchObject({ running: false, attention: true });
   });
 
   it("16b. S1: deriveCoarse.needsApproval is true from a waiting CHILD alone, with the tab's own permission null", () => {

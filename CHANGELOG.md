@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The sidebar keeps a session spinner visible while its child agents are working, including after the parent turn finishes.
 - Claude sessions can set a supported effort level on the start screen, including when using the CLI default model. The selection applies to the first prompt.
 - Stable Codex CLI versions newer than the tested range can start sessions, orchestrate agents, and install or upgrade normally. Settings shows the tested range. The minimum remains 0.144.0.
 
@@ -35,6 +36,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The sidebar keeps a session spinner visible while its child agents are working, including after the parent turn finishes.
 - Claude sessions show a subagent's report and the reply to it as a normal answer after a long-running command, instead of a false "agent request failed" error. Messages sent afterwards stream live and are marked delivered as soon as Claude takes them, including a message Claude folds into a turn it started on its own.
 - The message queue keeps delivery status text and its buttons inside the card.
 - The provisional Claude reply indicator sits in the conversation column and matches the conversation style.

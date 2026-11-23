@@ -80,10 +80,10 @@ export function isTurnCompletion(prev: TurnState["status"], next: TurnState["sta
  * stream deltas, so it must stay O(1).
  */
 export function deriveCoarse(
-  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents">,
+  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "backgroundChildren">,
 ): CoarseStatus {
   return {
-    turn: state.turn.status,
+    turn: state.liveSubagents.size || state.backgroundChildren.length ? "running" : state.turn.status,
     needsApproval: state.permission !== null || state.waitingSubagents.size > 0,
     live: state.connection === "ready",
   };
