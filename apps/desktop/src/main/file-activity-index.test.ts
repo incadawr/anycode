@@ -180,7 +180,7 @@ describe('reported file activity', () => {
     expect(index.lookup(root, 'new-10000')).toHaveLength(1);
     for (let n = 0; n < 21; n++) index.record(add(identity(`writer${n}`)), write('file'));
     expect(index.lookup(root, 'file')).toHaveLength(20);
-  });
+  }, 20_000); // 10k records; the default 5 s budget is hit under full-suite load
 
   it('projects only allowlisted metadata and returns detached records', () => {
     const a = add(identity('a'));

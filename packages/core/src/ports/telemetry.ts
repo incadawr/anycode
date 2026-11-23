@@ -32,6 +32,7 @@
 import type { CeilingRefusalReason, FinishReason, LoopEndReason, TokenUsage } from "../types/events.js";
 import type { ToolCallStatus } from "../types/tools.js";
 import type { PermissionMode } from "../types/permissions.js";
+import type { ReplMetrics } from "../types/subagent-card.js";
 
 /** One JSONL line; classified Codex errors are the only error text retained. */
 export type TelemetryEventRecord =
@@ -46,7 +47,7 @@ export type TelemetryEventRecord =
        *  it (not a 0% hit); 0 = an honest miss. */
       cachedInputTokens?: number;
     }
-  | { t: "tool"; tool: string; status: ToolCallStatus; durationMs: number }
+  | ({ t: "tool"; tool: string; status: ToolCallStatus; durationMs: number } & Partial<ReplMetrics>)
   | { t: "loop_end"; reason: LoopEndReason; turns: number }
   | { t: "compaction_start"; trigger: "auto" | "manual" }
   | {
@@ -156,6 +157,8 @@ export type TelemetryLifecycleRecord =
        *  the field is never written on an engine boot. */
       mode?: PermissionMode;
       appVersion?: string;
+      /** Present only when the root Native registry exposes Code Mode. */
+      codeMode?: true;
       /** Which runtime produced this session. Absent = core (the AgentLoop
        *  path) — correct by construction for every pre-existing file, since
        *  codex/claude engine boots wrote no records before this field

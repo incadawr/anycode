@@ -80,6 +80,22 @@ describe("IpcPermissionBroker matrix", () => {
     broker.denyAll("cleanup", "shutdown");
   });
 
+  it("askKeepsCallIdOnReconnect", async () => {
+    const { broker, emitted } = makeBroker();
+    const toolCallId = "provider-call.1";
+    const decision = broker.requestPermission({ ...request, toolCallId });
+    const id = requestId(emitted);
+    expect(id).not.toBe(toolCallId);
+    expect(emitted.find((message) => message.type === "permission_request")).toMatchObject({ requestId: id, toolCallId });
+    expect(broker.approvalState().pending).toMatchObject({ requestId: id, toolCallId });
+
+    broker.handleResponse(toolCallId, "deny");
+    expect(broker.approvalState().pending?.requestId).toBe(id);
+    broker.handleResponse(id, "allow");
+    await expect(decision).resolves.toEqual({ behavior: "allow" });
+    expect(broker.approvalState().pending).toBeNull();
+  });
+
   it("sends resolved workspace containment for aliases and restored approvals", async () => {
     const base = await mkdtemp(join(tmpdir(), "permission-alias-"));
     try {

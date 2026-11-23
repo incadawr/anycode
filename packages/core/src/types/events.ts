@@ -8,6 +8,7 @@
 import type { ToolCallOutcome } from "./tools.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
 import type { ProviderQuotaUpdate } from "../provider/quota.js";
+import type { ReplCallSnapshot, ReplCallStart } from "./subagent-card.js";
 import type { ReasoningSource } from "./history.js";
 
 export interface TokenUsage {
@@ -253,6 +254,8 @@ export type AgentEvent =
   | { type: "user_injected"; step: number; text: string }
   | { type: "tool_execution_start"; toolCallId: string; toolName: string; input: unknown }
   | { type: "tool_result"; outcome: ToolCallOutcome }
+  | ({ type: "repl_call_start"; toolCallId: string } & ReplCallStart)
+  | { type: "repl_call_end"; toolCallId: string; callId: string; outcome: ReplCallSnapshot }
   | { type: "todo_reminder_state"; count: number; threshold: number }
   | { type: "workspace_transition"; transition: WorkspaceTransition }
   | {

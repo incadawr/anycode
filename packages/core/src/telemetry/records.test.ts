@@ -15,8 +15,50 @@ import { buildEngineTelemetryTap, buildSubagentTelemetryTap, buildTelemetryTap, 
 import { JsonlTelemetrySink } from "../adapters/node/node-telemetry.js";
 import type { AgentEvent } from "../types/events.js";
 import type { TelemetryPort, TelemetryRecord } from "../ports/telemetry.js";
+import { aggregateProfileStats } from "./stats.js";
 
 const SENTINEL = "LEAK_SENTINEL_7f3a9c";
+
+it("oneReplRecordAndNoPayload", () => {
+  const records: TelemetryRecord[] = [];
+  const tap = buildTelemetryTap({
+    record: (record) => { records.push(record); },
+    status: () => ({ filePath: "", written: records.length, dropped: 0 }),
+    flush: async () => {},
+    dispose: async () => {},
+  }, "session");
+  const calls = (["Read", "Edit", "Bash"] as const).map((toolName, index) => ({
+    toolName,
+    callId: `parent.${index + 1}`,
+    input: { fields: { file_path: SENTINEL } },
+    status: "success" as const,
+    durationMs: index + 1,
+    outputPreview: SENTINEL,
+  }));
+  for (const { callId, toolName, input, ...rest } of calls) {
+    tap({ type: "repl_call_start", toolCallId: "parent", callId, toolName, input });
+    tap({ type: "repl_call_end", toolCallId: "parent", callId, outcome: { callId, toolName, input, ...rest } });
+  }
+  const parent = {
+    toolCallId: "parent", toolName: "REPL", modelText: SENTINEL, status: "success" as const, durationMs: 42,
+    result: {
+      ok: true,
+      output: { console: SENTINEL },
+      presentation: { repl: { code: SENTINEL, calls } },
+      replMetrics: { nestedCalls: 3, nestedByTool: { Read: 1, Edit: 1, Bash: 1, [SENTINEL]: 1 }, endReason: "ok" as const, activeJsMs: 9 },
+    },
+  };
+  tap({ type: "tool_result", outcome: parent });
+  expect(records).toMatchObject([
+    { t: "tool", tool: "REPL", status: "success", durationMs: 42, nestedCalls: 3,
+      nestedByTool: { Read: 1, Edit: 1, Bash: 1 }, endReason: "ok", activeJsMs: 9 },
+  ]);
+  const lines = records.map(record => JSON.stringify(record));
+  expect(lines[0]).not.toContain(SENTINEL);
+  expect(aggregateProfileStats([{ name: "session.jsonl", lines }], { now: Date.now() }).toolCalls).toBe(1);
+  expect(JSON.stringify(telemetryRecordFor({ type: "tool_result", outcome: { ...parent, toolName: "Read" } })))
+    .toBe('{"t":"tool","tool":"Read","status":"success","durationMs":42}');
+});
 
 describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", () => {
   it("turn_end", () => {

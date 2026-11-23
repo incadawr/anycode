@@ -54,7 +54,7 @@ import type { PreviewPort } from "../ports/preview.js";
 import type { ArtifactContext } from "../ports/artifacts.js";
 import type { CheckpointCapturer, CheckpointCaptureResult } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { ConversationHistory } from "../context/history.js";
+import { ConversationHistory, INTERRUPTED_REPL_MESSAGE } from "../context/history.js";
 import {
   ASK_CLASSIFIER_USER_TURNS,
   ASK_CLASSIFIER_USER_TURN_MAX_CHARS,
@@ -1447,7 +1447,7 @@ export class AgentLoop {
           try {
             const modelRequest = {
               system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
-              messages: this.history.toMessages(),
+              messages: this.history.toModelMessages(),
               tools: toToolDeclarations(this.config.registry).filter((tool) => !this.config.orchestrate || tool.name !== "ExitPlanMode"),
               maxOutputTokens: this.config.maxOutputTokens,
               reasoningEffort: this.config.reasoningEffort,
@@ -1734,6 +1734,10 @@ export class AgentLoop {
 
         const validCalls = toolCalls.filter((call) => !call.invalid);
         if (validCalls.length > 0) {
+          // Every parent call in this assistant message shares the same
+          // durable write. A checked flush reports a write failure only once.
+          let replHistoryFlush: Promise<void> | undefined;
+          dispatchCtx.flushReplHistory = () => (replHistoryFlush ??= this.history.flushChecked());
           const batches = runToolBatches(dispatchCtx, validCalls, this.schedulerConfig, signal);
           let next = await batches.next();
           while (!next.done) {
@@ -1914,7 +1918,7 @@ export class AgentLoop {
       system: this.config.systemPrompt,
       // Read-only: the instruction lives in the decision request alone, so the
       // transcript this run continues with is the one the loop already built.
-      messages: this.history.toMessages(),
+      messages: this.history.toModelMessages(),
       maxOutputTokens: this.config.maxOutputTokens,
       reasoningEffort: this.config.reasoningEffort,
       round,
@@ -2294,7 +2298,9 @@ export class AgentLoop {
           toolCallId,
           toolName,
           status: "cancelled",
-          modelText: `Tool ${toolName} was cancelled before it produced a result.`,
+          modelText: toolName === "REPL"
+            ? INTERRUPTED_REPL_MESSAGE
+            : `Tool ${toolName} was cancelled before it produced a result.`,
           durationMs: 0,
         };
         yield { type: "tool_result", outcome };

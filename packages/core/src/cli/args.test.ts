@@ -62,6 +62,13 @@ describe("parseCliArgs — defaults", () => {
   });
 });
 
+it("verboseIsOptional", () => {
+  expect(parseCliArgs([])).not.toHaveProperty("verbose");
+  expect(parseCliArgs(["--verbose", "-p", "fixture"])).toMatchObject({ verbose: true, printPrompt: "fixture" });
+  expect(collectUnknownFlags(["--verbose"])).toEqual([]);
+  expect(formatUsage()).toContain("--verbose                            show Code Mode script source");
+});
+
 describe("parseCliArgs — existing flags parse byte-identically (--mode/--yolo/--resume)", () => {
   it("--mode <value> and --mode=<value>", () => {
     expect(parseCliArgs(["--mode", "plan"]).mode).toBe("plan");

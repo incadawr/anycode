@@ -16,6 +16,8 @@ import { shouldReplayReasoning } from "../provider/sdk-mapping.js";
 import { IMAGE_TOKEN_ESTIMATE } from "../types/config.js";
 import { HeuristicTokenizer, type Tokenizer } from "./tokenizer.js";
 
+export const INTERRUPTED_REPL_MESSAGE = "Code Mode script interrupted. Some actions may have completed. Check the current state before continuing.";
+
 /** Write-behind persistence sink: never throws into the turn; flush() awaits the queue. */
 export interface HistorySink {
   append(items: readonly HistoryItem[]): void;
@@ -44,6 +46,30 @@ export class ConversationHistory {
   async flushChecked(): Promise<void> {
     if (this.sink?.flushChecked) await this.sink.flushChecked();
     else await this.sink?.flush();
+  }
+
+  /** Close interrupted REPLs before the resumed model sees their history. */
+  async repairInterruptedReplCalls(): Promise<number> {
+    const unanswered = new Set(this.unansweredToolCallIds());
+    if (unanswered.size === 0) return 0;
+
+    const repairs = new Map<string, HistoryItem>();
+    for (const item of this.list) {
+      if (item.message.role !== "assistant") continue;
+      for (const part of item.message.content) {
+        if (part.type === "tool_call" && part.toolName === "REPL" && unanswered.has(part.toolCallId)) {
+          repairs.set(part.toolCallId, item);
+        }
+      }
+    }
+    for (const [toolCallId, item] of repairs) {
+      const { turnId, step } = item;
+      this.append({ role: "tool", content: [{
+        type: "tool_result", toolCallId, toolName: "REPL", status: "cancelled", text: INTERRUPTED_REPL_MESSAGE,
+      }] }, turnId !== undefined && step !== undefined ? { turnId, step } : undefined);
+    }
+    if (repairs.size > 0) await this.flushChecked();
+    return repairs.size;
   }
 
   /**
@@ -79,6 +105,21 @@ export class ConversationHistory {
 
   toMessages(): ChatMessage[] {
     return this.list.map((item) => item.message);
+  }
+
+  /** Keep REPL child previews in the transcript, outside model requests. */
+  toModelMessages(): ChatMessage[] {
+    return this.list.map(({ message }) => {
+      if (message.role !== "tool" || !message.content.some(part => part.presentation?.repl !== undefined)) {
+        return message;
+      }
+      return { role: "tool", content: message.content.map(part => {
+        if (part.presentation?.repl === undefined) return part;
+        const { presentation, ...result } = part;
+        const { repl: _repl, ...remaining } = presentation;
+        return Object.keys(remaining).length > 0 ? { ...result, presentation: remaining } : result;
+      }) };
+    });
   }
 
   /** Sum of cached per-item estimates (items missing a cache are counted on the fly). */

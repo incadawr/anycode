@@ -94,6 +94,7 @@ export type {
 // and the desktop host append to a plan-mode turn's user prompt. Exported so
 // there is exactly ONE copy of the rule text in the repo.
 export { PLAN_MODE_REMINDER, withPlanModeReminder } from "./prompts/plan-reminder.js";
+export { CODE_MODE_REMINDER, withCodeModeReminder } from "./prompts/code-mode-reminder.js";
 // Pure string helper: the orchestrate-mode reminder the desktop
 // host appends instead of the plan reminder while a tab is in orchestrate mode.
 export { ORCHESTRATE_REMINDER, withOrchestrateReminder, orchestrationInstructions, orchestrationDeveloperBlock, orchestrationTurnReminder } from "./prompts/orchestrate.js";
@@ -165,7 +166,11 @@ export { scopeRuntimeHistory, mergeRuntimeHistory } from "./context/runtime-hist
 // types/ file — see ports/index.ts's own ImageAttachment precedent) so the
 // desktop renderer's decode/project module (S1 W4) can type-only import
 // SubagentCardSnapshotV1 the same way it already type-only imports ToolResultPart.
+export { loadCodeModeEnabled } from "./tools/arch-map.js";
 export type {
+  ReplCallInput,
+  ReplCallSnapshot,
+  ReplSnapshot,
   SubagentCardActivityEntry,
   SubagentCardFinalStatus,
   SubagentCardSnapshotV1,

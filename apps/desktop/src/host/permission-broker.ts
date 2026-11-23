@@ -465,6 +465,7 @@ export class IpcPermissionBroker implements PermissionBroker {
     const pending = shown && entry
       ? {
           requestId: shown.requestId,
+          ...(shown.request.toolCallId !== undefined ? { toolCallId: shown.request.toolCallId } : {}),
           toolName: shown.request.toolName,
           input: shown.request.input,
           mode: shown.request.mode,
@@ -547,6 +548,7 @@ export class IpcPermissionBroker implements PermissionBroker {
       ...(entry.presentedAt !== null && entry.presentedTimeoutMs !== null
         ? { deadline: entry.presentedAt + entry.presentedTimeoutMs } : {}),
       requestId,
+      ...(entry.request.toolCallId !== undefined ? { toolCallId: entry.request.toolCallId } : {}),
       toolName: entry.request.toolName,
       input: entry.request.input,
       mode: entry.request.mode,

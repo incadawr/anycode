@@ -814,6 +814,19 @@ describe("handleClearSecret", () => {
 });
 
 describe("handleSet — merge + read-only", () => {
+  it("codeModePreservesSiblingSettings", async () => {
+    const deps = makeDeps();
+    const siblings = { archMap: true, maxTurns: 12, adaptiveTurnBudget: false };
+    expect((await handleSet(deps, { tools: siblings })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.tools).not.toHaveProperty("codeMode");
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).tools).toEqual(siblings);
+    for (const codeMode of [true, false]) {
+      expect((await handleSet(deps, { tools: { codeMode } })).ok).toBe(true);
+      expect(JSON.parse(await readFile(settingsPath, "utf8")).tools).toEqual({ ...siblings, codeMode });
+      expect((await loadSettings(settingsPath)).settings.tools).toEqual({ ...siblings, codeMode });
+    }
+  });
+
   it("clears the root turn limit and persists the absence", async () => {
     expect((await handleSet(makeDeps(), { tools: { maxTurns: 300 } })).ok).toBe(true);
     expect((await handleSet(makeDeps(), { tools: { maxTurns: "" } })).ok).toBe(true);

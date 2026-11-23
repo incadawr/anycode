@@ -267,6 +267,8 @@ export function nodeWirePort(port: NodeMessagePort): WirePort {
 }
 
 export interface HarnessOptions {
+  /** Forwarded to the Session: live check that REPL is offered (Code Mode reminder gate). */
+  codeModeReminderActive?: () => boolean;
   steps: ModelStreamEvent[][];
   /** Native settings seam handed to the Session (engine presets); omitted for Core. */
   engineSettings?: SessionOptions["engineSettings"];
@@ -804,6 +806,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.observeFileActivity ? { observeFileActivity: options.observeFileActivity } : {}),
     ...(options.runtimeHistory ? {runtimeHistory: options.runtimeHistory} : {}),
     ...(options.engineSwitchCoordinator ? { engineSwitchCoordinator: options.engineSwitchCoordinator } : {}),
+    ...(options.codeModeReminderActive !== undefined ? { codeModeReminderActive: options.codeModeReminderActive } : {}),
     ...(options.engineSettings !== undefined ? { engineSettings: options.engineSettings } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
     ...(options.backgroundChildren !== undefined ? { backgroundChildren: options.backgroundChildren } : {}),

@@ -608,8 +608,9 @@ describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tool
       // System
       "network",
       "environment",
+      "experimental",
     ]);
-    expect(SETTINGS_PANES).toHaveLength(19);
+    expect(SETTINGS_PANES).toHaveLength(20);
   });
 
   it("the Sessions API pane is found by its search keywords", () => {
@@ -693,7 +694,7 @@ describe("Settings rail sections (the flat rail grouped into five sections)", ()
       ["provider", "codex", "claude", "vision"],
       ["permissions", "tools", "skills", "subagents", "roles"],
       ["mcp", "language-servers", "plugins", "sessions-api"],
-      ["network", "environment"],
+      ["network", "environment", "experimental"],
     ]);
   });
 
@@ -704,7 +705,7 @@ describe("Settings rail sections (the flat rail grouped into five sections)", ()
   it("pane ids, labels and count are unchanged by the grouping", () => {
     expect([...ALL_IDS].sort()).toEqual(
       [
-        "about", "appearance", "claude", "codex", "environment", "language-servers", "mcp", "network",
+        "about", "appearance", "claude", "codex", "environment", "experimental", "language-servers", "mcp", "network",
         "permissions", "plugins", "profile", "provider", "roles", "sessions-api", "shortcuts", "skills",
         "subagents", "tools", "vision",
       ].sort(),

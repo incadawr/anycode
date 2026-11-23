@@ -18,6 +18,7 @@ import { createAgentTool, type CreateAgentToolOptions } from "./agent.js";
 import { skillTool } from "./skill.js";
 import { workflowTool } from "./workflow.js";
 import { archMapTool } from "./arch-map.js";
+import { replTool } from "../codemode/repl-tool.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, AnyToolDefinition>();
@@ -80,6 +81,8 @@ export interface CreateDefaultToolRegistryOptions {
    * `tools.archMap: true` in ~/.anycode/settings.json; default off).
    */
   archMap?: boolean;
+  /** Register the experimental root-session REPL. */
+  codeMode?: boolean;
   /**
    * WebSearch tool instance to register after WebFetch. WebSearch is a
    * factory-built tool (createWebSearchTool) that exists only when a search
@@ -119,6 +122,7 @@ export function createDefaultToolRegistry(opts?: CreateDefaultToolRegistryOption
   if (opts?.archMap === true) {
     registry.register(archMapTool);
   }
+  if (opts?.codeMode === true) registry.register(replTool);
   return registry;
 }
 

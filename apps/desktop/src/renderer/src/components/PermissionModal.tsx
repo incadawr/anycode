@@ -91,6 +91,7 @@ export interface PermissionModalProps {
    * knows which agent is asking. Absent for the tab's own ask.
    */
   ownerLabel?: string;
+  fromCodeMode?: boolean;
   /**
    * Set when several child asks are waiting at once: the 0-based position of
    * THIS one among them and the total. The header prints "Request 1 of N" and
@@ -480,6 +481,7 @@ export function PermissionModal({
   allowRemember = true,
   workspace = null,
   ownerLabel,
+  fromCodeMode = false,
   queuePosition,
   onShowNextRequest,
 }: PermissionModalProps) {
@@ -661,6 +663,7 @@ export function PermissionModal({
           {ownerLabel !== undefined && (
             <span className="permission-owner-label">{ownerLabel}</span>
           )}
+          {fromCodeMode && <span className="permission-owner-label">from a Code Mode script</span>}
           {queuePosition !== undefined && queuePosition.total > 1 && (
             <span className="permission-queue-position" role="status">
               Request {queuePosition.index + 1} of {queuePosition.total}
@@ -908,6 +911,13 @@ export function canRememberPermission(engine: EnginePresentation | null): boolea
 
 export function ConnectedPermissionModal() {
   const request = useTabStore((state) => state.permission);
+  const fromCodeMode = useTabStore((state) => {
+    const pending = state.permission;
+    return state.turn.status === "running" && pending?.toolCallId !== undefined && state.transcript.some((block) =>
+      block.kind === "tool_call" && block.toolName === "REPL" && block.status === "running" &&
+      block.repl?.calls.some((call) => call.callId === pending.toolCallId && call.toolName === pending.toolName && !("status" in call)),
+    );
+  });
   const engine = useTabStore((state) => state.engine);
   const workspace = useTabStore((state) => state.workspace);
   const sendToHost = useTabSend();
@@ -937,6 +947,7 @@ export function ConnectedPermissionModal() {
       onDeny={() => sendToHost({ type: "permission_response", requestId: request.requestId, behavior: "deny" })}
       allowRemember={allowRemember}
       workspace={workspace}
+      fromCodeMode={fromCodeMode}
     />
   );
 }

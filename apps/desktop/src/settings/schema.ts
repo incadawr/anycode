@@ -836,6 +836,7 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
       // field at boot). `.catch(undefined)` keeps the whole-document fail-soft
       // contract: a hand-edited truthy string degrades to "not enabled" alone.
       archMap: z.boolean().optional().catch(undefined),
+      codeMode: z.boolean().optional().catch(undefined),
       // adaptive turn budget, mirror of ANYCODE_ADAPTIVE_TURN_BUDGET
       // (env > settings). Absent = OFF; `.catch(undefined)` as for archMap.
       adaptiveTurnBudget: z.boolean().optional().catch(undefined),

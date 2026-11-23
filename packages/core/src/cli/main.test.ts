@@ -6194,3 +6194,42 @@ describe("CLI connection discovery", () => {
     for (const secret of ["fake-cli-secret", "fake-user", "fake-pass", "example.test"]) expect(transcript).not.toContain(secret);
   });
 });
+
+describe("explicit --verbose outside a TTY (code-mode finish 3)", () => {
+  it("prints the full multi-line Code Mode source when stdout is redirected", async () => {
+    const code = "const a = 1;\nconst b = 2;\nreturn a + b;";
+    const modelPort = new SequencedModelPort([
+      [
+        { type: "start" },
+        { type: "tool_call", toolCall: { id: "call-1", name: "REPL", input: { code } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} },
+      ],
+      [
+        { type: "start" },
+        { type: "text_delta", id: "t", text: "done" },
+        { type: "finish", finishReason: "stop", usage: {} },
+      ],
+    ]);
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const getText = collectOutput(output);
+    const runPromise = runCli({
+      argv: ["--verbose"],
+      env: {
+        ANYCODE_API_KEY: "test-key",
+        ANYCODE_MODEL: "test-model",
+        ANYCODE_DB_PATH: ":memory:",
+        ANYCODE_SETTINGS_PATH: isolatedSettingsPath(),
+        ANYCODE_EXPERIMENTAL_CODE_MODE: "1",
+      } as NodeJS.ProcessEnv,
+      input,
+      output,
+      modelPort,
+      cwd: process.cwd(),
+    });
+    input.write("compute it\n");
+    input.end();
+    expect(await runPromise).toBe(0);
+    expect(getText()).toContain(`${code}\n`);
+  });
+});

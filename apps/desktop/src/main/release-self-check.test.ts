@@ -7,18 +7,19 @@ import { describe, expect, it } from "vitest";
 
 // The fake executable records the exact arguments and mimics the app's output.
 describe.skipIf(process.platform === "win32")("release self-check launcher", () => {
-  it("passes the Linux capture opt-in and surfaces missing screenshot warnings", () => {
+  it("packagedSelfCheckReportsRuntime and preserves capture opt-in and warnings", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-test-"));
     const binary = join(root, "fake-app");
     try {
       writeFileSync(binary, `#!/usr/bin/env node
 console.error('[self-check] welcome.png unavailable: UnknownVizError');
-console.log('ANYCODE_SELF_CHECK ' + JSON.stringify({ ok: true, packaged: true, checks: ["builtin-policy-worker"], args: process.argv.slice(2) }));
+console.log('ANYCODE_SELF_CHECK ' + JSON.stringify({ ok: true, packaged: true, checks: ["builtin-policy-worker", "code-mode-runtime"], args: process.argv.slice(2) }));
 `);
       chmodSync(binary, 0o755);
       const script = fileURLToPath(new URL("../../scripts/release-self-check.mjs", import.meta.url));
       const result = spawnSync(process.execPath, [script, binary, "--self-check-allow-unavailable-capture"], { encoding: "utf8" });
       expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).checks).toContain("code-mode-runtime");
       expect(JSON.parse(result.stdout).args).toEqual(["--self-check", "--self-check-allow-unavailable-capture"]);
       expect(result.stderr).toContain("welcome.png unavailable: UnknownVizError");
       writeFileSync(binary, `#!/usr/bin/env node
