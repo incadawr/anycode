@@ -346,12 +346,21 @@ export async function createNativeBootRegistry(
   meta: SessionMeta,
 ) {
   const archMap = await loadArchMapEnabled(fs, settingsPath, env);
-  const codeMode = await loadCodeModeEnabled(fs, settingsPath, env);
+  // A durable child reopened without its child arguments has no recoverable
+  // profile restrictions. Do not add a new execution capability in that case.
+  const restrictionsKnown = meta.parentSessionId === undefined || args.child !== undefined;
+  const codeMode = restrictionsKnown && await loadCodeModeEnabled(fs, settingsPath, env);
   return createDefaultToolRegistry({
     ...(args.child === undefined ? { agent: { sessionTier: true } } : {}),
     ...(archMap ? { archMap: true } : {}),
     ...(codeMode ? { codeMode: true } : {}),
   });
+}
+
+/** Session-start telemetry reflects the registry after child profile filtering. */
+export function nativeCodeModeTelemetry(registry: { has(name: string): boolean }, args: HostArgs): { codeMode?: true } {
+  return registry.has("REPL") && (args.child?.restrictions === undefined || args.child.restrictions.tools.includes("REPL"))
+    ? { codeMode: true } : {};
 }
 
 /**

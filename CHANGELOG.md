@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Native subagents can use Code Mode when enabled and permitted by their tool list.
+- Native subagents can use Code Mode when it is enabled in Settings and their tool list allows it.
 
 ## [0.0.109] - 2026-11-23
 
