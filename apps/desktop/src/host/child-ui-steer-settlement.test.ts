@@ -17,6 +17,7 @@ import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import {
   AgentLoop,
+  CODE_MODE_REMINDER,
   SessionPermissionRules,
   type AgentLoopConfig,
   type ModelStreamEvent,
@@ -59,7 +60,7 @@ interface Fixture {
  */
 async function childFixture(
   steps: ModelStreamEvent[][],
-  options: { parkAfterIndex?: number; manualSteer?: boolean; maxTurns?: number; seamNotReady?: boolean } = {},
+  options: { parkAfterIndex?: number; manualSteer?: boolean; maxTurns?: number; seamNotReady?: boolean; codeMode?: boolean } = {},
 ): Promise<Fixture> {
   const donor = createHarness({ steps: [] });
   const port = new GatedModelPort(steps, options.parkAfterIndex ?? 0);
@@ -104,6 +105,7 @@ async function childFixture(
     sessionId: "child-session",
     bootHistory: [],
     rules: new SessionPermissionRules(),
+    codeModeReminderActive: () => options.codeMode === true,
     child: { parentSessionId: PARENT_SESSION_ID, onReady: () => {}, onProgress: () => {}, flushHistory, onTerminal: terminal },
   });
   session.bindPort(nodeWirePort(channel.port2));
@@ -133,6 +135,19 @@ const steer = (requestId: string, text: string) => ({ type: "steer_message", req
 const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 30));
 
 describe("child UI steer settlement", () => {
+  it("adds the Code Mode reminder to the programmatic first turn and a queued steer turn", async () => {
+    const f = await childFixture([textStep("FIRST"), textStep("SECOND")], { codeMode: true });
+    try {
+      expect(f.session.startProgrammaticTurn("INITIAL_PROMPT")).toEqual({ ok: true });
+      await f.waitUntil(() => f.port.requests.length === 1);
+      expect(occurrences(requestText(f.port, 0), CODE_MODE_REMINDER)).toBe(1);
+      f.send(steer("s", "STEER_ONE"));
+      await settle();
+      f.port.release();
+      await f.waitUntil(() => f.terminal.mock.calls.length > 0);
+      expect(occurrences(requestText(f.port, 1), CODE_MODE_REMINDER)).toBe(2);
+    } finally { f.close(); }
+  });
   it("queues a rejected steer host-side and runs it as the next turn before the terminal", async () => {
     // The first step is text-only: the steer never meets a seam, so the real
     // engine rejects it when the loop ends.

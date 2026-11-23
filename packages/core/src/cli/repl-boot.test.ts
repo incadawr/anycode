@@ -7,6 +7,7 @@ import { SqlitePersistenceAdapter, WriteBehindHistorySink } from "../adapters/no
 import { ConversationHistory, INTERRUPTED_REPL_MESSAGE } from "../context/history.js";
 import type { ModelRequest } from "../ports/model.js";
 import { runCli } from "./main.js";
+import { CODE_MODE_REMINDER } from "../prompts/code-mode-reminder.js";
 
 async function withProfile(check: (fixture: Awaited<ReturnType<typeof createProfile>>) => Promise<void>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "anycode-repl-boot-")));
@@ -60,8 +61,39 @@ async function createProfile(root: string) {
     expect(exit).toBe(0);
     return { stdout, stderr, frames };
   }
-  return { cwd, dbPath, run };
+  return { cwd, home, env, dbPath, run };
 }
+
+it("passes Code Mode to CLI native children only while enabled", async () => {
+  await withProfile(async ({ cwd, home, env }) => {
+    for (const enabled of [true, false]) {
+      const frames: ModelRequest[] = [];
+      let spawned = false;
+      const exit = await runCli({
+        argv: ["--yolo", "-p", "delegate"], cwd, home,
+        env: { ...env, ANYCODE_EXPERIMENTAL_CODE_MODE: enabled ? "1" : "0" },
+        input: new PassThrough(), output: new PassThrough(), errorOutput: new PassThrough(),
+        modelPort: { async *streamText(request) {
+          frames.push(request);
+          yield { type: "start" };
+          if (!spawned) {
+            spawned = true;
+            yield { type: "tool_call", toolCall: { id: "agent", name: "Agent", input: { agent_type: "general-purpose", description: "child", prompt: "child task" } } };
+            yield { type: "finish", finishReason: "tool_calls", usage: {} };
+          } else {
+            yield { type: "text_delta", id: "t", text: "done" };
+            yield { type: "finish", finishReason: "stop", usage: {} };
+          }
+        } },
+      });
+      expect(exit).toBe(0);
+      const child = frames.find(frame => frame.system?.includes("child task") === false && frame.messages.some(message => message.role === "user" && typeof message.content === "string" && message.content.startsWith("child task")));
+      expect(child).toBeDefined();
+      expect(child!.tools.some(tool => tool.name === "REPL")).toBe(enabled);
+      expect(JSON.stringify(child!.messages).includes(CODE_MODE_REMINDER)).toBe(enabled);
+    }
+  });
+}, 20_000);
 
 it("resumeOffRepairsOnceAndPrintDenies: repairs a durable parent exactly once with the flag off", async () => {
   await withProfile(async ({ cwd, dbPath, run }) => {

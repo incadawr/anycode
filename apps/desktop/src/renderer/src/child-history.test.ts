@@ -32,6 +32,14 @@ const ITEMS: WireHistoryItem[] = [
 ];
 
 describe("projectChildHistoryResult", () => {
+  it("preserves nested REPL calls in the completed child transcript", () => {
+    const repl = { code: 'await call("Read", {});', calls: [{ callId: "r.1", toolName: "Read" as const, status: "success" as const, durationMs: 1, input: { fields: {} } }] };
+    const items: WireHistoryItem[] = [
+      { id: "a", createdAt: 1, message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "r", toolName: "REPL", input: { code: repl.code } }] } },
+      { id: "b", createdAt: 2, message: { role: "tool", content: [{ type: "tool_result", toolCallId: "r", toolName: "REPL", status: "success", text: "done", presentation: { repl } }] } },
+    ];
+    expect(projectChildHistoryResult({ ok: true, items })).toMatchObject({ kind: "blocks", blocks: [{ kind: "tool_call", toolName: "REPL", repl }] });
+  });
   it("a refused channel call (unauthorized/not-found) maps to the unavailable state, never a thrown exception", () => {
     expect(() => projectChildHistoryResult(REFUSED)).not.toThrow();
     expect(projectChildHistoryResult(REFUSED)).toEqual({ kind: "unavailable" });
