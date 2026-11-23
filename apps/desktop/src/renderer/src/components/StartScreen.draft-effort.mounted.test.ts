@@ -57,14 +57,14 @@ beforeEach(() => {
     draftActive: true,
     availableEngines: ["core", "codex", "claude"],
     claudeOrchestrateEnabled: false,
-    codexModels: [], claudeModels: [],
+    codexModels: [], claudeModels: [], claudeCatalogConfirmedAt: 0,
   });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   document.body.replaceChildren();
-  useTabsStore.setState({ draft: null, draftActive: false, codexModels: [], claudeModels: [] });
+  useTabsStore.setState({ draft: null, draftActive: false, codexModels: [], claudeModels: [], claudeCatalogConfirmedAt: 0 });
 });
 
 async function mountStartScreen(): Promise<{ container: HTMLDivElement; root: ReturnType<typeof createRoot> }> {
