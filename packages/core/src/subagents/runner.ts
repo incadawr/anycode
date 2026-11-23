@@ -353,7 +353,7 @@ export function buildChildConfig(
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
   const restrictions = sessionRestrictionsForPersona(effectivePersona);
-  if (parent.registry.has("REPL") && (restrictions === null || restrictions.tools.includes("REPL"))) {
+  if (parent.registry?.has("REPL") && (restrictions === null || restrictions.tools.includes("REPL"))) {
     const repl = parent.registry.get("REPL");
     if (repl) registry.register(repl, { silentDuplicateWarning: true });
   }
