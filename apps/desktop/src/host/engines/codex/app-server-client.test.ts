@@ -148,31 +148,9 @@ describe("AppServerClient", () => {
   });
 
   it("fails closed for an unsupported or timed-out version", async () => {
-    await expect(makeClient(["--bad-version"]).start()).rejects.toBeInstanceOf(EngineVersionError);
+    await expect(makeClient(["--below-floor"]).start()).rejects.toBeInstanceOf(EngineVersionError);
     await expect(makeClient(["--hang-version"], { versionTimeoutMs: 150 }).start()).rejects.toBeInstanceOf(EngineVersionError);
   });
-
-  // the rejection text must be DERIVED from SUPPORTED_CODEX_VERSION,
-  // not a second literal restating it — otherwise widening the constant alone
-  // (as every prior codex bump did) leaves this message advertising a stale
-  // ceiling narrower than the predicate actually accepts. Reads the constant's
-  // live value rather than a copied string, so the assertion cannot itself
-  // become the next place that goes stale. Triggered with `--bad-version`
-  // (above the ceiling): the floor is gone (owner decision, 2026-08-29), so an
-  // old version no longer fails this preflight at all.
-  it("names the CURRENT supported ceiling in the rejection message, not a stale copy", async () => {
-    const failure = await makeClient(["--bad-version"]).start().then(() => null, (error: unknown) => error);
-    expect(failure).toBeInstanceOf(EngineVersionError);
-    expect((failure as Error).message).toContain(SUPPORTED_CODEX_VERSION);
-  });
-
-  // ── the preflight judges by the ACTIVE support policy main
-  // delivers, not by the compiled wire pin. The three properties are unit-
-  // pinned in version-policy.test.ts; these run them through the REAL
-  // spawn+preflight path, which is the only place that actually refuses a
-  // Codex child. (The two tests above carry no carrier in `sourceEnv`, so they
-  // are simultaneously the fail-safe pin: with no policy the compiled pin
-  // still decides.)
 
   it("refuses a version the delivered policy excludes even though the compiled pin allows it", async () => {
     // The child reports 0.144.1 — inside `SUPPORTED_CODEX_VERSION` but below
@@ -187,15 +165,15 @@ describe("AppServerClient", () => {
     expect((failure as Error).message).not.toContain(SUPPORTED_CODEX_VERSION);
   });
 
-  it("starts on an above-ceiling version and records the warning", async () => {
-    // `--bad-version` reports 1.0.0, far above the delivered ceiling: the
-    // soft-allow admits it WITHOUT verification, and the preflight records why.
-    const client = makeClient(["--bad-version"], { sourceEnv: policyEnv([">=0.144.0 <0.152.0"]) });
+  it("starts and allows orchestration on an above-ceiling version without a session warning", async () => {
+    // `--newer-version` reports 1.0.0, far above the delivered ceiling: the
+    // the host can launch it without surfacing the Settings notice in the session.
+    const client = makeClient(["--newer-version"], { sourceEnv: policyEnv([">=0.144.0 <0.152.0"]) });
     try {
       await client.start();
       await expect(client.request("echo", { value: 3 })).resolves.toEqual({ value: 3 });
-      expect(client.versionWarning).toMatch(/not verified, running anyway/);
-      expect(client.orchestrationVersionVerified).toBe(false);
+      expect(client.versionWarning).toBeNull();
+      expect(client.orchestrationVersionAllowed).toBe(true);
     } finally {
       await client.close();
     }
@@ -206,25 +184,21 @@ describe("AppServerClient", () => {
     try {
       await client.start();
       await expect(client.request("echo", { value: 1 })).resolves.toEqual({ value: 1 });
-      expect(client.orchestrationVersionVerified).toBe(true);
+      expect(client.orchestrationVersionAllowed).toBe(true);
     } finally {
       await client.close();
     }
   });
 
-  it("starts on an ABOVE-CEILING version once it is risk-accepted — the 'use it anyway' button reaching the engine path", async () => {
-    // `--bad-version` reports 1.0.0, which every range refuses; the acceptance
-    // is the only thing that can let this spawn happen. The host
-    // never saw `riskAcceptedVersions` at all and this could not pass.
-    const client = makeClient(["--bad-version"], {
+  it("keeps orchestration available with a legacy above-ceiling risk acceptance", async () => {
+    const client = makeClient(["--newer-version"], {
       sourceEnv: policyEnv([">=0.144.0 <0.152.0"], ["1.0.0"]),
     });
     try {
       await client.start();
       await expect(client.request("echo", { value: 2 })).resolves.toEqual({ value: 2 });
-      // Risk acceptance keeps today's marking: allowed WITHOUT a new warning.
       expect(client.versionWarning).toBeNull();
-      expect(client.orchestrationVersionVerified).toBe(false);
+      expect(client.orchestrationVersionAllowed).toBe(true);
     } finally {
       await client.close();
     }

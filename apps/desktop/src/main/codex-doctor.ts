@@ -880,7 +880,7 @@ export async function runCodexDoctor(binaryPath: string, options: RunCodexDoctor
     if (!verdict.allowed) {
       return { status: "update_required", version };
     }
-    versionWarning = verdict.warning;
+    versionWarning = verdict.newerVersionNotice ?? verdict.warning;
 
     // An abort that landed during the (bounded) preflight must not go on to
     // spawn a child the caller has already stopped waiting for — that child

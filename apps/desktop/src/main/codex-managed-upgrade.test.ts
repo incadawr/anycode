@@ -481,9 +481,7 @@ describe("runCodexManagedUpgrade — failure handling leaves the old install wor
     expect(existsSync(oldBinaryPath)).toBe(true);
   });
 
-  it("a recommended version outside the policy's own ranges is refused (no forced downgrade/upgrade)", async () => {
-    // Supported range narrowed below the recommended value — a malformed
-    // policy combination the verdict gate must catch.
+  it("upgrades to the recommendation even above the tested ceiling", async () => {
     setActiveCodexVersionPolicy({
       manifest: {
         ...BUNDLED_CODEX_MANIFEST,
@@ -494,8 +492,8 @@ describe("runCodexManagedUpgrade — failure handling leaves the old install wor
     });
     const { home, oldBinaryPath } = machineWithOldManagedInstall();
     const result = await runCodexManagedUpgrade(upgradeDeps({ home, binaryPathSetting: oldBinaryPath }));
-    expect(result.ok).toBe(false);
-    expect(existsSync(join(home, ".anycode", "codex", "bin", NEW_VERSION))).toBe(false);
+    expect(result).toMatchObject({ ok: true, upgraded: true });
+    expect(existsSync(join(home, ".anycode", "codex", "bin", NEW_VERSION))).toBe(true);
     expect(existsSync(oldBinaryPath)).toBe(true);
   });
 });

@@ -452,6 +452,7 @@ export function deriveBinaryActions(report: CodexDoctorReport | undefined, suppo
   const untestedVersion =
     support !== null &&
     version !== undefined &&
+    !report?.versionWarning &&
     support.riskAcceptedVersions.includes(version) &&
     !isCodexVersionWithinSupportedRange(version, support.supportedRange) &&
     !isCodexVersionBelowCompileTimeFloor(version)

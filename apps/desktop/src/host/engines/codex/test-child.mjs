@@ -33,13 +33,9 @@ if (args.includes("--version")) {
     // on timeout strands this grandchild with nothing left to reap it.
     forkStubbornGrandchild();
     setInterval(() => {}, 1_000);
-  } else if (args.includes("--bad-version")) {
-    // (owner decision, 2026-08-29): SUPPORTED_CODEX_VERSION dropped
-    // its floor and is now a bare ceiling, so the only way left to be
-    // unsupported is ABOVE it — a below-floor probe (e.g. 0.100.0) would now
-    // pass. Every codex-cli release observed so far (W0 through the 0.150.1
-    // measurement) has stayed on major 0, so a next-major placeholder stays
-    // above the ceiling no matter how far a future edit raises it within 0.x.
+  } else if (args.includes("--below-floor")) {
+    process.stdout.write("codex-cli 0.143.9\n");
+  } else if (args.includes("--newer-version")) {
     process.stdout.write("codex-cli 1.0.0\n");
   } else if (args.includes("--hang-version")) setInterval(() => {}, 1_000);
   else process.stdout.write("codex-cli 0.144.1\n");

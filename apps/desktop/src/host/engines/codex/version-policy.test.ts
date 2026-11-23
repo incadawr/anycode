@@ -1,15 +1,9 @@
-/**
- * The host's own half: which policy a preflight judges against,
- * resolved from the fork env main composed. Three properties, one test each:
- * the delivered policy is honoured, a risk acceptance overrides the ceiling,
- * and NO policy falls back to the compiled wire pin rather than to "allow".
- */
 import { describe, expect, it } from "vitest";
 import {
   ENV_CODEX_SUPPORT_POLICY,
   encodeCodexSupportPolicy,
 } from "../../../shared/codex-version-policy.js";
-import { SUPPORTED_CODEX_VERSION, isSupportedCodexVersion, parseCodexVersion } from "./protocol.js";
+import { isSupportedCodexVersion, parseCodexVersion } from "./protocol.js";
 import { resolveHostCodexVersionPolicy } from "./version-policy.js";
 
 function version(text: string) {
@@ -30,28 +24,25 @@ describe("resolveHostCodexVersionPolicy", () => {
     // and now SOFT-ALLOWS (owner decision 10.10), so `allows` is true there.
     const policy = resolveHostCodexVersionPolicy(envWith([">=0.145.0 <0.146.0"]));
     expect(isSupportedCodexVersion(version("0.144.5"))).toBe(true);
-    expect(policy.allows(version("0.144.5"))).toBe(false);
-    expect(policy.allows(version("0.151.0"))).toBe(true);
-    expect(policy.allows(version("0.145.9"))).toBe(true);
+    expect(policy.judge(version("0.144.5")).allowed).toBe(false);
+    expect(policy.judge(version("0.151.0")).allowed).toBe(true);
+    expect(policy.judge(version("0.145.9")).allowed).toBe(true);
     expect(policy.supportedRange).toBe(">=0.145.0 <0.146.0");
   });
 
   it("soft-allows above the delivered ceiling with a warning, null when verified", () => {
     const policy = resolveHostCodexVersionPolicy(envWith([">=0.144.0 <0.146.0"]));
-    expect(policy.allows(version("0.150.0"))).toBe(true);
-    expect(policy.warningFor(version("0.150.0"))).toMatch(/not verified, running anyway/);
-    expect(policy.warningFor(version("0.145.9"))).toBeNull();
+    expect(policy.judge(version("0.150.0")).allowed).toBe(true);
+    expect(policy.judge(version("0.150.0")).newerVersionNotice).toMatch(/newer than the tested range/);
+    expect(policy.judge(version("0.145.9")).newerVersionNotice).toBeUndefined();
   });
 
-  it("starts a version ABOVE the ceiling once it is in riskAcceptedVersions", () => {
+  it("gives the same Settings notice with or without legacy consent", () => {
     const policy = resolveHostCodexVersionPolicy(envWith([">=0.144.0 <0.152.0"], ["0.152.0"]));
-    expect(policy.allows(version("0.152.0"))).toBe(true);
-    // Only the accepted version, and only exactly — the neighbour below is a
-    // gap now? No: it is ABOVE the ceiling, so it soft-allows; but a risk
-    // acceptance never adds a warning, which is what this asserts.
-    expect(policy.warningFor(version("0.152.0"))).toBeNull();
-    expect(policy.allows(version("0.153.0"))).toBe(true);
-    expect(policy.warningFor(version("0.153.0"))).toMatch(/not verified, running anyway/);
+    expect(policy.judge(version("0.152.0")).allowed).toBe(true);
+    expect(policy.judge(version("0.152.0")).newerVersionNotice).toBeDefined();
+    expect(policy.judge(version("0.153.0")).allowed).toBe(true);
+    expect(policy.judge(version("0.153.0")).newerVersionNotice).toMatch(/newer than the tested range/);
   });
 
   it("names the ACTIVE range, `||`-joined, for the refusal message", () => {
@@ -64,19 +55,9 @@ describe("resolveHostCodexVersionPolicy", () => {
     ["a blank carrier", { [ENV_CODEX_SUPPORT_POLICY]: "" }],
     ["an unparseable carrier", { [ENV_CODEX_SUPPORT_POLICY]: "{not json" }],
     ["a structurally broken carrier", { [ENV_CODEX_SUPPORT_POLICY]: '{"ranges":[]}' }],
-  ])("falls back to the compiled wire pin for %s — absence of policy is not absence of a check", (_label, env) => {
+  ])("uses the bundled policy for %s", (_label, env) => {
     const policy = resolveHostCodexVersionPolicy(env as NodeJS.ProcessEnv);
-    expect(policy.supportedRange).toBe(SUPPORTED_CODEX_VERSION);
-    // Byte-for-byte the predicate: a bare ceiling, no floor.
-    expect(policy.allows(version("0.154.0"))).toBe(true);
-    expect(policy.allows(version("0.169.0"))).toBe(true);
-    expect(policy.allows(version("0.170.0"))).toBe(true);
-    expect(policy.allows(version("0.171.0"))).toBe(true);
-    expect(policy.allows(version("0.172.0"))).toBe(false);
-    expect(policy.allows(version("1.0.0"))).toBe(false);
-    expect(policy.allows(version("0.100.0"))).toBe(true);
-    // The strict compiled fallback never soft-allows and never warns.
-    expect(policy.warningFor(version("0.163.0"))).toBeNull();
-    expect(policy.warningFor(version("0.154.0"))).toBeNull();
+    expect(policy.judge(version("1.0.0"))).toMatchObject({ allowed: true, risk: false, newerVersionNotice: expect.any(String) });
+    expect(policy.judge(version("0.100.0")).allowed).toBe(false);
   });
 });

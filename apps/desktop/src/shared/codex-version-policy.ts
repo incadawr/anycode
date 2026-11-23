@@ -115,8 +115,10 @@ export interface CodexVersionVerdict {
   risk: boolean;
   /** The range the verdict was judged against, for the report/UI/refusal text. */
   supportedRange: string;
-  /** Soft-allow (owner decision 10.10): allowed WITHOUT verification — patch of a verified minor, or above the verified ceiling. Absent when verified in-range or risk-accepted. */
+  /** Run-only exception for a later patch in a tested minor inside a manifest gap. */
   warning?: string;
+  /** Informational only, displayed by Settings. All runtime capabilities remain eligible. */
+  newerVersionNotice?: string;
 }
 
 /** Display form of a policy's supported set — the `||` join every report/refusal message shows. */
@@ -185,10 +187,10 @@ function overallCeiling(ranges: readonly string[]): { version: ParsedCodexVersio
  *  1. unparsable or below `CODEX_MIN_FLOOR` -> rejected ALWAYS (risk
  *     acceptance cannot override the compiled floor);
  *  2. inside any policy range -> allowed;
- *  3. explicitly risk-accepted (exact version match) -> allowed, flagged risk;
- *  4. a patch of a verified minor, or above/equal-to-the-exclusive verified
- *     ceiling -> allowed WITH a warning (soft-allow, owner decision 10.10);
- *  5. otherwise rejected.
+ *  3. above the tested ceiling -> allowed, with a Settings notice only;
+ *  4. explicitly risk-accepted (exact version match) -> allowed, flagged risk;
+ *  5. a patch inside a gap after a verified minor -> allowed WITH a warning (soft-allow, owner decision 10.10);
+ *  6. otherwise rejected.
  */
 export function judgeCodexVersion(version: string, policy: CodexSupportPolicy): CodexVersionVerdict {
   const supportedRange = supportedRangeText(policy.ranges);
@@ -204,22 +206,19 @@ export function judgeCodexVersion(version: string, policy: CodexSupportPolicy): 
       return { allowed: true, risk: false, supportedRange };
     }
   }
+  const ceiling = overallCeiling(policy.ranges);
+  if (ceiling !== null && (compareCodexVersions(parsed, ceiling.version) > 0 || (!ceiling.inclusive && compareCodexVersions(parsed, ceiling.version) === 0))) {
+    return { allowed: true, risk: false, supportedRange, newerVersionNotice: `Codex ${version} is newer than the tested range (${supportedRange}).` };
+  }
   if (policy.riskAcceptedVersions.includes(version)) {
     return { allowed: true, risk: true, supportedRange };
   }
-  // Owner decision 10.10 (option A): forward-compatibility soft-allows. The
-  // floor check above still refuses everything below CODEX_MIN_FLOOR, and
-  // versions in manifest gaps (an unverified minor below the ceiling) stay
-  // refused — only PATCHES of verified minors and ABOVE-CEILING versions pass.
+  // Inside a gap, a newer patch of a known minor keeps its existing run-only exception.
   for (const range of policy.ranges) {
     const comparators = parseCodexRange(range);
     if (comparators !== null && isVerifiedMinor(parsed, comparators)) {
       return { allowed: true, risk: false, supportedRange, warning: `Codex ${version} is a patch of a verified release but is not verified itself (supported ${supportedRange}) — not verified, running anyway.` };
     }
-  }
-  const ceiling = overallCeiling(policy.ranges);
-  if (ceiling !== null && (compareCodexVersions(parsed, ceiling.version) > 0 || (!ceiling.inclusive && compareCodexVersions(parsed, ceiling.version) === 0))) {
-    return { allowed: true, risk: false, supportedRange, warning: `Codex ${version} is newer than the verified range (${supportedRange}) — not verified, running anyway.` };
   }
   return { allowed: false, risk: false, supportedRange };
 }
@@ -261,8 +260,8 @@ export function encodeCodexSupportPolicy(policy: CodexSupportPolicy): string {
  * Decodes a carrier value, or returns null for "no usable policy travelled".
  *
  * null is NOT "allow everything" and never becomes one: it is the caller's cue
- * to fall back to its own compiled default (the host falls back to the wire
- * pin's ceiling — `host/engines/codex/version-policy.ts`). Every malformed
+ * to fall back to its own compiled default (the host falls back to the bundled
+ * manifest — `host/engines/codex/version-policy.ts`). Every malformed
  * shape collapses to null rather than to a partially-honoured policy, because
  * a policy with, say, its ranges dropped but its risk list kept would be a
  * WIDER policy than either the sender or the receiver ever intended.

@@ -5,6 +5,12 @@ All notable AnyCode changes are recorded in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and version numbers follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Stable Codex CLI versions newer than the tested range can start sessions, orchestrate agents, and install or upgrade normally. Settings shows the tested range. The minimum remains 0.144.0.
+
 ## [0.0.110] - 2026-11-23
 
 ### Changed

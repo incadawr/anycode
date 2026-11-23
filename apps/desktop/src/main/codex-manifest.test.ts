@@ -88,7 +88,7 @@ describe("effectiveCodexManifest", () => {
     const verdict = codexVersionVerdict("0.999.0", { manifest: effective, riskAcceptedVersions: [] });
     expect(verdict.allowed).toBe(true);
     expect(verdict.risk).toBe(false);
-    expect(verdict.warning).toMatch(/not verified, running anyway/);
+    expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
   });
 });
 
@@ -116,12 +116,12 @@ describe("codexVersionVerdict", () => {
     const verdict = codexVersionVerdict("0.150.0", policy(validManifest()));
     expect(verdict.allowed).toBe(true);
     expect(verdict.risk).toBe(false);
-    expect(verdict.warning).toBeDefined();
+    expect(verdict.newerVersionNotice).toBeDefined();
   });
 
-  it("allows an out-of-range version the user explicitly risk-accepted (§7.4), flagged as risk", () => {
+  it("treats old risk acceptances above the tested range as ordinary newer versions", () => {
     const verdict = codexVersionVerdict("0.150.0", policy(validManifest(), ["0.150.0"]));
-    expect(verdict).toEqual({ allowed: true, risk: true, supportedRange: ">=0.144.0 <0.146.0" });
+    expect(verdict).toMatchObject({ allowed: true, risk: false, newerVersionNotice: expect.any(String) });
   });
 
   it("risk acceptance is PER-VERSION, not blanket (gap versions)", () => {

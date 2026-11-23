@@ -181,7 +181,7 @@ async function nativeRig() {
   let releaseTransition!: () => void;
   const transitionGate = new Promise<void>(resolve => { releaseTransition = resolve; });
   engine.installOrchestration(() => {
-    const server = new FakeAppServer(); Object.assign(server, { orchestrationVersionVerified: true }); server.threadId = "fresh-thread"; servers.push(server);
+    const server = new FakeAppServer(); Object.assign(server, { orchestrationVersionAllowed: true }); server.threadId = "fresh-thread"; servers.push(server);
     server.serverRequestHandler = request => {
       const owner = engine.activeTurnDetails;
       return child.bridge.handle(request, child.response, owner, event => engine.pushBridgeEvent(event, owner));

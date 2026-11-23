@@ -567,9 +567,17 @@ describe("createCodexInstallController (IPC surface — verdict gate, doctor gat
     expect(written).toEqual([{ binaryPath: join(dir, ".anycode", "codex", "bin", VERSION, "vendor", TRIPLE, "bin", "codex") }]);
   });
 
+  it("installs an explicitly requested stable release above the tested ceiling", async () => {
+    setActiveCodexVersionPolicy({
+      manifest: { ...BUNDLED_CODEX_MANIFEST, supported: [{ range: "=0.144.0", status: "tested" }] },
+    });
+    const { controller } = controllerWith();
+    expect(await controller.install(VERSION)).toMatchObject({ ok: true, version: VERSION });
+  });
+
   it("refuses to install a version the policy rejects (outside manifest, not risk-accepted)", async () => {
     const { written, controller } = controllerWith();
-    const result = await controller.install("0.150.0");
+    const result = await controller.install("0.143.9");
     expect(result.ok).toBe(false);
     expect(written).toEqual([]);
   });

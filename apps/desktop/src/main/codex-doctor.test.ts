@@ -476,10 +476,10 @@ describe("runCodexDoctor", () => {
     });
     expect(report.status).toBe("ready");
     expect(report.version).toBe("0.150.0");
-    expect(report.versionWarning).toMatch(/not verified, running anyway/);
+    expect(report.versionWarning).toMatch(/newer than the tested range/);
   });
 
-  it("soft-allows a patch of a verified minor, carrying the patch warning", async () => {
+  it("reports a newer patch above an inclusive ceiling in Settings", async () => {
     const report = await runCodexDoctor("/fake/codex", {
       trust: TRUSTED,
       spawnImpl: fakeSpawn(["--report-version=0.145.1"]),
@@ -487,7 +487,7 @@ describe("runCodexDoctor", () => {
     });
     expect(report.status).toBe("ready");
     expect(report.version).toBe("0.145.1");
-    expect(report.versionWarning).toMatch(/patch of a verified release/);
+    expect(report.versionWarning).toMatch(/newer than the tested range/);
   });
 
   it("reports error for unparseable version output", async () => {

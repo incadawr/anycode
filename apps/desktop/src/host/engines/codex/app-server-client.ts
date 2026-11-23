@@ -32,7 +32,6 @@ import {
   parseCodexVersion,
 } from "./protocol.js";
 import { resolveHostCodexVersionPolicy } from "./version-policy.js";
-import { decodeCodexSupportPolicy, ENV_CODEX_SUPPORT_POLICY, judgeCodexVersion } from "../../../shared/codex-version-policy.js";
 
 export const CODEX_MAX_LINE_BYTES = 10 * 1024 * 1024;
 export const CODEX_MAX_PENDING_REQUESTS = 64;
@@ -429,9 +428,9 @@ export class AppServerClient {
   }
 
   private versionWarningValue: string | null = null;
-  private verifiedOrchestration = false;
-  get orchestrationVersionVerified(): boolean { return this.replacement?.orchestrationVersionVerified ?? this.verifiedOrchestration; }
-  /** Soft-allow warning from the last preflight (null when the version was verified or no policy travelled). */
+  private orchestrationVersionAllowedValue = false;
+  get orchestrationVersionAllowed(): boolean { return this.replacement?.orchestrationVersionAllowed ?? this.orchestrationVersionAllowedValue; }
+  /** Session warning for an unverified patch in a manifest gap. Newer releases are reported only in Settings. */
   get versionWarning(): string | null {
     return this.replacement ? this.replacement.versionWarning : this.versionWarningValue;
   }
@@ -721,22 +720,14 @@ export class AppServerClient {
         settle(() => resolve(stdout));
       });
     });
-    // judged against the ACTIVE support policy (the manifest range
-    // Settings shows, plus the versions the user explicitly risk-accepted),
-    // delivered per-fork by main via ENV_CODEX_SUPPORT_POLICY. Absent/garbage
-    // policy falls back to the compiled wire pin — see
-    // `resolveHostCodexVersionPolicy`, which is where that fail-safe lives.
-    // The refusal names the range that was ACTUALLY applied, never a constant
-    // restating a different one.
     const policy = resolveHostCodexVersionPolicy(this.options.sourceEnv);
     const version = parseCodexVersion(output);
-    if (version === null || !policy.allows(version)) {
+    const verdict = version && policy.judge(version);
+    if (!verdict?.allowed) {
       throw new EngineVersionError(`Unsupported Codex version: ${output.trim() || "unparseable"} (supported ${policy.supportedRange})`);
     }
-    this.versionWarningValue = policy.warningFor(version);
-    const manifestPolicy = decodeCodexSupportPolicy(this.options.sourceEnv[ENV_CODEX_SUPPORT_POLICY]);
-    const verdict = manifestPolicy && judgeCodexVersion(`${version.major}.${version.minor}.${version.patch}`, manifestPolicy);
-    this.verifiedOrchestration = !!verdict && verdict.allowed && !verdict.risk && !verdict.warning;
+    this.versionWarningValue = verdict.warning ?? null;
+    this.orchestrationVersionAllowedValue = !verdict.risk && !verdict.warning;
   }
 
   /**

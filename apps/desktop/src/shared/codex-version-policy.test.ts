@@ -29,14 +29,14 @@ describe("judgeCodexVersion", () => {
     const verdict = judgeCodexVersion("0.152.0", POLICY);
     expect(verdict.allowed).toBe(true);
     expect(verdict.risk).toBe(false);
-    expect(verdict.warning).toMatch(/not verified, running anyway/);
+    expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
   });
 
   it("soft-allows a patch of a verified minor pinned exactly", () => {
     const verdict = judgeCodexVersion("0.162.1", { ranges: ["=0.162.0"], riskAcceptedVersions: [] });
     expect(verdict.allowed).toBe(true);
     expect(verdict.risk).toBe(false);
-    expect(verdict.warning).toMatch(/patch of a verified release/);
+    expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
   });
 
   it("refuses a patch of a NON-verified minor (manifest gap)", () => {
@@ -52,7 +52,7 @@ describe("judgeCodexVersion", () => {
   it("treats an exclusive-ceiling equality as above the ceiling (soft-allow)", () => {
     const verdict = judgeCodexVersion("0.152.0", { ranges: [">=0.144.0 <0.152.0"], riskAcceptedVersions: [] });
     expect(verdict.allowed).toBe(true);
-    expect(verdict.warning).toMatch(/not verified, running anyway/);
+    expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
   });
 
   it("a conjunction's ceiling is its LOWEST upper bound, exclusive wins on equality", () => {
@@ -60,7 +60,7 @@ describe("judgeCodexVersion", () => {
     // lowest upper bound), exclusive — so 0.146.0 itself soft-allows.
     const verdict = judgeCodexVersion("0.146.0", { ranges: [">=0.144.0 <0.146.0 <0.150.0"], riskAcceptedVersions: [] });
     expect(verdict.allowed).toBe(true);
-    expect(verdict.warning).toMatch(/not verified, running anyway/);
+    expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
     // Above that lowest bound soft-allows too.
     expect(judgeCodexVersion("0.147.0", { ranges: [">=0.144.0 <0.146.0 <0.150.0"], riskAcceptedVersions: [] }).allowed).toBe(true);
     // Inside the conjunction (below BOTH upper bounds) is verified, no warning.
@@ -74,7 +74,7 @@ describe("judgeCodexVersion", () => {
     for (const range of ranges) {
       const verdict = judgeCodexVersion("0.146.0", { ranges: [range], riskAcceptedVersions: [] });
       expect(verdict.allowed).toBe(true);
-      expect(verdict.warning).toMatch(/not verified, running anyway/);
+      expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
       const inside = judgeCodexVersion("0.145.0", { ranges: [range], riskAcceptedVersions: [] });
       expect(inside.allowed).toBe(true);
       expect(inside.warning).toBeUndefined();
@@ -88,7 +88,7 @@ describe("judgeCodexVersion", () => {
     // equality; 0.146.0 soft-allows above the exclusive ceiling.
     const verdict = judgeCodexVersion("0.146.0", { ranges: [">=0.144.0 <=0.146.0 <0.146.0"], riskAcceptedVersions: [] });
     expect(verdict.allowed).toBe(true);
-    expect(verdict.warning).toMatch(/not verified, running anyway/);
+    expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
   });
 
   it("union behavior stays correct: highest per-range ceiling wins, gaps stay refused", () => {
@@ -109,7 +109,7 @@ describe("judgeCodexVersion", () => {
   it("a pin at a nonzero patch allows only NEWER patches", () => {
     const newer = judgeCodexVersion("0.162.4", { ranges: ["=0.162.3"], riskAcceptedVersions: [] });
     expect(newer.allowed).toBe(true);
-    expect(newer.warning).toMatch(/patch of a verified release/);
+    expect(newer.newerVersionNotice).toMatch(/newer than the tested range/);
     expect(judgeCodexVersion("0.162.2", { ranges: ["=0.162.3"], riskAcceptedVersions: [] }).allowed).toBe(false);
   });
 
@@ -120,12 +120,12 @@ describe("judgeCodexVersion", () => {
   it("a higher version outside an exact pin soft-allows with a warning", () => {
     const verdict = judgeCodexVersion("0.163.0", { ranges: ["=0.162.0"], riskAcceptedVersions: [] });
     expect(verdict.allowed).toBe(true);
-    expect(verdict.warning).toMatch(/not verified, running anyway/);
+    expect(verdict.newerVersionNotice).toMatch(/newer than the tested range/);
   });
 
-  it("allows an above-ceiling version that is explicitly risk-accepted, and flags it as risk", () => {
+  it("keeps an old risk acceptance from restricting an above-ceiling version", () => {
     const verdict = judgeCodexVersion("0.152.0", { ...POLICY, riskAcceptedVersions: ["0.152.0"] });
-    expect(verdict).toEqual({ allowed: true, risk: true, supportedRange: ">=0.144.0 <0.152.0" });
+    expect(verdict).toMatchObject({ allowed: true, risk: false, newerVersionNotice: expect.any(String) });
     expect(verdict.warning).toBeUndefined();
   });
 

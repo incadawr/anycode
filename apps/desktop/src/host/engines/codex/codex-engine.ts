@@ -833,7 +833,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
       replacement.observeNotifications((notification) => options.onMcpNotification?.(notification));
       return { client: replacement, start: () => replacement.start() };
     }, options.persistOrchestrationThreadId, options.mcpForward?.servers);
-    if (options.persistOrchestrationThreadId) await engine.verifyOrchestrationAvailability(client.orchestrationVersionVerified, options.mcpForward?.servers);
+    if (options.persistOrchestrationThreadId) await engine.verifyOrchestrationAvailability(client.orchestrationVersionAllowed, options.mcpForward?.servers);
     return connected;
   } catch (error) {
     // Any bounded boot RPC that times out lands here: the child is released.
@@ -885,7 +885,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       replacement.observeNotifications((notification) => options.onMcpNotification?.(notification));
       return { client: replacement, start: () => replacement.start() };
     }, options.persistOrchestrationThreadId, options.mcpForward?.servers);
-    if (options.persistOrchestrationThreadId) await engine.verifyOrchestrationAvailability(client.orchestrationVersionVerified, options.mcpForward?.servers);
+    if (options.persistOrchestrationThreadId) await engine.verifyOrchestrationAvailability(client.orchestrationVersionAllowed, options.mcpForward?.servers);
     return connected;
   } catch (error) {
     await client.close();
@@ -1018,9 +1018,9 @@ export class CodexEngine implements SessionEngine {
   denyOrchestrationApprovals(): boolean { return this.orchestrationState !== "off"; }
 
   /** A malformed or incomplete inventory never exposes the toggle. */
-  async verifyOrchestrationAvailability(versionVerified: boolean, forwarded: Record<string, unknown> = {}): Promise<void> {
+  async verifyOrchestrationAvailability(versionAllowed: boolean, forwarded: Record<string, unknown> = {}): Promise<void> {
     this.orchestrationVerified = false;
-    if (!versionVerified || !this.settings?.workspace) return;
+    if (!versionAllowed || !this.settings?.workspace) return;
     try {
       const config = await this.client.request("config/read", { cwd: this.settings.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs });
       if (!config || typeof config !== "object" || !Array.isArray((config as { layers?: unknown }).layers)) return;
@@ -1072,7 +1072,7 @@ export class CodexEngine implements SessionEngine {
           const client = replacement.client;
           this.orchestrationCandidate = client;
           await replacement.start();
-          if (!(client as CodexClient & { orchestrationVersionVerified?: boolean }).orchestrationVersionVerified) throw new Error("Codex orchestration version is not verified");
+          if (!(client as CodexClient & { orchestrationVersionAllowed?: boolean }).orchestrationVersionAllowed) throw new Error("Codex orchestration is unavailable for this version");
           check();
           await initializeAndVerifyAccount(client, this.bounds.bootRpcMs, this.agentBridge !== undefined, process.platform);
           check();

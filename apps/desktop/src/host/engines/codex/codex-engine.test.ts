@@ -1108,7 +1108,7 @@ describe("Codex orchestration restart", () => {
     let releaseFactory: (() => void) | undefined;
     engine.installOrchestration((args) => {
       overrides.push([...args]);
-      const next = new FakeAppServer(); Object.assign(next, { orchestrationVersionVerified: true }); servers.push(next);
+      const next = new FakeAppServer(); Object.assign(next, { orchestrationVersionAllowed: true }); servers.push(next);
       const original = next.request.bind(next);
       next.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> => {
         if (method === "config/read") return Promise.resolve({ config: args.length ? onConfig : baseConfig } as T);

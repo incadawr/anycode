@@ -585,6 +585,14 @@ describe("deriveBinaryActions", () => {
     expect(deriveBinaryActions({ status: "ready", version: "0.146.0", account: null }, riskySupport).untestedVersion).toBe("0.146.0");
   });
 
+  it("shows only the informational notice for a newer version with a legacy risk acceptance", () => {
+    const report: CodexDoctorReport = { status: "ready", version: "0.190.0", versionWarning: "Codex 0.190.0 is newer than the tested range." };
+    expect(deriveBinaryActions(report, { ...support, riskAcceptedVersions: ["0.190.0"] })).toEqual({
+      showInstall: false, showUpdate: false, showUseAnyway: false, untestedVersion: null,
+    });
+    expect(codexVersionWarningNotice(report)).toBe(report.versionWarning);
+  });
+
   it("R3-9: hides the banner once the manifest widens to include a previously risk-accepted version, even though it's still in riskAcceptedVersions", () => {
     const widenedSupport: CodexSupportStatusResult = { ...support, supportedRange: ">=0.144.0 <0.147.0", riskAcceptedVersions: ["0.146.0"] };
     expect(deriveBinaryActions({ status: "ready", version: "0.146.0", account: null }, widenedSupport).untestedVersion).toBeNull();
