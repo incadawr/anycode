@@ -169,17 +169,23 @@ describe("managed child startup", () => {
       const gate = deferred<void>();
       const r = rig();
       const allocate = r.resources.allocate.bind(r.resources);
-      vi.spyOn(r.resources, "allocate").mockImplementation(async (...a) => { await gate.promise; return allocate(...a); });
+      const allocation = vi.spyOn(r.resources, "allocate").mockImplementation(async (...args) => {
+        await gate.promise;
+        return allocate(...args);
+      });
+      const settlement = vi.spyOn(r.manager, "settleManagedWorktree");
       expect(r.manager.createTab({ workspace: repo, projectRoot: repo, sessionId: "second-root", resume: false }).ok).toBe(true);
       const req = spawnRequest();
       r.parent.emit("message", req);
-      await flush();
+      await waitCi(() => expect(allocation).toHaveBeenCalledOnce());
       const closing = r.manager.closeTab(r.tab.tabId);
       gate.resolve();
       expect(await closing).toEqual({ ok: true });
-      await flush();
+      // Closing drops the child run before Git finishes. The retained receipt marks the end of the filesystem work.
+      await waitCi(() => expect(settlement).toHaveBeenCalledOnce());
+      await expect(settlement.mock.results[0]!.value).resolves.toMatchObject({ phase: "retained" });
       expect(r.calls.filter(c => c.args.includes("--child-parent"))).toHaveLength(0);
-      await waitCi(() => expect(r.manager.listChildRuns()).toHaveLength(0));
+      expect(r.manager.listChildRuns()).toHaveLength(0);
     });
 
     it("forks a resumed ordinary child at its own workspace and reports a stored workspace that moved", async () => {
