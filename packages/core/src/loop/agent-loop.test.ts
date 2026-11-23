@@ -1468,6 +1468,7 @@ describe("AgentLoop.runTurn — ceiling decision ladder (cut-1)", () => {
   const refusedEvents = (events: AgentEvent[]) =>
     events.filter((e): e is Extract<AgentEvent, { type: "ceiling_refused" }> => e.type === "ceiling_refused");
 
+
   it("round 1: grants, is visible as one event, and the loop resumes with the SAME history — no trace of the decision call", async () => {
     const modelPort = new MockModelPort([
       toolTurnStep("c1"),
@@ -2121,6 +2122,17 @@ describe("AgentLoop.runTurn — adaptive budget", () => {
     metadata: { ...baseMetadata, name: "Planner", readOnly: true, sideEffectScope: "none" },
   });
   const registry = makeRegistry({ Mock: makeTool(), Reader: readerTool, Planner: plannerTool });
+
+  it.each([["Write", 2], ["Read", 0]] as const)("counts nested %s calls as productive only when they mutate", async (nestedName, expected) => {
+    const repl = makeTool({
+      metadata: { ...baseMetadata, name: "REPL", readOnly: true, sideEffectScope: "none" },
+      handler: async () => ({ ok: true, presentation: { repl: { code: "", calls: [{ callId: "r.1", toolName: nestedName, status: "success", durationMs: 1, input: { fields: {} } }] } } } as unknown as ToolResult),
+    });
+    const modelPort = new MockModelPort([toolTurnStep("c1", "REPL"), toolTurnStep("c2", "REPL"), verdictStep(["a"]), completionStep()]);
+    const loop = makeLoop({ modelPort, maxTurns: 2, registry: makeRegistry({ Write: makeTool(), Read: readerTool, REPL: repl }), ceiling: { adaptive: true } });
+    const events = await collect(loop.runTurn("go"));
+    expect(events.find(event => event.type === "ceiling_grant")?.progress?.productiveToolCalls).toBe(expected);
+  });
 
   const grantEvents = (events: AgentEvent[]) =>
     events.filter((e): e is Extract<AgentEvent, { type: "ceiling_grant" }> => e.type === "ceiling_grant");

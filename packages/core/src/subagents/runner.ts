@@ -32,6 +32,7 @@ import {
   buildSubagentSystemPrompt,
 } from "../prompts/subagent.js";
 import type { SystemPromptEnv } from "../prompts/system.js";
+import { withCodeModeReminder } from "../prompts/code-mode-reminder.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { capUtf8Bytes } from "../util/bytes.js";
@@ -349,6 +350,11 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
+  const restrictions = sessionRestrictionsForPersona(effectivePersona);
+  if (parent.registry.has("REPL") && (restrictions === null || restrictions.tools.includes("REPL"))) {
+    const repl = parent.registry.get("REPL");
+    if (repl) registry.register(repl, { silentDuplicateWarning: true });
+  }
   limitSubagentBashOutput(registry);
   if (extras?.readConnectionTargets && effectivePersona.tools.some(name => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name))) {
     const readTargets = extras.readConnectionTargets;
@@ -1528,7 +1534,7 @@ export function createSubagentRunner(
           // The signal is already linked by the parent dispatcher to the turn
           // signal, so threading it here completes the parent->child->grandchild
           // SIGTERM/SIGKILL cascade through the existing chain — no new kill path.
-          for await (const event of loop.runTurn(req.prompt, { signal })) {
+          for await (const event of loop.runTurn(childConfig.registry.has("REPL") ? withCodeModeReminder(req.prompt) : req.prompt, { signal })) {
             switch (event.type) {
               case "waiting_for_network":
               case "network_wait_end":

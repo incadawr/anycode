@@ -1784,6 +1784,10 @@ export class AgentLoop {
               buildToolResultMessage(call, forHistory),
               ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
             );
+            const replMadeProgress = call.name === "REPL" && annotated.result?.presentation?.repl?.calls.some(
+              nested => nested.status === "success" && isProductiveToolCall(nested.toolName, this.config.registry),
+            );
+            if (replMadeProgress) this.ceilingProductiveToolCalls += 1;
             if (annotated.status === "success") {
               this.ceilingSuccessfulToolCalls += 1;
               // only non-read-only successes count as PRODUCTIVE
