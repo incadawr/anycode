@@ -230,6 +230,11 @@ const ENTRIES: CatalogProviderEntry[] = [
       // (docs.z.ai spec boxes; the 5.3-Flash page states "Context Length 1M",
       // "Maximum Output Tokens 128K" for the flash/flashx pair).
       // GLM-5.3: $1.4 in / $0.26 cached / $4.4 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
+      // GLM-5.4: released 2026-11-23 on the GLM Coding Plan (model id `glm-5.4`),
+      // the plan's new flagship with image input. It continues the 5.x thinking
+      // line, so it carries 5.3's reasoning fields; context and output follow 5.3.
+      // No per-token price is published yet, so the row has no pricing.
+      { id: "glm-5.4", name: "GLM-5.4", contextWindow: 1_000_000, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" },
       { id: "glm-5.3", pricing: { basisId: "glm-5.3-zai-2026-10-27", input: 1.4, cachedInput: 0.26, cacheWrite: 1.4, output: 4.4 }, name: "GLM-5.3", contextWindow: 1_000_000, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, reasoning: true, effortLevels: ["low", "high", "max"], defaultEffort: "max" },
       // GLM-5.3-Flash: $0.15 in / $0.03 cached / $0.50 out (docs.z.ai/guides/overview/pricing, 2026-10-27).
       { id: "glm-5.3-flash", pricing: { basisId: "glm-5.3-flash-zai-2026-10-27", input: 0.15, cachedInput: 0.03, cacheWrite: 0.15, output: 0.5 }, name: "GLM-5.3 Flash", contextWindow: 1_000_000, usableContextWindow: LARGE_MODEL_USABLE_CONTEXT_TOKENS, maxOutputTokens: 131_072, imageInput: true, reasoning: true, effortLevels: ["low", "high", "max"] },
