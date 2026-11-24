@@ -6621,6 +6621,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // admit/terminal of a detached child (host/session.ts).
             set((state) => ({
               backgroundChildren: message.children,
+              // A Claude abandon is stale once AnyCode children report: the
+              // next drop to 0 is theirs and a real completion.
+              ...(state.engineBackgroundAgents.abandoned ? { engineBackgroundAgents: { ...state.engineBackgroundAgents, abandoned: false } } : {}),
               failedBackgroundChildren: state.failedBackgroundChildren.filter((child) => !message.children.some((item) => item.childSessionId === child.childSessionId)),
               recentBackgroundChildren: [...state.recentBackgroundChildren, ...state.backgroundChildren.filter((child) => !message.children.some((item) => item.childSessionId === child.childSessionId))].slice(-20),
             }));
