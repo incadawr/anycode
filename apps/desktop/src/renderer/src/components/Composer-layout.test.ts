@@ -43,7 +43,7 @@ describe("main window controls", () => {
       }
       expect(result.dark!.text).toBe("rgb(236, 233, 227)");
       expect(result.light!.text).toBe("rgb(28, 26, 23)");
-    } finally { rmSync(directory, {recursive:true, force:true}); }
+    } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 60_000);
 });
 
@@ -115,7 +115,7 @@ describe("cost popover layout", () => {
         expect(cost.right).toBeLessThanOrEqual(cost.popRight);
       }
       expect(result.costs[1]!.text).toBe("cost ≈ $0.0021");
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 40_000);
 
   it.skipIf(!existsSync(chrome))("keeps a long expanded turn on screen and scrolls its body in a short window", () => {
@@ -264,7 +264,7 @@ describe("cost popover layout", () => {
       expect(result.headerVisibleAfterScroll).toBe(true);
       expect(result.scrollTopAfterScroll).toBeGreaterThan(0);
       expect(result.lastRowReachable).toBe(true);
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 60_000);
 
   it.skipIf(!existsSync(chrome))("tints the usage bar warning / danger near the limit", () => {
@@ -311,7 +311,7 @@ describe("cost popover layout", () => {
       expect(danger!.fill).not.toBe(result.accent);
       // …and the two tints stay distinct from each other.
       expect(warning!.fill).not.toBe(danger!.fill);
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 40_000);
 });
 
@@ -425,6 +425,6 @@ describe("composer chip row geometry", () => {
       for (const id of ["start-wide", "start-narrow"]) {
         expect(result[id]!.inkRight, id).toBeLessThanOrEqual(result[id]!.sendLeft + 0.6);
       }
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 60_000);
 });

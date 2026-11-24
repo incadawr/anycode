@@ -101,7 +101,7 @@ describe("UI audit C8/C9/C12 — computed styles over the shipped CSS", () => {
       expect(result.sidebar.currentBg).not.toBe(result.sidebar.openBg);
       expect(result.sidebar.open).toContain("2px");
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   }, 30_000);
 });

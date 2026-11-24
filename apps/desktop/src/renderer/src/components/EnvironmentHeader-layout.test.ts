@@ -24,7 +24,7 @@ it.skipIf(!existsSync(chrome))("preserves the branch after the folder collapses 
       expect(row.branch, JSON.stringify(rows)).toBeGreaterThan(20); expect(row.nowrap).toBe("nowrap"); expect(row.overflow).toBe(false);
     }
     expect(rows[2]!.branch).toBeLessThan(rows[2]!.scroll);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 }, 60000);
 
 it("removes the separate header chips while keeping child worktree policy controls", () => {
@@ -45,7 +45,7 @@ it.skipIf(!existsSync(chrome))("keeps the child worktree label within its trigge
     for (const row of rows) expect(row.scroll).toBeLessThanOrEqual(row.width + 1);
     for (const row of rows.slice(0, 2)) expect(row.label + 1).toBeGreaterThanOrEqual(row.labelScroll);
     expect(rows[2]!.label).toBeLessThan(rows[2]!.labelScroll);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 }, 60000);
 
 // The widths below are calibrated against the macOS system UI font. Linux CI
@@ -75,7 +75,7 @@ it.skipIf(!existsSync(chrome) || process.platform !== "darwin")("keeps crowded h
       }
     }
     }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 }, 60000);
 
 it.skipIf(!existsSync(chrome))("keeps both header menus within the viewport across layouts", async () => {
@@ -96,5 +96,5 @@ it.skipIf(!existsSync(chrome))("keeps both header menus within the viewport acro
       expect(menu.left, row.key).toBeGreaterThanOrEqual(row.gutter - 1);
       expect(menu.right, row.key).toBeLessThanOrEqual(row.viewport - row.gutter + 1);
     }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 }, 60000);

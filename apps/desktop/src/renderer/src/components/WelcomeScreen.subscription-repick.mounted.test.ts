@@ -273,5 +273,5 @@ it.skipIf(!existsSync(chrome))("lays out the actual connection buttons in order 
         expect(rows[4]!.bottom).toBeLessThanOrEqual(rows[5]!.y);
       }
     }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 }, 60000);

@@ -121,7 +121,7 @@ describe("composer bottom row layout", () => {
         }
       }
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   }, 60_000);
 });
