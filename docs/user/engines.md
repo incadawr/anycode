@@ -117,8 +117,8 @@ verifies sha512 integrity before unpacking, and does not run npm lifecycle
 scripts. Managed installs can auto-upgrade to the recommended version; binaries
 you selected yourself are never changed.
 
-The bundled Codex support range is `>=0.144.0 <0.172.0`,
-recommended 0.171.0. The support manifest refreshes at most every six hours.
+The bundled Codex support range is `>=0.144.0 <0.173.0`,
+recommended 0.172.0. The support manifest refreshes at most every six hours.
 Read the pane for the current verdict and recommendation. Accepting risk for
 an unsupported version applies to that version only. Claude requires at least
 2.1.212; its doctor uses initialization rather than a model turn. AnyCode does
