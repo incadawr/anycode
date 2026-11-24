@@ -3756,7 +3756,7 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
     await engine.dispose("session-close");
   });
 
-  it("reports the background agent count to the detached sink, the 0 arriving before the card's end", async () => {
+  it("reports the background agent count to the detached sink, the 0 held past the card's end", async () => {
     const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const engine = engineWith(transport);
     const detached: AgentEvent[] = [];
@@ -3766,14 +3766,16 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
     for (const frame of ownerFrames("two")) transport.enqueue(frame);
     await collect(engine.runTurn("second", { signal: new AbortController().signal }));
 
-    const counts = detached.filter((event) => event.type === "engine_background_agents");
-    expect(counts).toEqual([
+    const counts = (): AgentEvent[] => detached.filter((event) => event.type === "engine_background_agents");
+    // The census settles on task_updated, one line before the notification
+    // that ends the card; its 0 is reported once BACKGROUND_AGENTS_ZERO_HOLD_MS has passed.
+    await vi.waitFor(() => expect(counts()).toEqual([
       { type: "engine_background_agents", count: 1, abandoned: false },
       { type: "engine_background_agents", count: 0, abandoned: false },
-    ]);
-    // The census settles on task_updated, one line before the notification that ends the card.
-    expect(detached.indexOf(counts[1]!)).toBeLessThan(detached.findIndex((event) => event.type === "subagent_end"));
+    ]));
+    expect(detached.indexOf(counts()[1]!)).toBeGreaterThan(detached.findIndex((event) => event.type === "subagent_end"));
     await engine.dispose("session-close");
+    expect(counts()).toHaveLength(2);
   });
 
   it("the CLI's own report turn after the agent finishes is still absorbed as a foreign turn", async () => {

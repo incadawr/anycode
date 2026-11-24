@@ -2667,6 +2667,7 @@ export class ClaudeEngine implements SessionEngine {
     this.replacementAbort?.abort(new ClaudeTransportAbortError("claude_transport_retired"));
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
     this.settleOrphanedTasks();
+    this.subagentTasks.dispose();
     // epoch bump + wake stops the idle reader; the disposal wait
     // settles a waiting owner turn, which terminalizes cancelled.
     this.stopIdleReader();
