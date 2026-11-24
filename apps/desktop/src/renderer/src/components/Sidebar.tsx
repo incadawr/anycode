@@ -104,6 +104,9 @@ function BackgroundAgentsBadge({ count }: { count: number }) {
  * host-exited branch renders byte-identical markup to the pre-R10 slot
  * (`<Dot className="sidebar-row-dot" />`) so the existing danger-dot
  * sign-off carries over unchanged.
+ *
+ * The background-agents badge is a separate element next to this indicator,
+ * not a status kind: it coexists with the turn spinner and the dots.
  */
 function RowStatusIndicator({ kind }: { kind: RowStatusKind | null }) {
   if (kind === null) {
