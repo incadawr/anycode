@@ -63,6 +63,25 @@ describe("agent census over real captures", () => {
   it("w0-23 (nested agent restarted, same task_id, new run_id) reads 0,1,2,1,0,1,0", () => {
     expect(replay("w0-23-agent-restarted-by-own-task.jsonl")).toEqual([0, 1, 2, 1, 0, 1, 0]);
   });
+
+  it("w0-23 keeps counting the nested agent while it waits on its own background Bash", () => {
+    const list = frames("w0-23-agent-restarted-by-own-task.jsonl");
+    const counts: number[] = [];
+    let census: AgentCensus = EMPTY_AGENT_CENSUS;
+    for (const frame of list) {
+      census = reduceAgentCensus(census, frame);
+      counts.push(countWorkingBackgroundAgents(census));
+    }
+    const field = (frame: ClaudeStreamMessage, key: string): unknown => (frame as Record<string, unknown>)[key];
+    const settles = (taskId: string) => list.findIndex((frame) =>
+      field(frame, "subtype") === "task_updated" && field(frame, "task_id") === taskId && (field(frame, "patch") as { status?: string }).status === "completed");
+    const agentSettle = settles("ac68cc72eaa3f0ca0");
+    const bashEnd = settles("bdcsig06x");
+    expect(agentSettle).toBeGreaterThan(0);
+    expect(bashEnd).toBeGreaterThan(agentSettle);
+    expect(counts.slice(agentSettle, bashEnd)).toEqual(Array(bashEnd - agentSettle).fill(1));
+    expect(counts[bashEnd]).toBe(0);
+  });
 });
 
 describe("agent census rules", () => {
@@ -156,6 +175,113 @@ describe("agent census rules", () => {
     reduceAgentCensus(census, system("background_tasks_changed", { tasks: [] }));
     reduceAgentCensus(census, system("task_updated", { task_id: "b", patch: { is_backgrounded: true } }));
     expect(JSON.stringify([...census])).toBe(before);
+  });
+
+  it("does not count a main-session background Bash", () => {
+    expect(countWorkingBackgroundAgents(fold(started("b", { task_type: "local_bash", is_backgrounded: true })))).toBe(0);
+    const census = fold(started("a"), system("task_notification", { task_id: "a", status: "completed" }), started("b", { task_type: "local_bash" }));
+    expect(countWorkingBackgroundAgents(census)).toBe(0);
+  });
+
+  it("keeps counting a settled background agent while its own background Bash runs", () => {
+    const census = fold(
+      started("a", { run_id: "r1" }),
+      started("b", { task_type: "local_bash", run_id: "rb", parent_task_id: "a", is_backgrounded: true, owned_by_subagent: true }),
+      system("task_updated", { task_id: "a", run_id: "r1", patch: { status: "completed" } }),
+    );
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
+    for (const end of [
+      system("task_updated", { task_id: "b", run_id: "rb", patch: { status: "completed" } }),
+      system("task_notification", { task_id: "b", run_id: "rb", status: "failed" }),
+      system("background_tasks_changed", { tasks: [] }),
+    ]) {
+      const ended = reduceAgentCensus(census, end);
+      expect(countWorkingBackgroundAgents(ended)).toBe(0);
+      expect(ended.has("b")).toBe(false);
+    }
+  });
+
+  it("a foreground Bash does not keep its settled owner counted", () => {
+    const census = fold(
+      started("a"),
+      started("b", { task_type: "local_bash", parent_task_id: "a", is_backgrounded: false }),
+      system("task_notification", { task_id: "a", status: "completed" }),
+    );
+    expect(countWorkingBackgroundAgents(census)).toBe(0);
+  });
+
+  it("a foreground agent's background Bash is not counted", () => {
+    const census = fold(started("a", { is_backgrounded: false }), started("b", { task_type: "local_bash", parent_task_id: "a" }));
+    expect(countWorkingBackgroundAgents(census)).toBe(0);
+    expect(countWorkingBackgroundAgents(reduceAgentCensus(census, system("task_notification", { task_id: "a", status: "completed" })))).toBe(0);
+  });
+
+  it("a Bash backgrounded by a patch keeps its settled background owner counted", () => {
+    const census = fold(
+      started("a"),
+      started("b", { task_type: "local_bash", run_id: "rb", parent_task_id: "a", is_backgrounded: false }),
+      system("task_updated", { task_id: "b", run_id: "rb", patch: { is_backgrounded: true } }),
+      system("task_notification", { task_id: "a", status: "completed" }),
+    );
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
+    expect(countWorkingBackgroundAgents(reduceAgentCensus(census, system("task_notification", { task_id: "b", run_id: "rb", status: "completed" })))).toBe(0);
+  });
+
+  it("background_tasks_changed omitting the command releases the waiting agent", () => {
+    const census = fold(
+      started("a"),
+      started("b", { task_type: "local_bash", parent_task_id: "a" }),
+      system("task_notification", { task_id: "a", status: "completed" }),
+    );
+    expect(reduceAgentCensus(census, system("background_tasks_changed", { tasks: [{ task_id: "b" }] }))).toBe(census);
+    expect(countWorkingBackgroundAgents(reduceAgentCensus(census, system("background_tasks_changed", { tasks: [{ task_id: "other" }] })))).toBe(0);
+  });
+
+  it("an agent restarted while waiting counts once", () => {
+    const census = fold(
+      started("a", { run_id: "r1" }),
+      started("b", { task_type: "local_bash", parent_task_id: "a" }),
+      system("task_notification", { task_id: "a", run_id: "r1", status: "completed" }),
+      started("a", { run_id: "r2" }),
+    );
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
+    expect(census.get("a")).toEqual({ kind: "agent", runId: "r2", backgrounded: true, running: true });
+  });
+
+  it("a running command of a background parent does not make it delegating", () => {
+    const census = fold(started("a"), started("b", { task_type: "local_bash", parent_task_id: "a" }));
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
+    const foreground = fold(started("a"), started("b", { task_type: "local_bash", parent_task_id: "a", is_backgrounded: false }));
+    expect(countWorkingBackgroundAgents(foreground)).toBe(1);
+  });
+
+  it("ignores a monitor owned by an agent", () => {
+    const census = fold(started("a"), started("m", { task_type: "monitor", parent_task_id: "a", owned_by_subagent: true }));
+    expect(census.has("m")).toBe(false);
+    expect(countWorkingBackgroundAgents(reduceAgentCensus(census, system("task_notification", { task_id: "a", status: "completed" })))).toBe(0);
+  });
+
+  it("ignores a command end frame of an earlier run", () => {
+    const census = fold(
+      started("a"),
+      started("b", { task_type: "local_bash", run_id: "r2", parent_task_id: "a" }),
+      system("task_notification", { task_id: "a", status: "completed" }),
+    );
+    expect(reduceAgentCensus(census, system("task_updated", { task_id: "b", run_id: "r1", patch: { status: "completed" } }))).toBe(census);
+    expect(reduceAgentCensus(census, system("task_notification", { task_id: "b", run_id: "r1", status: "completed" }))).toBe(census);
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
+  });
+
+  it("the owner of a running command survives the 500 cap", () => {
+    let census = fold(started("owner"), started("cmd", { task_type: "local_bash", parent_task_id: "owner" }), system("task_notification", { task_id: "owner", status: "completed" }));
+    for (let i = 0; i < 600; i++) {
+      census = reduceAgentCensus(census, started(`t${i}`));
+      census = reduceAgentCensus(census, system("task_notification", { task_id: `t${i}`, status: "completed" }));
+    }
+    expect([...census.values()].filter((entry) => entry.kind === "agent" && !entry.running)).toHaveLength(500);
+    expect(census.has("owner")).toBe(true);
+    expect(census.has("cmd")).toBe(true);
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
   });
 
   it("keeps at most 500 settled entries, never evicting an ancestor of a running entry", () => {
