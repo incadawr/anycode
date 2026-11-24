@@ -916,6 +916,11 @@ export class TurnTranslator {
     return { toolCallId: item.id as string, toolName: `codex:collab:${verb}`, input };
   }
 
+  private pendingChildPresentation(cardId: string): { subagentOutcomePending: true } | undefined {
+    if (this.collab.hasObservedChild(cardId) && !this.collab.hasTerminal(cardId)) return { subagentOutcomePending: true };
+    return undefined;
+  }
+
   private collabCallOutcome(cardId: string, item: Record<string, unknown>): ToolCallOutcome {
     const status: ToolCallStatus = item.status === "failed" ? "error" : "success";
     const modelText = status === "success" ? "" : "Codex spawn call failed";
@@ -925,7 +930,9 @@ export class TurnTranslator {
       status,
       modelText,
       durationMs: 0,
-      result: status === "success" ? { ok: true, output: "" } : { ok: false, error: modelText },
+      result: status === "success" ? { ok: true, output: "" } : {
+        ok: false, error: modelText, presentation: this.pendingChildPresentation(cardId),
+      },
     };
   }
 
@@ -1163,7 +1170,10 @@ export class TurnTranslator {
           status: "cancelled",
           modelText: "Codex turn ended before this tool completed",
           durationMs: 0,
-          result: { ok: false, error: "Codex turn ended before this tool completed", errorKind: "cancelled" },
+          result: {
+            ok: false, error: "Codex turn ended before this tool completed", errorKind: "cancelled",
+            ...(projection.toolName === AGENT_TOOL_NAME ? { presentation: this.pendingChildPresentation(id) } : {}),
+          },
         },
       });
     }

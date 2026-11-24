@@ -1260,6 +1260,7 @@ function collabTests(): void {
       const events = translator.onNotification(completeOf(collabItem({ status: "failed", agentsStates: { "child-1": { status: "running" } } })));
       expect(events.some((event) => event.type === "subagent_end")).toBe(false);
       expect((evOf(events, "tool_result")!.outcome as { status: string }).status).toBe("error");
+      expect(evOf(events, "tool_result")).toHaveProperty("outcome.result.presentation.subagentOutcomePending", true);
     });
 
     it("empty/multiple receiver ids, duplicates and malformed states never throw and keep the card visible", () => {
@@ -1404,6 +1405,16 @@ function collabTests(): void {
   });
 
   describe("— parent turn boundary vs live child", () => {
+    it("cancels an unacknowledged spawn without marking its child active", () => {
+      const translator = fresh();
+      translator.onNotification(startOf(collabItem()));
+      const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "interrupted" } } });
+      const result = evOf(events, "tool_result");
+      expect(result).toMatchObject({ outcome: { toolName: "Agent", status: "cancelled" } });
+      expect(result).not.toHaveProperty("outcome.result.presentation.subagentOutcomePending");
+      expect(evOf(events, "subagent_end")).toBeUndefined();
+    });
+
     it("a parent turn ending with a live child emits no inferred subagent_end; the cancel sweep closes only the open outer call", () => {
       const index = new CollabAgentCardIndex();
       const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, collab: index });
@@ -1414,6 +1425,7 @@ function collabTests(): void {
       expect(cancelledResults).toHaveLength(1);
       expect((evOf(cancelledResults, "tool_result")!.outcome as { status: string; toolCallId: string }).status).toBe("cancelled");
       expect((evOf(cancelledResults, "tool_result")!.outcome as { toolCallId: string }).toolCallId).toBe("spawn-1");
+      expect(cancelledResults[0]).toHaveProperty("outcome.result.presentation.subagentOutcomePending", true);
       // The child correlation survives the parent turn for a later observation.
       expect(index.cardFor("child-1")).toBe("spawn-1");
       const turn2 = new TurnTranslator({ threadId: THREAD_ID, turnId: "turn-2", turn: 2, collab: index });

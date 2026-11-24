@@ -3124,13 +3124,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     }
 
     /** Patches the tool_call block matching `toolCallId` in place (no-op if it isn't in the transcript yet). */
-    function patchToolCall(toolCallId: string, patch: Partial<ToolCallBlock>): void {
+    function patchToolCall(toolCallId: string, patch: Partial<ToolCallBlock>, failedSpawn: boolean): void {
       flushDeltas();
       set((state) => ({
-        ...(patch.subagent?.final ? settledSubagent(state, toolCallId) : {}),
-        transcript: state.transcript.map((block) =>
-          block.kind === "tool_call" && block.toolCallId === toolCallId ? { ...block, ...patch } : block,
-        ),
+        ...(patch.subagent?.final || failedSpawn ? settledSubagent(state, toolCallId) : {}),
+        transcript: state.transcript.map(block => {
+          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId) return block;
+          const updated = { ...block, ...patch };
+          if (failedSpawn && updated.subagent?.waiting) {
+            updated.subagent = { ...updated.subagent };
+            delete updated.subagent.waiting;
+          }
+          return updated;
+        }),
       }));
     }
 
@@ -3197,6 +3203,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         const index = state.transcript.findIndex(block => block.kind === "tool_call" && block.toolCallId === toolCallId);
         const block = state.transcript[index];
         if (block?.kind !== "tool_call" || block.subagent?.final || state.liveSubagents.has(toolCallId)) return state;
+        if (block.status === "error" || block.status === "cancelled") return state;
         const transcript = state.transcript.slice();
         transcript[index] = {
           ...block,
@@ -3262,22 +3269,22 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      */
     function patchSubagentActivity(toolCallId: string, toolName: string, summary: string): void {
       flushDeltas();
-      set((state) => ({
-        transcript: state.transcript.map((block) => {
-          if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
-            return block;
-          }
-          const activity = [...block.subagent.activity, { toolName, summary }];
-          const overflow = activity.length - SUBAGENT_ACTIVITY_RING;
-          const ringed = overflow > 0 ? activity.slice(overflow) : activity;
-          const activityDropped = block.subagent.activityDropped + Math.max(overflow, 0);
-          // Activity is a confirmed sign of life: the stall report is stale
-          // the moment a row lands (follow-up slice).
-          const subagent = { ...block.subagent, activity: ringed, activityDropped };
-          delete subagent.stalled;
-          return { ...block, subagent };
-        }),
-      }));
+      set(state => {
+        const index = state.transcript.findIndex(block => block.kind === "tool_call" && block.toolCallId === toolCallId);
+        const block = state.transcript[index];
+        if (block?.kind !== "tool_call" || !block.subagent || block.subagent.final !== null) return state;
+        const activity = [...block.subagent.activity, { toolName, summary }];
+        const overflow = Math.max(0, activity.length - SUBAGENT_ACTIVITY_RING);
+        const subagent = { ...block.subagent, activity: activity.slice(overflow), activityDropped: block.subagent.activityDropped + overflow };
+        delete subagent.stalled;
+        const transcript = state.transcript.slice();
+        transcript[index] = { ...block, subagent };
+        // A later turn can be the first to observe a Codex child whose spawn was interrupted.
+        if (block.status === "cancelled" && subagent.engine === "codex" && !state.liveSubagents.has(toolCallId)) {
+          return { transcript, liveSubagents: new Set(state.liveSubagents).add(toolCallId) };
+        }
+        return { transcript };
+      });
     }
 
     /**
@@ -3314,6 +3321,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           if (block.kind !== "tool_call" || block.toolCallId !== toolCallId || !block.subagent || block.subagent.final !== null) {
             return block;
           }
+          if (waiting && (block.status === "error" || block.status === "cancelled") && !state.liveSubagents.has(toolCallId)) return block;
           matched = true;
           const subagent = { ...block.subagent };
           if (waiting) {
@@ -4379,6 +4387,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             ? decodeWorkflowCardSnapshot(presentedWorkflow, { toolCallId: event.outcome.toolCallId, toolName: event.outcome.toolName })
             : null;
           const repl = decodeReplSnapshot(event.outcome.toolName, event.outcome.result?.presentation?.repl);
+          // A successful spawn can return while its child continues in the background.
+          const failedSpawn = event.outcome.toolName === "Agent" && !event.outcome.result?.presentation?.subagentOutcomePending
+            && (event.outcome.status === "error" || event.outcome.status === "cancelled");
           patchToolCall(event.outcome.toolCallId, {
             status: event.outcome.status,
             modelText: event.outcome.modelText,
@@ -4387,7 +4398,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             ...(decodedSubagent !== null ? { subagent: projectSubagentCard(decodedSubagent) } : {}),
             ...(decodedWorkflow !== null ? { workflow: projectWorkflowCard(decodedWorkflow) } : {}),
             ...(repl === undefined ? {} : { repl }),
-          });
+          }, failedSpawn);
           return;
         }
 

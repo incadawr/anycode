@@ -4130,6 +4130,42 @@ describe("desktop store — persisted subagent card (slice S1 W5, CUT-S1 §3 W5)
     expect(store.getState().transcript.filter((b) => b.kind === "tool_call" && b.toolCallId === "call-1")).toHaveLength(1);
   });
 
+  it.each(["error", "cancelled"] as const)("clears live and waiting on an Agent %s without an end or snapshot", status => {
+    const store = createDesktopStore(createManualScheduler().scheduler);
+    beginAgentToolCall(store, "turn-1", "call");
+    const send = (event: Extract<HostToUiMessage, { type: "agent_event" }>["event"]) =>
+      store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-1", event });
+    const start = { type: "subagent_start", toolCallId: "call", agentType: "explore", description: "scan" } as const;
+    const attention = { type: "subagent_attention", toolCallId: "call", waiting: true } as const;
+    send(start);
+    send(attention);
+    expect([...store.getState().waitingSubagents]).toEqual(["call"]);
+    send({ type: "tool_result", outcome: { toolCallId: "call", toolName: "Agent", status, modelText: "spawn failed", durationMs: 1 } });
+    send(start);
+    send(attention);
+    expect(store.getState().liveSubagents.size).toBe(0);
+    expect(store.getState().waitingSubagents.size).toBe(0);
+  });
+
+  it.each([
+    { status: "success", description: "a background spawn acknowledgement" },
+    { status: "error", pending: true, description: "a failed Codex spawn with an observed child" },
+    { status: "cancelled", pending: true, description: "an interrupted Codex spawn with an observed child" },
+  ] as const)("keeps the child live after $description until its own end", row => {
+    const store = createDesktopStore(createManualScheduler().scheduler);
+    beginAgentToolCall(store, "turn-1", "call");
+    const send = (event: Extract<HostToUiMessage, { type: "agent_event" }>["event"]) =>
+      store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-1", event });
+    send({ type: "subagent_start", toolCallId: "call", agentType: "explore", description: "scan" });
+    send({ type: "tool_result", outcome: {
+      toolCallId: "call", toolName: "Agent", status: row.status, modelText: "", durationMs: 1,
+      ...("pending" in row ? { result: { ok: false, presentation: { subagentOutcomePending: true } } } : {}),
+    } });
+    expect([...store.getState().liveSubagents]).toEqual(["call"]);
+    send({ type: "subagent_end", toolCallId: "call", status: "completed", turns: 1, durationMs: 2 });
+    expect(store.getState().liveSubagents.size).toBe(0);
+  });
+
   it("settles live activity and approval from the terminal tool result when subagent_end was lost", () => {
     const store = createDesktopStore(createManualScheduler().scheduler);
     const turnId = "turn-1";
@@ -8776,6 +8812,24 @@ describe("desktop store — Codex collab feed", () => {
     expect(block.subagent).toMatchObject({ agentType: "codex subagent", description: "do work", model: "gpt-native", engine: "codex", final: null });
     expect(block.subagent!.activity.length).toBeGreaterThan(0);
     expect(cardBlocks(store, "spawn-1")).toHaveLength(1);
+  });
+
+  it("restores sidebar activity when Codex first observes the child after the spawn call was interrupted", () => {
+    const store = boot("turn-1");
+    const collab = new CollabAgentCardIndex();
+    const first = new TurnTranslator({ threadId: THREAD, turnId: "turn-1", turn: 1, collab });
+    feed(store, "turn-1", first.onNotification(startedN("turn-1", spawnItem({ agentsStates: {} }))));
+    feed(store, "turn-1", first.finishTerminal("cancelled"));
+    expect(store.getState().liveSubagents.size).toBe(0);
+
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "req-2", turnId: "turn-2" });
+    const next = new TurnTranslator({ threadId: THREAD, turnId: "turn-2", turn: 2, collab });
+    feed(store, "turn-2", next.onNotification(startedN("turn-2", waitItem({
+      status: "inProgress", agentsStates: { "child-1": { status: "running" } },
+    }))));
+    expect([...store.getState().liveSubagents]).toEqual(["spawn-1"]);
+    feed(store, "turn-2", next.onNotification(completedN("turn-2", waitItem())));
+    expect(store.getState().liveSubagents.size).toBe(0);
   });
 
   it("patches the ORIGINAL turn-1 Agent block from turn-2 wait events without duplicating it, and gives wait its own card (no foreign-turn exception)", () => {
