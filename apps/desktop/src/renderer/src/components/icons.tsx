@@ -246,7 +246,7 @@ export function Spinner(props: IconProps) {
 export function DashedRing(props: IconProps) {
   return (
     <Icon {...props}>
-      <circle cx="8" cy="8" r="6" strokeDasharray="3 3.1" />
+      <circle cx="8" cy="8" r="6" pathLength="12" strokeDasharray="1 1" />
     </Icon>
   );
 }
