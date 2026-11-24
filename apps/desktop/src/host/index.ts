@@ -561,6 +561,7 @@ import { decorateEngineBroker, type EngineClassifierBoot } from "./engine-classi
 import { createSnapshotHook } from "./snapshot-hook.js";
 import { TerminalManager } from "./terminal.js";
 import { createWirePort } from "./wire.js";
+import { shouldForwardClaudeDetachedEvent } from "./claude-detached-forwarding.js";
 import {
   cleanupOwnedWorktreeResource,
   WorktreeLifecycleService,

@@ -249,3 +249,46 @@ it("answers a subagent transcript request from the Claude engine's own session f
     expect(received).toContainEqual({ type: "claude_subagent_transcript", requestId: "r3", toolCallId: "toolu_x", result: { ok: false, reason: "unavailable" } });
   } finally { await close(); await rm(root, { recursive: true, force: true }); }
 });
+
+const backgroundAgents = (count: number) => ({ type: "engine_background_agents" as const, count, abandoned: false });
+const countEvents = (received: HostToUiMessage[]) => received.filter((m) => m.type === "agent_event" && m.event.type === "engine_background_agents");
+
+it("delivers the count live outside the replay ring", async () => {
+  const { received, send, settle, close, session } = await wireFixture();
+  try {
+    await settle();
+    received.length = 0;
+    session.emitDetachedSubagentEvent(backgroundAgents(2));
+    await settle();
+    expect(countEvents(received)).toEqual([{ type: "agent_event", turnId: "detached-subagent", event: backgroundAgents(2) }]);
+    received.length = 0;
+    send({ type: "ui_ready" });
+    await settle();
+    // one replayed copy (the remembered count), not a ring copy plus a replay
+    expect(countEvents(received)).toHaveLength(1);
+  } finally { await close(); }
+});
+
+it("ui_ready delivers exactly one count event and no history", async () => {
+  const { received, send, settle, close, session } = await wireFixture();
+  try {
+    for (const count of [1, 2, 1]) session.emitDetachedSubagentEvent(backgroundAgents(count));
+    await settle();
+    received.length = 0;
+    send({ type: "ui_ready" });
+    await settle();
+    expect(countEvents(received)).toEqual([{ type: "agent_event", turnId: "detached-subagent", event: backgroundAgents(1) }]);
+  } finally { await close(); }
+});
+
+it.each([[[0]], [[1, 0]]])("ui_ready sends no count event when the count is 0 (%j)", async (counts) => {
+  const { received, send, settle, close, session } = await wireFixture();
+  try {
+    for (const count of counts) session.emitDetachedSubagentEvent(backgroundAgents(count));
+    await settle();
+    received.length = 0;
+    send({ type: "ui_ready" });
+    await settle();
+    expect(countEvents(received)).toEqual([]);
+  } finally { await close(); }
+});
