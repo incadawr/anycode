@@ -28,8 +28,6 @@ export function backgroundHeading(running: number, failed = 0): string {
   return `${running} running · ${failed} failed`;
 }
 
-export { isFailedBackgroundChild };
-
 /**
  * GitHub #17 slice E: the optional progress line for one child.
  * Only facts the child actually reported appear — an engine that reports no

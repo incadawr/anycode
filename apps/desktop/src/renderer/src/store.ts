@@ -1523,7 +1523,7 @@ export interface DesktopState {
    * Their parent turn has already ended, so this is the only live sign of them.
    */
   backgroundChildren: WireBackgroundChild[];
-  /** The Claude CLI's background agent count as the host last reported it; `abandoned` = the session ended with agents unsettled. */
+  /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
   engineBackgroundAgents: { count: number; abandoned: boolean };
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
@@ -1936,7 +1936,7 @@ interface SessionSlice {
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
-  /** The Claude CLI's background agent count as the host last reported it; `abandoned` = the session ended with agents unsettled. */
+  /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
   engineBackgroundAgents: { count: number; abandoned: boolean };
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];

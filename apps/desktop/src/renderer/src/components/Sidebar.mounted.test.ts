@@ -134,7 +134,9 @@ it("shows the background agents badge on an open row, before the spinner, with t
     const spinner = row.querySelector(".sidebar-row-spinner")!;
     expect(badge.compareDocumentPosition(spinner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents");
-    expect(container.querySelector(".sidebar-row-resumable .sidebar-row-bg-agents")).toBeNull();
+    const resumable = container.querySelector(".sidebar-row-resumable");
+    expect(resumable).not.toBeNull();
+    expect(resumable!.querySelector(".sidebar-row-bg-agents")).toBeNull();
   } finally { await cleanup(); }
 });
 

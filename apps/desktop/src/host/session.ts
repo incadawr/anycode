@@ -1328,7 +1328,7 @@ export class Session {
   private readonly presentationJournal: PresentationJournal;
   private readonly detachedCardStates = new Map<string, { start?: WireAgentEvent; latest?: WireAgentEvent; finished: boolean }>();
   private readonly claudeBackgroundTasks = new Map<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>();
-  /** Latest Claude background-agent count; replayed as a single event, never as history. */
+  /** Latest background-agent count of the engine (Claude CLI today); replayed as a single event, never as history. */
   private engineBackgroundAgentCount = 0;
   private claudeTurnPreview: { turnId: string; event: Extract<WireAgentEvent, { type: "claude_turn_preview" }> } | null = null;
   private readonly outbound: Outbound;

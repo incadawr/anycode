@@ -15,6 +15,9 @@
  * the engine is idle — which is why this state lives for the engine's
  * lifetime rather than one turn.
  *
+ * The tracker also keeps the agent census (agent-census.ts) over the same
+ * frames and reports the count of background agents as it changes.
+ *
  * Only `local_agent` tasks are mapped: other task types (a background Bash
  * command) already own a card of their own and must not turn into one.
  */
@@ -95,6 +98,9 @@ export class ClaudeSubagentTasks {
    * original Agent call (the child frames' parent) and the cumulative count.
    */
   private readonly history = new Map<string, { agentCall: string; toolUses: number }>();
+  /** Immutable; only ever reassigned. Independent of the card state: `detachLive` leaves it alone. */
+  private census: AgentCensus = EMPTY_AGENT_CENSUS;
+  private lastCount = 0;
 
   /**
    * @param detach receives the events of a task that outlived its owner turn
@@ -106,10 +112,6 @@ export class ClaudeSubagentTasks {
     /** Receives the number of agents working in the background whenever it changes. */
     private readonly onBackgroundAgents: (update: { count: number; abandoned: boolean }) => void = () => {},
   ) {}
-
-  /** Immutable; only ever reassigned. Independent of the card state: `detachLive` leaves it alone. */
-  private census: AgentCensus = EMPTY_AGENT_CENSUS;
-  private lastCount = 0;
 
   /** Check before translating: translation consumes a terminal task. */
   knowsNotification(frame: ClaudeStreamMessage): boolean {

@@ -28,7 +28,7 @@
  *
  * Factory-plus-singleton, mirroring tabs-store.ts: `createTabStatusStore`
  * for test isolation, `useTabStatusStore` for the app. Pure renderer module:
- * imports zustand + store.ts TYPES only — safe in the node test env, safe to
+ * imports zustand, store.ts TYPES and the pure background-children.js only — safe in the node test env, safe to
  * import from Sidebar.tsx (which must never import tab-registry.ts and its
  * port/xterm graph).
  */
@@ -61,9 +61,9 @@ export interface CoarseStatus {
   turn: TurnState["status"];
   needsApproval: boolean;
   live: boolean;
-  /** Claude CLI background agents + running detached children, regardless of liveness (`applyCoarse` gates it). */
+  /** The engine's background agents (Claude CLI today) plus running detached children, regardless of liveness (`applyCoarse` gates it). */
   backgroundAgents: number;
-  /** The session ended with Claude agents unsettled: their drop to 0 is not a completion. */
+  /** The session ended with the engine's agents unsettled: their drop to 0 is not a completion. */
   backgroundAgentsAbandoned: boolean;
 }
 
@@ -143,7 +143,7 @@ export interface TabStatusState {
    * return WITHOUT calling set() — no zustand notification, no Sidebar
    * re-render. tab-registry.ts calls this on EVERY setState of every tab
    * store; the per-call cost on the bail path is one Map.get plus at most
-   * four boolean compares.
+   * three boolean compares and one number compare.
    *
    * Transition semantics:
    *  - running       = next.live && next.turn === "running"
