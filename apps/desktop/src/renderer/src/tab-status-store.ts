@@ -33,7 +33,6 @@
  * port/xterm graph).
  */
 import { create } from "zustand";
-import { countRunningBackgroundChildren } from "./background-children.js";
 import type { DesktopState, TurnState } from "./store.js";
 
 /** One tab's mirrored coarse status — the exact roadmap tuple. */
@@ -87,17 +86,17 @@ export function isTurnCompletion(prev: TurnState["status"], next: TurnState["sta
  * `patchSubagentAttention`/`patchSubagentEnd`, store.ts) rather than scanning
  * the transcript: this function runs on EVERY setState of every tab store
  * (tab-registry.ts's per-tab mirror subscription), including high-frequency
- * stream deltas, so it must stay O(1) — the only scan is the count over the
- * small `backgroundChildren` array.
+ * stream deltas, so it must stay O(1) — the running detached-children count is
+ * kept in `runningBackgroundChildren` rather than recomputed here.
  */
 export function deriveCoarse(
-  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "engineBackgroundAgents" | "backgroundChildren">,
+  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "backgroundChildren" | "engineBackgroundAgents" | "runningBackgroundChildren">,
 ): CoarseStatus {
   return {
     turn: state.liveSubagents.size || state.backgroundChildren.length ? "running" : state.turn.status,
     needsApproval: state.permission !== null || state.waitingSubagents.size > 0,
     live: state.connection === "ready",
-    backgroundAgents: state.engineBackgroundAgents.count + countRunningBackgroundChildren(state.backgroundChildren),
+    backgroundAgents: state.engineBackgroundAgents.count + state.runningBackgroundChildren,
     backgroundAgentsAbandoned: state.engineBackgroundAgents.abandoned,
   };
 }

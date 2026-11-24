@@ -36,10 +36,10 @@ function deriveInput(
   permission: DesktopState["permission"],
   waitingSubagents: ReadonlySet<string> = new Set(),
   engineBackgroundAgents: DesktopState["engineBackgroundAgents"] = { count: 0, abandoned: false },
-  backgroundChildren: DesktopState["backgroundChildren"] = [],
+  runningBackgroundChildren: DesktopState["runningBackgroundChildren"] = 0,
 ): Pick<
   DesktopState,
-  "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "engineBackgroundAgents" | "backgroundChildren"
+  "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "backgroundChildren" | "engineBackgroundAgents" | "runningBackgroundChildren"
 > {
   return {
     turn: { status: turn, turnId: null, requestId: null },
@@ -48,7 +48,7 @@ function deriveInput(
     waitingSubagents,
     liveSubagents: new Set<string>(),
     engineBackgroundAgents,
-    backgroundChildren,
+    runningBackgroundChildren,
   };
 }
 
@@ -286,10 +286,8 @@ describe("tab-status-store — pure projections", () => {
 
 describe("tab-status-store — background agents", () => {
   it("deriveCoarse sums Claude agents and running detached children", () => {
-    const running = { childSessionId: "a" } as DesktopState["backgroundChildren"][number];
-    const failed = { childSessionId: "b", endedAt: 5 } as DesktopState["backgroundChildren"][number];
     const derived = deriveCoarse(
-      deriveInput("idle", "ready", null, new Set(), { count: 2, abandoned: true }, [running, failed]),
+      deriveInput("idle", "ready", null, new Set(), { count: 2, abandoned: true }, 1),
     );
     expect(derived.backgroundAgents).toBe(3);
     expect(derived.backgroundAgentsAbandoned).toBe(true);

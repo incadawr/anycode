@@ -8404,6 +8404,18 @@ describe("desktop store — background_children (detached agents strip)", () => 
     expect(store.getState().backgroundChildren).toEqual([]);
   });
 
+  it("background_children keeps runningBackgroundChildren at the rows without endedAt or failureReason", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    expect(store.getState().runningBackgroundChildren).toBe(0);
+    const ended = { ...CHILD, childSessionId: "child-2", endedAt: 5 };
+    const failed = { ...CHILD, childSessionId: "child-3", failureReason: "boom" };
+    store.getState().applyHostMessage({ type: "background_children", children: [CHILD, ended, failed] });
+    expect(store.getState().runningBackgroundChildren).toBe(1);
+    store.getState().applyHostMessage({ type: "background_children", children: [] });
+    expect(store.getState().runningBackgroundChildren).toBe(0);
+  });
+
   it("a refused cancel surfaces a notice; an accepted one stays silent", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

@@ -146,6 +146,7 @@ import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, isSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
+import { countRunningBackgroundChildren } from "./background-children.js";
 import { dismissFailedChild, recordFailedChild } from "./failed-background-children.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 // the global settings-store (NOT part of DesktopState) — the
@@ -1523,6 +1524,8 @@ export interface DesktopState {
    * Their parent turn has already ended, so this is the only live sign of them.
    */
   backgroundChildren: WireBackgroundChild[];
+  /** `countRunningBackgroundChildren(backgroundChildren)`, kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundChildren: number;
   /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
   engineBackgroundAgents: { count: number; abandoned: boolean };
   recentBackgroundChildren: WireBackgroundChild[];
@@ -1936,6 +1939,8 @@ interface SessionSlice {
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
+  /** `countRunningBackgroundChildren(backgroundChildren)`, kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundChildren: number;
   /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
   engineBackgroundAgents: { count: number; abandoned: boolean };
   recentBackgroundChildren: WireBackgroundChild[];
@@ -2027,6 +2032,7 @@ function initialSessionSlice(): SessionSlice {
     claudeTurnPreview: null,
     backgroundTaskOutput: {},
     backgroundChildren: [],
+    runningBackgroundChildren: 0,
     engineBackgroundAgents: { count: 0, abandoned: false },
     recentBackgroundChildren: [],
     failedBackgroundChildren: [],
@@ -6621,6 +6627,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // admit/terminal of a detached child (host/session.ts).
             set((state) => ({
               backgroundChildren: message.children,
+              runningBackgroundChildren: countRunningBackgroundChildren(message.children),
               // A Claude abandon is stale once AnyCode children report: the
               // next drop to 0 is theirs and a real completion.
               ...(state.engineBackgroundAgents.abandoned ? { engineBackgroundAgents: { ...state.engineBackgroundAgents, abandoned: false } } : {}),
