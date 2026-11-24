@@ -28,6 +28,8 @@ import {
   limitGroupRows,
   parseOlderThanDays,
   agentProjectMenuItem,
+  backgroundAgentsLabel,
+  rowAriaLabel,
   PROJECT_MENU_ITEM_COUNT,
   removeProjectDisabledReason,
   sidebarConfirmCopy,
@@ -1025,4 +1027,18 @@ it("positions menus below, flips above, and clamps oversized menus", () => {
   expect(menuTop(20, 40, 100, 500)).toBe(44);
   expect(menuTop(450, 470, 100, 500)).toBe(346);
   expect(menuTop(30, 50, 700, 500)).toBe(8);
+});
+
+describe("background agents badge labels", () => {
+  it("labels the count, singular and plural, and nothing for zero", () => {
+    expect(backgroundAgentsLabel(0)).toBeNull();
+    expect(backgroundAgentsLabel(1)).toBe("1 background agent");
+    expect(backgroundAgentsLabel(3)).toBe("3 background agents");
+  });
+  it("composes the row aria-label: status first, then background agents", () => {
+    expect(rowAriaLabel("T", null, 0)).toBeUndefined();
+    expect(rowAriaLabel("T", "running", 0)).toBe("T, running");
+    expect(rowAriaLabel("T", null, 2)).toBe("T, 2 background agents");
+    expect(rowAriaLabel("T", "running", 2)).toBe("T, running, 2 background agents");
+  });
 });

@@ -241,6 +241,16 @@ export function Spinner(props: IconProps) {
   );
 }
 
+/** DashedRing — dashed circle for slow ambient rotation: pair with the
+ *  `icon-spin-slow` class (app.css). */
+export function DashedRing(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="8" cy="8" r="6" strokeDasharray="3 3.1" />
+    </Icon>
+  );
+}
+
 /** Check — selection marker / success confirmation. */
 export function Check(props: IconProps) {
   return (

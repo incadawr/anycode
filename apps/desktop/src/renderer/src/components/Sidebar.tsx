@@ -24,7 +24,7 @@ import { handleCreateTabResult, resolveConnectionMissingAction } from "./Session
 import { pendingResumeRowSets, resumeWithMarker, usePendingResumes } from "../pending-resumes.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
-import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
+import { ArrowUp, Chevron, Collapse, Cube, DashedRing, Dot, Ellipsis, Folder, Gear, Plus, Robot, Search, Spinner, Trash, X } from "./icons.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import { AccountBudgetCard } from "./AccountBudgetCard.js";
 
@@ -68,6 +68,33 @@ const ROW_STATUS_LABEL: Record<RowStatusKind, string> = {
   running: "running",
   attention: "new results",
 };
+
+/** Accessible-name fragment for the background agents badge; `null` when there are none. */
+export function backgroundAgentsLabel(count: number): string | null {
+  if (count <= 0) {
+    return null;
+  }
+  return count === 1 ? "1 background agent" : `${count} background agents`;
+}
+
+/** Row button aria-label: "{title}, {status}, {N background agents}"; `undefined` when neither applies. */
+export function rowAriaLabel(title: string, kind: RowStatusKind | null, backgroundAgents: number): string | undefined {
+  const parts = [kind !== null ? ROW_STATUS_LABEL[kind] : null, backgroundAgentsLabel(backgroundAgents)].filter(
+    (part): part is string => part !== null,
+  );
+  return parts.length > 0 ? `${title}, ${parts.join(", ")}` : undefined;
+}
+
+/** Pill with the number of agents working in the background; the glyphs are aria-hidden, the row's aria-label carries the meaning. */
+function BackgroundAgentsBadge({ count }: { count: number }) {
+  return (
+    <span className="sidebar-row-bg-agents">
+      <Robot className="sidebar-row-bg-agents-robot" />
+      <span className="sidebar-row-bg-agents-count">{count}</span>
+      <DashedRing className="sidebar-row-bg-agents-ring icon-spin-slow" />
+    </span>
+  );
+}
 
 /**
  * R10: the ONE status indicator an open row shows (precedence ruled in
@@ -1317,14 +1344,16 @@ export function Sidebar({
                   if (row.kind === "open") {
                     // R10: mirror read by tabId — survives filterSidebarGroups
                     // because open rows carry tabId through the wrapper.
-                    const statusKind = rowStatusKind(statuses.get(row.tabId!), row.hostExited === true);
+                    const rowStatus = statuses.get(row.tabId!);
+                    const statusKind = rowStatusKind(rowStatus, row.hostExited === true);
+                    const backgroundAgents = rowStatus?.backgroundAgents ?? 0;
                     return (
                       <div key={row.key} className="sidebar-row-wrap">
                         <button
                           type="button"
                           className={`sidebar-row sidebar-row-open${row.hostExited ? " sidebar-row-host-exited" : ""}`}
                           aria-current={row.tabId === activeTabId ? "true" : undefined}
-                          aria-label={statusKind !== null ? `${row.title}, ${ROW_STATUS_LABEL[statusKind]}` : undefined}
+                          aria-label={rowAriaLabel(row.title, statusKind, backgroundAgents)}
                           onClick={() => onSelectTab(row.tabId!)}
                           onDoubleClick={() => onRenameRequest(row)}
                           onKeyDown={event => { if (event.key === "F2") { event.preventDefault(); onRenameRequest(row); } }}
@@ -1341,6 +1370,7 @@ export function Sidebar({
                               WT · {row.worktree.id}
                             </span>
                           )}
+                          {backgroundAgents > 0 && <BackgroundAgentsBadge count={backgroundAgents} />}
                           <RowStatusIndicator kind={statusKind} />
                         </button>
                         <button type="button" className="sidebar-row-menu-button" aria-label={`Actions for ${row.title}`} aria-haspopup="menu" onClick={e => showRowMenu(row, e.currentTarget)}><Ellipsis /></button>

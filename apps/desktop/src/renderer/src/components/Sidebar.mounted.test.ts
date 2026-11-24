@@ -16,6 +16,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { usePendingResumes } from "../pending-resumes.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useTabStatusStore } from "../tab-status-store.js";
 import { Sidebar } from "./Sidebar.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -32,6 +33,7 @@ function session(id: string): SessionSummary {
 afterEach(() => {
   usePendingResumes.setState({ marks: new Map(), armBaselines: new Map() });
   useTabsStore.setState({ tabs: [] });
+  useTabStatusStore.setState({ statuses: new Map() });
   delete (window as unknown as { anycode?: unknown }).anycode;
 });
 
@@ -109,4 +111,36 @@ it("renames open rows by double click and history rows by F2 without resuming", 
     await act(async () => history.click());
     expect(createTab).toHaveBeenCalledOnce();
   } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+async function mountWithStatus(backgroundAgents: number): Promise<{ container: HTMLElement; cleanup: () => Promise<void> }> {
+  (window as unknown as { anycode: unknown }).anycode = { listSessions: async () => [session("history")] };
+  useTabsStore.getState().addTab({ tabId: "t", workspace: "/w" });
+  useTabStatusStore.setState({
+    statuses: new Map([["t", { running: true, needsApproval: false, attention: false, backgroundAgents }]]),
+  });
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  const noop = () => {};
+  await act(async () => root.render(createElement(Sidebar, { tabs: useTabsStore.getState().tabs, activeTabId: "t", onRenameRequest: noop, onSelectTab: noop, onCloseTab: noop, onTabCreated: noop, onFocusTab: noop, onOpenSettings: noop, collapsed: false, onToggleCollapsed: noop })));
+  return { container, cleanup: async () => { await act(async () => root.unmount()); container.remove(); } };
+}
+
+it("shows the background agents badge on an open row, before the spinner, with the count in the label", async () => {
+  const { container, cleanup } = await mountWithStatus(2);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    const badge = row.querySelector(".sidebar-row-bg-agents")!;
+    expect(badge.textContent).toBe("2");
+    const spinner = row.querySelector(".sidebar-row-spinner")!;
+    expect(badge.compareDocumentPosition(spinner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents");
+    expect(container.querySelector(".sidebar-row-resumable .sidebar-row-bg-agents")).toBeNull();
+  } finally { await cleanup(); }
+});
+
+it("shows no badge when there are no background agents", async () => {
+  const { container, cleanup } = await mountWithStatus(0);
+  try {
+    expect(container.querySelector(".sidebar-row-bg-agents")).toBeNull();
+  } finally { await cleanup(); }
 });

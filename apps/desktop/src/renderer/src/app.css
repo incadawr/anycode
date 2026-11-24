@@ -127,6 +127,10 @@ body {
 .icon-spin {
   animation: spin 800ms linear infinite;
 }
+/* Ambient rotation (background agents ring); same global reduced-motion rule. */
+.icon-spin-slow {
+  animation: spin 2400ms linear infinite;
+}
 .claude-turn-preview { flex: 0 1 auto; box-sizing: border-box; width: min(100% - 2 * var(--sp-4), calc(var(--content-measure) + 6rem)); max-height: 30vh; overflow: auto; margin: var(--sp-2) auto; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-sidebar); color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .claude-turn-preview-title { color: var(--text-3); font-size: var(--fs-2xs); }
 .claude-turn-preview-text { white-space: pre-wrap; margin-top: var(--sp-1); font-size: var(--fs-sm); color: var(--text-2); }
@@ -1246,6 +1250,30 @@ body {
   width: 10px;
   height: 10px;
   color: var(--text-ghost);
+}
+
+.sidebar-row-bg-agents {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 1px var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+}
+
+.sidebar-row-bg-agents-robot {
+  width: 11px;
+  height: 11px;
+}
+
+.sidebar-row-bg-agents-ring {
+  width: 9px;
+  height: 9px;
 }
 
 .sidebar-row-age {
