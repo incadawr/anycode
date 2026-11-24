@@ -1,7 +1,7 @@
 /** Isolated live Session access observations; screenshots contain synthetic fixtures only. */
 import { createPeerSmoke } from './session-peers-smoke.mjs';
 import { resolve, join } from 'node:path';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 const pngDir = process.env.ANYCODE_SHOTS_DIR;
 const d = await createPeerSmoke({pngDir:pngDir ? resolve(pngDir) : undefined});
 const delay = () => new Promise(r => setTimeout(r,400));
@@ -134,13 +134,21 @@ try {
     const view=await d.invoke('sessionPeers.get',a.tabId);
     console.log('PROJECT-OFF VIEW',JSON.stringify({projectEnabled:view.view?.project?.enabled,trusted:view.view?.project?.trusted,granted:view.view?.peers?.filter(p=>p.granted).length}));
     await dismiss(); await menu();
-    const inactiveSeen=await d.evaluate(`new Promise(resolve=>{const end=Date.now()+4000;const probe=()=>{const m=document.querySelector('.environment-menu');const t=m?.querySelector('.native-access-summary')?.innerText||'';if(t.includes('Currently inactive')||Date.now()>end)resolve(t);else setTimeout(probe,100)};probe()})`);
+    const inactiveSeen=await d.evaluate(`new Promise(resolve=>{const end=Date.now()+4000;const probe=()=>{const t=document.querySelector('.environment-menu .native-access-summary')?.innerText||'';if(t.includes('Currently inactive')||Date.now()>end)resolve(t);else setTimeout(probe,100)};probe()})`);
     console.log('MENU SUMMARY',JSON.stringify(inactiveSeen));
     await shot('currently-inactive',`!!document.querySelector('.environment-menu .native-access-summary-state')?.innerText.includes('Currently inactive')`); await dismiss();
   });
   await attempt('untrusted disabled reason',async()=>{
-    const trustPath=join(d.root,'.anycode','workspace-trust.json'); const trust=JSON.parse(readFileSync(trustPath,'utf8')); delete trust.folders[a.workspace]; writeFileSync(trustPath,JSON.stringify(trust));
-    await menu(); await shot('native-untrusted-disabled',`(()=>{const m=document.querySelector('.environment-menu');return !!m && m.innerText.includes('Trust this folder first') && !!m.querySelector('[aria-label="Native session access"]:disabled')})()`); await dismiss();
+    // Empty folders are trusted by default. A new project MCP entry needs its own trust decision.
+    writeFileSync(join(a.workspace, '.mcp.json'), JSON.stringify({ mcpServers: { fixture: { command: 'unused-smoke-fixture' } } }));
+    const peers = await d.invoke('sessionPeers.get', a.tabId);
+    if (peers.view?.project?.trusted !== false) throw Error('fixture project is still trusted');
+    await menu();
+    await shot('native-untrusted-disabled', `(() => {
+      const row = document.querySelector('.environment-menu [role="group"][aria-label="Native session access"]');
+      return !!row?.innerText.includes('Trust this folder first') && !!row.querySelector('[role="switch"]:disabled');
+    })()`);
+    await dismiss();
   });
   await attempt('reload persistence',async()=>{const before=await d.invoke('sessionPeers.get',a.tabId);const communication=await d.invoke('communication.get');await d.cdp.call('Page.reload');await new Promise(r=>setTimeout(r,3000));const after=await d.invoke('sessionPeers.get',a.tabId);const afterComm=await d.invoke('communication.get');console.log(`${JSON.stringify(before)===JSON.stringify(after)&&JSON.stringify(communication)===JSON.stringify(afterComm)?'PASS':'FAIL'} reload grants and approvals unchanged`);});
   console.log('STUB WRITABLE',JSON.stringify(await d.evaluate(`({window:Object.getOwnPropertyDescriptor(window,'anycode')?.writable, peers:Object.getOwnPropertyDescriptor(window.anycode,'sessionPeers')?.writable, frozen:Object.isFrozen(window.anycode.sessionPeers)})`)));
