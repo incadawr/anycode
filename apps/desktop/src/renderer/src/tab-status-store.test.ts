@@ -19,8 +19,14 @@ import {
 import type { DesktopState, TurnState } from "./store.js";
 
 /** Shorthand for a CoarseStatus tuple: `coarse(turn, needsApproval, live)`. */
-function coarse(turn: TurnState["status"], needsApproval: boolean, live: boolean): CoarseStatus {
-  return { turn, needsApproval, live };
+function coarse(
+  turn: TurnState["status"],
+  needsApproval: boolean,
+  live: boolean,
+  backgroundAgents = 0,
+  backgroundAgentsAbandoned = false,
+): CoarseStatus {
+  return { turn, needsApproval, live, backgroundAgents, backgroundAgentsAbandoned };
 }
 
 /** Builds a deriveCoarse input (a slice of DesktopState) from primitives. `waitingSubagents` defaults to empty (regression: an ordinary tab with no children). */
@@ -29,8 +35,21 @@ function deriveInput(
   connection: DesktopState["connection"],
   permission: DesktopState["permission"],
   waitingSubagents: ReadonlySet<string> = new Set(),
-) {
-  return { turn: { status: turn, turnId: null, requestId: null }, connection, permission, waitingSubagents, liveSubagents: new Set<string>(), backgroundChildren: [] };
+  engineBackgroundAgents: DesktopState["engineBackgroundAgents"] = { count: 0, abandoned: false },
+  backgroundChildren: DesktopState["backgroundChildren"] = [],
+): Pick<
+  DesktopState,
+  "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "engineBackgroundAgents" | "backgroundChildren"
+> {
+  return {
+    turn: { status: turn, turnId: null, requestId: null },
+    connection,
+    permission,
+    waitingSubagents,
+    liveSubagents: new Set<string>(),
+    engineBackgroundAgents,
+    backgroundChildren,
+  };
 }
 
 /** A stand-in non-null permission request — deriveCoarse only checks `!== null`. */
@@ -43,7 +62,7 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
 
     store.getState().applyCoarse("t1", coarse("idle", false, false), true);
 
-    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false, backgroundAgents: 0 });
     expect(store.getState().statuses).not.toBe(before);
   });
 
@@ -70,7 +89,7 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
 
     store.getState().applyCoarse("t1", coarse("running", false, true), false);
 
-    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: false, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: false, attention: false, backgroundAgents: 0 });
     expect(store.getState().statuses).not.toBe(before);
   });
 
@@ -79,10 +98,10 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
     store.getState().applyCoarse("t1", coarse("running", false, true), false);
 
     store.getState().applyCoarse("t1", coarse("running", true, true), false);
-    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: true, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: true, attention: false, backgroundAgents: 0 });
 
     store.getState().applyCoarse("t1", coarse("running", false, true), false);
-    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: false, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: false, attention: false, backgroundAgents: 0 });
   });
 
   it("5. background completion sets attention", () => {
@@ -91,7 +110,7 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
 
     store.getState().applyCoarse("t1", coarse("idle", false, true), /* background */ true);
 
-    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: true });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: true, backgroundAgents: 0 });
   });
 
   it("6. active completion does NOT set attention", () => {
@@ -100,7 +119,7 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
 
     store.getState().applyCoarse("t1", coarse("idle", false, true), /* background */ false);
 
-    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false, backgroundAgents: 0 });
   });
 
   it("7. attention is sticky across a non-flip: an identical idle coarse bails and attention stays true", () => {
@@ -122,7 +141,7 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
     expect(store.getState().statuses.get("t1")?.attention).toBe(true);
 
     store.getState().applyCoarse("t1", coarse("running", false, true), false);
-    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: false, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: true, needsApproval: false, attention: false, backgroundAgents: 0 });
   });
 
   it("9. live gate: a host exit mid-turn writes running:false but mints no attention", () => {
@@ -132,7 +151,7 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
     // Host dies: turn.status frozen at "running", connection no longer ready.
     store.getState().applyCoarse("t1", coarse("running", false, /* live */ false), true);
 
-    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false, backgroundAgents: 0 });
   });
 
   it("10. live gate: a respawn reset mints no attention and the ready re-settle bails", () => {
@@ -151,7 +170,7 @@ describe("tab-status-store — applyCoarse / clearAttention / remove", () => {
   it("11. dead-host permission is masked in the data (live gate)", () => {
     const store = createTabStatusStore();
     store.getState().applyCoarse("t1", coarse("running", true, /* live */ false), false);
-    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false });
+    expect(store.getState().statuses.get("t1")).toEqual({ running: false, needsApproval: false, attention: false, backgroundAgents: 0 });
   });
 
   it("12. clearAttention: clears when set, no-op when already clear, no-op for an unknown tabId", () => {
@@ -217,6 +236,8 @@ describe("tab-status-store — pure projections", () => {
       turn: "running",
       needsApproval: true,
       live: true,
+      backgroundAgents: 0,
+      backgroundAgentsAbandoned: false,
     });
     expect(deriveCoarse(deriveInput("running", "host_exited", null)).live).toBe(false);
     expect(deriveCoarse(deriveInput("idle", "awaiting_host_ready", null)).live).toBe(false);
@@ -252,13 +273,80 @@ describe("tab-status-store — pure projections", () => {
   });
 
   it("17. rowStatusKind: precedence host-exited > permission > running > attention > null", () => {
-    const fullTrue: TabStatus = { running: true, needsApproval: true, attention: true };
+    const fullTrue: TabStatus = { running: true, needsApproval: true, attention: true, backgroundAgents: 0 };
     expect(rowStatusKind(fullTrue, true)).toBe("host-exited");
-    expect(rowStatusKind({ running: true, needsApproval: true, attention: false }, false)).toBe("permission");
-    expect(rowStatusKind({ running: true, needsApproval: false, attention: false }, false)).toBe("running");
-    expect(rowStatusKind({ running: false, needsApproval: false, attention: true }, false)).toBe("attention");
-    expect(rowStatusKind({ running: false, needsApproval: false, attention: false }, false)).toBeNull();
+    expect(rowStatusKind({ running: true, needsApproval: true, attention: false, backgroundAgents: 0 }, false)).toBe("permission");
+    expect(rowStatusKind({ running: true, needsApproval: false, attention: false, backgroundAgents: 0 }, false)).toBe("running");
+    expect(rowStatusKind({ running: false, needsApproval: false, attention: true, backgroundAgents: 0 }, false)).toBe("attention");
+    expect(rowStatusKind({ running: false, needsApproval: false, attention: false, backgroundAgents: 0 }, false)).toBeNull();
     expect(rowStatusKind(undefined, true)).toBe("host-exited");
     expect(rowStatusKind(undefined, false)).toBeNull();
+  });
+});
+
+describe("tab-status-store — background agents", () => {
+  it("deriveCoarse sums Claude agents and running detached children", () => {
+    const running = { childSessionId: "a" } as DesktopState["backgroundChildren"][number];
+    const failed = { childSessionId: "b", endedAt: 5 } as DesktopState["backgroundChildren"][number];
+    const derived = deriveCoarse(
+      deriveInput("idle", "ready", null, new Set(), { count: 2, abandoned: true }, [running, failed]),
+    );
+    expect(derived.backgroundAgents).toBe(3);
+    expect(derived.backgroundAgentsAbandoned).toBe(true);
+  });
+
+  it("shows the count on a live host", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 2), true);
+    expect(store.getState().statuses.get("t1")?.backgroundAgents).toBe(2);
+  });
+
+  it("shows 0 when the host is not live", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, false, 2), true);
+    expect(store.getState().statuses.get("t1")?.backgroundAgents).toBe(0);
+  });
+
+  it("a drop to 0 on an unseen tab raises attention", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 2), true);
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 0), true);
+    expect(store.getState().statuses.get("t1")).toEqual({
+      running: false,
+      needsApproval: false,
+      attention: true,
+      backgroundAgents: 0,
+    });
+  });
+
+  it("on the active tab it does not", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 2), false);
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 0), false);
+    expect(store.getState().statuses.get("t1")?.attention).toBe(false);
+  });
+
+  it("abandoned drop is not a completion", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 2), true);
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 0, true), true);
+    expect(store.getState().statuses.get("t1")?.attention).toBe(false);
+  });
+
+  it("agents settling during a running turn do not raise attention", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 2), true);
+    store.getState().applyCoarse("t1", coarse("running", false, true, 0), true);
+    expect(store.getState().statuses.get("t1")?.attention).toBe(false);
+  });
+
+  it("a count change re-renders, an identical snapshot does not", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 1), false);
+    const first = store.getState().statuses;
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 1), false);
+    expect(store.getState().statuses).toBe(first);
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 2), false);
+    expect(store.getState().statuses).not.toBe(first);
   });
 });

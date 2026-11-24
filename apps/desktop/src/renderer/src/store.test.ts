@@ -9997,6 +9997,23 @@ it("tracks detached Claude task updates while ignoring unrelated stale turns", (
   expect(store.getState().claudeBackgroundTasks).toMatchObject([{ taskId: "task", status: "completed", summary: "done" }]);
 });
 
+it("a detached engine_background_agents event sets engineBackgroundAgents with no active turn", () => {
+  const store = createDesktopStore();
+  expect(store.getState().engineBackgroundAgents).toEqual({ count: 0, abandoned: false });
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: { type: "engine_background_agents", count: 2, abandoned: false } });
+  expect(store.getState().engineBackgroundAgents).toEqual({ count: 2, abandoned: false });
+});
+
+it("a detached engine_background_agents event sets engineBackgroundAgents during another turn", () => {
+  const store = createDesktopStore();
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+  store.getState().applyHostMessage({ type: "turn_started", requestId: "r", turnId: "t" });
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: { type: "engine_background_agents", count: 0, abandoned: true } });
+  expect(store.getState().engineBackgroundAgents).toEqual({ count: 0, abandoned: true });
+  store.getState().applyHostMessage({ type: "agent_event", turnId: "stale", event: { type: "engine_background_agents", count: 5, abandoned: false } });
+  expect(store.getState().engineBackgroundAgents).toEqual({ count: 0, abandoned: true });
+});
+
 it("never lists a foreground-tracked task, and lists it once the CLI moves it to the background", () => {
   const store = createDesktopStore();
   const task = { type: "claude_background_task" as const, taskId: "fg", toolCallId: "call", kind: "bash" as const, description: "sleep 6", startedAt: 1, status: "running" as const };

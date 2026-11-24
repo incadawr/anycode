@@ -1523,6 +1523,8 @@ export interface DesktopState {
    * Their parent turn has already ended, so this is the only live sign of them.
    */
   backgroundChildren: WireBackgroundChild[];
+  /** The Claude CLI's background agent count as the host last reported it; `abandoned` = the session ended with agents unsettled. */
+  engineBackgroundAgents: { count: number; abandoned: boolean };
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
   /**
@@ -1934,6 +1936,8 @@ interface SessionSlice {
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
+  /** The Claude CLI's background agent count as the host last reported it; `abandoned` = the session ended with agents unsettled. */
+  engineBackgroundAgents: { count: number; abandoned: boolean };
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
   modelTurns: number;
@@ -2023,6 +2027,7 @@ function initialSessionSlice(): SessionSlice {
     claudeTurnPreview: null,
     backgroundTaskOutput: {},
     backgroundChildren: [],
+    engineBackgroundAgents: { count: 0, abandoned: false },
     recentBackgroundChildren: [],
     failedBackgroundChildren: [],
     modelTurns: 0,
@@ -4044,7 +4049,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         get().turn.turnId !== turnId &&
         event.type !== "context_usage" &&
         event.type !== "preview_console" &&
-        !(event.type === "claude_background_task" && turnId === "detached-subagent") &&
+        !((event.type === "claude_background_task" || event.type === "engine_background_agents") && turnId === "detached-subagent") &&
         event.type !== "compaction_start" &&
         event.type !== "compaction_end" &&
         !(turnId === "detached-subagent" && (event.type === "subagent_start" || event.type === "subagent_progress" || event.type === "subagent_activity" || event.type === "subagent_end" || event.type === "engine_quota")) &&
@@ -4978,8 +4983,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "claude_turn_preview":
           set({ claudeTurnPreview: event.preview });
           return;
-        // The background agent count has no renderer state yet.
         case "engine_background_agents":
+          set(state =>
+            state.engineBackgroundAgents.count === event.count && state.engineBackgroundAgents.abandoned === event.abandoned
+              ? state
+              : { engineBackgroundAgents: { count: event.count, abandoned: event.abandoned } },
+          );
           return;
         case "claude_background_task":
           set(state => {
