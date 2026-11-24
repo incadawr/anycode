@@ -165,10 +165,11 @@ describe("AppServerClient", () => {
     expect((failure as Error).message).not.toContain(SUPPORTED_CODEX_VERSION);
   });
 
-  it("starts and allows orchestration on an above-ceiling version without a session warning", async () => {
-    // `--newer-version` reports 1.0.0, far above the delivered ceiling: the
-    // the host can launch it without surfacing the Settings notice in the session.
-    const client = makeClient(["--newer-version"], { sourceEnv: policyEnv([">=0.144.0 <0.152.0"]) });
+  it.each([
+    ["delivered", { sourceEnv: policyEnv([">=0.144.0 <0.152.0"]) }],
+    ["bundled (no policy in the host environment)", {}],
+  ] as const)("starts and allows orchestration on a newer version with the %s policy", async (_label, overrides) => {
+    const client = makeClient(["--newer-version"], overrides);
     try {
       await client.start();
       await expect(client.request("echo", { value: 3 })).resolves.toEqual({ value: 3 });

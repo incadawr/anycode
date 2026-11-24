@@ -20,12 +20,12 @@ import { makeTrustedScratchDir } from "../shared/test-scratch.js";
 import type { ResolvedCodexProfile } from "./codex-profiles.js";
 import { ENV_CODEX_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../shared/engines.js";
 
-/** A syntactically valid manifest with one arbitrary supported range — the doctor must follow IT, not any hardcode. */
-function narrowManifest(range: string): CodexSupportManifest {
+/** A syntactically valid manifest with arbitrary supported ranges — the doctor must follow IT, not any hardcode. */
+function narrowManifest(...ranges: string[]): CodexSupportManifest {
   return {
     schemaVersion: "anycode.codex-support.v1",
     updatedAt: "2026-07-16T00:00:00Z",
-    supported: [{ range, status: "tested" }],
+    supported: ranges.map(range => ({ range, status: "tested" })),
     recommended: "0.145.0",
     minimum: "0.144.0",
   };
@@ -488,6 +488,16 @@ describe("runCodexDoctor", () => {
     expect(report.status).toBe("ready");
     expect(report.version).toBe("0.145.1");
     expect(report.versionWarning).toMatch(/newer than the tested range/);
+  });
+
+  it("warns about an unverified patch of a verified minor in a gap between tested ranges", async () => {
+    const report = await runCodexDoctor("/fake/codex", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--report-version=0.145.1"]),
+      versionPolicy: { manifest: narrowManifest(">=0.145.0 <=0.145.0", ">=0.147.0 <0.148.0"), riskAcceptedVersions: [] },
+    });
+    expect(report.status).toBe("ready");
+    expect(report.versionWarning).toMatch(/patch of a verified release/);
   });
 
   it("reports error for unparseable version output", async () => {
