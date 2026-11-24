@@ -80,6 +80,22 @@ describe("agent census rules", () => {
     expect(countWorkingBackgroundAgents(census)).toBe(1);
   });
 
+  it("ignores a task_updated terminal status of an earlier run", () => {
+    const census = fold(
+      started("a", { run_id: "r1" }),
+      started("a", { run_id: "r2" }),
+      system("task_updated", { task_id: "a", run_id: "r1", patch: { status: "completed" } }),
+    );
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
+  });
+
+  it("a foreground child of a background parent stops counting when the parent settles, even without its own terminal frame", () => {
+    const census = fold(started("p"), started("kid", { parent_task_id: "p", is_backgrounded: false }));
+    expect(countWorkingBackgroundAgents(census)).toBe(1);
+    const settled = reduceAgentCensus(census, system("task_updated", { task_id: "p", patch: { status: "completed" } }));
+    expect(countWorkingBackgroundAgents(settled)).toBe(0);
+  });
+
   it("a run_id absent on either side matches", () => {
     const census = fold(started("a"), system("task_notification", { task_id: "a", run_id: "r1", status: "completed" }));
     expect(countWorkingBackgroundAgents(census)).toBe(0);

@@ -3,7 +3,7 @@
  *
  * A pure fold over the CLI's `task_*` system frames. The census keeps one
  * entry per agent task (`task_id`), and an agent counts when it is running,
- * its lineage is backgrounded (itself or any ancestor via `parent_task_id`),
+ * its lineage is backgrounded (itself or a running ancestor via `parent_task_id`),
  * and it has no running foreground child. That last clause counts a
  * background parent whose work is delegated to foreground children once, as
  * those children, not twice.
@@ -34,7 +34,7 @@ export interface AgentCensusEntry {
   readonly running: boolean;
 }
 
-/** Agent entries keyed by the CLI's `task_id`, in the order they started. */
+/** Agent entries keyed by the CLI's `task_id`, in the order first seen. */
 export type AgentCensus = ReadonlyMap<string, AgentCensusEntry>;
 
 export const EMPTY_AGENT_CENSUS: AgentCensus = new Map();
@@ -134,12 +134,14 @@ export function reduceAgentCensus(census: AgentCensus, frame: ClaudeStreamMessag
   }
 }
 
-/** True when the entry, or an ancestor of it, was backgrounded. */
+/** True when the entry is backgrounded, or its running ancestor chain is: a settled parent no longer carries its children. */
 function lineageBackgrounded(census: AgentCensus, entry: AgentCensusEntry): boolean {
-  let current: AgentCensusEntry | undefined = entry;
-  for (let depth = 0; current !== undefined && depth < MAX_DEPTH; depth += 1) {
+  let current: AgentCensusEntry = entry;
+  for (let depth = 0; depth < MAX_DEPTH; depth += 1) {
     if (current.backgrounded) return true;
-    current = current.parentTaskId === undefined ? undefined : census.get(current.parentTaskId);
+    const parent = current.parentTaskId === undefined ? undefined : census.get(current.parentTaskId);
+    if (parent === undefined || !parent.running) return false;
+    current = parent;
   }
   return false;
 }

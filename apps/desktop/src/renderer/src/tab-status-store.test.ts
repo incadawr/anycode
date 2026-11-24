@@ -16,7 +16,7 @@ import {
   type CoarseStatus,
   type TabStatus,
 } from "./tab-status-store.js";
-import type { DesktopState, TurnState } from "./store.js";
+import { createDesktopStore, type DesktopState, type TurnState } from "./store.js";
 
 /** Shorthand for a CoarseStatus tuple: `coarse(turn, needsApproval, live)`. */
 function coarse(
@@ -331,6 +331,32 @@ describe("tab-status-store — background agents", () => {
     store.getState().applyCoarse("t1", coarse("idle", false, true, 2), true);
     store.getState().applyCoarse("t1", coarse("idle", false, true, 0, true), true);
     expect(store.getState().statuses.get("t1")?.attention).toBe(false);
+  });
+
+  it("a live tab with count going not-live raises no attention", () => {
+    const store = createTabStatusStore();
+    store.getState().applyCoarse("t1", coarse("idle", false, true, 2), true);
+    store.getState().applyCoarse("t1", coarse("idle", false, false, 0), true);
+    expect(store.getState().statuses.get("t1")?.attention).toBe(false);
+  });
+
+  it("a stale abandoned flag does not swallow a later AnyCode child drop to 0", () => {
+    const desktop = createDesktopStore();
+    const mirror = createTabStatusStore();
+    const send = (message: object) => desktop.getState().applyHostMessage(message as never);
+    const apply = () => mirror.getState().applyCoarse("t1", deriveCoarse(desktop.getState()), true);
+    send({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+    const child = { childSessionId: "c1" };
+    send({ type: "agent_event", turnId: "detached-subagent", event: { type: "engine_background_agents", count: 2, abandoned: false } });
+    send({ type: "background_children", children: [child] });
+    apply();
+    expect(mirror.getState().statuses.get("t1")?.backgroundAgents).toBe(3);
+    send({ type: "agent_event", turnId: "detached-subagent", event: { type: "engine_background_agents", count: 0, abandoned: true } });
+    apply();
+    expect(mirror.getState().statuses.get("t1")).toMatchObject({ backgroundAgents: 1, attention: false });
+    send({ type: "background_children", children: [] });
+    apply();
+    expect(mirror.getState().statuses.get("t1")).toMatchObject({ backgroundAgents: 0, attention: true });
   });
 
   it("agents settling during a running turn do not raise attention", () => {
