@@ -906,11 +906,15 @@ describe("the CLI's own agents across a transport replacement", () => {
       const detached: AgentEvent[] = [];
       engine.onDetachedEvent = event => detached.push(event);
       fake.streams[0]!.emit("data", Buffer.from(JSON.stringify({ type: "system", subtype: "task_started", task_id: "a1", tool_use_id: "toolu_bg", task_type: "local_agent", description: "Scan docs" }) + "\n"));
-      await vi.waitFor(() => expect(detached).toHaveLength(1));
+      await vi.waitFor(() => expect(detached.some(event => event.type === "subagent_start")).toBe(true));
       await engine.replaceTransport({ resume: sessionRef });
-      expect(detached).toEqual([
+      expect(detached.filter(event => event.type !== "engine_background_agents")).toEqual([
         { type: "subagent_start", toolCallId: "toolu_bg", agentType: "agent", description: "Scan docs" },
         { type: "subagent_end", toolCallId: "toolu_bg", status: "cancelled", turns: 0, toolCalls: 0, durationMs: -1 },
+      ]);
+      expect(detached.filter(event => event.type === "engine_background_agents")).toEqual([
+        { type: "engine_background_agents", count: 1, abandoned: false },
+        { type: "engine_background_agents", count: 0, abandoned: true },
       ]);
     } finally {
       await engine.dispose("session-close");

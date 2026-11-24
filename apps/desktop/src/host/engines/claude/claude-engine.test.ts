@@ -3709,6 +3709,8 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
   const reportTurn = capture.slice(reportInit);
   const isForeignNotice = (event: AgentEvent): boolean =>
     event.type === "engine_notice" && String((event as { message?: string }).message).includes("started a turn on its own");
+  /** The detached sink without the badge's count events: the card events alone. */
+  const cardEvents = (events: AgentEvent[]): AgentEvent[] => events.filter((event) => event.type !== "engine_background_agents");
 
   it("the capture splits as described: parent turn, idle agent frames, the CLI's report turn", () => {
     expect(firstResult).toBeGreaterThan(0);
@@ -3743,14 +3745,34 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
     expect(events.some((event) => event.type === "error")).toBe(false);
     expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
     expect(transport.sent.at(-1)).toBe("second");
-    expect(types(detached)).toEqual([
+    expect(types(cardEvents(detached))).toEqual([
       "subagent_activity", "subagent_progress",
       "subagent_activity", "subagent_progress",
       "subagent_activity", "subagent_progress",
       "subagent_end",
     ]);
-    expect(detached[0]).toEqual({ type: "subagent_activity", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", toolName: "Read", summary: "/workspace/README.md" });
-    expect(detached.at(-1)).toMatchObject({ toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed", toolCalls: 3, durationMs: 4010 });
+    expect(cardEvents(detached)[0]).toEqual({ type: "subagent_activity", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", toolName: "Read", summary: "/workspace/README.md" });
+    expect(cardEvents(detached).at(-1)).toMatchObject({ toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed", toolCalls: 3, durationMs: 4010 });
+    await engine.dispose("session-close");
+  });
+
+  it("reports the background agent count to the detached sink, the 0 arriving before the card's end", async () => {
+    const transport = new FakeTransport({ frames: parentTurn, contextUsage: { totalTokens: 1, maxTokens: 2 } });
+    const engine = engineWith(transport);
+    const detached: AgentEvent[] = [];
+    engine.onDetachedEvent = (event) => detached.push(event);
+    await collect(engine.runTurn("launch it", { signal: new AbortController().signal }));
+    for (const frame of idleAgentFrames) transport.push(frame);
+    for (const frame of ownerFrames("two")) transport.enqueue(frame);
+    await collect(engine.runTurn("second", { signal: new AbortController().signal }));
+
+    const counts = detached.filter((event) => event.type === "engine_background_agents");
+    expect(counts).toEqual([
+      { type: "engine_background_agents", count: 1, abandoned: false },
+      { type: "engine_background_agents", count: 0, abandoned: false },
+    ]);
+    // The census settles on task_updated, one line before the notification that ends the card.
+    expect(detached.indexOf(counts[1]!)).toBeLessThan(detached.findIndex((event) => event.type === "subagent_end"));
     await engine.dispose("session-close");
   });
 
@@ -3794,7 +3816,7 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
 
     expect(events.filter((event) => event.type.startsWith("subagent_"))).toEqual([]);
     expect(JSON.stringify(events)).toContain("OWNER OUTPUT two");
-    expect(detached.at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed" });
+    expect(cardEvents(detached).at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed" });
     await engine.dispose("session-close");
   });
 
@@ -3815,7 +3837,7 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
       if (event.type === "subagent_progress") controller.abort();
     }
     expect(events.find((event) => event.type === "loop_end")).toMatchObject({ reason: "cancelled" });
-    expect(detached).toEqual([
+    expect(cardEvents(detached)).toEqual([
       expect.objectContaining({ type: "subagent_end", toolCallId: "toolu_01RDu83vHyAmThJmAAheTCUb", status: "cancelled" }),
     ]);
     await engine.dispose("session-close");
@@ -3833,9 +3855,9 @@ describe("ClaudeEngine — the CLI's own background agents", () => {
 
     expect(events.find((event) => event.type === "compaction_end")).toMatchObject({ ok: true });
     expect(events.filter((event) => event.type.startsWith("subagent_"))).toEqual([]);
-    expect(types(detached)).toContain("subagent_progress");
-    expect(types(detached)).toContain("subagent_activity");
-    expect(detached.at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed" });
+    expect(types(cardEvents(detached))).toContain("subagent_progress");
+    expect(types(cardEvents(detached))).toContain("subagent_activity");
+    expect(cardEvents(detached).at(-1)).toMatchObject({ type: "subagent_end", toolCallId: "toolu_01AJKBpVVvTVqpg8nKBashrq", status: "completed" });
     await engine.dispose("session-close");
   });
 

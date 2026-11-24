@@ -340,6 +340,68 @@ describe("ClaudeSubagentTasks — an agent resumed by SendMessage", () => {
   });
 });
 
+describe("ClaudeSubagentTasks — background agent count", () => {
+  type Update = { count: number; abandoned: boolean };
+  function tracker(): { tasks: ClaudeSubagentTasks; updates: Update[] } {
+    const updates: Update[] = [];
+    return { tasks: new ClaudeSubagentTasks(() => {}, (update) => updates.push(update)), updates };
+  }
+  const feed = (tasks: ClaudeSubagentTasks, file: string, end?: number): void => {
+    for (const frame of frames(file).slice(0, end)) tasks.onFrame(frame);
+  };
+
+  it("w0-19 reports one background agent, then none", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-19-background-agent.jsonl");
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: false }]);
+  });
+
+  it("w0-20 (a foreground agent) reports nothing", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-20-foreground-agent.jsonl");
+    expect(updates).toEqual([]);
+  });
+
+  it("w0-21 reports 1, 2, 1, 0 as the nested foreground children come and go", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-21-nested-foreground-agents.jsonl");
+    expect(updates.map((update) => update.count)).toEqual([1, 2, 1, 0]);
+    expect(updates.every((update) => !update.abandoned)).toBe(true);
+  });
+
+  it("abandonAll reports 0 abandoned", () => {
+    const { tasks, updates } = tracker();
+    tasks.onFrame(frames("w0-19-background-agent.jsonl").find((frame) => (frame as { subtype?: string }).subtype === "task_started")!);
+    tasks.abandonAll();
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: true }]);
+  });
+
+  it("abandonAll with nothing counted reports nothing", () => {
+    const { tasks, updates } = tracker();
+    tasks.abandonAll();
+    expect(updates).toEqual([]);
+  });
+
+  it("counts again after an abandon", () => {
+    const { tasks, updates } = tracker();
+    const start = frames("w0-19-background-agent.jsonl").find((frame) => (frame as { subtype?: string }).subtype === "task_started")!;
+    tasks.onFrame(start);
+    tasks.abandonAll();
+    updates.length = 0;
+    feed(tasks, "w0-19-background-agent.jsonl");
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: false }]);
+  });
+
+  it("detachLive does not change the count", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-21-nested-foreground-agents.jsonl", 19);
+    expect(updates.at(-1)).toEqual({ count: 2, abandoned: false });
+    const before = updates.length;
+    tasks.detachLive();
+    expect(updates).toHaveLength(before);
+  });
+});
+
 describe("isClaudeSubagentFrame", () => {
   it("is true for a child's own frames and for the task lifecycle frames", () => {
     expect(isClaudeSubagentFrame({ type: "assistant", parent_tool_use_id: "toolu_a", message: { model: "m", content: [] } })).toBe(true);

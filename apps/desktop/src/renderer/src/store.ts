@@ -4978,6 +4978,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "claude_turn_preview":
           set({ claudeTurnPreview: event.preview });
           return;
+        // The background agent count has no renderer state yet.
+        case "engine_background_agents":
+          return;
         case "claude_background_task":
           set(state => {
             // A foreground-tracked call is not a background task: never listed (a later move to the background arrives unflagged).

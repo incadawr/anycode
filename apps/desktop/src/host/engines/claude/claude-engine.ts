@@ -1074,7 +1074,10 @@ export class ClaudeEngine implements SessionEngine {
    * turn-scoped: a background agent starts inside one turn and reports the
    * rest of its life while the engine is idle.
    */
-  private readonly subagentTasks = new ClaudeSubagentTasks((event) => this.emitDetached(event));
+  private readonly subagentTasks = new ClaudeSubagentTasks(
+    (event) => this.emitDetached(event),
+    (update) => this.emitDetached({ type: "engine_background_agents", ...update }),
+  );
   private readonly nativeBackgroundTasks = new ClaudeNativeBackgroundTasks();
   /**
    * Receives the subagent_* events of the CLI's own agents that arrive with

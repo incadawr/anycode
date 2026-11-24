@@ -20,6 +20,7 @@
  */
 
 import { summarizeChildToolCall, type AgentEvent } from "@anycode/core";
+import { countWorkingBackgroundAgents, EMPTY_AGENT_CENSUS, reduceAgentCensus, type AgentCensus } from "./agent-census.js";
 import type { ClaudeStreamMessage } from "./protocol.js";
 
 type SubagentEndStatus = Extract<AgentEvent, { type: "subagent_end" }>["status"];
@@ -100,7 +101,15 @@ export class ClaudeSubagentTasks {
    * (`detachLive`), wherever its frames arrive — between turns or inside a
    * later owner turn, which must not adopt another turn's card.
    */
-  constructor(private readonly detach: (event: AgentEvent) => void = () => {}) {}
+  constructor(
+    private readonly detach: (event: AgentEvent) => void = () => {},
+    /** Receives the number of agents working in the background whenever it changes. */
+    private readonly onBackgroundAgents: (update: { count: number; abandoned: boolean }) => void = () => {},
+  ) {}
+
+  /** Immutable; only ever reassigned. Independent of the card state: `detachLive` leaves it alone. */
+  private census: AgentCensus = EMPTY_AGENT_CENSUS;
+  private lastCount = 0;
 
   /** Check before translating: translation consumes a terminal task. */
   knowsNotification(frame: ClaudeStreamMessage): boolean {
@@ -113,6 +122,15 @@ export class ClaudeSubagentTasks {
    * instead. Never throws on an unexpected shape.
    */
   onFrame(frame: ClaudeStreamMessage): AgentEvent[] {
+    const next = reduceAgentCensus(this.census, frame);
+    if (next !== this.census) {
+      this.census = next;
+      const count = countWorkingBackgroundAgents(next);
+      if (count !== this.lastCount) {
+        this.lastCount = count;
+        this.onBackgroundAgents({ count, abandoned: false });
+      }
+    }
     const { task, events } = this.translate(frame);
     if (task?.detached !== true) return events;
     for (const event of events) this.detach(event);
@@ -295,6 +313,11 @@ export class ClaudeSubagentTasks {
     for (const [taskId, task] of this.tasks) {
       events.push(this.endEvent(task, "cancelled", -1));
       this.settle(taskId, task);
+    }
+    this.census = EMPTY_AGENT_CENSUS;
+    if (this.lastCount > 0) {
+      this.lastCount = 0;
+      this.onBackgroundAgents({ count: 0, abandoned: true });
     }
     return events;
   }
