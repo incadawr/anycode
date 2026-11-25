@@ -10049,6 +10049,56 @@ it("keeps the last state per launching tool call beyond the popover list cap", (
   expect(store.getState().claudeTaskByToolCall.cfg).toBeUndefined();
 });
 
+describe("runningBackgroundTasks", () => {
+  const sendTask = (store: ReturnType<typeof createDesktopStore>, event: object) =>
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event: { type: "claude_background_task", kind: "bash", description: "x", startedAt: 1, toolCallId: "c", ...event } as never });
+
+  it("counts running tasks only, never foreground or settled ones", () => {
+    const store = createDesktopStore();
+    expect(store.getState().runningBackgroundTasks).toBe(0);
+    sendTask(store, { taskId: "a", toolCallId: "ca", status: "running" });
+    expect(store.getState().runningBackgroundTasks).toBe(1);
+    sendTask(store, { taskId: "b", toolCallId: "cb", kind: "monitor", status: "running" });
+    expect(store.getState().runningBackgroundTasks).toBe(2);
+    sendTask(store, { taskId: "fg", toolCallId: "cfg", status: "running", foreground: true });
+    expect(store.getState().runningBackgroundTasks).toBe(2);
+    for (const status of ["completed", "failed", "stopped", "unknown"]) {
+      sendTask(store, { taskId: "a", toolCallId: "ca", status });
+      expect(store.getState().runningBackgroundTasks).toBe(1);
+      sendTask(store, { taskId: "a", toolCallId: "ca", status: "running" });
+      expect(store.getState().runningBackgroundTasks).toBe(2);
+    }
+  });
+
+  it("drops a running task that is reclassified as foreground", () => {
+    const store = createDesktopStore();
+    sendTask(store, { taskId: "a", status: "running" });
+    sendTask(store, { taskId: "a", status: "running", foreground: true });
+    expect(store.getState().runningBackgroundTasks).toBe(0);
+  });
+
+  it("resets on host_ready like the other session fields", () => {
+    const store = createDesktopStore();
+    sendTask(store, { taskId: "a", status: "running" });
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });
+    expect(store.getState().runningBackgroundTasks).toBe(0);
+  });
+
+  it("flags the engine abandon when a running task becomes unknown, and clears it when new work starts", () => {
+    const store = createDesktopStore();
+    sendTask(store, { taskId: "a", status: "running" });
+    expect(store.getState().engineBackgroundAgents.abandoned).toBe(false);
+    sendTask(store, { taskId: "a", status: "completed" });
+    expect(store.getState().engineBackgroundAgents.abandoned).toBe(false);
+    sendTask(store, { taskId: "b", toolCallId: "cb", status: "running" });
+    sendTask(store, { taskId: "b", toolCallId: "cb", status: "unknown" });
+    expect(store.getState().engineBackgroundAgents).toEqual({ count: 0, abandoned: true });
+    expect(store.getState().runningBackgroundTasks).toBe(0);
+    sendTask(store, { taskId: "c", toolCallId: "cc", status: "running" });
+    expect(store.getState().engineBackgroundAgents).toEqual({ count: 0, abandoned: false });
+  });
+});
+
 it("keeps provisional Claude content out of the transcript and clears it", () => {
   const store = createDesktopStore();
   store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m", sessionId: "s" });

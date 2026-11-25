@@ -113,11 +113,11 @@ it("renames open rows by double click and history rows by F2 without resuming", 
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
-async function mountWithStatus(backgroundAgents: number): Promise<{ container: HTMLElement; cleanup: () => Promise<void> }> {
+async function mountWithStatus(backgroundAgents: number, backgroundTasks = 0): Promise<{ container: HTMLElement; cleanup: () => Promise<void> }> {
   (window as unknown as { anycode: unknown }).anycode = { listSessions: async () => [session("history")] };
   useTabsStore.getState().addTab({ tabId: "t", workspace: "/w" });
   useTabStatusStore.setState({
-    statuses: new Map([["t", { running: true, needsApproval: false, attention: false, backgroundAgents }]]),
+    statuses: new Map([["t", { running: true, needsApproval: false, attention: false, backgroundAgents, backgroundTasks }]]),
   });
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
   const noop = () => {};
@@ -142,6 +142,48 @@ it("shows the background agents badge on an open row, before the spinner, with t
 
 it("shows no badge when there are no background agents", async () => {
   const { container, cleanup } = await mountWithStatus(0);
+  try {
+    expect(container.querySelector(".sidebar-row-bg-agents")).toBeNull();
+  } finally { await cleanup(); }
+});
+
+it("shows only the terminal group for a tasks-only row", async () => {
+  const { container, cleanup } = await mountWithStatus(0, 1);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    expect(row.querySelector(".sidebar-row-bg-agents")).not.toBeNull();
+    expect(row.querySelector(".sidebar-row-bg-agents-robot")).toBeNull();
+    expect(row.querySelector(".sidebar-row-bg-agents-terminal")).not.toBeNull();
+    expect(row.querySelector(".sidebar-row-bg-agents")!.textContent).toBe("1");
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 1 background task");
+  } finally { await cleanup(); }
+});
+
+it("shows only the robot group for an agents-only row", async () => {
+  const { container, cleanup } = await mountWithStatus(2, 0);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    expect(row.querySelector(".sidebar-row-bg-agents-robot")).not.toBeNull();
+    expect(row.querySelector(".sidebar-row-bg-agents-terminal")).toBeNull();
+  } finally { await cleanup(); }
+});
+
+it("shows both groups inside one pill with one ring", async () => {
+  const { container, cleanup } = await mountWithStatus(2, 1);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    expect(row.querySelectorAll(".sidebar-row-bg-agents")).toHaveLength(1);
+    expect(row.querySelectorAll(".sidebar-row-bg-agents-ring")).toHaveLength(1);
+    expect(row.querySelectorAll(".sidebar-row-bg-agents-group")).toHaveLength(2);
+    expect(row.querySelector(".sidebar-row-bg-agents-robot")).not.toBeNull();
+    expect(row.querySelector(".sidebar-row-bg-agents-terminal")).not.toBeNull();
+    expect(row.querySelector(".sidebar-row-bg-agents")!.textContent).toBe("21");
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents, 1 background task");
+  } finally { await cleanup(); }
+});
+
+it("shows no pill with neither agents nor tasks", async () => {
+  const { container, cleanup } = await mountWithStatus(0, 0);
   try {
     expect(container.querySelector(".sidebar-row-bg-agents")).toBeNull();
   } finally { await cleanup(); }

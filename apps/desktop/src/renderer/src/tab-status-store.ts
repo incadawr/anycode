@@ -45,6 +45,8 @@ export interface TabStatus {
   attention: boolean;
   /** Background agents working on a live host: the Claude CLI's plus our own running detached children. */
   backgroundAgents: number;
+  /** Background Bash commands and monitors running on a live host (the composer's background-task list). */
+  backgroundTasks: number;
 }
 
 /**
@@ -64,6 +66,8 @@ export interface CoarseStatus {
   backgroundAgents: number;
   /** The session ended with the engine's agents unsettled: their drop to 0 is not a completion. */
   backgroundAgentsAbandoned: boolean;
+  /** Running background Bash/monitor tasks, regardless of liveness (`applyCoarse` gates it). */
+  backgroundTasks: number;
 }
 
 /**
@@ -90,7 +94,7 @@ export function isTurnCompletion(prev: TurnState["status"], next: TurnState["sta
  * kept in `runningBackgroundChildren` rather than recomputed here.
  */
 export function deriveCoarse(
-  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "backgroundChildren" | "engineBackgroundAgents" | "runningBackgroundChildren">,
+  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "backgroundChildren" | "engineBackgroundAgents" | "runningBackgroundChildren" | "runningBackgroundTasks">,
 ): CoarseStatus {
   return {
     turn: state.liveSubagents.size || state.backgroundChildren.length ? "running" : state.turn.status,
@@ -98,6 +102,7 @@ export function deriveCoarse(
     live: state.connection === "ready",
     backgroundAgents: state.engineBackgroundAgents.count + state.runningBackgroundChildren,
     backgroundAgentsAbandoned: state.engineBackgroundAgents.abandoned,
+    backgroundTasks: state.runningBackgroundTasks,
   };
 }
 
@@ -138,7 +143,7 @@ export interface TabStatusState {
   /**
    * Applies one coarse snapshot for `tabId`. THE STORM GUARD LIVES HERE
    * (slice-R10-cut §2.2): the stored entry is the last-written tuple; if the
-   * derived {running, needsApproval, attention, backgroundAgents} equals it field-by-field,
+   * derived {running, needsApproval, attention, backgroundAgents, backgroundTasks} equals it field-by-field,
    * return WITHOUT calling set() — no zustand notification, no Sidebar
    * re-render. tab-registry.ts calls this on EVERY setState of every tab
    * store; the per-call cost on the bail path is one Map.get plus at most
@@ -150,9 +155,10 @@ export interface TabStatusState {
    *  - completion    = stored.running && next.live && isTurnCompletion(...)
    *    (the `next.live` gate suppresses host-exit / respawn-reset edges)
    *  - backgroundAgents = next.live ? next.backgroundAgents : 0
-   *  - agentsCompleted  = stored.backgroundAgents > 0 && shown === 0 && next.live
+   *  - backgroundTasks  = next.live ? next.backgroundTasks : 0
+   *  - agentsCompleted  = stored total (agents + tasks) > 0 && shown total === 0 && next.live
    *    && next.turn !== "running" && !next.backgroundAgentsAbandoned
-   *    (agents settling mid-turn, or an abandoned session, are not completions)
+   *    (work settling mid-turn, or an abandoned session, are not completions)
    *  - attention     = running ? false            // a new turn clears it
    *                  : completion || agentsCompleted ? background  // set only when unseen
    *                  : stored.attention            // otherwise sticky
@@ -183,10 +189,11 @@ export function createTabStatusStore() {
       const completed =
         prev !== undefined && next.live && isTurnCompletion(prev.running ? "running" : "idle", next.turn);
       const backgroundAgents = next.live ? next.backgroundAgents : 0;
+      const backgroundTasks = next.live ? next.backgroundTasks : 0;
       const agentsCompleted =
         prev !== undefined &&
-        prev.backgroundAgents > 0 &&
-        backgroundAgents === 0 &&
+        prev.backgroundAgents + prev.backgroundTasks > 0 &&
+        backgroundAgents + backgroundTasks === 0 &&
         next.live &&
         next.turn !== "running" &&
         !next.backgroundAgentsAbandoned;
@@ -196,12 +203,13 @@ export function createTabStatusStore() {
         prev.running === running &&
         prev.needsApproval === needsApproval &&
         prev.attention === attention &&
-        prev.backgroundAgents === backgroundAgents
+        prev.backgroundAgents === backgroundAgents &&
+        prev.backgroundTasks === backgroundTasks
       ) {
         return;
       }
       const statuses = new Map(get().statuses);
-      statuses.set(tabId, { running, needsApproval, attention, backgroundAgents });
+      statuses.set(tabId, { running, needsApproval, attention, backgroundAgents, backgroundTasks });
       set({ statuses });
     },
 

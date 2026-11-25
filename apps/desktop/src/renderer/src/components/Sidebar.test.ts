@@ -29,6 +29,7 @@ import {
   parseOlderThanDays,
   agentProjectMenuItem,
   backgroundAgentsLabel,
+  backgroundTasksLabel,
   rowAriaLabel,
   PROJECT_MENU_ITEM_COUNT,
   removeProjectDisabledReason,
@@ -1036,9 +1037,19 @@ describe("background agents badge labels", () => {
     expect(backgroundAgentsLabel(3)).toBe("3 background agents");
   });
   it("composes the row aria-label: status first, then background agents", () => {
-    expect(rowAriaLabel("T", null, 0)).toBeUndefined();
-    expect(rowAriaLabel("T", "running", 0)).toBe("T, running");
-    expect(rowAriaLabel("T", null, 2)).toBe("T, 2 background agents");
-    expect(rowAriaLabel("T", "running", 2)).toBe("T, running, 2 background agents");
+    expect(rowAriaLabel("T", null, 0, 0)).toBeUndefined();
+    expect(rowAriaLabel("T", "running", 0, 0)).toBe("T, running");
+    expect(rowAriaLabel("T", null, 2, 0)).toBe("T, 2 background agents");
+    expect(rowAriaLabel("T", "running", 2, 0)).toBe("T, running, 2 background agents");
+  });
+  it("labels background tasks, singular and plural, and nothing for zero", () => {
+    expect(backgroundTasksLabel(0)).toBeNull();
+    expect(backgroundTasksLabel(1)).toBe("1 background task");
+    expect(backgroundTasksLabel(4)).toBe("4 background tasks");
+  });
+  it("appends the background tasks part after status and agents", () => {
+    expect(rowAriaLabel("T", null, 0, 1)).toBe("T, 1 background task");
+    expect(rowAriaLabel("T", null, 0, 3)).toBe("T, 3 background tasks");
+    expect(rowAriaLabel("T", "running", 2, 1)).toBe("T, running, 2 background agents, 1 background task");
   });
 });

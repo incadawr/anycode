@@ -7,6 +7,11 @@ export function visibleBackgroundTasks(tasks: readonly ClaudeBackgroundTask[]): 
   return tasks.filter(task => task.foreground !== true);
 }
 
+/** How many listed (non-foreground) tasks are still running: the sidebar badge's task count. */
+export function runningBackgroundTaskCount(tasks: readonly ClaudeBackgroundTask[]): number {
+  return visibleBackgroundTasks(tasks).filter(task => task.status === "running").length;
+}
+
 /** Exit code from the CLI's closing wording: `... completed (exit code 0)` / `... failed with exit code 144`. Anchored to the end: the description may mention "exit 3". */
 export function backgroundExitCode(summary: string | undefined): number | undefined {
   const match = summary?.trim().match(/(?:\(exit code (-?\d{1,4})\)|exit code (-?\d{1,4}))\.?$/i);

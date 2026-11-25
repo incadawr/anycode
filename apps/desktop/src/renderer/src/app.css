@@ -1266,7 +1266,14 @@ body {
   line-height: var(--lh-tight);
 }
 
-.sidebar-row-bg-agents-robot {
+.sidebar-row-bg-agents-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.sidebar-row-bg-agents-robot,
+.sidebar-row-bg-agents-terminal {
   width: 11px;
   height: 11px;
 }

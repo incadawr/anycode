@@ -147,6 +147,7 @@ import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, isSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
 import { countRunningBackgroundChildren } from "./background-children.js";
+import { runningBackgroundTaskCount } from "./claude-background-tasks.js";
 import { dismissFailedChild, recordFailedChild } from "./failed-background-children.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 // the global settings-store (NOT part of DesktopState) — the
@@ -1528,6 +1529,8 @@ export interface DesktopState {
   runningBackgroundChildren: number;
   /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
   engineBackgroundAgents: { count: number; abandoned: boolean };
+  /** Running Bash/monitor tasks the composer lists (`claudeBackgroundTasks`), kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundTasks: number;
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
   /**
@@ -1943,6 +1946,8 @@ interface SessionSlice {
   runningBackgroundChildren: number;
   /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
   engineBackgroundAgents: { count: number; abandoned: boolean };
+  /** Running Bash/monitor tasks the composer lists (`claudeBackgroundTasks`), kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundTasks: number;
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
   modelTurns: number;
@@ -2034,6 +2039,7 @@ function initialSessionSlice(): SessionSlice {
     backgroundChildren: [],
     runningBackgroundChildren: 0,
     engineBackgroundAgents: { count: 0, abandoned: false },
+    runningBackgroundTasks: 0,
     recentBackgroundChildren: [],
     failedBackgroundChildren: [],
     modelTurns: 0,
@@ -4999,13 +5005,29 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "claude_background_task":
           set(state => {
             // A foreground-tracked call is not a background task: never listed (a later move to the background arrives unflagged).
-            if (event.foreground === true) return state.claudeBackgroundTasks.some(task => task.taskId === event.taskId) ? { claudeBackgroundTasks: state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId) } : {};
+            if (event.foreground === true) {
+              if (!state.claudeBackgroundTasks.some(task => task.taskId === event.taskId)) return {};
+              const remaining = state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId);
+              return { claudeBackgroundTasks: remaining, runningBackgroundTasks: runningBackgroundTaskCount(remaining) };
+            }
+            const previous = state.claudeBackgroundTasks.find(task => task.taskId === event.taskId);
             const tasks = [...state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId), event];
             const { [event.toolCallId]: _previous, ...rest } = state.claudeTaskByToolCall;
             const byCall = { ...rest, [event.toolCallId]: event };
             const keys = Object.keys(byCall);
             for (const key of keys.slice(0, Math.max(0, keys.length - 100))) delete byCall[key];
-            return { claudeTaskByToolCall: byCall, claudeBackgroundTasks: [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)] };
+            const claudeBackgroundTasks = [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)];
+            // The CLI going away settles its running commands as "unknown" (abandonAll) without an engine_background_agents abandon when only commands ran:
+            // flag it here, in the same snapshot, so the sidebar mirror raises no completion dot. New running work makes that abandon history.
+            const abandoned = previous?.status === "running" && event.status === "unknown"
+              ? true
+              : previous?.status !== "running" && event.status === "running" ? false : state.engineBackgroundAgents.abandoned;
+            return {
+              claudeTaskByToolCall: byCall,
+              claudeBackgroundTasks,
+              runningBackgroundTasks: runningBackgroundTaskCount(claudeBackgroundTasks),
+              ...(abandoned !== state.engineBackgroundAgents.abandoned ? { engineBackgroundAgents: { ...state.engineBackgroundAgents, abandoned } } : {}),
+            };
           });
           return;
         case "engine_notice":
