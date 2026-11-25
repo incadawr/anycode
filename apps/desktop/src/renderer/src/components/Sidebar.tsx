@@ -24,7 +24,7 @@ import { handleCreateTabResult, resolveConnectionMissingAction } from "./Session
 import { pendingResumeRowSets, resumeWithMarker, usePendingResumes } from "../pending-resumes.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
-import { ArrowUp, Chevron, Collapse, Cube, DashedRing, Dot, Ellipsis, Folder, Gear, Plus, Robot, Search, Spinner, Terminal, Trash, X } from "./icons.js";
+import { ArrowUp, Chevron, Collapse, CommandPrompt, Cube, DashedRing, Dot, Ellipsis, Folder, Gear, Plus, Robot, Search, Spinner, Trash, X } from "./icons.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import { AccountBudgetCard } from "./AccountBudgetCard.js";
 
@@ -85,6 +85,12 @@ export function backgroundTasksLabel(count: number): string | null {
   return count === 1 ? "1 background task" : `${count} background tasks`;
 }
 
+/** Tooltip for the background work pill: "{N background agents} · {N background tasks}"; `null` when there is none. */
+export function backgroundWorkSummary(agents: number, tasks: number): string | null {
+  const parts = [backgroundAgentsLabel(agents), backgroundTasksLabel(tasks)].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 /** Row button aria-label: "{title}, {status}, {N background agents}, {N background tasks}"; `undefined` when none applies. */
 export function rowAriaLabel(
   title: string,
@@ -101,13 +107,13 @@ export function rowAriaLabel(
 }
 
 /**
- * One pill for the background work of an open session: a robot group (agents) and a terminal group (Bash commands,
+ * One pill for the background work of an open session: a robot group (agents) and a prompt group (Bash commands,
  * monitors), each shown only when non-zero, sharing one slowly rotating ring. The glyphs are aria-hidden, the row's
  * aria-label carries the meaning.
  */
 function BackgroundWorkBadge({ agents, tasks }: { agents: number; tasks: number }) {
   return (
-    <span className="sidebar-row-bg-agents">
+    <span className="sidebar-row-bg-agents" title={backgroundWorkSummary(agents, tasks) ?? undefined}>
       {agents > 0 && (
         <span className="sidebar-row-bg-agents-group">
           <Robot className="sidebar-row-bg-agents-robot" />
@@ -116,7 +122,7 @@ function BackgroundWorkBadge({ agents, tasks }: { agents: number; tasks: number 
       )}
       {tasks > 0 && (
         <span className="sidebar-row-bg-agents-group">
-          <Terminal className="sidebar-row-bg-agents-terminal" />
+          <CommandPrompt className="sidebar-row-bg-agents-prompt" />
           <span className="sidebar-row-bg-agents-count">{tasks}</span>
         </span>
       )}

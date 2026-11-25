@@ -89,6 +89,15 @@ export function Terminal(props: IconProps) {
   );
 }
 
+/** CommandPrompt — bare shell prompt (chevron and cursor bar, no frame), heavier stroke so it stays legible at 11-12px. */
+export function CommandPrompt(props: IconProps) {
+  return (
+    <Icon strokeWidth={1.7} {...props}>
+      <path d="M3 4.25L7.25 8 3 11.75M8.75 12h4.5" />
+    </Icon>
+  );
+}
+
 /** ServerStack — language-server status panel. */
 export function ServerStack(props: IconProps) {
   return (

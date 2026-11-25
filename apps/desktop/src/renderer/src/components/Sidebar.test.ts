@@ -30,6 +30,7 @@ import {
   agentProjectMenuItem,
   backgroundAgentsLabel,
   backgroundTasksLabel,
+  backgroundWorkSummary,
   rowAriaLabel,
   PROJECT_MENU_ITEM_COUNT,
   removeProjectDisabledReason,
@@ -1051,5 +1052,22 @@ describe("background agents badge labels", () => {
     expect(rowAriaLabel("T", null, 0, 1)).toBe("T, 1 background task");
     expect(rowAriaLabel("T", null, 0, 3)).toBe("T, 3 background tasks");
     expect(rowAriaLabel("T", "running", 2, 1)).toBe("T, running, 2 background agents, 1 background task");
+  });
+});
+
+describe("backgroundWorkSummary (badge tooltip)", () => {
+  it("is null with nothing running", () => {
+    expect(backgroundWorkSummary(0, 0)).toBeNull();
+  });
+  it("names agents, singular and plural", () => {
+    expect(backgroundWorkSummary(1, 0)).toBe("1 background agent");
+    expect(backgroundWorkSummary(3, 0)).toBe("3 background agents");
+  });
+  it("names tasks, singular and plural", () => {
+    expect(backgroundWorkSummary(0, 1)).toBe("1 background task");
+    expect(backgroundWorkSummary(0, 2)).toBe("2 background tasks");
+  });
+  it("joins agents and tasks with a middle dot", () => {
+    expect(backgroundWorkSummary(2, 1)).toBe("2 background agents · 1 background task");
   });
 });
