@@ -1,0 +1,104 @@
+import { describe, expect, it } from "vitest";
+import type { WireBackgroundChild } from "../../shared/protocol.js";
+import type { ClaudeBackgroundTask } from "./claude-background-tasks.js";
+import { collapsedRows, deckRowsFrom, visibleDeckRows, type AnchorState, type DeckRow } from "./running-deck.js";
+
+const task = (extra: Partial<ClaudeBackgroundTask> = {}): ClaudeBackgroundTask => ({ type: "claude_background_task", taskId: "t", toolCallId: "call", kind: "bash", description: "npm test", startedAt: 10, status: "running", ...extra });
+const child = (extra: Partial<WireBackgroundChild> = {}): WireBackgroundChild => ({ childSessionId: "c", spawnToolCallId: "spawn", agentType: "general-purpose", description: "Explore repo", startedAt: 20, ...extra });
+const row = (extra: Partial<DeckRow> = {}): DeckRow => ({ key: "task:t", kind: "task", toolCallId: "call", title: "x", typeLabel: "Bash", startedAt: 0, waiting: false, detail: undefined, ...extra });
+const anchor = (extra: Partial<AnchorState> = {}): AnchorState => ({ hasCard: true, live: true, above: false, distance: 0, ...extra });
+
+describe("deckRowsFrom", () => {
+  it("drops foreground and finished tasks and failed children", () => {
+    const rows = deckRowsFrom(
+      [task({ taskId: "a" }), task({ taskId: "fg", foreground: true }), task({ taskId: "done", status: "completed" }), task({ taskId: "bad", status: "failed" })],
+      [child({ childSessionId: "ok" }), child({ childSessionId: "ended", endedAt: 5 }), child({ childSessionId: "failed", failureReason: "boom" })],
+    );
+    expect(rows.map(r => r.key)).toEqual(["task:a", "child:ok"]);
+  });
+
+  it("anchors rows on toolCallId / spawnToolCallId", () => {
+    const rows = deckRowsFrom([task({ toolCallId: "tc" })], [child({ spawnToolCallId: "sp" }), child({ childSessionId: "c2", spawnToolCallId: undefined })]);
+    expect(rows.map(r => [r.key, r.toolCallId])).toEqual([["task:t", "tc"], ["child:c", "sp"], ["child:c2", undefined]]);
+  });
+
+  it("fills kind, type label, start time and waiting", () => {
+    const [t, c] = deckRowsFrom([task({ kind: "monitor" })], [child()]);
+    expect(t).toMatchObject({ kind: "task", typeLabel: "Monitor", startedAt: 10, waiting: false });
+    expect(c).toMatchObject({ kind: "child", typeLabel: "general-purpose", startedAt: 20, waiting: false });
+  });
+
+  it("title falls back from descriptionFor to description to a constant, including empty descriptions", () => {
+    const fallback = (t: ClaudeBackgroundTask) => (t.taskId === "x" ? "from input" : undefined);
+    const rows = deckRowsFrom(
+      [task({ taskId: "x", description: "" }), task({ taskId: "y", description: "own" }), task({ taskId: "z", description: "" })],
+      [],
+      fallback,
+    );
+    expect(rows.map(r => r.title)).toEqual(["from input", "own", "Background task"]);
+    expect(deckRowsFrom([task({ description: "" })], [])[0]?.title).toBe("Background task");
+  });
+
+  it("detail is the task summary or the child's turn and tool counts", () => {
+    const rows = deckRowsFrom(
+      [task({ taskId: "s", summary: "building" }), task({ taskId: "n" })],
+      [child({ childSessionId: "p", turns: 3, toolCalls: 12 }), child({ childSessionId: "q" })],
+    );
+    expect(rows.map(r => r.detail)).toEqual(["building", undefined, "turn 3 · 12 tools", undefined]);
+  });
+
+  it("does not mutate its inputs", () => {
+    const tasks = Object.freeze([Object.freeze(task())]);
+    const children = Object.freeze([Object.freeze(child())]);
+    expect(() => deckRowsFrom(tasks, children)).not.toThrow();
+  });
+});
+
+describe("visibleDeckRows", () => {
+  it("lists rows without an anchor, without a card, or whose card is not live", () => {
+    const rows = [row({ key: "a", toolCallId: undefined }), row({ key: "b", toolCallId: "b" }), row({ key: "c", toolCallId: "c" })];
+    const anchors = new Map([["b", anchor({ hasCard: false })], ["c", anchor({ live: false })]]);
+    expect(visibleDeckRows(rows, anchors).map(r => r.key)).toEqual(["a", "b", "c"]);
+  });
+
+  it("hides a live card that is visible and shows one that is above", () => {
+    const rows = [row({ key: "vis", toolCallId: "vis" }), row({ key: "up", toolCallId: "up" })];
+    const anchors = new Map([["vis", anchor({ above: false })], ["up", anchor({ above: true })]]);
+    expect(visibleDeckRows(rows, anchors).map(r => r.key)).toEqual(["up"]);
+  });
+
+  it("orders card-less rows newest first (ties by key), then live-above rows by ascending distance", () => {
+    const rows = [
+      row({ key: "far", toolCallId: "far", startedAt: 99 }),
+      row({ key: "old", toolCallId: undefined, startedAt: 1 }),
+      row({ key: "tieB", toolCallId: undefined, startedAt: 5 }),
+      row({ key: "near", toolCallId: "near", startedAt: 0 }),
+      row({ key: "tieA", toolCallId: undefined, startedAt: 5 }),
+      row({ key: "new", toolCallId: undefined, startedAt: 8 }),
+    ];
+    const anchors = new Map([["far", anchor({ above: true, distance: 300 })], ["near", anchor({ above: true, distance: 40 })]]);
+    expect(visibleDeckRows(rows, anchors).map(r => r.key)).toEqual(["new", "tieA", "tieB", "old", "near", "far"]);
+  });
+
+  it("does not mutate its inputs", () => {
+    const rows = Object.freeze([row({ key: "b", toolCallId: undefined, startedAt: 1 }), row({ key: "a", toolCallId: undefined, startedAt: 2 })]);
+    expect(visibleDeckRows(rows, new Map()).map(r => r.key)).toEqual(["a", "b"]);
+    expect(rows.map(r => r.key)).toEqual(["b", "a"]);
+  });
+});
+
+describe("collapsedRows", () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => row({ key: `k${i}` }));
+  it("caps at 3 and counts the rest", () => {
+    const { front, more } = collapsedRows(many(5));
+    expect(front.map(r => r.key)).toEqual(["k0", "k1", "k2"]);
+    expect(more).toBe(2);
+  });
+  it("shows everything when under the cap", () => {
+    expect(collapsedRows(many(2))).toMatchObject({ more: 0 });
+    expect(collapsedRows(many(2)).front).toHaveLength(2);
+  });
+  it("honours a custom max", () => {
+    expect(collapsedRows(many(4), 1)).toMatchObject({ more: 3 });
+  });
+});
