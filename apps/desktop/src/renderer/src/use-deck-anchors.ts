@@ -70,7 +70,13 @@ export interface UseDeckAnchorsArgs {
   readonly collapsedDeckBottom: () => number;
 }
 
-export function useDeckAnchors(args: UseDeckAnchorsArgs): AnchorMap {
+export interface DeckAnchors {
+  readonly anchors: AnchorMap;
+  /** Coalesces into one rAF read; for callers that know the geometry changed (e.g. the todo card resized). */
+  readonly schedule: () => void;
+}
+
+export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
   const ctx = useContext(TabContext);
   const [anchors, setAnchors] = useState<AnchorMap>(EMPTY_ANCHORS);
   const idEntry = useRef<BlockIdEntry | null>(null);
@@ -176,5 +182,5 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): AnchorMap {
     });
   }, [ctx, schedule]);
 
-  return anchors;
+  return { anchors, schedule };
 }

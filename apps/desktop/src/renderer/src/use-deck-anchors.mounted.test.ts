@@ -44,16 +44,19 @@ function card(list: HTMLElement, id: string, bottom: number): HTMLElement {
 function mount(opts: { list: HTMLElement; blocks: TranscriptBlock[]; rows: DeckRow[]; deckBottom?: number }) {
   const store = createStore(() => ({ claudeTaskByToolCall: Object.fromEntries(opts.rows.map(r => [r.toolCallId!, task(r.toolCallId!)])) }));
   const seen: ReadonlyMap<string, AnchorState>[] = [];
+  const schedule = { current: (() => undefined) as () => void };
   const listRef = { current: opts.list } as RefObject<HTMLElement | null>;
   function Probe(p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) {
-    seen.push(useDeckAnchors({ listRef, blocks: p.blocks, rows: p.rows, collapsedDeckBottom: () => opts.deckBottom ?? 100 }));
+    const result = useDeckAnchors({ listRef, blocks: p.blocks, rows: p.rows, collapsedDeckBottom: () => opts.deckBottom ?? 100 });
+    schedule.current = result.schedule;
+    seen.push(result.anchors);
     return null;
   }
   const el = (p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) => createElement(TabContext.Provider, { value: { tabId: "t", store: store as never } }, createElement(Probe, p));
   const root = createRoot(document.createElement("div"));
   roots.push(root);
   act(() => root.render(el({ blocks: opts.blocks, rows: opts.rows })));
-  return { seen, store, rerender: (p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) => act(() => root.render(el(p))) };
+  return { seen, store, schedule, rerender: (p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) => act(() => root.render(el(p))) };
 }
 
 it("reports a card scrolled above after one frame", () => {
@@ -143,4 +146,16 @@ it("updates live when the linked task flips with rows and blocks unchanged", () 
   act(() => store.setState({ claudeTaskByToolCall: { a: { ...task("a"), status: "completed" } } } as never));
   flush();
   expect(seen.at(-1)!.get("task:a")!.live).toBe(false);
+});
+
+it("exposes schedule: an external trigger costs one coalesced read", () => {
+  const list = attachedList();
+  const a = card(list, "a", 50);
+  const { schedule } = mount({ list, blocks: [tool("a")], rows: [row("a")] });
+  flush();
+  const reads = (a.getBoundingClientRect as ReturnType<typeof vi.fn>).mock.calls.length;
+  act(() => { schedule.current(); schedule.current(); });
+  expect(frames.length).toBe(1);
+  flush();
+  expect((a.getBoundingClientRect as ReturnType<typeof vi.fn>).mock.calls.length).toBe(reads + 1);
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement, useState, type ReactElement, type RefObject } from "react";
+import { act, createElement, useLayoutEffect, useState, type ReactElement, type RefObject } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabContext } from "../tab-context.js";
@@ -307,6 +307,116 @@ describe("RunningDeckHost", () => {
     expect(intervals).not.toHaveBeenCalled();
     act(() => empty.setState({ claudeBackgroundTasks: [task("x")] } as never));
     expect(intervals).toHaveBeenCalledTimes(1);
+  });
+});
+
+const child = (id: string) => ({ childSessionId: id, agentType: "general", description: `child ${id}`, startedAt: 1 });
+
+describe("RunningDeckHost store wiring", () => {
+  it("shows one row per running task and detached child, and drops a completed task", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const store = storeWith(["bash1"]);
+    store.setState({ backgroundChildren: [child("c1")] } as never);
+    mountInto(hostIn("A", store, { current: list }), list);
+    expect(rowButtons()).toHaveLength(2);
+    expect(labels().some(l => l?.includes("job bash1"))).toBe(true);
+    expect(labels().some(l => l?.includes("child c1"))).toBe(true);
+    act(() => store.setState({ claudeBackgroundTasks: [{ ...task("bash1"), status: "completed" }] } as never));
+    expect(rowButtons()).toHaveLength(1);
+    expect(labels().some(l => l?.includes("job bash1"))).toBe(false);
+  });
+
+  it("does not leak rows between tab stores", () => {
+    const listA = document.createElement("div");
+    const listB = document.createElement("div");
+    document.body.append(listA, listB);
+    const a = storeWith(["a1"]);
+    const b = storeWith(["b1", "b2"]);
+    mountInto(hostIn("A", a, { current: listA }), listA);
+    mountInto(hostIn("B", b, { current: listB }), listB);
+    expect(listA.querySelectorAll(".running-deck-row")).toHaveLength(1);
+    expect(listB.querySelectorAll(".running-deck-row")).toHaveLength(2);
+    act(() => a.setState({ claudeBackgroundTasks: [] } as never));
+    expect(listA.querySelectorAll(".running-deck-row")).toHaveLength(0);
+    expect(listB.querySelectorAll(".running-deck-row")).toHaveLength(2);
+  });
+});
+
+describe("RunningDeckHost machinery", () => {
+  let observers: { callback: ResizeObserverCallback; targets: Element[] }[] = [];
+  let frames: FrameRequestCallback[] = [];
+  const raf = vi.fn((cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
+  beforeEach(() => {
+    observers = [];
+    frames = [];
+    raf.mockClear();
+    vi.stubGlobal("ResizeObserver", class {
+      readonly entry: { callback: ResizeObserverCallback; targets: Element[] };
+      constructor(callback: ResizeObserverCallback) { this.entry = { callback, targets: [] }; observers.push(this.entry); }
+      observe(target: Element) { this.entry.targets.push(target); }
+      unobserve() {}
+      disconnect() {}
+    });
+    vi.stubGlobal("requestAnimationFrame", raf);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  });
+  const flush = () => { const run = frames; frames = []; act(() => run.forEach(cb => cb(0))); };
+
+  function listWithCard() {
+    const list = document.createElement("div");
+    Object.defineProperty(list, "clientHeight", { value: 800 });
+    const panel = document.createElement("div");
+    panel.className = "todo-panel";
+    const todo = document.createElement("div");
+    todo.className = "todo-panel-card";
+    panel.append(todo);
+    list.append(panel);
+    document.body.append(list);
+    return { list, todo };
+  }
+
+  it("builds no observers and asks for no frames while there are no rows", () => {
+    const { list } = listWithCard();
+    mountInto(hostIn("A", storeWith([]), { current: list }), list);
+    expect(observers).toHaveLength(0);
+    expect(raf).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the anchors once when the todo card resizes", () => {
+    const { list, todo } = listWithCard();
+    const anchor = document.createElement("div");
+    anchor.setAttribute("data-block-id", "x");
+    anchor.getClientRects = () => [{}] as unknown as DOMRectList;
+    anchor.getBoundingClientRect = vi.fn(() => ({ top: 90, bottom: 100, left: 0, right: 10, width: 10, height: 10 }) as DOMRect);
+    list.append(anchor);
+    const blocks = [{ kind: "tool_call", id: "x", toolCallId: "x", toolName: "Bash", input: { command: "ls" }, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null }] as unknown as TranscriptBlock[];
+    const store = storeWith(["x"]);
+    mountInto(createElement(TabContext.Provider, { value: { tabId: "A", store } },
+      createElement(RunningDeckHost, { listRef: { current: list }, blocks, onJumpToBlock: () => undefined })), list);
+    flush();
+    const reads = () => (anchor.getBoundingClientRect as ReturnType<typeof vi.fn>).mock.calls.length;
+    const before = reads();
+    expect(before).toBeGreaterThan(0);
+    const cardObserver = observers.find(o => o.targets.includes(todo));
+    expect(cardObserver).toBeDefined();
+    act(() => { cardObserver!.callback([], {} as ResizeObserver); });
+    flush();
+    expect(reads()).toBe(before + 1);
+  });
+
+  it("places the deck in a layout effect, before the first paint", () => {
+    const { list } = listWithCard();
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({ top: 0, left: 0, right: 100, bottom: 50, width: 100, height: 50 }) as DOMRect);
+    let placedAtLayout: string | null = null;
+    function After() {
+      useLayoutEffect(() => { placedAtLayout = document.querySelector<HTMLElement>(".running-deck-wrap")?.style.getPropertyValue("--deck-top") ?? null; }, []);
+      return null;
+    }
+    mountInto(createElement("div", null,
+      hostIn("A", storeWith(["x"]), { current: list }),
+      createElement(After)), list);
+    expect(placedAtLayout).toBe("58px");
   });
 });
 

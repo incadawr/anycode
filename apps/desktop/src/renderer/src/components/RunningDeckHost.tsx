@@ -1,8 +1,8 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useStore, type StoreApi } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { useShallow } from "zustand/react/shallow";
-import { deckRowsFrom } from "../running-deck.js";
+import { deckRowsFrom, type DeckRow } from "../running-deck.js";
 import type { DesktopState, TranscriptBlock } from "../store.js";
 import { TabContext } from "../tab-context.js";
 import { blockIdEntry, useDeckAnchors, type BlockIdEntry } from "../use-deck-anchors.js";
@@ -87,23 +87,18 @@ export interface RunningDeckHostProps {
   readonly onJumpToBlock: (blockId: string) => void;
 }
 
-/**
- * Owns everything that changes often (store rows, anchors, the elapsed tick,
- * placement) so MessageList never re-renders because of the deck.
- */
-export function RunningDeckHost({ listRef, blocks, onJumpToBlock }: RunningDeckHostProps) {
-  const ctx = useContext(TabContext);
-  const tabId = ctx?.tabId ?? "";
-  const { tasks, children } = useStore(
-    (ctx?.store ?? EMPTY_STORE) as StoreApi<DeckSources>,
-    useShallow((state: DeckSources) => ({ tasks: state.claudeBackgroundTasks, children: state.backgroundChildren })),
-  );
-  const rows = useMemo(
-    () => deckRowsFrom(tasks, children, task => taskDescription(task, blocks)),
-    [tasks, children, blocks],
-  );
-  const hasRows = rows.length > 0;
+interface DeckMachineryProps extends RunningDeckHostProps {
+  readonly rows: readonly DeckRow[];
+  readonly collapsed: boolean;
+  readonly onCollapsedChange: (collapsed: boolean) => void;
+}
 
+/**
+ * The geometry side of the deck (anchors, placement, observers, elapsed tick).
+ * Mounted only while rows exist, so a transcript with no background work pays
+ * for none of it.
+ */
+function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onCollapsedChange }: DeckMachineryProps) {
   const idEntry = useRef<BlockIdEntry | null>(null);
   const blockIds = useMemo(() => {
     idEntry.current = blockIdEntry(idEntry.current, blocks);
@@ -154,7 +149,7 @@ export function RunningDeckHost({ listRef, blocks, onJumpToBlock }: RunningDeckH
     return { originTop, top: p.top === "default" ? spacing.defaultTop : p.top, rowHeight: spacing.rowHeight };
   }, [listRef]);
 
-  const anchors = useDeckAnchors({
+  const { anchors, schedule } = useDeckAnchors({
     listRef,
     blocks,
     rows,
@@ -166,14 +161,16 @@ export function RunningDeckHost({ listRef, blocks, onJumpToBlock }: RunningDeckH
 
   // Re-measure on list resize and todo-card resize; the card mounts and
   // unmounts as a direct child of the list, so re-attach on childList changes.
-  useEffect(() => {
+  // A layout effect, so the first placement lands before the first paint.
+  useLayoutEffect(() => {
     const list = listRef.current;
-    if (!hasRows || !list || typeof ResizeObserver === "undefined") {
+    if (!list || typeof ResizeObserver === "undefined") {
       return;
     }
     const resize = new ResizeObserver(() => {
       spacingRef.current = null;
       place();
+      schedule();
     });
     resize.observe(list);
     const attach = () => {
@@ -190,6 +187,7 @@ export function RunningDeckHost({ listRef, blocks, onJumpToBlock }: RunningDeckH
       }
     };
     attach();
+    place();
     const mutations = typeof MutationObserver === "undefined" ? null : new MutationObserver(attach);
     mutations?.observe(list, { childList: true });
     return () => {
@@ -198,31 +196,20 @@ export function RunningDeckHost({ listRef, blocks, onJumpToBlock }: RunningDeckH
       cardRef.current = null;
       written.current = { top: null, max: null, chipOnly: false };
     };
-  }, [hasRows, listRef, place]);
+  }, [listRef, place, schedule]);
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!hasRows) {
-      return;
-    }
     setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(id);
-  }, [hasRows]);
-
-  const [collapsedTabs, setCollapsedTabs] = useState<ReadonlySet<string>>(() => new Set());
-  const onCollapsedChange = useCallback((collapsed: boolean) => {
-    setCollapsedTabs(prev => new Set(collapsed ? [...prev, tabId] : [...prev].filter(id => id !== tabId)));
-  }, [tabId]);
+  }, []);
 
   const jump = useCallback((blockId: string) => {
     onJumpToBlock(blockId);
     listRef.current?.focus({ preventScroll: true });
   }, [onJumpToBlock, listRef]);
 
-  if (!hasRows) {
-    return null;
-  }
   return (
     <div className="running-deck-wrap" ref={wrapRef}>
       <RunningDeck
@@ -231,9 +218,35 @@ export function RunningDeckHost({ listRef, blocks, onJumpToBlock }: RunningDeckH
         blockIdByToolCall={blockIds}
         elapsedNow={now}
         onJumpToBlock={jump}
-        collapsed={collapsedTabs.has(tabId)}
+        collapsed={collapsed}
         onCollapsedChange={onCollapsedChange}
       />
     </div>
   );
+}
+
+/** Cheap shell: derives the rows from the tab store and mounts the machinery only when there are any. */
+export function RunningDeckHost(props: RunningDeckHostProps) {
+  const { blocks } = props;
+  const ctx = useContext(TabContext);
+  const tabId = ctx?.tabId ?? "";
+  const { tasks, children } = useStore(
+    (ctx?.store ?? EMPTY_STORE) as StoreApi<DeckSources>,
+    useShallow((state: DeckSources) => ({ tasks: state.claudeBackgroundTasks, children: state.backgroundChildren })),
+  );
+  const rows = useMemo(
+    () => deckRowsFrom(tasks, children, task => taskDescription(task, blocks)),
+    [tasks, children, blocks],
+  );
+  const hasRows = rows.length > 0;
+
+  const [collapsedTabs, setCollapsedTabs] = useState<ReadonlySet<string>>(() => new Set());
+  const onCollapsedChange = useCallback((collapsed: boolean) => {
+    setCollapsedTabs(prev => new Set(collapsed ? [...prev, tabId] : [...prev].filter(id => id !== tabId)));
+  }, [tabId]);
+
+  if (!hasRows) {
+    return null;
+  }
+  return <DeckMachinery {...props} rows={rows} collapsed={collapsedTabs.has(tabId)} onCollapsedChange={onCollapsedChange} />;
 }
