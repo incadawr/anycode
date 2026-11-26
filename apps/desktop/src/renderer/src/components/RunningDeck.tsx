@@ -82,7 +82,7 @@ export function RunningDeck(props: RunningDeckProps) {
   const stackEl = useRef<HTMLDivElement | null>(null);
   // Set by the click handlers that swap the chip and the rows, so focus lands on a live element
   // whether or not the browser fires blur for the node it removes.
-  const pendingFocus = useRef<"chip" | "row" | null>(null);
+  const pendingFocus = useRef<"chip" | "foot" | null>(null);
 
   const setRegion = useCallback((el: HTMLDivElement | null) => {
     regionEl.current = el;
@@ -102,7 +102,7 @@ export function RunningDeck(props: RunningDeckProps) {
     const pending = pendingFocus.current;
     pendingFocus.current = null;
     if (pending !== null) {
-      const target = pending === "chip" ? chipEl.current : [...rowEls.current.values()][0] ?? collapseEl.current;
+      const target = pending === "chip" ? chipEl.current : collapseEl.current ?? [...rowEls.current.values()][0];
       if (target?.isConnected) {
         target.focus({ preventScroll: true });
         prevKeys.current = mounted.map(r => r.key);
@@ -154,9 +154,12 @@ export function RunningDeck(props: RunningDeckProps) {
     return null;
   }
 
-  const onFocus = () => {
+  // Like hover, only a row opens the deck: pressing Hide or the chip focuses them, and opening then would move the foot away mid-click.
+  const onFocus = (event: FocusEvent<HTMLDivElement>) => {
     focusInside.current = true;
-    setFocusWithin(true);
+    if (event.target instanceof Element && event.target.closest(".running-deck-stack") !== null) {
+      setFocusWithin(true);
+    }
   };
   const onBlur = (event: FocusEvent<HTMLDivElement>) => {
     const next = event.relatedTarget;
@@ -240,7 +243,7 @@ export function RunningDeck(props: RunningDeckProps) {
           className="running-deck-chip"
           onFocus={() => { focusedId.current = CHIP_ID; }}
           onClick={() => {
-            pendingFocus.current = "row";
+            pendingFocus.current = "foot";
             onCollapsedChange(false);
           }}
         >

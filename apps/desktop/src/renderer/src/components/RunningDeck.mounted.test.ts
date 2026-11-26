@@ -272,6 +272,13 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
     expect(region()!.hasAttribute("data-open")).toBe(true);
   });
 
+  it("does not open the deck when Hide takes focus (a press would otherwise move it)", () => {
+    mountInto(deck({ rows: five() }));
+    focus(document.querySelector<HTMLButtonElement>(".running-deck-collapse")!);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    expect(rowButtons()).toHaveLength(3);
+  });
+
   it("does not focus the region when its background is pressed, but leaves controls alone", () => {
     mountInto(deck({ rows: five() }));
     const down = (el: Element) => { const e = new MouseEvent("mousedown", { bubbles: true, cancelable: true }); act(() => { el.dispatchEvent(e); }); return e.defaultPrevented; };
@@ -295,7 +302,8 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
     } as never);
     act(() => chip.click());
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toBe(rowButtons()[0]);
+    expect(document.activeElement).toBe(document.querySelector(".running-deck-collapse"));
+    expect(region()!.hasAttribute("data-open")).toBe(false);
   });
 
   it("keeps peek rows out of the tab order while closed, including after Escape", () => {
