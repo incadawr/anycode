@@ -1396,6 +1396,25 @@ export function statusLabel(
   return STATUS_LABELS[block.status];
 }
 
+/**
+ * Whether the card is still doing work: the one rule the card's collapsed
+ * progress and the running deck share. A card carrying an agent runs until the
+ * agent's final lands; a Bash/Monitor launch runs while its linked background
+ * task does; a detached spawn card runs while the call or its child does.
+ */
+export function cardShowsRunning(
+  block: Pick<ToolCallBlock, "toolName" | "status" | "subagent" | "input"> &
+    Partial<Pick<ToolCallBlock, "subagentDispatched" | "subagentOutcomeUnknown">>,
+  linkedTask: ClaudeBackgroundTask | undefined,
+): boolean {
+  if (block.subagent != null) return block.subagent.final === null;
+  if (block.toolName === "Bash" || block.toolName === "Monitor") {
+    return block.status === "success" && linkedTask?.status === "running";
+  }
+  if (isBackgroundAgent(block)) return block.status === "running";
+  return false;
+}
+
 /** The badge's tint (the `tool-call-status-*` suffix): how the call actually ended, `unknown` when that was lost. */
 export function statusTone(
   block: Pick<ToolCallBlock, "toolName" | "status" | "input"> & Partial<Pick<ToolCallBlock, "subagent">>,
@@ -2287,7 +2306,7 @@ export function ToolCallHeaderRow({
         )}
         {/* Any card can carry a running agent: the Claude CLI reports an agent
             resumed by SendMessage on the SendMessage card. */}
-        {!expanded && block.subagent && block.subagent.final === null && (
+        {!expanded && block.subagent && cardShowsRunning(block, undefined) && (
           <span className="subagent-collapsed-progress">
             <Spinner className="icon-spin" />
             {formatSubagentCounters(block.subagent)}
