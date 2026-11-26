@@ -3356,6 +3356,10 @@ button.environment-menu-row:hover,
   height: calc(var(--n) * var(--deck-row-h) + var(--deck-extra));
   max-height: calc(var(--deck-max, 50dvh) - var(--deck-foot-h));
   overflow-y: auto;
+}
+
+/* Set by RunningDeck only while the open stack really overflows. */
+.running-deck[data-open] .running-deck-stack[data-scrollable] {
   overscroll-behavior: contain;
 }
 
@@ -3381,6 +3385,10 @@ button.environment-menu-row:hover,
   pointer-events: auto;
   transform-origin: center bottom;
   transition: transform var(--dur-2) var(--ease-out), height var(--dur-2) var(--ease-out);
+}
+
+.running-deck-row.ak-btn[aria-disabled="true"] {
+  cursor: default;
 }
 
 .running-deck-row.ak-btn:hover:not(:disabled) {
@@ -3527,7 +3535,7 @@ button.environment-menu-row:hover,
 .running-deck-more,
 .running-deck-collapse.ak-btn,
 .running-deck-chip.ak-btn,
-.running-deck-chip-only {
+.running-deck-chip-only.ak-btn {
   pointer-events: auto;
   height: auto;
   padding: 0 var(--sp-2);
@@ -3564,7 +3572,7 @@ button.environment-menu-row:hover,
 
 /* Short window + tall todo card: no room for even three rows, so only the
    "N running" chip shows, left-aligned at the default top, clear of the card. */
-.running-deck-chip-only {
+.running-deck-chip-only.ak-btn {
   display: none;
   align-self: flex-start;
   font-size: var(--fs-xs);
@@ -3575,8 +3583,12 @@ button.environment-menu-row:hover,
   display: none;
 }
 
-.running-deck-wrap[data-chip-only] .running-deck-chip-only {
+.running-deck-wrap[data-chip-only] .running-deck-chip-only.ak-btn {
   display: inline-flex;
+}
+
+.running-deck-chip-only.ak-btn[aria-disabled="true"] {
+  cursor: default;
 }
 
 /* Centered measure column: max 76ch, centered via margin auto in the same

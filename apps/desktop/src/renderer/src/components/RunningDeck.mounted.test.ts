@@ -6,7 +6,7 @@ import { TabContext } from "../tab-context.js";
 import type { AnchorState, DeckRow } from "../running-deck.js";
 import { createDesktopStore, type TranscriptBlock } from "../store.js";
 import { RunningDeck } from "./RunningDeck.js";
-import { RunningDeckHost, deckPlacement } from "./RunningDeckHost.js";
+import { RunningDeckHost, deckPlacement, resetFoldedDecks } from "./RunningDeckHost.js";
 import { MessageList } from "./MessageList.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -64,6 +64,7 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
 });
 afterEach(() => {
+  resetFoldedDecks();
   roots.forEach(r => act(() => r.unmount()));
   roots = [];
   document.body.replaceChildren();
@@ -254,6 +255,104 @@ describe("RunningDeck", () => {
   });
 });
 
+// ── final-wave interaction guards ──
+
+const over = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body })); });
+const five = () => ["a", "b", "c", "d", "e"].map(id => row(id));
+
+describe("RunningDeck pointer, focus and a11y guards", () => {
+  it("opens from the row stack only: the foot never opens or moves the deck", () => {
+    mountInto(deck({ rows: five() }));
+    const hide = document.querySelector<HTMLButtonElement>(".running-deck-collapse")!;
+    over(hide);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    over(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    over(hide);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+  });
+
+  it("does not focus the region when its background is pressed, but leaves controls alone", () => {
+    mountInto(deck({ rows: five() }));
+    const down = (el: Element) => { const e = new MouseEvent("mousedown", { bubbles: true, cancelable: true }); act(() => { el.dispatchEvent(e); }); return e.defaultPrevented; };
+    expect(down(region()!)).toBe(true);
+    expect(down(document.querySelector(".running-deck-foot")!)).toBe(true);
+    expect(down(rowButtons()[0]!)).toBe(false);
+    expect(down(document.querySelector(".running-deck-collapse")!)).toBe(false);
+  });
+
+  it("leaves focus on a live element when the chip is clicked, even if the browser blurs the removed chip", () => {
+    mountInto(deck({ rows: five() }));
+    act(() => document.querySelector<HTMLButtonElement>(".running-deck-collapse")!.click());
+    const chip = document.querySelector<HTMLButtonElement>(".running-deck-chip")!;
+    focus(chip);
+    const remove = Node.prototype.removeChild;
+    vi.spyOn(Node.prototype, "removeChild").mockImplementation(function (this: Node, child: Node) {
+      if (child === chip || (child instanceof Element && child.contains(chip))) {
+        act(() => { chip.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null })); });
+      }
+      return remove.call(this, child) as never;
+    } as never);
+    act(() => chip.click());
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(rowButtons()[0]);
+  });
+
+  it("keeps peek rows out of the tab order while closed, including after Escape", () => {
+    mountInto(deck({ rows: five() }));
+    expect(rowButtons().map(b => b.tabIndex)).toEqual([0, -1, -1]);
+    focus(rowButtons()[0]!);
+    expect(rowButtons().every(b => b.tabIndex === 0)).toBe(true);
+    keyDown(document.activeElement!, "Escape");
+    expect(rowButtons().map(b => b.tabIndex)).toEqual([0, -1, -1]);
+  });
+
+  it("names jumpable rows by their affordance and disables rows without a card", () => {
+    const ids = new Map([["a", "block-a"]]);
+    mountInto(deck({ rows: [row("a", { detail: "turn 2 · 3 tools" }), row("b")], blockIds: ids }));
+    const [a, b] = rowButtons();
+    expect(a!.getAttribute("aria-label")).toBe("Bash: run a, running, jump to its card");
+    expect(a!.hasAttribute("aria-disabled")).toBe(false);
+    expect(document.getElementById(a!.getAttribute("aria-describedby")!)!.textContent).toBe("turn 2 · 3 tools");
+    expect(b!.getAttribute("aria-label")).toBe("Bash: run b, running");
+    expect(b!.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("contains overscroll only while the open stack overflows", () => {
+    const sh = vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(500);
+    const ch = vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(100);
+    mountInto(deck({ rows: five() }));
+    const stack = () => document.querySelector<HTMLElement>(".running-deck-stack")!;
+    expect(stack().hasAttribute("data-scrollable")).toBe(false);
+    focus(rowButtons()[0]!);
+    expect(stack().hasAttribute("data-scrollable")).toBe(true);
+    sh.mockReturnValue(100);
+    keyDown(document.activeElement!, "Escape");
+    focus(rowButtons()[0]!);
+    ch.mockReturnValue(100);
+    act(() => { rowButtons()[0]!.blur(); });
+    focus(rowButtons()[0]!);
+    expect(stack().hasAttribute("data-scrollable")).toBe(false);
+  });
+
+  it("makes the chip-only chip a real button that jumps to the first card", () => {
+    const jumps: string[] = [];
+    mountInto(deck({ rows: [row("a")], blockIds: new Map([["a", "block-a"]]), onJump: id => jumps.push(id) }));
+    const chip = document.querySelector<HTMLButtonElement>(".running-deck-chip-only")!;
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip.getAttribute("aria-label")).toBe("1 running: run a, jump to its card");
+    act(() => chip.click());
+    expect(jumps).toEqual(["block-a"]);
+  });
+
+  it("orders nearest-above first in the rendered rows", () => {
+    const rows = [row("far"), row("near")];
+    const anchors = new Map([["task:far", { hasCard: true, live: true, above: true, distance: -900 }], ["task:near", { hasCard: true, live: true, above: true, distance: -30 }]]);
+    mountInto(deck({ rows, anchors }));
+    expect(labels()).toEqual(["Bash: run near, running", "Bash: run far, running"]);
+  });
+});
+
 // ── host ──
 
 const task = (id: string, startedAt = 1_000) => ({ type: "claude_background_task" as const, taskId: id, toolCallId: id, kind: "bash" as const, description: `job ${id}`, startedAt, status: "running" as const });
@@ -286,6 +385,46 @@ describe("RunningDeckHost", () => {
     expect(document.querySelector(".running-deck-chip")).not.toBeNull();
   });
 
+  it("keeps the folded flag when the tab's list is remounted (key={tabId})", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const store = storeWith(["a1", "a2"]);
+    const first = mountInto(hostIn("A", store, { current: list }), list);
+    act(() => document.querySelector<HTMLButtonElement>(".running-deck-collapse")!.click());
+    expect(document.querySelector(".running-deck-chip")).not.toBeNull();
+    act(() => first.root.unmount());
+    roots = roots.filter(r => r !== first.root);
+    document.body.replaceChildren(list);
+    mountInto(hostIn("A", store, { current: list }), list);
+    expect(document.querySelector(".running-deck-chip")).not.toBeNull();
+    expect(rowButtons()).toHaveLength(0);
+  });
+
+  it("stops the elapsed tick in chip-only mode (no room for rows)", () => {
+    vi.useFakeTimers();
+    const clear = vi.spyOn(globalThis, "clearInterval");
+    const list = document.createElement("div");
+    Object.defineProperty(list, "clientHeight", { value: 0 });
+    document.body.append(list);
+    mountInto(hostIn("A", storeWith(["a1"]), { current: list }), list);
+    expect(clear).toHaveBeenCalled();
+  });
+
+  it("stops the elapsed tick while folded", () => {
+    vi.useFakeTimers();
+    const set = vi.spyOn(globalThis, "setInterval");
+    const clear = vi.spyOn(globalThis, "clearInterval");
+    const list = document.createElement("div");
+    Object.defineProperty(list, "clientHeight", { value: 800 });
+    document.body.append(list);
+    mountInto(hostIn("A", storeWith(["a1"]), { current: list }), list);
+    expect(set).toHaveBeenCalledTimes(1);
+    act(() => document.querySelector<HTMLButtonElement>(".running-deck-collapse")!.click());
+    expect(clear).toHaveBeenCalledTimes(1);
+    act(() => document.querySelector<HTMLButtonElement>(".running-deck-chip")!.click());
+    expect(set).toHaveBeenCalledTimes(2);
+  });
+
   it("uses the transcript fallback for a task without a description", () => {
     const list = document.createElement("div");
     document.body.append(list);
@@ -294,7 +433,7 @@ describe("RunningDeckHost", () => {
     const blocks = [{ kind: "tool_call", id: "x", toolCallId: "x", toolName: "Bash", input: { command: "npm test" }, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null }] as unknown as TranscriptBlock[];
     mountInto(createElement(TabContext.Provider, { value: { tabId: "t", store } },
       createElement(RunningDeckHost, { listRef: { current: list }, blocks, onJumpToBlock: () => undefined })), list);
-    expect(labels()).toEqual(["Bash: npm test, running"]);
+    expect(labels()).toEqual(["Bash: npm test, running, jump to its card"]);
   });
 
   it("ticks elapsed time only while rows exist", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from "react";
 import { formatTaskElapsed } from "../claude-background-tasks.js";
 import { collapsedRows, visibleDeckRows, type AnchorState, type DeckRow } from "../running-deck.js";
 import { Button } from "../ui/index.js";
@@ -24,7 +24,10 @@ export interface RunningDeckProps {
   readonly onCollapsedChange: (collapsed: boolean) => void;
 }
 
-const rowName = (row: DeckRow): string => `${row.typeLabel}: ${row.title}, running`;
+const INTERACTIVE = "button, a, input, select, textarea";
+
+const rowName = (row: DeckRow, canJump: boolean): string =>
+  `${row.typeLabel}: ${row.title}, running${canJump ? ", jump to its card" : ""}`;
 
 const cssVars = (vars: Record<string, string | number>): CSSProperties => vars as CSSProperties;
 
@@ -35,6 +38,7 @@ const cssVars = (vars: Record<string, string | number>): CSSProperties => vars a
  * region whose box covers every row while open).
  */
 export function RunningDeck(props: RunningDeckProps) {
+  const idBase = useId();
   const { rows, anchors, blockIdByToolCall, elapsedNow, onJumpToBlock, collapsed, onCollapsedChange } = props;
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
@@ -75,6 +79,10 @@ export function RunningDeck(props: RunningDeckProps) {
   const collapseEl = useRef<HTMLButtonElement | null>(null);
   const chipEl = useRef<HTMLButtonElement | null>(null);
   const regionEl = useRef<HTMLDivElement | null>(null);
+  const stackEl = useRef<HTMLDivElement | null>(null);
+  // Set by the click handlers that swap the chip and the rows, so focus lands on a live element
+  // whether or not the browser fires blur for the node it removes.
+  const pendingFocus = useRef<"chip" | "row" | null>(null);
 
   const setRegion = useCallback((el: HTMLDivElement | null) => {
     regionEl.current = el;
@@ -91,6 +99,16 @@ export function RunningDeck(props: RunningDeckProps) {
   }, []);
 
   useLayoutEffect(() => {
+    const pending = pendingFocus.current;
+    pendingFocus.current = null;
+    if (pending !== null) {
+      const target = pending === "chip" ? chipEl.current : [...rowEls.current.values()][0] ?? collapseEl.current;
+      if (target?.isConnected) {
+        target.focus({ preventScroll: true });
+        prevKeys.current = mounted.map(r => r.key);
+        return;
+      }
+    }
     const active = document.activeElement;
     const lost = active === null || active === document.body || !active.isConnected;
     const id = focusedId.current;
@@ -108,6 +126,14 @@ export function RunningDeck(props: RunningDeckProps) {
       target?.focus({ preventScroll: true });
     }
     prevKeys.current = mounted.map(r => r.key);
+  });
+
+  // Scroll containment only while the open stack really overflows, so wheel scrolling of the transcript is never trapped.
+  useLayoutEffect(() => {
+    const el = stackEl.current;
+    if (el !== null) {
+      el.toggleAttribute("data-scrollable", open && el.scrollHeight > el.clientHeight);
+    }
   });
 
   // Nothing shown: forget hover/focus state (no pointerleave/blur fires for a removed node).
@@ -146,7 +172,19 @@ export function RunningDeck(props: RunningDeckProps) {
       setDismissed(false);
     }
   };
-  const onPointerEnter = () => setHovered(true);
+  // Only the row stack opens the deck: the foot (Hide, "+N running") must not move away under the pointer.
+  const onPointerOver = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.target instanceof Element && event.target.closest(".running-deck-stack") !== null) {
+      setHovered(true);
+    }
+  };
+  // A click on the region's own background must not focus it (that would count as focus within and pin the deck open).
+  const onMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    const hit = event.target instanceof Element ? event.target.closest(INTERACTIVE) : null;
+    if (hit === null || !event.currentTarget.contains(hit)) {
+      event.preventDefault();
+    }
+  };
   const onPointerLeave = () => {
     setHovered(false);
     clearTimer();
@@ -190,7 +228,8 @@ export function RunningDeck(props: RunningDeckProps) {
       style={cssVars({ "--n": mounted.length, "--open-index": expanding ? expandedIndex : NO_OPEN_INDEX })}
       onFocus={onFocus}
       onBlur={onBlur}
-      onPointerEnter={onPointerEnter}
+      onPointerOver={onPointerOver}
+      onMouseDown={onMouseDown}
       onPointerLeave={onPointerLeave}
       onKeyDown={onKeyDown}
     >
@@ -200,16 +239,20 @@ export function RunningDeck(props: RunningDeckProps) {
           variant="ghost"
           className="running-deck-chip"
           onFocus={() => { focusedId.current = CHIP_ID; }}
-          onClick={() => onCollapsedChange(false)}
+          onClick={() => {
+            pendingFocus.current = "row";
+            onCollapsedChange(false);
+          }}
         >
           <Spinner className="icon-spin" width={12} height={12} />
           {`${live.length} running`}
         </Button>
       ) : (
         <>
-          <div className="running-deck-stack">
+          <div className="running-deck-stack" ref={stackEl}>
             {mounted.map((row, i) => {
               const blockId = blockIdOf(row);
+              const detailId = `${idBase}-${i}`;
               return (
                 <Button
                   key={row.key}
@@ -226,7 +269,10 @@ export function RunningDeck(props: RunningDeckProps) {
                     };
                   }}
                   className="running-deck-row"
-                  aria-label={rowName(row)}
+                  aria-label={rowName(row, blockId !== undefined)}
+                  aria-describedby={row.detail === undefined ? undefined : detailId}
+                  aria-disabled={blockId === undefined || undefined}
+                  tabIndex={open || i === 0 ? undefined : -1}
                   data-front={i === 0 || undefined}
                   data-expanded={(open && expandedKey === row.key) || undefined}
                   style={cssVars({ "--i": i })}
@@ -251,7 +297,7 @@ export function RunningDeck(props: RunningDeckProps) {
                       <span className="running-deck-meta">{formatTaskElapsed(row.startedAt, elapsedNow)}</span>
                       {blockId !== undefined && <span className="running-deck-jump">↑ jump</span>}
                     </span>
-                    {row.detail !== undefined && <span className="running-deck-detail">{row.detail}</span>}
+                    {row.detail !== undefined && <span className="running-deck-detail" id={detailId}>{row.detail}</span>}
                   </span>
                 </Button>
               );
@@ -266,12 +312,29 @@ export function RunningDeck(props: RunningDeckProps) {
               className="running-deck-collapse"
               aria-label="Hide running tasks"
               onFocus={() => { focusedId.current = COLLAPSE_ID; }}
-              onClick={() => onCollapsedChange(true)}
+              onClick={() => {
+                pendingFocus.current = "chip";
+                onCollapsedChange(true);
+              }}
             >
               Hide
             </Button>
           </div>
-          <span className="running-deck-chip-only">{`${live.length} running`}</span>
+          <Button
+            variant="ghost"
+            className="running-deck-chip-only"
+            aria-label={`${live.length} running${shown[0] ? `: ${shown[0].title}` : ""}${shown[0] !== undefined && blockIdOf(shown[0]) !== undefined ? ", jump to its card" : ""}`}
+            aria-disabled={shown[0] === undefined || blockIdOf(shown[0]) === undefined || undefined}
+            onClick={() => {
+              const first = shown[0];
+              const id = first === undefined ? undefined : blockIdOf(first);
+              if (id !== undefined) {
+                onJumpToBlock(id);
+              }
+            }}
+          >
+            {`${live.length} running`}
+          </Button>
         </>
       )}
     </div>

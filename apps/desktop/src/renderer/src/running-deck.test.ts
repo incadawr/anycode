@@ -68,7 +68,7 @@ describe("visibleDeckRows", () => {
     expect(visibleDeckRows(rows, anchors).map(r => r.key)).toEqual(["up"]);
   });
 
-  it("orders card-less rows newest first (ties by key), then live-above rows by ascending distance", () => {
+  it("orders card-less rows newest first (ties by key), then live-above rows nearest the viewport top first", () => {
     const rows = [
       row({ key: "far", toolCallId: "call-far", startedAt: 99 }),
       row({ key: "old", toolCallId: undefined, startedAt: 1 }),
@@ -77,7 +77,7 @@ describe("visibleDeckRows", () => {
       row({ key: "tieA", toolCallId: undefined, startedAt: 5 }),
       row({ key: "new", toolCallId: undefined, startedAt: 8 }),
     ];
-    const anchors = new Map([["far", anchor({ above: true, distance: 300 })], ["near", anchor({ above: true, distance: 40 })]]);
+    const anchors = new Map([["far", anchor({ above: true, distance: -300 })], ["near", anchor({ above: true, distance: -40 })]]);
     expect(visibleDeckRows(rows, anchors).map(r => r.key)).toEqual(["new", "tieA", "tieB", "old", "near", "far"]);
   });
 

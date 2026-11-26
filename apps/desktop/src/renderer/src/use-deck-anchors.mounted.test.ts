@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { act, createElement, type RefObject } from "react";
+import { act, createElement, useMemo, type RefObject } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import { TabContext } from "./tab-context.js";
 import type { AnchorState, DeckRow } from "./running-deck.js";
 import type { TranscriptBlock } from "./store.js";
-import { useDeckAnchors } from "./use-deck-anchors.js";
+import { blockIdByToolCall, useDeckAnchors } from "./use-deck-anchors.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,7 +47,8 @@ function mount(opts: { list: HTMLElement; blocks: TranscriptBlock[]; rows: DeckR
   const schedule = { current: (() => undefined) as () => void };
   const listRef = { current: opts.list } as RefObject<HTMLElement | null>;
   function Probe(p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) {
-    const result = useDeckAnchors({ listRef, blocks: p.blocks, rows: p.rows, collapsedDeckBottom: () => opts.deckBottom ?? 100 });
+    const idByCall = useMemo(() => blockIdByToolCall(p.blocks), [p.blocks]);
+    const result = useDeckAnchors({ listRef, blocks: p.blocks, rows: p.rows, collapsedDeckBottom: () => opts.deckBottom ?? 100, idByCall });
     schedule.current = result.schedule;
     seen.push(result.anchors);
     return null;
@@ -158,4 +159,59 @@ it("exposes schedule: an external trigger costs one coalesced read", () => {
   expect(frames.length).toBe(1);
   flush();
   expect((a.getBoundingClientRect as ReturnType<typeof vi.fn>).mock.calls.length).toBe(reads + 1);
+});
+
+it("a rows-only change does not iterate blocks", () => {
+  const list = attachedList();
+  card(list, "a", 50);
+  let touched = 0;
+  const blocks = new Proxy([tool("a")], { get(target, key, receiver) { touched += 1; return Reflect.get(target, key, receiver); } });
+  const { rerender } = mount({ list, blocks, rows: [row("a")] });
+  flush();
+  touched = 0;
+  rerender({ blocks, rows: [{ ...row("a"), title: "progress 2" }] });
+  flush();
+  expect(touched).toBe(0);
+});
+
+it("does not publish a new map when only distances change", () => {
+  const list = attachedList();
+  const a = card(list, "a", 50);
+  const { seen } = mount({ list, blocks: [tool("a")], rows: [row("a")] });
+  flush();
+  const renders = seen.length;
+  a.getBoundingClientRect = () => ({ top: 20, bottom: 60, width: 10, height: 10 }) as DOMRect;
+  list.dispatchEvent(new Event("scroll"));
+  flush();
+  expect(seen.length).toBe(renders);
+});
+
+it("publishes when the order of above rows changes", () => {
+  const list = attachedList();
+  const a = card(list, "a", 50);
+  const b = card(list, "b", 20);
+  const { seen } = mount({ list, blocks: [tool("a"), tool("b")], rows: [row("a"), row("b")] });
+  flush();
+  const renders = seen.length;
+  a.getBoundingClientRect = () => ({ top: 0, bottom: 10, width: 10, height: 10 }) as DOMRect;
+  b.getBoundingClientRect = () => ({ top: 0, bottom: 90, width: 10, height: 10 }) as DOMRect;
+  list.dispatchEvent(new Event("scroll"));
+  flush();
+  expect(seen.length).toBe(renders + 1);
+});
+
+it("does not re-query a block whose element is not laid out until blocks change", () => {
+  const list = attachedList();
+  const spy = vi.spyOn(list, "querySelectorAll");
+  const { rerender } = mount({ list, blocks: [tool("a")], rows: [row("a")] });
+  flush();
+  const queries = spy.mock.calls.length;
+  list.dispatchEvent(new Event("scroll"));
+  flush();
+  list.dispatchEvent(new Event("scroll"));
+  flush();
+  expect(spy.mock.calls.length).toBe(queries);
+  rerender({ blocks: [tool("a"), tool("z")], rows: [row("a")] });
+  flush();
+  expect(spy.mock.calls.length).toBeGreaterThan(queries);
 });

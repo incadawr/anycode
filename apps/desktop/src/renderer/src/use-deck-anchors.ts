@@ -53,8 +53,9 @@ export function isAbove(rectBottom: number, collapsedDeckBottom: number, wasAbov
   return rectBottom <= collapsedDeckBottom + (wasAbove ? hysteresisPx : 0);
 }
 
+/** `distance` is deliberately not compared: it changes every scroll frame; only the ORDER it implies matters (see `aboveOrder`). */
 const sameAnchor = (a: AnchorState, b: AnchorState): boolean =>
-  a.hasCard === b.hasCard && a.live === b.live && a.above === b.above && a.distance === b.distance;
+  a.hasCard === b.hasCard && a.live === b.live && a.above === b.above;
 
 const sameAnchors = (a: AnchorMap, b: AnchorMap): boolean =>
   a.size === b.size && [...b].every(([key, next]) => {
@@ -62,10 +63,20 @@ const sameAnchors = (a: AnchorMap, b: AnchorMap): boolean =>
     return prev !== undefined && sameAnchor(prev, next);
   });
 
+/** Keys of the visible above-rows, nearest the viewport top first (distance is negative above: least negative first). */
+const aboveOrder = (anchors: AnchorMap): string =>
+  [...anchors]
+    .filter(([, a]) => a.hasCard && a.live && a.above)
+    .sort(([ka, a], [kb, b]) => b.distance - a.distance || (ka < kb ? -1 : ka > kb ? 1 : 0))
+    .map(([key]) => key)
+    .join("\u0000");
+
 export interface UseDeckAnchorsArgs {
   readonly listRef: RefObject<HTMLElement | null>;
   readonly blocks: readonly TranscriptBlock[];
   readonly rows: readonly DeckRow[];
+  /** toolCallId -> block id, built once per `blocks` by the caller. */
+  readonly idByCall: ReadonlyMap<string, string>;
   /** Bottom edge of the COLLAPSED deck (collapsed height + --deck-top), never the open height. */
   readonly collapsedDeckBottom: () => number;
 }
@@ -79,16 +90,21 @@ export interface DeckAnchors {
 export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
   const ctx = useContext(TabContext);
   const [anchors, setAnchors] = useState<AnchorMap>(EMPTY_ANCHORS);
-  const idEntry = useRef<BlockIdEntry | null>(null);
-  // O(blocks) work happens only when `blocks` or `rows` change, never per scroll frame.
-  const derived = useMemo(() => {
-    idEntry.current = blockIdEntry(idEntry.current, args.blocks);
-    const wanted = new Set(args.rows.flatMap(r => (r.toolCallId === undefined ? [] : [r.toolCallId])));
-    return { idByCall: idEntry.current.map, toolBlocks: toolBlocksFor(args.blocks, wanted) };
-  }, [args.blocks, args.rows]);
+  // O(blocks) work happens only when `blocks` or the SET of wanted toolCallIds changes
+  // (a key string), never on a rows-only change and never per scroll frame.
+  const wantedKey = args.rows.flatMap(r => (r.toolCallId === undefined ? [] : [r.toolCallId])).sort().join("\u0000");
+  const toolBlocks = useMemo(
+    () => toolBlocksFor(args.blocks, new Set(wantedKey === "" ? [] : wantedKey.split("\u0000"))),
+    [args.blocks, wantedKey],
+  );
+  const derived = useMemo(() => ({ idByCall: args.idByCall, toolBlocks }), [args.idByCall, toolBlocks]);
   const latest = useRef({ args, ctx, anchors, derived });
   latest.current = { args, ctx, anchors, derived };
   const nodes = useRef(new Map<string, HTMLElement>());
+  // Block ids whose element was not laid out; not re-queried until `blocks` change or the list's content height does.
+  const missing = useRef(new Set<string>());
+  const missingHeight = useRef(-1);
+  const publishedOrder = useRef("");
   const frame = useRef<number | null>(null);
 
   const read = useRef(() => {
@@ -101,6 +117,10 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
       return;
     }
     const { idByCall, toolBlocks } = d;
+    if (list.scrollHeight !== missingHeight.current) {
+      missingHeight.current = list.scrollHeight;
+      missing.current.clear();
+    }
     const tasks = c?.store.getState().claudeTaskByToolCall ?? {};
     const deckBottom = a.collapsedDeckBottom();
     const next = new Map(
@@ -111,11 +131,16 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
           return [r.key, NO_CARD];
         }
         const cached = nodes.current.get(blockId);
+        if (!cached?.isConnected && missing.current.has(blockId)) {
+          return [r.key, NO_CARD];
+        }
         const el = cached?.isConnected ? cached : resolveAnchorElement(list, blockId);
         if (el === null) {
           nodes.current.delete(blockId);
+          missing.current.add(blockId);
           return [r.key, NO_CARD];
         }
+        missing.current.delete(blockId);
         nodes.current.set(blockId, el);
         const bottom = el.getBoundingClientRect().bottom;
         return [r.key, {
@@ -131,7 +156,9 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
       return id === undefined ? [] : [id];
     }));
     [...nodes.current.keys()].filter(id => !live.has(id)).forEach(id => nodes.current.delete(id));
-    if (!sameAnchors(previous, next)) {
+    const order = aboveOrder(next);
+    if (!sameAnchors(previous, next) || order !== publishedOrder.current) {
+      publishedOrder.current = order;
       setAnchors(next);
     }
   }).current;
@@ -163,6 +190,10 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
       }
     };
   }, [args.listRef, schedule]);
+
+  useEffect(() => {
+    missing.current.clear();
+  }, [args.blocks]);
 
   useEffect(() => {
     schedule();

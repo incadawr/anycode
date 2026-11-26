@@ -54,6 +54,17 @@ type DeckSources = Pick<DesktopState, "claudeBackgroundTasks" | "backgroundChild
 /** Stand-in when no tab provides a store (render tests): no rows, no deck. */
 const EMPTY_STORE: StoreApi<DeckSources> = createStore<DeckSources>(() => ({ claudeBackgroundTasks: [], backgroundChildren: [] }));
 
+/**
+ * Per-tab "folded" flag. MessageList is remounted per tab (key={tabId}), so the
+ * flag lives at module level like MessageList's savedScroll.
+ */
+const foldedTabs = new Set<string>();
+
+/** Test hook: forget every tab's folded flag. */
+export function resetFoldedDecks(): void {
+  foldedTabs.clear();
+}
+
 const TICK_MS = 1000;
 const FLOOR_ROWS = 3;
 
@@ -108,6 +119,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLElement | null>(null);
   const spacingRef = useRef<DeckSpacing | null>(null);
+  const [chipOnly, setChipOnly] = useState(false);
   const written = useRef<{ top: string | null; max: string | null; chipOnly: boolean }>({ top: null, max: null, chipOnly: false });
 
   /** Measure, then write --deck-top/--deck-max straight onto the wrapper (never React state). */
@@ -146,6 +158,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
       wrap.toggleAttribute("data-chip-only", p.chipOnly);
     }
     written.current = { top, max, chipOnly: p.chipOnly };
+    setChipOnly(p.chipOnly);
     return { originTop, top: p.top === "default" ? spacing.defaultTop : p.top, rowHeight: spacing.rowHeight };
   }, [listRef]);
 
@@ -153,6 +166,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
     listRef,
     blocks,
     rows,
+    idByCall: blockIds,
     collapsedDeckBottom: () => {
       const placed = place();
       return placed === null ? Number.NEGATIVE_INFINITY : placed.originTop + placed.top + placed.rowHeight;
@@ -213,11 +227,16 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
   }, [listRef, place]);
 
   const [now, setNow] = useState(() => Date.now());
+  // Elapsed text exists only on rows; the folded chip and the chip-only mode show none.
+  const ticking = !collapsed && !chipOnly;
   useEffect(() => {
+    if (!ticking) {
+      return;
+    }
     setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [ticking]);
 
   const jump = useCallback((blockId: string) => {
     onJumpToBlock(blockId);
@@ -254,13 +273,18 @@ export function RunningDeckHost(props: RunningDeckHostProps) {
   );
   const hasRows = rows.length > 0;
 
-  const [collapsedTabs, setCollapsedTabs] = useState<ReadonlySet<string>>(() => new Set());
+  const [, setVersion] = useState(0);
   const onCollapsedChange = useCallback((collapsed: boolean) => {
-    setCollapsedTabs(prev => new Set(collapsed ? [...prev, tabId] : [...prev].filter(id => id !== tabId)));
+    if (collapsed) {
+      foldedTabs.add(tabId);
+    } else {
+      foldedTabs.delete(tabId);
+    }
+    setVersion(v => v + 1);
   }, [tabId]);
 
   if (!hasRows) {
     return null;
   }
-  return <DeckMachinery {...props} rows={rows} collapsed={collapsedTabs.has(tabId)} onCollapsedChange={onCollapsedChange} />;
+  return <DeckMachinery {...props} rows={rows} collapsed={foldedTabs.has(tabId)} onCollapsedChange={onCollapsedChange} />;
 }

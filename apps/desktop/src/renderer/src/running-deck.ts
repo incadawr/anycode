@@ -13,7 +13,7 @@ export interface DeckRow {
   readonly detail: string | undefined;
 }
 
-/** Where a row's transcript card sits; `distance` = card bottom minus the deck's collapsed bottom (smaller = nearer the viewport top). */
+/** Where a row's transcript card sits; `distance` = card bottom minus the deck's collapsed bottom: negative above, and the LEAST negative is the nearest the viewport top. */
 export interface AnchorState {
   readonly hasCard: boolean;
   readonly live: boolean;
@@ -74,7 +74,7 @@ export function visibleDeckRows(rows: readonly DeckRow[], anchors: ReadonlyMap<s
   const above = rows.filter(row => !cardless(row, anchorOf(row)) && anchorOf(row)?.above === true);
   return [
     ...[...listed].sort((a, b) => b.startedAt - a.startedAt || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
-    ...[...above].sort((a, b) => (anchorOf(a)?.distance ?? 0) - (anchorOf(b)?.distance ?? 0)),
+    ...[...above].sort((a, b) => (anchorOf(b)?.distance ?? 0) - (anchorOf(a)?.distance ?? 0)),
   ];
 }
 
