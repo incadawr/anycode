@@ -161,8 +161,9 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
 
   // Re-measure on list resize and todo-card resize; the card mounts and
   // unmounts as a direct child of the list, so re-attach on childList changes.
-  // A layout effect, so the first placement lands before the first paint.
-  useLayoutEffect(() => {
+  // The observers attach in a passive effect: the list is this component's
+  // parent, and its ref is not set yet during a same-commit layout effect.
+  useEffect(() => {
     const list = listRef.current;
     if (!list || typeof ResizeObserver === "undefined") {
       return;
@@ -173,12 +174,14 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
       schedule();
     });
     resize.observe(list);
+    let observed: HTMLElement | null = null;
     const attach = () => {
       const next = findTodoCard(list);
-      if (next !== cardRef.current) {
-        if (cardRef.current) {
-          resize.unobserve(cardRef.current);
+      if (next !== observed) {
+        if (observed) {
+          resize.unobserve(observed);
         }
+        observed = next;
         cardRef.current = next;
         if (next) {
           resize.observe(next);
@@ -197,6 +200,17 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
       written.current = { top: null, max: null, chipOnly: false };
     };
   }, [listRef, place, schedule]);
+
+  // First placement before paint. A no-op while the list ref is still unset
+  // (same-commit mount); the passive effect above places again.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    cardRef.current = findTodoCard(list);
+    place();
+  }, [listRef, place]);
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

@@ -343,6 +343,9 @@ describe("RunningDeckHost store wiring", () => {
   });
 });
 
+const CARD_BOTTOM = 50;
+const SPACING_GAP_PX = 8; // --sp-2 fallback (0.5rem at the 16px root) when the token is not defined in jsdom
+
 describe("RunningDeckHost machinery", () => {
   let observers: { callback: ResizeObserverCallback; targets: Element[] }[] = [];
   let frames: FrameRequestCallback[] = [];
@@ -381,6 +384,7 @@ describe("RunningDeckHost machinery", () => {
     mountInto(hostIn("A", storeWith([]), { current: list }), list);
     expect(observers).toHaveLength(0);
     expect(raf).not.toHaveBeenCalled();
+    expect(frames).toHaveLength(0);
   });
 
   it("re-reads the anchors once when the todo card resizes", () => {
@@ -405,9 +409,18 @@ describe("RunningDeckHost machinery", () => {
     expect(reads()).toBe(before + 1);
   });
 
+  it("attaches observers and places when mounted in the same commit as the list (real MessageList)", () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({ top: 0, left: 0, right: 100, bottom: CARD_BOTTOM, width: 100, height: CARD_BOTTOM }) as DOMRect);
+    mountInto(messageList(storeWith(["x"])));
+    const list = document.querySelector<HTMLElement>(".message-list")!;
+    expect(observers.some(o => o.targets.includes(list))).toBe(true);
+    const wrap = document.querySelector<HTMLElement>(".running-deck-wrap")!;
+    expect(wrap.style.getPropertyValue("--deck-max")).not.toBe("");
+  });
+
   it("places the deck in a layout effect, before the first paint", () => {
     const { list } = listWithCard();
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({ top: 0, left: 0, right: 100, bottom: 50, width: 100, height: 50 }) as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({ top: 0, left: 0, right: 100, bottom: CARD_BOTTOM, width: 100, height: CARD_BOTTOM }) as DOMRect);
     let placedAtLayout: string | null = null;
     function After() {
       useLayoutEffect(() => { placedAtLayout = document.querySelector<HTMLElement>(".running-deck-wrap")?.style.getPropertyValue("--deck-top") ?? null; }, []);
@@ -416,7 +429,7 @@ describe("RunningDeckHost machinery", () => {
     mountInto(createElement("div", null,
       hostIn("A", storeWith(["x"]), { current: list }),
       createElement(After)), list);
-    expect(placedAtLayout).toBe("58px");
+    expect(placedAtLayout).toBe(`${CARD_BOTTOM + SPACING_GAP_PX}px`);
   });
 });
 
