@@ -548,7 +548,7 @@ export function findAnchorBlock(container: AnchorContainerLike): { id: string; o
  * `display:none` anchor shares its id with the visible member card) — the
  * nearest laid-out block ancestor of it.
  */
-function findLaidOutAnchor(container: HTMLElement, id: string): HTMLElement | null {
+export function findLaidOutAnchor(container: HTMLElement, id: string): HTMLElement | null {
   const matches = container.querySelectorAll<HTMLElement>(`[data-block-id="${escapeSelector(id)}"]`);
   for (const match of matches) {
     if (isLaidOut(match)) {
