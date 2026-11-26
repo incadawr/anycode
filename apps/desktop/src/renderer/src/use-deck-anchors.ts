@@ -1,6 +1,6 @@
-import { useContext, useEffect, useRef, useState, type RefObject } from "react";
+import { useContext, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { cardShowsRunning } from "./components/ToolCallCard.js";
-import { findLaidOutAnchor } from "./components/MessageList.js";
+import { findLaidOutAnchor } from "./block-anchor.js";
 import type { AnchorState, DeckRow } from "./running-deck.js";
 import type { ToolCallBlock, TranscriptBlock } from "./store.js";
 import { TabContext } from "./tab-context.js";
@@ -10,19 +10,23 @@ type AnchorMap = ReadonlyMap<string, AnchorState>;
 const EMPTY_ANCHORS: AnchorMap = new Map();
 const NO_CARD: AnchorState = { hasCard: false, live: false, above: false, distance: Number.POSITIVE_INFINITY };
 
-let lastIdsKey: string | null = null;
-let lastIdMap: ReadonlyMap<string, string> = new Map();
+export interface BlockIdEntry {
+  readonly key: string;
+  readonly map: ReadonlyMap<string, string>;
+}
 
-/** toolCallId -> block id. Memoised on the ordered tool_call ids, so unrelated block changes keep the same Map. */
+/** toolCallId -> block id (live: same id; hydrated: `item:part`). Pure. */
 export function blockIdByToolCall(blocks: readonly TranscriptBlock[]): ReadonlyMap<string, string> {
+  return blockIdEntry(null, blocks).map;
+}
+
+/** Same as `blockIdByToolCall`, but returns `prev` (same Map identity) while the ordered tool_call ids are unchanged. */
+export function blockIdEntry(prev: BlockIdEntry | null, blocks: readonly TranscriptBlock[]): BlockIdEntry {
   const tools = blocks.filter((block): block is ToolCallBlock => block.kind === "tool_call");
   const key = tools.map(block => `${block.id}\u0000${block.toolCallId}`).join("\u0001");
-  if (key === lastIdsKey) {
-    return lastIdMap;
-  }
-  lastIdsKey = key;
-  lastIdMap = new Map(tools.map(block => [block.toolCallId, block.id] as const));
-  return lastIdMap;
+  return prev !== null && prev.key === key
+    ? prev
+    : { key, map: new Map(tools.map(block => [block.toolCallId, block.id] as const)) };
 }
 
 /** The requested tool_call blocks by toolCallId; no work at all when nothing is requested. */
@@ -69,13 +73,20 @@ export interface UseDeckAnchorsArgs {
 export function useDeckAnchors(args: UseDeckAnchorsArgs): AnchorMap {
   const ctx = useContext(TabContext);
   const [anchors, setAnchors] = useState<AnchorMap>(EMPTY_ANCHORS);
-  const latest = useRef({ args, ctx, anchors });
-  latest.current = { args, ctx, anchors };
+  const idEntry = useRef<BlockIdEntry | null>(null);
+  // O(blocks) work happens only when `blocks` or `rows` change, never per scroll frame.
+  const derived = useMemo(() => {
+    idEntry.current = blockIdEntry(idEntry.current, args.blocks);
+    const wanted = new Set(args.rows.flatMap(r => (r.toolCallId === undefined ? [] : [r.toolCallId])));
+    return { idByCall: idEntry.current.map, toolBlocks: toolBlocksFor(args.blocks, wanted) };
+  }, [args.blocks, args.rows]);
+  const latest = useRef({ args, ctx, anchors, derived });
+  latest.current = { args, ctx, anchors, derived };
   const nodes = useRef(new Map<string, HTMLElement>());
   const frame = useRef<number | null>(null);
 
   const read = useRef(() => {
-    const { args: a, ctx: c, anchors: previous } = latest.current;
+    const { args: a, ctx: c, anchors: previous, derived: d } = latest.current;
     const list = a.listRef.current;
     if (!list || a.rows.length === 0) {
       if (previous.size !== 0) {
@@ -83,8 +94,7 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): AnchorMap {
       }
       return;
     }
-    const idByCall = blockIdByToolCall(a.blocks);
-    const toolBlocks = toolBlocksFor(a.blocks, new Set(a.rows.flatMap(r => (r.toolCallId === undefined ? [] : [r.toolCallId]))));
+    const { idByCall, toolBlocks } = d;
     const tasks = c?.store.getState().claudeTaskByToolCall ?? {};
     const deckBottom = a.collapsedDeckBottom();
     const next = new Map(
@@ -110,6 +120,11 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): AnchorMap {
         }];
       }),
     );
+    const live = new Set(a.rows.flatMap(r => {
+      const id = r.toolCallId === undefined ? undefined : idByCall.get(r.toolCallId);
+      return id === undefined ? [] : [id];
+    }));
+    [...nodes.current.keys()].filter(id => !live.has(id)).forEach(id => nodes.current.delete(id));
     if (!sameAnchors(previous, next)) {
       setAnchors(next);
     }
@@ -146,6 +161,20 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): AnchorMap {
   useEffect(() => {
     schedule();
   }, [args.blocks, args.rows, schedule]);
+
+  // A task status change is a trigger too: one rAF read of O(rows).
+  useEffect(() => {
+    if (ctx === null) {
+      return;
+    }
+    let tasks = ctx.store.getState().claudeTaskByToolCall;
+    return ctx.store.subscribe(state => {
+      if (state.claudeTaskByToolCall !== tasks) {
+        tasks = state.claudeTaskByToolCall;
+        schedule();
+      }
+    });
+  }, [ctx, schedule]);
 
   return anchors;
 }

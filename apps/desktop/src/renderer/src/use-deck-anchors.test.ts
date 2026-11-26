@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import type { ToolCallBlock, TranscriptBlock } from "./store.js";
-import { blockIdByToolCall, isAbove, resolveAnchorElement, toolBlocksFor } from "./use-deck-anchors.js";
+import { blockIdByToolCall, blockIdEntry, isAbove, resolveAnchorElement, toolBlocksFor } from "./use-deck-anchors.js";
 
 const tool = (id: string, toolCallId: string): TranscriptBlock => ({ kind: "tool_call", id, toolCallId, toolName: "Bash", input: {}, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null } as TranscriptBlock);
 const text = (id: string, t = "x"): TranscriptBlock => ({ kind: "assistant_text", id, text: t });
@@ -16,12 +16,13 @@ describe("blockIdByToolCall", () => {
     expect(blockIdByToolCall([text("a")]).size).toBe(0);
   });
   it("keeps identity when an unrelated block changes", () => {
-    const first = blockIdByToolCall([text("a", "1"), tool("t", "t")]);
-    const second = blockIdByToolCall([text("a", "2"), text("b"), tool("t", "t")]);
-    expect(second).toBe(first);
+    const first = blockIdEntry(null, [text("a", "1"), tool("t", "t")]);
+    const second = blockIdEntry(first, [text("a", "2"), text("b"), tool("t", "t")]);
+    expect(second.map).toBe(first.map);
   });
   it("changes identity when tool blocks change", () => {
-    expect(blockIdByToolCall([tool("t", "t")])).not.toBe(blockIdByToolCall([tool("t", "t"), tool("u", "u")]));
+    const first = blockIdEntry(null, [tool("t", "t")]);
+    expect(blockIdEntry(first, [tool("t", "t"), tool("u", "u")]).map).not.toBe(first.map);
   });
 });
 

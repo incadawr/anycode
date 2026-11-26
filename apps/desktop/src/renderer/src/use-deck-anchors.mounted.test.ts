@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
   vi.stubGlobal("cancelAnimationFrame", () => { frames = []; });
 });
-afterEach(() => { document.body.replaceChildren(); roots.forEach(r => act(() => r.unmount())); roots = []; vi.unstubAllGlobals(); });
+afterEach(() => { roots.forEach(r => act(() => r.unmount())); roots = []; document.body.replaceChildren(); vi.unstubAllGlobals(); });
 
 function attachedList(): HTMLElement {
   const list = document.createElement("div");
@@ -53,7 +53,7 @@ function mount(opts: { list: HTMLElement; blocks: TranscriptBlock[]; rows: DeckR
   const root = createRoot(document.createElement("div"));
   roots.push(root);
   act(() => root.render(el({ blocks: opts.blocks, rows: opts.rows })));
-  return { seen, rerender: (p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) => act(() => root.render(el(p))) };
+  return { seen, store, rerender: (p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) => act(() => root.render(el(p))) };
 }
 
 it("reports a card scrolled above after one frame", () => {
@@ -118,4 +118,29 @@ it("marks a row with no card", () => {
   const { seen } = mount({ list, blocks: [], rows: [row("gone")] });
   flush();
   expect(seen.at(-1)!.get("task:gone")).toMatchObject({ hasCard: false, above: false, live: false });
+});
+
+it("does not iterate blocks while scrolling after the first derive", () => {
+  const list = attachedList();
+  card(list, "a", 50);
+  let touched = 0;
+  const blocks = new Proxy([tool("a")], { get(target, key, receiver) { touched += 1; return Reflect.get(target, key, receiver); } });
+  mount({ list, blocks, rows: [row("a")] });
+  flush();
+  touched = 0;
+  list.dispatchEvent(new Event("scroll"));
+  list.dispatchEvent(new Event("scroll"));
+  flush();
+  expect(touched).toBe(0);
+});
+
+it("updates live when the linked task flips with rows and blocks unchanged", () => {
+  const list = attachedList();
+  card(list, "a", 50);
+  const { seen, store } = mount({ list, blocks: [tool("a")], rows: [row("a")] });
+  flush();
+  expect(seen.at(-1)!.get("task:a")!.live).toBe(true);
+  act(() => store.setState({ claudeTaskByToolCall: { a: { ...task("a"), status: "completed" } } } as never));
+  flush();
+  expect(seen.at(-1)!.get("task:a")!.live).toBe(false);
 });

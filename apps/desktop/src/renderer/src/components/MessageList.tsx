@@ -54,6 +54,7 @@ import { ToolCallStack } from "./ToolCallStack.js";
 import { WorkingRow, formatElapsed } from "./WorkingRow.js";
 import { Button } from "../ui/index.js";
 import { formatBlockTime } from "../block-time.js";
+import { escapeSelector, findLaidOutAnchor, isLaidOut, type AnchorElementLike } from "../block-anchor.js";
 import { isOutcomeLost, settledStatus } from "../child-layout.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
@@ -317,10 +318,6 @@ export interface JumpContainer {
   removeEventListener?(type: string, listener: () => void): void;
 }
 
-function escapeSelector(value: string): string {
-  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value;
-}
-
 /**
  * Scroll a block into view by its `data-block-id` (TodoPanel row click, minimap
  * mark click). Extracted from the component so the disclosure handling is
@@ -488,35 +485,13 @@ export function shouldShowJumpButton(follow: boolean, blockCount: number): boole
  */
 const savedScroll = new Map<string, { follow: boolean; anchorId: string | null; anchorOffset: number }>();
 
-/**
- * Minimal structural view of a block element — enough to measure it.
- * Structural (not `HTMLElement`) so the anchor helpers can be unit-tested
- * with plain stubs: the node test env has no DOM.
- */
-export interface AnchorElementLike {
-  getBoundingClientRect(): { top: number; bottom: number; width: number; height: number };
-  getClientRects(): ArrayLike<unknown>;
-  getAttribute(name: string): string | null;
-}
+export { findLaidOutAnchor, isLaidOut };
+export type { AnchorElementLike };
 
 /** Minimal structural view of the scrolling container. */
 export interface AnchorContainerLike {
   getBoundingClientRect(): { top: number };
   querySelectorAll(selector: string): Iterable<AnchorElementLike>;
-}
-
-/**
- * Is this element really laid out? A collapsed tool-call stack renders its
- * anchor with `display:none` — no boxes, an all-zero rect — so it must
- * never be used as a scroll anchor (it would pin the list to the wrong
- * place on restore).
- */
-export function isLaidOut(el: AnchorElementLike): boolean {
-  if (el.getClientRects().length === 0) {
-    return false;
-  }
-  const rect = el.getBoundingClientRect();
-  return rect.width > 0 || rect.height > 0;
 }
 
 /**
@@ -538,34 +513,6 @@ export function findAnchorBlock(container: AnchorContainerLike): { id: string; o
         return { id, offset: rect.top - containerTop };
       }
     }
-  }
-  return null;
-}
-
-/**
- * The laid-out element for a saved block id: the first match that actually
- * has boxes, or — when every match is hidden (a collapsed stack's
- * `display:none` anchor shares its id with the visible member card) — the
- * nearest laid-out block ancestor of it.
- */
-export function findLaidOutAnchor(container: HTMLElement, id: string): HTMLElement | null {
-  const matches = container.querySelectorAll<HTMLElement>(`[data-block-id="${escapeSelector(id)}"]`);
-  for (const match of matches) {
-    if (isLaidOut(match)) {
-      return match;
-    }
-  }
-  const first = matches[0];
-  if (!first) {
-    return null;
-  }
-  let node: HTMLElement | null = first.parentElement;
-  while (node) {
-    const candidate = node.closest<HTMLElement>("[data-block-id]");
-    if (candidate && isLaidOut(candidate)) {
-      return candidate;
-    }
-    node = candidate ? candidate.parentElement : null;
   }
   return null;
 }
