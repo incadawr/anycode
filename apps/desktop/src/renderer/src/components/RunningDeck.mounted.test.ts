@@ -1,0 +1,345 @@
+// @vitest-environment jsdom
+import { act, createElement, useState, type ReactElement, type RefObject } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TabContext } from "../tab-context.js";
+import type { AnchorState, DeckRow } from "../running-deck.js";
+import { createDesktopStore, type TranscriptBlock } from "../store.js";
+import { RunningDeck } from "./RunningDeck.js";
+import { RunningDeckHost, deckPlacement } from "./RunningDeckHost.js";
+import { MessageList } from "./MessageList.js";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// MessageList renders TodoPanel on every render of its own: counting TodoPanel
+// renders counts MessageList renders without touching MessageList.
+const todoRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock("./TodoPanel.js", () => ({
+  TodoPanel: () => {
+    todoRenders.count += 1;
+    return null;
+  },
+}));
+
+const SPACING = { gap: 8, chipZone: 56, floorRows: 3, rowHeight: 44, defaultTop: 12 } as const;
+const card = (left: number, right: number, bottom: number) => ({ left, right, bottom });
+
+describe("deckPlacement", () => {
+  it("drops below the todo card when the card overlaps the deck horizontally", () => {
+    const p = deckPlacement({ left: 100, width: 600 }, card(500, 760, 200), SPACING, 900);
+    expect(p).toEqual({ top: 208, chipOnly: false, maxHeight: 900 - 208 - 56 });
+  });
+
+  it("stays at the default top with no card, or a card beside the deck", () => {
+    expect(deckPlacement({ left: 100, width: 600 }, null, SPACING, 900)).toEqual({ top: "default", chipOnly: false, maxHeight: 900 - 12 - 56 });
+    expect(deckPlacement({ left: 100, width: 600 }, card(720, 980, 400), SPACING, 900).top).toBe("default");
+    expect(deckPlacement({ left: 100, width: 600 }, card(700, 960, 400), SPACING, 900).top).toBe("default");
+  });
+
+  it("falls back to the chip alone at the default top in a short window with a tall card", () => {
+    const p = deckPlacement({ left: 0, width: 600 }, card(300, 560, 400), SPACING, 520);
+    expect(p.chipOnly).toBe(true);
+    expect(p.top).toBe("default");
+  });
+
+  it("computes maxHeight from the list height, the top and the chip zone", () => {
+    expect(deckPlacement({ left: 0, width: 600 }, card(300, 560, 100), SPACING, 700).maxHeight).toBe(700 - 108 - 56);
+    // exactly the floor (3 rows) is enough room
+    expect(deckPlacement({ left: 0, width: 600 }, card(300, 560, 100), SPACING, 108 + 56 + 132).chipOnly).toBe(false);
+    expect(deckPlacement({ left: 0, width: 600 }, card(300, 560, 100), SPACING, 108 + 56 + 131).chipOnly).toBe(true);
+  });
+
+  it("is a pure function of its inputs (no oscillation)", () => {
+    const args = [{ left: 0, width: 600 }, card(300, 560, 150), SPACING, 800] as const;
+    const first = deckPlacement(...args);
+    expect(deckPlacement(...args)).toEqual(first);
+    expect(deckPlacement(...args)).toEqual(first);
+  });
+});
+
+let roots: Root[] = [];
+
+beforeEach(() => {
+  todoRenders.count = 0;
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+});
+afterEach(() => {
+  roots.forEach(r => act(() => r.unmount()));
+  roots = [];
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+function mountInto(el: ReactElement, host: HTMLElement = document.body) {
+  const container = document.createElement("div");
+  container.tabIndex = -1;
+  host.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(el));
+  return { container, root, rerender: (next: ReactElement) => act(() => root.render(next)) };
+}
+
+const row = (id: string, over: Partial<DeckRow> = {}): DeckRow => ({
+  key: `task:${id}`, kind: "task", toolCallId: id, title: `run ${id}`, typeLabel: "Bash", startedAt: 1_000, waiting: false, detail: undefined, ...over,
+});
+
+interface DeckArgs {
+  rows: readonly DeckRow[];
+  blockIds?: ReadonlyMap<string, string>;
+  onJump?: (id: string) => void;
+  anchors?: ReadonlyMap<string, AnchorState>;
+}
+
+/** RunningDeck with its collapse flag held in a tiny stateful parent, like the host does. */
+function Deck(props: DeckArgs) {
+  const [collapsed, setCollapsed] = useState(false);
+  return createElement(RunningDeck, {
+    rows: props.rows,
+    anchors: props.anchors ?? new Map(),
+    blockIdByToolCall: props.blockIds ?? new Map(),
+    elapsedNow: 61_000,
+    onJumpToBlock: props.onJump ?? (() => undefined),
+    collapsed,
+    onCollapsedChange: setCollapsed,
+  });
+}
+
+const deck = (args: DeckArgs) => createElement(Deck, args);
+const region = () => document.querySelector<HTMLElement>('[role="region"]');
+const rowButtons = () => [...document.querySelectorAll<HTMLButtonElement>(".running-deck-row")];
+const labels = () => rowButtons().map(b => b.getAttribute("aria-label"));
+const byText = (text: string) => [...document.querySelectorAll<HTMLElement>("button, span")].find(el => el.textContent?.trim() === text);
+const keyDown = (target: Element, key: string) => {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+  act(() => { target.dispatchEvent(event); });
+  return event;
+};
+const focus = (el: HTMLElement) => act(() => el.focus());
+const outside = () => {
+  const b = document.createElement("button");
+  document.body.append(b);
+  return b;
+};
+
+describe("RunningDeck", () => {
+  it("renders nothing with zero rows", () => {
+    const { container } = mountInto(deck({ rows: [] }));
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("is a labelled region that can take programmatic focus, without aria-live", () => {
+    mountInto(deck({ rows: [row("a")] }));
+    expect(region()?.getAttribute("aria-label")).toBe("Running");
+    expect(region()?.tabIndex).toBe(-1);
+    expect(document.querySelector("[aria-live]")).toBeNull();
+  });
+
+  it("names each row by kind, description and state, without meta or elapsed", () => {
+    mountInto(deck({ rows: [row("a", { detail: "3 tools" })] }));
+    const [button] = rowButtons();
+    expect(button!.tagName).toBe("BUTTON");
+    expect(button!.getAttribute("aria-label")).toBe("Bash: run a, running");
+    expect(button!.textContent).toContain("1m 0s");
+  });
+
+  it("shows three rows and a +N running chip when collapsed", () => {
+    mountInto(deck({ rows: ["a", "b", "c", "d", "e"].map(id => row(id)) }));
+    expect(rowButtons()).toHaveLength(3);
+    expect(byText("+2 running")).toBeDefined();
+  });
+
+  it("folds into one N running chip and reopens on click", () => {
+    mountInto(deck({ rows: ["a", "b", "c", "d"].map(id => row(id)) }));
+    const collapse = document.querySelector<HTMLButtonElement>(".running-deck-collapse")!;
+    focus(collapse);
+    act(() => collapse.click());
+    expect(rowButtons()).toHaveLength(0);
+    const chip = document.querySelector<HTMLButtonElement>(".running-deck-chip")!;
+    expect(chip.textContent).toContain("4 running");
+    expect(document.activeElement).toBe(chip);
+    act(() => chip.click());
+    expect(rowButtons().length).toBeGreaterThan(0);
+  });
+
+  it("opens on focus within and mounts every row", () => {
+    mountInto(deck({ rows: ["a", "b", "c", "d", "e"].map(id => row(id)) }));
+    focus(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    expect(rowButtons()).toHaveLength(5);
+    expect(byText("+2 running")).toBeUndefined();
+  });
+
+  it("closes on Escape, consumes it, and stays closed until focus leaves", () => {
+    mountInto(deck({ rows: ["a", "b", "c", "d"].map(id => row(id)) }));
+    focus(rowButtons()[0]!);
+    const first = keyDown(document.activeElement!, "Escape");
+    expect(first.defaultPrevented).toBe(true);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    focus(rowButtons()[1]!);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    const second = keyDown(document.activeElement!, "Escape");
+    expect(second.defaultPrevented).toBe(false);
+    focus(outside());
+    focus(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+  });
+
+  it("does not consume Escape while closed", () => {
+    mountInto(deck({ rows: [row("a")] }));
+    expect(keyDown(region()!, "Escape").defaultPrevented).toBe(false);
+  });
+
+  it("jumps to the resolved block on click; a card-less row does nothing", () => {
+    const onJump = vi.fn();
+    mountInto(deck({ rows: [row("a", { startedAt: 2_000 }), row("b")], blockIds: new Map([["a", "block-a"]]), onJump }));
+    const [withCard, cardless] = rowButtons();
+    expect(withCard!.textContent).toContain("↑ jump");
+    expect(cardless!.textContent).not.toContain("↑ jump");
+    act(() => withCard!.click());
+    expect(onJump).toHaveBeenCalledWith("block-a");
+    act(() => cardless!.click());
+    expect(onJump).toHaveBeenCalledTimes(1);
+  });
+
+  it("freezes the rendered rows while open and applies changes on close", () => {
+    const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
+    const { rerender } = mountInto(deck({ rows }));
+    focus(rowButtons()[0]!);
+    rerender(deck({ rows: rows.slice(0, 2) }));
+    expect(labels()).toContain("Bash: run c, running");
+    focus(outside());
+    expect(labels()).not.toContain("Bash: run c, running");
+  });
+
+  it("moves focus from an unmounting row to the next row, never to body", () => {
+    const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
+    const { rerender } = mountInto(deck({ rows }));
+    focus(rowButtons()[1]!);
+    keyDown(document.activeElement!, "Escape");
+    rerender(deck({ rows: [rows[0]!, rows[2]!] }));
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Bash: run c, running");
+  });
+
+  it("moves focus to the collapse control when the last row unmounts", () => {
+    const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 })];
+    const { rerender } = mountInto(deck({ rows }));
+    focus(rowButtons()[1]!);
+    keyDown(document.activeElement!, "Escape");
+    rerender(deck({ rows: [rows[0]!] }));
+    expect(document.activeElement?.classList.contains("running-deck-collapse")).toBe(true);
+  });
+
+  it("hands focus to the focusable ancestor when the whole deck unmounts", () => {
+    const { container, rerender } = mountInto(deck({ rows: [row("a")] }));
+    focus(rowButtons()[0]!);
+    keyDown(document.activeElement!, "Escape");
+    rerender(deck({ rows: [] }));
+    expect(document.activeElement).toBe(container);
+  });
+
+  it("clears a pending expanded-row collapse on unmount", () => {
+    vi.useFakeTimers();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { root } = mountInto(deck({ rows: [row("a", { detail: "x" }), row("b")] }));
+    const [a] = rowButtons();
+    act(() => { a!.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body })); });
+    act(() => { a!.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: region() })); });
+    act(() => root.unmount());
+    roots = roots.filter(r => r !== root);
+    expect(() => act(() => { vi.advanceTimersByTime(200); })).not.toThrow();
+    expect(errors).not.toHaveBeenCalled();
+  });
+});
+
+// ── host ──
+
+const task = (id: string, startedAt = 1_000) => ({ type: "claude_background_task" as const, taskId: id, toolCallId: id, kind: "bash" as const, description: `job ${id}`, startedAt, status: "running" as const });
+
+function storeWith(ids: readonly string[]) {
+  const store = createDesktopStore();
+  store.setState({ claudeBackgroundTasks: ids.map((id, i) => task(id, 1_000 + i)) } as never);
+  return store;
+}
+
+function hostIn(tabId: string, store: ReturnType<typeof createDesktopStore>, listRef: RefObject<HTMLElement | null>) {
+  return createElement(TabContext.Provider, { value: { tabId, store } },
+    createElement(RunningDeckHost, { listRef, blocks: [] as TranscriptBlock[], onJumpToBlock: () => undefined }));
+}
+
+describe("RunningDeckHost", () => {
+  it("keeps the collapse flag per tab", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const listRef = { current: list };
+    const a = storeWith(["a1"]);
+    const b = storeWith(["b1"]);
+    const { rerender } = mountInto(hostIn("A", a, listRef), list);
+    act(() => document.querySelector<HTMLButtonElement>(".running-deck-collapse")!.click());
+    expect(document.querySelector(".running-deck-chip")).not.toBeNull();
+    rerender(hostIn("B", b, listRef));
+    expect(document.querySelector(".running-deck-chip")).toBeNull();
+    expect(rowButtons()).toHaveLength(1);
+    rerender(hostIn("A", a, listRef));
+    expect(document.querySelector(".running-deck-chip")).not.toBeNull();
+  });
+
+  it("uses the transcript fallback for a task without a description", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const store = createDesktopStore();
+    store.setState({ claudeBackgroundTasks: [{ ...task("x"), description: "" }] } as never);
+    const blocks = [{ kind: "tool_call", id: "x", toolCallId: "x", toolName: "Bash", input: { command: "npm test" }, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null }] as unknown as TranscriptBlock[];
+    mountInto(createElement(TabContext.Provider, { value: { tabId: "t", store } },
+      createElement(RunningDeckHost, { listRef: { current: list }, blocks, onJumpToBlock: () => undefined })), list);
+    expect(labels()).toEqual(["Bash: npm test, running"]);
+  });
+
+  it("ticks elapsed time only while rows exist", () => {
+    vi.useFakeTimers();
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    const list = document.createElement("div");
+    document.body.append(list);
+    const empty = storeWith([]);
+    mountInto(hostIn("A", empty, { current: list }), list);
+    expect(intervals).not.toHaveBeenCalled();
+    act(() => empty.setState({ claudeBackgroundTasks: [task("x")] } as never));
+    expect(intervals).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── MessageList wiring ──
+
+function messageList(store: ReturnType<typeof createDesktopStore>, readOnly = false) {
+  return createElement(TabContext.Provider, { value: { tabId: "t", store } },
+    createElement(MessageList, {
+      blocks: [] as TranscriptBlock[], turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
+      onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 0, readOnly,
+    }));
+}
+
+describe("MessageList and the deck", () => {
+  it("renders the deck inside the list", () => {
+    mountInto(messageList(storeWith(["a"])));
+    expect(document.querySelector(".message-list > .running-deck-wrap")).not.toBeNull();
+    expect(rowButtons()).toHaveLength(1);
+  });
+
+  it("renders no deck when read-only", () => {
+    mountInto(messageList(storeWith(["a"]), true));
+    expect(document.querySelector(".running-deck-wrap")).toBeNull();
+    expect(region()).toBeNull();
+  });
+
+  it("does not re-render when the deck's stores change", () => {
+    const store = storeWith(["a"]);
+    mountInto(messageList(store));
+    const renders = todoRenders.count;
+    act(() => store.setState({ claudeBackgroundTasks: [task("a"), task("b")] } as never));
+    act(() => store.setState({ backgroundChildren: [{ childSessionId: "c", agentType: "general", description: "d", startedAt: 1 }] } as never));
+    expect(rowButtons().length).toBeGreaterThan(1);
+    expect(todoRenders.count).toBe(renders);
+  });
+});

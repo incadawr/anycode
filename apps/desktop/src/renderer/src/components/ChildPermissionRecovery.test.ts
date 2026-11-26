@@ -153,6 +153,9 @@ it("does not count down child asks queued behind another child or the parent", a
 
 it("places finished-child notices below the header and clears them on visiting that child", async () => {
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  // The transcript's running deck schedules its geometry read in a frame; this DOM has none.
+  vi.stubGlobal("requestAnimationFrame", () => 0);
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
   const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost" });
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, HTMLDialogElement: dom.window.HTMLDialogElement, IS_REACT_ACT_ENVIRONMENT: true });
   Object.defineProperty(dom.window, "anycode", { value: { previewPanel: { list: async () => ({ tabId: "parent-tab", previews: [] }), setState: async () => {} }, browserAccess: { get: async () => ({ ok: true, tabs: [] }), onChanged: () => () => {} }, listSessions: async () => [], childHistory: async () => ({ ok: true, items: [] }) } });

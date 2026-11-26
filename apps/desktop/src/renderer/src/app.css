@@ -3296,6 +3296,289 @@ button.environment-menu-row:hover,
   background: var(--bg-hover);
 }
 
+/* ── Running deck (running-stack design rev 2): what is running and has no
+   visible live card, stacked Sonner-style. Its own sticky height-0 sibling
+   right after .todo-panel, so the transcript never shifts; z-index 6 like the
+   todo, DOM order puts it above on a tie. In normal flow (no counter-margin):
+   it takes the column's measure, centring and the has-rail padding.
+   RunningDeckHost writes --deck-top (below the todo card when they overlap
+   horizontally), --deck-max and [data-chip-only] onto this wrapper.
+   --deck-row-h and --deck-chip-zone must stay literal rem: the host reads them. ── */
+.running-deck-wrap {
+  --deck-row-h: 2.75rem;     /* card + a transparent tail of --sp-2: rows are contiguous */
+  --deck-chip-zone: 3.5rem;  /* the jump-to-latest chip and its inset */
+  --deck-foot-h: 1.5rem;
+  --deck-peek: 0.25rem;
+  --deck-detail-h: 3.25rem;  /* up to three detail lines */
+  /* Defaults; RunningDeckHost overrides both inline from its measured read. */
+  --deck-top: var(--sp-3);
+  --deck-max: 50dvh;
+  position: sticky;
+  top: var(--deck-top);
+  z-index: 6;
+  height: 0;
+  overflow: visible;
+  max-width: var(--content-measure);
+  margin: 0 auto;
+  pointer-events: none;
+}
+
+/* The parent owns hover: collapsed, only the visible row boxes and controls
+   take the pointer (the text beneath stays usable); open, the whole stack
+   area does, so no gap can lose the hover. */
+.running-deck {
+  /* --n / --open-index (and each row's --i) are set inline by RunningDeck. */
+  --n: 1;
+  --open-index: 9999;
+  --deck-extra: 0rem;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.running-deck:focus {
+  outline: none;
+}
+
+.running-deck[data-open] {
+  pointer-events: auto;
+}
+
+.running-deck[data-expanding] {
+  --deck-extra: var(--deck-detail-h);
+}
+
+.running-deck-stack {
+  position: relative;
+}
+
+.running-deck[data-open] .running-deck-stack {
+  height: calc(var(--n) * var(--deck-row-h) + var(--deck-extra));
+  max-height: calc(var(--deck-max, 50dvh) - var(--deck-foot-h));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Rows are kit Buttons (ghost); these compound selectors undo the kit's
+   control box so a row is a plain card plus its transparent tail. */
+.running-deck-row.ak-btn {
+  --i: 0;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--deck-row-h);
+  padding: 0 0 var(--sp-2);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  white-space: normal;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  transform-origin: center bottom;
+  transition: transform var(--dur-2) var(--ease-out), height var(--dur-2) var(--ease-out);
+}
+
+.running-deck-row.ak-btn:hover:not(:disabled) {
+  background: transparent;
+}
+
+.running-deck-row.ak-btn:active:not(:disabled) {
+  filter: none;
+}
+
+/* Peek rows sit behind the front one: absolutely placed WITHOUT z-index
+   (overlay-boundary). Each card is clipped to the strip that shows below the
+   row above it, so DOM paint order never hides the front card. */
+.running-deck-row:not([data-front]) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  transform: translateY(calc(var(--i) * var(--deck-peek))) scale(calc(1 - var(--i) * 0.04));
+}
+
+.running-deck-row:not([data-front]) .running-deck-card {
+  clip-path: inset(calc(100% - var(--deck-peek)) 0 0 0);
+}
+
+/* Open: rows spread out; the rows after the expanded one make room. */
+.running-deck[data-open] .running-deck-row {
+  pointer-events: auto;
+  transform: translateY(calc(var(--i) * var(--deck-row-h) + clamp(0, var(--i) - var(--open-index), 1) * var(--deck-extra)));
+}
+
+.running-deck[data-open] .running-deck-row .running-deck-card {
+  clip-path: inset(-1rem);
+}
+
+.running-deck[data-open] .running-deck-row[data-expanded] {
+  height: calc(var(--deck-row-h) + var(--deck-extra));
+}
+
+.running-deck-card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  clip-path: inset(-1rem);
+  transition: clip-path var(--dur-2) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.running-deck-row:hover .running-deck-card,
+.running-deck-row:focus-visible .running-deck-card {
+  border-color: var(--text-3);
+}
+
+.running-deck-row.ak-btn:focus-visible {
+  outline: none;
+}
+
+.running-deck-row:focus-visible .running-deck-card {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.running-deck-line {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  height: calc(var(--deck-row-h) - var(--sp-2) - 2px);
+  padding: 0 var(--sp-3);
+  min-width: 0;
+}
+
+.running-deck-spinner,
+.running-deck-kind {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.running-deck-type {
+  flex-shrink: 0;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.running-deck-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.running-deck-meta {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.running-deck-jump {
+  flex-shrink: 0;
+  color: var(--info);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.running-deck-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-5));
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.running-deck-row[data-expanded] .running-deck-detail,
+.running-deck-row:focus-visible .running-deck-detail {
+  opacity: 1;
+}
+
+.running-deck-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--deck-foot-h);
+}
+
+.running-deck-more,
+.running-deck-collapse.ak-btn,
+.running-deck-chip.ak-btn,
+.running-deck-chip-only {
+  pointer-events: auto;
+  height: auto;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-card);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-normal);
+  white-space: nowrap;
+}
+
+.running-deck-collapse.ak-btn {
+  margin-left: auto;
+}
+
+.running-deck-chip.ak-btn {
+  align-self: flex-start;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--fs-xs);
+}
+
+.running-deck-collapse.ak-btn:hover:not(:disabled),
+.running-deck-collapse.ak-btn:focus-visible,
+.running-deck-chip.ak-btn:hover:not(:disabled),
+.running-deck-chip.ak-btn:focus-visible {
+  background: var(--bg-card);
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+/* Short window + tall todo card: no room for even three rows, so only the
+   "N running" chip shows, left-aligned at the default top, clear of the card. */
+.running-deck-chip-only {
+  display: none;
+  align-self: flex-start;
+  font-size: var(--fs-xs);
+}
+
+.running-deck-wrap[data-chip-only] .running-deck-stack,
+.running-deck-wrap[data-chip-only] .running-deck-foot {
+  display: none;
+}
+
+.running-deck-wrap[data-chip-only] .running-deck-chip-only {
+  display: inline-flex;
+}
+
 /* Centered measure column: max 76ch, centered via margin auto in the same
    main-pane the composer is centered in, so the two share one visual
    column (they are not forced to the same pixel width — the composer
