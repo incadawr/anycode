@@ -69,7 +69,7 @@ const cardless = (row: DeckRow, anchor: AnchorState | undefined): boolean =>
   row.toolCallId === undefined || anchor === undefined || !anchor.hasCard || !anchor.live;
 
 export function visibleDeckRows(rows: readonly DeckRow[], anchors: ReadonlyMap<string, AnchorState>): readonly DeckRow[] {
-  const anchorOf = (row: DeckRow) => (row.toolCallId === undefined ? undefined : anchors.get(row.toolCallId));
+  const anchorOf = (row: DeckRow) => (row.toolCallId === undefined ? undefined : anchors.get(row.key));
   const listed = rows.filter(row => cardless(row, anchorOf(row)));
   const above = rows.filter(row => !cardless(row, anchorOf(row)) && anchorOf(row)?.above === true);
   return [

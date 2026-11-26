@@ -55,24 +55,25 @@ describe("deckRowsFrom", () => {
 });
 
 describe("visibleDeckRows", () => {
+  // Anchors are keyed by row key (what useDeckAnchors returns), never by toolCallId.
   it("lists rows without an anchor, without a card, or whose card is not live", () => {
-    const rows = [row({ key: "a", toolCallId: undefined }), row({ key: "b", toolCallId: "b" }), row({ key: "c", toolCallId: "c" })];
+    const rows = [row({ key: "a", toolCallId: undefined }), row({ key: "b", toolCallId: "call-b" }), row({ key: "c", toolCallId: "call-c" })];
     const anchors = new Map([["b", anchor({ hasCard: false })], ["c", anchor({ live: false })]]);
     expect(visibleDeckRows(rows, anchors).map(r => r.key)).toEqual(["a", "b", "c"]);
   });
 
   it("hides a live card that is visible and shows one that is above", () => {
-    const rows = [row({ key: "vis", toolCallId: "vis" }), row({ key: "up", toolCallId: "up" })];
+    const rows = [row({ key: "vis", toolCallId: "call-vis" }), row({ key: "up", toolCallId: "call-up" })];
     const anchors = new Map([["vis", anchor({ above: false })], ["up", anchor({ above: true })]]);
     expect(visibleDeckRows(rows, anchors).map(r => r.key)).toEqual(["up"]);
   });
 
   it("orders card-less rows newest first (ties by key), then live-above rows by ascending distance", () => {
     const rows = [
-      row({ key: "far", toolCallId: "far", startedAt: 99 }),
+      row({ key: "far", toolCallId: "call-far", startedAt: 99 }),
       row({ key: "old", toolCallId: undefined, startedAt: 1 }),
       row({ key: "tieB", toolCallId: undefined, startedAt: 5 }),
-      row({ key: "near", toolCallId: "near", startedAt: 0 }),
+      row({ key: "near", toolCallId: "call-near", startedAt: 0 }),
       row({ key: "tieA", toolCallId: undefined, startedAt: 5 }),
       row({ key: "new", toolCallId: undefined, startedAt: 8 }),
     ];
