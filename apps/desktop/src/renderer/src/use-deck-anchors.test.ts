@@ -24,6 +24,24 @@ describe("blockIdByToolCall", () => {
     const first = blockIdEntry(null, [tool("t", "t")]);
     expect(blockIdEntry(first, [tool("t", "t"), tool("u", "u")]).map).not.toBe(first.map);
   });
+  it("keeps identity when only a tool call's own fields change, such as its status", () => {
+    const first = blockIdEntry(null, [tool("t", "t"), text("a")]);
+    const done = { ...tool("t", "t"), status: "error" } as never;
+    expect(blockIdEntry(first, [done, text("a")])).toBe(first);
+  });
+  it("changes identity when a tool call is removed, replaced by another, or renumbered", () => {
+    const first = blockIdEntry(null, [tool("t", "t"), tool("u", "u")]);
+    expect(blockIdEntry(first, [tool("t", "t")]).map).not.toBe(first.map);
+    expect(blockIdEntry(first, [tool("t", "t"), tool("v", "v")]).map).not.toBe(first.map);
+    expect(blockIdEntry(first, [tool("t", "t"), tool("u", "other")]).map.get("other")).toBe("u");
+    expect(blockIdEntry(first, [tool("t", "t"), tool("u", "u")])).toBe(first);
+  });
+  it("rebuilds from nothing, and from an entry that held no tool call", () => {
+    const empty = blockIdEntry(null, [text("a")]);
+    expect(empty.map.size).toBe(0);
+    expect(blockIdEntry(empty, [text("a"), tool("t", "t")]).map.get("t")).toBe("t");
+    expect(blockIdEntry(blockIdEntry(null, [tool("t", "t")]), [text("a")]).map.size).toBe(0);
+  });
 });
 
 describe("toolBlocksFor", () => {

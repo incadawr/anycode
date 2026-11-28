@@ -36,10 +36,24 @@ export function isLaidOut(el: AnchorElementLike): boolean {
  * nearest laid-out block ancestor of it.
  */
 export function findLaidOutAnchor(container: HTMLElement, id: string): HTMLElement | null {
+  return findLaidOutAnchorEntry(container, id)?.el ?? null;
+}
+
+/**
+ * `el` is what `findLaidOutAnchor` returns; `via` is the element that carries the id itself. They are the same node unless the
+ * match is hidden and an ancestor stands in for it. A caller that caches `el` can tell the stand-in is stale when `via` leaves the
+ * DOM or loses the id, without querying again.
+ */
+export interface LaidOutAnchor {
+  readonly el: HTMLElement;
+  readonly via: HTMLElement;
+}
+
+export function findLaidOutAnchorEntry(container: HTMLElement, id: string): LaidOutAnchor | null {
   const matches = container.querySelectorAll<HTMLElement>(`[data-block-id="${escapeSelector(id)}"]`);
   for (const match of matches) {
     if (isLaidOut(match)) {
-      return match;
+      return { el: match, via: match };
     }
   }
   const first = matches[0];
@@ -50,7 +64,7 @@ export function findLaidOutAnchor(container: HTMLElement, id: string): HTMLEleme
   while (node) {
     const candidate = node.closest<HTMLElement>("[data-block-id]");
     if (candidate && isLaidOut(candidate)) {
-      return candidate;
+      return { el: candidate, via: first };
     }
     node = candidate ? candidate.parentElement : null;
   }

@@ -298,6 +298,63 @@ it("keeps the row of the FIRST call of a collapsed stack listed: the stack's roo
   const { seen } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 10 });
   expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: false });
 });
+
+function hiddenAnchor(id: string): HTMLElement {
+  const anchor = document.createElement("span");
+  anchor.setAttribute("data-block-id", id);
+  anchor.getClientRects = () => [] as unknown as DOMRectList;
+  anchor.getBoundingClientRect = vi.fn(() => ({ top: 0, bottom: 0, width: 0, height: 0 }) as DOMRect);
+  return anchor;
+}
+
+it("does not re-query the DOM on every scroll frame for a card inside a collapsed stack, and finds it once the stack opens", () => {
+  const list = attachedList();
+  // A collapsed tool-call stack: the head's id on the root, the other members on hidden anchors.
+  const stack = card(list, "head", 50);
+  stack.className = "tool-call-stack";
+  const anchor = hiddenAnchor("a");
+  stack.append(anchor);
+  const spy = vi.spyOn(list, "querySelectorAll");
+  const { seen, schedule } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 10 });
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: false });
+  const queries = spy.mock.calls.length;
+  for (let frame = 0; frame < 3; frame += 1) {
+    list.dispatchEvent(new Event("scroll"));
+    flush();
+  }
+  expect(spy.mock.calls.length).toBe(queries);
+  // Opening the stack removes the hidden anchor and lays the card out: the stand-in goes stale at once.
+  anchor.remove();
+  card(stack, "a", 90);
+  schedule.current();
+  flush();
+  expect(spy.mock.calls.length).toBeGreaterThan(queries);
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: true, above: false });
+});
+
+it("does the same for the FIRST call of a collapsed stack, whose id is on the stack's own root", () => {
+  const list = attachedList();
+  const root = card(list, "a", 50);
+  root.className = "tool-call-stack";
+  const spy = vi.spyOn(list, "querySelectorAll");
+  const { seen, schedule } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 10 });
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: false });
+  const queries = spy.mock.calls.length;
+  for (let frame = 0; frame < 3; frame += 1) {
+    list.dispatchEvent(new Event("scroll"));
+    flush();
+  }
+  expect(spy.mock.calls.length).toBe(queries);
+  // Open: the root loses the id and the card is rendered inside it.
+  root.removeAttribute("data-block-id");
+  card(root, "a", 90);
+  schedule.current();
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: true, above: false });
+});
+
 it("re-reads when the transcript column changes size, with no scroll, no list resize and no DOM change", () => {
   const targets: Element[] = [];
   const callbacks: ResizeObserverCallback[] = [];

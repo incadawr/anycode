@@ -321,9 +321,18 @@ export function RunningDeckHost(props: RunningDeckHostProps) {
       tabRegistry.sendToTab(tabId, { type: "task_list_request" });
     }
   }, [blocks, engineId, tabId]);
+  // A task with no description of its own is titled from its tool call's input, found in the transcript. Doing that per `blocks` would
+  // scan the transcript on every text flush of a streaming turn and give `rows` a new identity each time. The lookup instead reruns
+  // when the tool calls change (the index keeps its identity otherwise), and only while such a task exists.
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
+  const toolIndex = useRef<BlockIdEntry | null>(null);
+  const needsTranscript = tasks.some(task => !task.description.trim());
+  const toolCalls = needsTranscript ? (toolIndex.current = blockIdEntry(toolIndex.current, blocks)) : null;
   const rows = useMemo(
-    () => deckRowsFrom(tasks, children, task => taskDescription(task, blocks), coreTasks),
-    [tasks, coreTasks, children, blocks],
+    () => deckRowsFrom(tasks, children, task => taskDescription(task, blocksRef.current), coreTasks),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `toolCalls` stands for the part of `blocks` the titles read.
+    [tasks, coreTasks, children, toolCalls],
   );
   const hasRows = rows.length > 0;
 

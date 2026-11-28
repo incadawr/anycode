@@ -1,6 +1,6 @@
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { cardShowsRunning } from "./components/ToolCallCard.js";
-import { findLaidOutAnchor } from "./block-anchor.js";
+import { findLaidOutAnchor, findLaidOutAnchorEntry, isLaidOut, type LaidOutAnchor } from "./block-anchor.js";
 import type { AnchorState, DeckRow } from "./running-deck.js";
 import type { ToolCallBlock, TranscriptBlock } from "./store.js";
 import { TabContext } from "./tab-context.js";
@@ -19,7 +19,8 @@ const isTheCard = (el: HTMLElement, blockId: string): boolean => el.getAttribute
 const NO_CARD: AnchorState = { hasCard: false, live: false, above: false, distance: Number.POSITIVE_INFINITY };
 
 export interface BlockIdEntry {
-  readonly key: string;
+  /** The ordered tool calls the map was built from, flattened as [blockId, toolCallId, blockId, toolCallId, ...]. */
+  readonly pairs: readonly string[];
   readonly map: ReadonlyMap<string, string>;
 }
 
@@ -28,13 +29,35 @@ export function blockIdByToolCall(blocks: readonly TranscriptBlock[]): ReadonlyM
   return blockIdEntry(null, blocks).map;
 }
 
-/** Same as `blockIdByToolCall`, but returns `prev` (same Map identity) while the ordered tool_call ids are unchanged. */
+/**
+ * Same as `blockIdByToolCall`, but returns `prev` (same Map identity) while the ordered tool_call ids are unchanged. Every text flush
+ * of a streaming turn replaces `blocks`, so the unchanged case is the hot one: one pass, no allocation, nothing built unless a tool
+ * call was added, removed or renumbered.
+ */
 export function blockIdEntry(prev: BlockIdEntry | null, blocks: readonly TranscriptBlock[]): BlockIdEntry {
-  const tools = blocks.filter((block): block is ToolCallBlock => block.kind === "tool_call");
-  const key = tools.map(block => `${block.id}\u0000${block.toolCallId}`).join("\u0001");
-  return prev !== null && prev.key === key
-    ? prev
-    : { key, map: new Map(tools.map(block => [block.toolCallId, block.id] as const)) };
+  let count = 0;
+  let same = prev !== null;
+  for (const block of blocks) {
+    if (block.kind !== "tool_call") {
+      continue;
+    }
+    if (same && (prev!.pairs[2 * count] !== block.id || prev!.pairs[2 * count + 1] !== block.toolCallId)) {
+      same = false;
+    }
+    count++;
+  }
+  if (prev !== null && same && prev.pairs.length === 2 * count) {
+    return prev;
+  }
+  const pairs: string[] = [];
+  const map = new Map<string, string>();
+  for (const block of blocks) {
+    if (block.kind === "tool_call") {
+      pairs.push(block.id, block.toolCallId);
+      map.set(block.toolCallId, block.id);
+    }
+  }
+  return { pairs, map };
 }
 
 /** The requested tool_call blocks by toolCallId; no work at all when nothing is requested. */
@@ -114,7 +137,7 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
   const derived = useMemo(() => ({ idByCall: args.idByCall, toolBlocks }), [args.idByCall, toolBlocks]);
   const latest = useRef({ args, ctx, anchors, derived });
   latest.current = { args, ctx, anchors, derived };
-  const nodes = useRef(new Map<string, HTMLElement>());
+  const nodes = useRef(new Map<string, LaidOutAnchor>());
   // Block ids whose element was not laid out; not re-queried until `blocks` change or the list's content height does.
   const missing = useRef(new Set<string>());
   const missingHeight = useRef(-1);
@@ -149,20 +172,26 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
           return [r.key, NO_CARD];
         }
         const cached = nodes.current.get(blockId);
-        if (!cached?.isConnected && missing.current.has(blockId)) {
+        if (cached === undefined && missing.current.has(blockId)) {
           return [r.key, NO_CARD];
         }
-        // A cached element counts only while it is the card itself and still laid out. When the card sits in a collapsed tool-call
-        // stack, the stack's root stands in for it; it must not stay cached once the stack opens and the card is laid out.
-        const cachedIsCard = cached !== undefined && cached.isConnected && isTheCard(cached, blockId) && cached.getClientRects().length > 0;
-        const el = cachedIsCard ? cached : resolveAnchorElement(list, blockId);
-        if (el === null) {
+        // A cached element counts while it is still laid out and the node that carries the id is still in the DOM with that id. For a
+        // card in a collapsed stack the element is the stack's root (or the nearest laid-out ancestor), which stands in for the card:
+        // opening the stack removes the hidden anchor, or the root's id, so the entry goes stale at once and the real card is found.
+        // This keeps a running member of a collapsed stack off the DOM query on every scroll frame.
+        // A stand-in is stale as soon as the node that carries the id is laid out itself: that node is the card now.
+        const fresh = cached !== undefined && cached.el.isConnected && cached.via.isConnected
+          && cached.via.getAttribute("data-block-id") === blockId && cached.el.getClientRects().length > 0
+          && (cached.el === cached.via || !isLaidOut(cached.via));
+        const found = fresh ? cached : findLaidOutAnchorEntry(list, blockId);
+        if (found === null) {
           nodes.current.delete(blockId);
           missing.current.add(blockId);
           return [r.key, NO_CARD];
         }
+        const el = found.el;
         missing.current.delete(blockId);
-        nodes.current.set(blockId, el);
+        nodes.current.set(blockId, found);
         const bottom = el.getBoundingClientRect().bottom;
         // Not the card itself: the stack that holds it is collapsed. Its header says "Success" and nothing shows that work is running,
         // so the row must stay listed even while that header is in view.

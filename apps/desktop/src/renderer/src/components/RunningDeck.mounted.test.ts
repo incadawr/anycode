@@ -552,6 +552,32 @@ describe("RunningDeckHost", () => {
     expect(rowButtons()).toHaveLength(0);
   });
 
+  it("does not look the transcript up again on every text flush while a task has no description", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const store = createDesktopStore();
+    store.setState({ engine: { id: "claude" }, claudeBackgroundTasks: [{ ...task("x"), description: "" }] } as never);
+    // `input` is read only by the title lookup, so its read count is the number of times the transcript was searched.
+    let inputReads = 0;
+    const call = { kind: "tool_call", id: "x", toolCallId: "x", toolName: "Bash", status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null } as Record<string, unknown>;
+    Object.defineProperty(call, "input", { get: () => { inputReads += 1; return { command: "npm test" }; } });
+    const text = (n: number) => ({ kind: "assistant_text", id: `t${n}`, text: "x".repeat(n) }) as unknown as TranscriptBlock;
+    const host = (blocks: TranscriptBlock[]) => createElement(TabContext.Provider, { value: { tabId: "t", store } },
+      createElement(RunningDeckHost, { listRef: { current: list }, blocks, onJumpToBlock: () => undefined }));
+    const { rerender } = mountInto(host([call as unknown as TranscriptBlock]), list);
+    expect(labels()).toEqual(["Bash: npm test, running, jump to its card"]);
+    const reads = inputReads;
+    // Streaming text: the tool call is the same, the blocks array is new each time.
+    for (let n = 1; n <= 5; n += 1) {
+      rerender(host([call as unknown as TranscriptBlock, text(n)]));
+    }
+    expect(inputReads).toBe(reads);
+    expect(labels()).toEqual(["Bash: npm test, running, jump to its card"]);
+    // A new tool call changes the index, so the titles are read again.
+    rerender(host([call as unknown as TranscriptBlock, text(5), { ...(call as object), id: "y", toolCallId: "y" } as unknown as TranscriptBlock]));
+    expect(inputReads).toBeGreaterThan(reads);
+  });
+
   it("stops the elapsed tick in chip-only mode (no room for rows)", () => {
     vi.useFakeTimers();
     const clear = vi.spyOn(globalThis, "clearInterval");
