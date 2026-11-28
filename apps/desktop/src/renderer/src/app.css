@@ -127,10 +127,6 @@ body {
 .icon-spin {
   animation: spin 800ms linear infinite;
 }
-/* Ambient rotation (background agents ring); same global reduced-motion rule. */
-.icon-spin-slow {
-  animation: spin 2400ms linear infinite;
-}
 .claude-turn-preview { flex: 0 1 auto; box-sizing: border-box; width: min(100% - 2 * var(--sp-4), calc(var(--content-measure) + 6rem)); max-height: 30vh; overflow: auto; margin: var(--sp-2) auto; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-sidebar); color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .claude-turn-preview-title { color: var(--text-3); font-size: var(--fs-2xs); }
 .claude-turn-preview-text { white-space: pre-wrap; margin-top: var(--sp-1); font-size: var(--fs-sm); color: var(--text-2); }
@@ -1250,42 +1246,6 @@ body {
   width: 10px;
   height: 10px;
   color: var(--text-ghost);
-}
-
-.sidebar-row-bg-agents {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 2px var(--sp-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  color: var(--text-3);
-  font-size: var(--fs-2xs);
-  font-variant-numeric: tabular-nums;
-  line-height: var(--lh-tight);
-}
-
-.sidebar-row-bg-agents-group {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-}
-
-.sidebar-row-bg-agents-robot {
-  width: 13px;
-  height: 13px;
-}
-
-.sidebar-row-bg-agents-prompt {
-  width: 14px;
-  height: 14px;
-}
-
-.sidebar-row-bg-agents-ring {
-  /* same size as the row's own spinner (.sidebar-row-spinner) */
-  width: 10px;
-  height: 10px;
 }
 
 .sidebar-row-age {

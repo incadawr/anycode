@@ -113,6 +113,15 @@ export function IconSpinner(props: IconProps): React.ReactElement {
   );
 }
 
+/** Dashed circle for slow ambient rotation (the "still running" ring of CountPill); the rotation is CSS. */
+export function IconDashedRing(props: IconProps): React.ReactElement {
+  return (
+    <svg {...base(props)}>
+      <circle cx="8" cy="8" r="6" pathLength="12" strokeDasharray="1 1" />
+    </svg>
+  );
+}
+
 export function IconPlan(props: IconProps): React.ReactElement {
   return (
     <svg {...base(props)}>

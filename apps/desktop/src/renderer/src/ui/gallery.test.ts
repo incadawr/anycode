@@ -42,3 +42,8 @@ it("gallery shows the Menu trigger with its items",()=>{
   expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
   click(trigger);expect(byRole(container,"menu","Actions")).toBeTruthy();
 });
+it("gallery shows the CountPill states",()=>{
+  const {container}=mount(h(Gallery));
+  expect(container.querySelectorAll(".ak-countpill").length).toBeGreaterThanOrEqual(4);
+  expect(container.querySelector(".ak-countpill__ring")).not.toBeNull();
+});

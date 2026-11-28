@@ -24,7 +24,8 @@ import { handleCreateTabResult, resolveConnectionMissingAction } from "./Session
 import { pendingResumeRowSets, resumeWithMarker, usePendingResumes } from "../pending-resumes.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
-import { ArrowUp, Chevron, Collapse, CommandPrompt, Cube, DashedRing, Dot, Ellipsis, Folder, Gear, Plus, Robot, Search, Spinner, Trash, X } from "./icons.js";
+import { CountPill } from "../ui/index.js";
+import { ArrowUp, Chevron, Collapse, CommandPrompt, Cube, Dot, Ellipsis, Folder, Gear, Plus, Robot, Search, Spinner, Trash, X } from "./icons.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import { AccountBudgetCard } from "./AccountBudgetCard.js";
 
@@ -107,27 +108,19 @@ export function rowAriaLabel(
 }
 
 /**
- * One pill for the background work of an open session: a robot group (agents) and a prompt group (Bash commands,
- * monitors), each shown only when non-zero, sharing one slowly rotating ring. The glyphs are aria-hidden, the row's
- * aria-label carries the meaning.
+ * One pill for the background work of an open session: an agents group and a commands group (Bash commands, monitors), each shown
+ * only when non-zero, sharing one slowly rotating ring. The glyphs are decorative, the row's aria-label carries the meaning.
  */
 function BackgroundWorkBadge({ agents, tasks }: { agents: number; tasks: number }) {
   return (
-    <span className="sidebar-row-bg-agents" title={backgroundWorkSummary(agents, tasks) ?? undefined}>
-      {agents > 0 && (
-        <span className="sidebar-row-bg-agents-group">
-          <Robot className="sidebar-row-bg-agents-robot" />
-          <span className="sidebar-row-bg-agents-count">{agents}</span>
-        </span>
-      )}
-      {tasks > 0 && (
-        <span className="sidebar-row-bg-agents-group">
-          <CommandPrompt className="sidebar-row-bg-agents-prompt" />
-          <span className="sidebar-row-bg-agents-count">{tasks}</span>
-        </span>
-      )}
-      <DashedRing className="sidebar-row-bg-agents-ring icon-spin-slow" />
-    </span>
+    <CountPill
+      busy
+      title={backgroundWorkSummary(agents, tasks) ?? undefined}
+      items={[
+        { id: "agents", icon: <Robot width={13} height={13} />, count: agents },
+        { id: "commands", icon: <CommandPrompt width={14} height={14} />, count: tasks },
+      ]}
+    />
   );
 }
 

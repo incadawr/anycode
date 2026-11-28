@@ -129,21 +129,21 @@ it("shows the background agents badge on an open row, before the spinner, with t
   const { container, cleanup } = await mountWithStatus(2);
   try {
     const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
-    const badge = row.querySelector(".sidebar-row-bg-agents")!;
+    const badge = row.querySelector(".ak-countpill")!;
     expect(badge.textContent).toBe("2");
     const spinner = row.querySelector(".sidebar-row-spinner")!;
     expect(badge.compareDocumentPosition(spinner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents");
     const resumable = container.querySelector(".sidebar-row-resumable");
     expect(resumable).not.toBeNull();
-    expect(resumable!.querySelector(".sidebar-row-bg-agents")).toBeNull();
+    expect(resumable!.querySelector(".ak-countpill")).toBeNull();
   } finally { await cleanup(); }
 });
 
 it("shows no badge when there are no background agents", async () => {
   const { container, cleanup } = await mountWithStatus(0);
   try {
-    expect(container.querySelector(".sidebar-row-bg-agents")).toBeNull();
+    expect(container.querySelector(".ak-countpill")).toBeNull();
   } finally { await cleanup(); }
 });
 
@@ -151,10 +151,10 @@ it("shows only the prompt group for a commands-only row", async () => {
   const { container, cleanup } = await mountWithStatus(0, 1);
   try {
     const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
-    expect(row.querySelector(".sidebar-row-bg-agents")).not.toBeNull();
-    expect(row.querySelector(".sidebar-row-bg-agents-robot")).toBeNull();
-    expect(row.querySelector(".sidebar-row-bg-agents-prompt")).not.toBeNull();
-    expect(row.querySelector(".sidebar-row-bg-agents")!.textContent).toBe("1");
+    expect(row.querySelector(".ak-countpill")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=agents]")).toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=commands]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill")!.textContent).toBe("1");
     expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 1 background command");
   } finally { await cleanup(); }
 });
@@ -163,8 +163,8 @@ it("shows only the robot group for an agents-only row", async () => {
   const { container, cleanup } = await mountWithStatus(2, 0);
   try {
     const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
-    expect(row.querySelector(".sidebar-row-bg-agents-robot")).not.toBeNull();
-    expect(row.querySelector(".sidebar-row-bg-agents-prompt")).toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=agents]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=commands]")).toBeNull();
   } finally { await cleanup(); }
 });
 
@@ -172,12 +172,12 @@ it("shows both groups inside one pill with one ring", async () => {
   const { container, cleanup } = await mountWithStatus(2, 1);
   try {
     const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
-    expect(row.querySelectorAll(".sidebar-row-bg-agents")).toHaveLength(1);
-    expect(row.querySelectorAll(".sidebar-row-bg-agents-ring")).toHaveLength(1);
-    expect(row.querySelectorAll(".sidebar-row-bg-agents-group")).toHaveLength(2);
-    expect(row.querySelector(".sidebar-row-bg-agents-robot")).not.toBeNull();
-    expect(row.querySelector(".sidebar-row-bg-agents-prompt")).not.toBeNull();
-    expect(row.querySelector(".sidebar-row-bg-agents")!.textContent).toBe("21");
+    expect(row.querySelectorAll(".ak-countpill")).toHaveLength(1);
+    expect(row.querySelectorAll(".ak-countpill__ring")).toHaveLength(1);
+    expect(row.querySelectorAll(".ak-countpill__item")).toHaveLength(2);
+    expect(row.querySelector(".ak-countpill__item[data-item=agents]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=commands]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill")!.textContent).toBe("21");
     expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents, 1 background command");
   } finally { await cleanup(); }
 });
@@ -190,7 +190,7 @@ it("gives the pill a plain-words tooltip for agents-only, commands-only and both
   ] as const) {
     const { container, cleanup } = await mountWithStatus(agents, tasks);
     try {
-      expect(container.querySelector(".sidebar-row-bg-agents")!.getAttribute("title")).toBe(title);
+      expect(container.querySelector(".ak-countpill")!.getAttribute("title")).toBe(title);
     } finally { await cleanup(); }
   }
 });
@@ -198,8 +198,8 @@ it("gives the pill a plain-words tooltip for agents-only, commands-only and both
 it("draws the commands group with the frameless prompt icon", async () => {
   const { container, cleanup } = await mountWithStatus(0, 1);
   try {
-    const group = container.querySelector(".sidebar-row-bg-agents-group")!;
-    const icon = group.querySelector(".sidebar-row-bg-agents-prompt")!;
+    const group = container.querySelector(".ak-countpill__item[data-item=commands]")!;
+    const icon = group.querySelector("svg")!;
     expect(icon).not.toBeNull();
     expect(icon.querySelector("rect")).toBeNull();
   } finally { await cleanup(); }
