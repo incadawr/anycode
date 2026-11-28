@@ -48,17 +48,17 @@ export function RunningDeck(props: RunningDeckProps) {
 
   const live = visibleDeckRows(rows, anchors);
   const open = (hovered || focusWithin) && !dismissed && !collapsed;
-  // While open, the rendered list is frozen so nothing moves or vanishes under
-  // the pointer; changes apply on close. Derived state set during render.
-  if (open && frozen === null) {
+  // While the pointer is on the open stack, the rendered list is frozen so nothing moves or vanishes under it; changes apply when the
+  // pointer leaves. Keyboard focus alone does not freeze: a row whose work ended is dropped at once, so it never reads "running" for
+  // as long as focus stays, and it cannot come back from an old snapshot when the pointer arrives later. Derived state set during render.
+  const freezing = open && hovered;
+  if (freezing && frozen === null) {
     setFrozen(live);
-  } else if (!open && frozen !== null) {
+  } else if (!freezing && frozen !== null) {
     setFrozen(null);
   }
   const latest = new Map(rows.map(r => [r.key, r] as const));
-  // The freeze keeps a finished row from vanishing under a pointer that is on it. Keyboard focus alone does not freeze: a row whose
-  // work ended is dropped at once, so it never reads "running" while a user parked on it waits for the result.
-  const shown = (open ? frozen ?? live : live).filter(r => hovered || latest.has(r.key)).map(r => latest.get(r.key) ?? r);
+  const shown = (freezing ? frozen ?? live : live).map(r => latest.get(r.key) ?? r);
   const { front, more } = collapsedRows(shown);
   const mounted = open ? shown : front;
   const expandedIndex = open ? mounted.findIndex(r => r.key === expandedKey) : -1;

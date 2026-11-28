@@ -226,6 +226,23 @@ describe("RunningDeck", () => {
     expect(labels()).toEqual(["Bash: run a, running", "Bash: run b, running"]);
   });
 
+  it("does not bring a finished row back when the pointer arrives while keyboard focus holds the deck open", () => {
+    const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
+    const { rerender } = mountInto(deck({ rows }));
+    focus(rowButtons()[0]!);
+    rerender(deck({ rows: rows.slice(0, 2) }));
+    over(rowButtons()[0]!);
+    expect(labels()).not.toContain("Bash: run c, running");
+  });
+
+  it("shows a row added while keyboard focus holds the deck open", () => {
+    const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 })];
+    const { rerender } = mountInto(deck({ rows }));
+    focus(rowButtons()[0]!);
+    rerender(deck({ rows: [...rows, row("c", { startedAt: 1 })] }));
+    expect(labels()).toContain("Bash: run c, running");
+  });
+
   it("moves focus from an unmounting row to the next row, never to body", () => {
     const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
     const { rerender } = mountInto(deck({ rows }));

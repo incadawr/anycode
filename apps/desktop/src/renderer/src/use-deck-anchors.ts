@@ -197,7 +197,8 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
 
   // A row for a call that has a card appears in the deck only once the card's position is known. Read it synchronously, before the
   // paint, when the set of wanted calls changes: waiting for the next frame would flash a row for a card that is on screen. This is
-  // the one synchronous read (rare: a task starting or ending); every other trigger stays on the coalesced rAF.
+  // the one synchronous read (rare: a task starting or ending); every other trigger stays on the coalesced rAF. When the list itself
+  // mounts in the same commit it is not attached yet, so the read returns early and the frame read covers it.
   useLayoutEffect(() => {
     read();
   }, [wantedKey, read]);
