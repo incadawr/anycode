@@ -218,10 +218,11 @@ it("checks CSS embedded in strings and <style> text", () => {
   ]);
 });
 
+// Parses the whole renderer tree: ~2 s alone, past the 5 s default on a loaded CI runner.
 it("has no typography outside tokens beyond the named baseline, and no stale baseline entries", () => {
   const { added, stale } = baselineDiff(collectEntries(), BASELINE);
   expect({ added, stale }, [
     ...added.map(entry => `new violation (use a --fs-*/--lh-* token): ${entry}`),
     ...stale.map(entry => `stale baseline entry (fixed; remove it): ${entry}`),
   ].join("\n")).toEqual({ added: [], stale: [] });
-});
+}, 60_000);
