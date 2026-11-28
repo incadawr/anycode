@@ -368,7 +368,7 @@
 }
 
 .ak-peekstack__row:focus-visible .ak-peekstack__card {
-  outline: 2px solid var(--focus-ring);
+  outline: var(--focus-ring-width) solid var(--focus-ring);
   outline-offset: -2px;
 }
 

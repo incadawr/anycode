@@ -30,7 +30,7 @@ export interface PeekStackItem {
 export interface PeekStackLabels {
   /** Accessible name of the region. */
   readonly region: string;
-  /** What each row is doing, in the row's accessible name: "{type}: {title}, {state}". */
+  /** What each row is doing, in the row's accessible name: "{type}: {title}, {state}". The order and the ", " separators are fixed; only the words are yours. */
   readonly state: string;
   /** Appended to the accessible name of a row that can be activated. */
   readonly activateHint: string;
@@ -199,6 +199,26 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
     }
   }, [empty]);
 
+  // Hover content must be dismissable without moving the pointer (WCAG 1.4.13): while only the pointer has the stack open, focus is
+  // elsewhere, so the region's own handler never sees the key. Listen on the document in the capture phase so a global Escape
+  // handler (cancel the turn) sees a key that was already used here, and only while that is the case.
+  const pointerOnly = open && hovered && !focusWithin;
+  useEffect(() => {
+    if (!pointerOnly) {
+      return;
+    }
+    const onDocumentKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      event.preventDefault();
+      clearTimer();
+      setExpandedKey(null);
+      setDismissed(true);
+    };
+    document.addEventListener("keydown", onDocumentKeyDown, true);
+    return () => document.removeEventListener("keydown", onDocumentKeyDown, true);
+  }, [pointerOnly]);
   if (empty) {
     return null;
   }
@@ -294,6 +314,7 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
           ref={chipEl}
           variant="ghost"
           className="ak-peekstack__chip"
+          aria-expanded={false}
           onFocus={() => { focusedId.current = CHIP_ID; }}
           onClick={() => {
             pendingFocus.current = "foot";

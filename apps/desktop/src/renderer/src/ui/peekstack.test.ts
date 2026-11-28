@@ -102,6 +102,7 @@ describe("PeekStack", () => {
     expect(rowButtons()).toHaveLength(0);
     const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip")!;
     expect(chip.textContent).toBe("5 running");
+    expect(chip.getAttribute("aria-expanded")).toBe("false");
     act(() => chip.click());
     expect(rowButtons()).toHaveLength(3);
   });
@@ -132,6 +133,30 @@ describe("PeekStack", () => {
     expect(region()!.hasAttribute("data-open")).toBe(true);
   });
 
+  it("closes on Escape when only the pointer has it open and focus is elsewhere, and consumes the key", () => {
+    mount(stack({ items: five() }));
+    const elsewhere = outside();
+    focus(elsewhere);
+    over(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    const event = keyDown(elsewhere, "Escape");
+    expect(event.defaultPrevented).toBe(true);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+  });
+
+  it("leaves Escape alone when the pointer is not on the stack, and stops listening once it leaves", () => {
+    mount(stack({ items: five() }));
+    const elsewhere = outside();
+    focus(elsewhere);
+    expect(keyDown(elsewhere, "Escape").defaultPrevented).toBe(false);
+    const first = rowButtons()[0]!;
+    over(first);
+    out(first);
+    leave(region()!);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    expect(keyDown(elsewhere, "Escape").defaultPrevented).toBe(false);
+  });
+
   it("does not consume Escape while closed, so a global Escape handler still sees it", () => {
     mount(stack({ items: five() }));
     expect(keyDown(rowButtons()[0]!, "Escape").defaultPrevented).toBe(false);
@@ -145,8 +170,9 @@ describe("PeekStack", () => {
     expect(onActivate).toHaveBeenCalledWith("a");
     act(() => b!.click());
     expect(onActivate).toHaveBeenCalledTimes(1);
-    // A native button turns Enter into a click; jsdom does not, so the same path is exercised through click().
+    // A native button turns Enter and Space into a click; jsdom does not, so the same path is exercised through click().
     expect(a!.tagName).toBe("BUTTON");
+    expect((a as HTMLButtonElement).type).toBe("button");
   });
 
   it("freezes the rows while the pointer is on the stack and applies changes when it leaves", () => {
