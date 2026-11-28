@@ -184,7 +184,7 @@ describe("RunningStack", () => {
     mount(stack({ items: [item("a"), item("b", { activatable: false })], onActivate }));
     const [a, b] = rowButtons();
     act(() => a!.click());
-    expect(onActivate).toHaveBeenCalledWith("a");
+    expect(onActivate).toHaveBeenCalledWith("a", expect.objectContaining({ key: "a" }));
     act(() => b!.click());
     expect(onActivate).toHaveBeenCalledTimes(1);
     // A native button turns Enter and Space into a click; jsdom does not, so the same path is exercised through click().
@@ -211,7 +211,7 @@ describe("RunningStack", () => {
     over(first);
     expect(region()!.hasAttribute("data-open")).toBe(true);
     act(() => first.click());
-    expect(onActivate).toHaveBeenCalledWith("a");
+    expect(onActivate).toHaveBeenCalledWith("a", expect.objectContaining({ key: "a" }));
     expect(region()!.hasAttribute("data-open")).toBe(false);
   });
 
@@ -280,7 +280,7 @@ describe("RunningStack", () => {
     const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip-only")!;
     expect(chip.getAttribute("aria-label")).toBe("5 running: run a, jump to its card");
     act(() => chip.click());
-    expect(onActivate).toHaveBeenCalledWith("a");
+    expect(onActivate).toHaveBeenCalledWith("a", expect.objectContaining({ key: "a" }));
   });
 
   it("marks the chip-only chip as disabled when the first row cannot be activated", () => {
@@ -310,6 +310,19 @@ describe("RunningStack", () => {
       expect(glyph.getAttribute("aria-hidden") === "true" || glyph.closest("[aria-hidden='true']") !== null).toBe(true);
     }
   });
+
+  it("hands onActivate the item as the stack shows it, so a row that left `items` under the pointer still carries its own target", () => {
+    const onActivate = vi.fn();
+    const rows = [item("a", { target: "block-a" }), item("b", { target: "block-b" })];
+    const { render } = mount(stack({ items: rows, onActivate }));
+    over(rowButtons()[1]!);
+    // b's work ended: the caller dropped it, but the pointer holds the list frozen and it can still be pressed.
+    render(stack({ items: [rows[0]!], onActivate }));
+    expect(labels()).toHaveLength(2);
+    act(() => rowButtons()[1]!.click());
+    expect(onActivate).toHaveBeenCalledWith("b", expect.objectContaining({ key: "b", target: "block-b" }));
+  });
+
   it("leaves focus on the fold control when Escape comes from the foot, not from a row", () => {
     mount(stack({ items: five() }));
     over(rowButtons()[0]!);

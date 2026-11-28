@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import { formatTaskElapsed } from "../claude-background-tasks.js";
 import { visibleDeckRows, type AnchorState, type DeckRow } from "../running-deck.js";
 import { RunningStack, type RunningStackItem } from "../ui/index.js";
@@ -29,15 +29,11 @@ export function RunningDeck(props: RunningDeckProps) {
     (row: DeckRow): string | undefined => (row.toolCallId === undefined ? undefined : blockIdByToolCall.get(row.toolCallId)),
     [blockIdByToolCall],
   );
-  // The kit freezes the list while the pointer is on the stack, so a row can be clicked after its work ended and it left `rows`.
-  // Its card is still there: remember each row's block id, so that click still jumps.
-  const knownBlocks = useRef(new Map<string, string>());
+  // The kit freezes the list while the pointer is on the stack, so a row can be clicked after its work ended and it left `rows`. Its
+  // card is still there: the block id rides on the item (`target`), and the kit hands back the item it shows, so that click still jumps.
   const items = useMemo<readonly RunningStackItem[]>(
     () => visibleDeckRows(rows, anchors).map(row => {
       const blockId = blockIdOf(row);
-      if (blockId !== undefined) {
-        knownBlocks.current.set(row.key, blockId);
-      }
       return {
         key: row.key,
         icon: row.kind === "child" ? <Robot width={14} height={14} /> : <Terminal width={14} height={14} />,
@@ -46,19 +42,14 @@ export function RunningDeck(props: RunningDeckProps) {
         meta: formatTaskElapsed(row.startedAt, elapsedNow),
         detail: row.detail,
         activatable: blockId !== undefined,
+        target: blockId,
       };
     }),
     [rows, anchors, elapsedNow, blockIdOf],
   );
-  useEffect(() => {
-    if (rows.length === 0) {
-      knownBlocks.current.clear();
-    }
-  }, [rows.length]);
-  const onActivate = useCallback((key: string) => {
-    const blockId = knownBlocks.current.get(key);
-    if (blockId !== undefined) {
-      onJumpToBlock(blockId);
+  const onActivate = useCallback((_key: string, item: RunningStackItem) => {
+    if (item.target !== undefined) {
+      onJumpToBlock(item.target);
     }
   }, [onJumpToBlock]);
   return <RunningStack items={items} collapsed={collapsed} onCollapsedChange={onCollapsedChange} onActivate={onActivate} chipOnly={chipOnly} />;

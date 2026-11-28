@@ -49,6 +49,8 @@ export interface RunningStackItem {
   readonly detail?: string;
   /** The row can be activated (click or Enter calls `onActivate`). A row that cannot is announced as such and does nothing. */
   readonly activatable?: boolean;
+  /** Opaque value for the caller, handed back with the item to `onActivate`. The stack freezes its list under the pointer, so a row can be activated after the caller dropped it: the item it shows is then the only place the caller's own data for it still lives. */
+  readonly target?: string;
 }
 
 /** Every string the stack shows or announces. Pass only what differs from the English defaults. */
@@ -88,8 +90,8 @@ export interface RunningStackProps {
   /** Folded into one count chip. Controlled by the parent. */
   readonly collapsed: boolean;
   readonly onCollapsedChange: (collapsed: boolean) => void;
-  /** Click or Enter on an activatable row. */
-  readonly onActivate?: (key: string) => void;
+  /** Click or Enter on an activatable row, with the item as the stack shows it. */
+  readonly onActivate?: (key: string, item: RunningStackItem) => void;
   /** No room for rows: only the count chip shows, and it activates the first row. */
   readonly chipOnly?: boolean;
   /** How many rows peek out while the stack is closed. */
@@ -414,7 +416,7 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
                   }}
                   onClick={() => {
                     if (activatable) {
-                      onActivate?.(item.key);
+                      onActivate?.(item.key, item);
                       // Activating a row sends the user to its card, so the stack closes: with the pointer still on it, the frozen
                       // list would keep showing a row whose card is now in view.
                       clearTimer();
@@ -463,7 +465,7 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
             aria-disabled={first === undefined || !firstActivatable || undefined}
             onClick={() => {
               if (first !== undefined && firstActivatable) {
-                onActivate?.(first.key);
+                onActivate?.(first.key, first);
               }
             }}
           >
