@@ -236,6 +236,296 @@
   color: currentColor;
 }
 
+/* ── RunningStack ───────────────────────────────────────────────────────────── */
+/* Sizes come from tokens.css (--runningstack-*); a parent may override them (and --runningstack-max, the height the open stack may use). */
+/* The stack owns hover: collapsed, only the visible row boxes and controls
+   take the pointer (the text beneath stays usable); open, the whole stack
+   area does, so no gap can lose the hover. */
+.ak-runningstack {
+  /* --ak-rs-n / --ak-rs-open (and each row's --ak-rs-i) are set inline by RunningStack. */
+  --ak-rs-n: 1;
+  --ak-rs-open: 9999;
+  --ak-rs-extra: 0rem;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.ak-runningstack:focus {
+  outline: none;
+}
+
+.ak-runningstack[data-open] {
+  pointer-events: auto;
+}
+
+.ak-runningstack[data-expanding] {
+  --ak-rs-extra: var(--runningstack-detail-h);
+}
+
+.ak-runningstack__stack {
+  position: relative;
+}
+
+.ak-runningstack[data-open] .ak-runningstack__stack {
+  height: calc(var(--ak-rs-n) * var(--runningstack-row-h) + var(--ak-rs-extra));
+  max-height: calc(var(--runningstack-max) - var(--runningstack-foot-h));
+  overflow-y: auto;
+}
+
+/* Set by RunningStack only while the open stack really overflows. */
+.ak-runningstack[data-open] .ak-runningstack__stack[data-scrollable] {
+  overscroll-behavior: contain;
+}
+
+/* Rows are kit Buttons (ghost); these compound selectors undo the kit's
+   control box so a row is a plain card plus its transparent tail. */
+.ak-runningstack__row.ak-btn {
+  --ak-rs-i: 0;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--runningstack-row-h);
+  padding: 0 0 var(--sp-2);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  white-space: normal;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  transform-origin: center bottom;
+  transition: transform var(--dur-2) var(--ease-out), height var(--dur-2) var(--ease-out);
+}
+
+/* A row with nothing to jump to is not a disabled control: it still shows live information, so it keeps full opacity (the kit's
+   dimmed aria-disabled look would drop its muted text below the contrast minimum). */
+.ak-runningstack__row.ak-btn[aria-disabled="true"] {
+  cursor: default;
+  opacity: 1;
+}
+
+.ak-runningstack__row.ak-btn:hover:not(:disabled) {
+  background: transparent;
+}
+
+.ak-runningstack__row.ak-btn:active:not(:disabled) {
+  filter: none;
+}
+
+/* Peek rows sit behind the front one: absolutely placed WITHOUT z-index
+   (the app overlay guard). Each card is clipped to the strip that shows below the
+   row above it, so DOM paint order never hides the front card. */
+.ak-runningstack__row:not([data-front]) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  transform: translateY(calc(var(--ak-rs-i) * var(--runningstack-peek))) scale(calc(1 - var(--ak-rs-i) * 0.04));
+}
+
+.ak-runningstack__row:not([data-front]) .ak-runningstack__card {
+  clip-path: inset(calc(100% - var(--runningstack-peek)) 0 0 0);
+}
+
+/* Open: rows spread out; the rows after the expanded one make room. */
+.ak-runningstack[data-open] .ak-runningstack__row {
+  pointer-events: auto;
+  transform: translateY(calc(var(--ak-rs-i) * var(--runningstack-row-h) + clamp(0, var(--ak-rs-i) - var(--ak-rs-open), 1) * var(--ak-rs-extra)));
+}
+
+.ak-runningstack[data-open] .ak-runningstack__row .ak-runningstack__card {
+  clip-path: inset(-1rem);
+}
+
+.ak-runningstack[data-open] .ak-runningstack__row[data-expanded] {
+  height: calc(var(--runningstack-row-h) + var(--ak-rs-extra));
+}
+
+.ak-runningstack__card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  clip-path: inset(-1rem);
+  transition: clip-path var(--dur-2) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.ak-runningstack__row:hover .ak-runningstack__card,
+.ak-runningstack__row:focus-visible .ak-runningstack__card {
+  border-color: var(--text-3);
+}
+
+.ak-runningstack__row.ak-btn:focus-visible {
+  outline: none;
+}
+
+.ak-runningstack__row:focus-visible .ak-runningstack__card {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.ak-runningstack__line {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  height: calc(var(--runningstack-row-h) - var(--sp-2) - 2px);
+  padding: 0 var(--sp-3);
+  min-width: 0;
+}
+
+.ak-runningstack__glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.ak-runningstack__type {
+  flex-shrink: 0;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.ak-runningstack__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.ak-runningstack__meta {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ak-runningstack__cue {
+  flex-shrink: 0;
+  color: var(--info);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.ak-runningstack__detail {
+  display: block;
+  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-5));
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+/* Three lines at most, and the text rests on the bottom edge of that window: what does not fit is cut at the TOP, so the latest lines
+   stay visible (a line clamp would keep the first ones). The window is three line boxes of the detail's own font (1lh), so the row
+   keeps the height --runningstack-detail-h reserves. */
+.ak-runningstack__detail-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(3 * 1lh);
+  overflow: hidden;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.ak-runningstack__row[data-expanded] .ak-runningstack__detail,
+.ak-runningstack__row:focus-visible .ak-runningstack__detail {
+  opacity: 1;
+}
+
+.ak-runningstack__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--runningstack-foot-h);
+}
+
+.ak-runningstack__more,
+.ak-runningstack__fold.ak-btn,
+.ak-runningstack__chip.ak-btn,
+.ak-runningstack__chip-only.ak-btn {
+  pointer-events: auto;
+  height: auto;
+  /* WCAG 2.2 target size minimum (24 CSS px). */
+  min-height: var(--runningstack-foot-h);
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-card);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-normal);
+  white-space: nowrap;
+}
+
+.ak-runningstack__fold.ak-btn {
+  margin-left: auto;
+}
+
+.ak-runningstack__chip.ak-btn {
+  align-self: flex-start;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--fs-xs);
+}
+
+.ak-runningstack__fold.ak-btn:hover:not(:disabled),
+.ak-runningstack__fold.ak-btn:focus-visible,
+.ak-runningstack__chip.ak-btn:hover:not(:disabled),
+.ak-runningstack__chip.ak-btn:focus-visible {
+  background: var(--bg-card);
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+/* Short window + tall todo card: no room for even three rows, so only the
+   "N running" chip shows, left-aligned at the default top, clear of the card. */
+.ak-runningstack__chip-only.ak-btn {
+  display: none;
+  align-self: flex-start;
+  font-size: var(--fs-xs);
+}
+
+.ak-runningstack[data-chip-only] .ak-runningstack__stack,
+.ak-runningstack[data-chip-only] .ak-runningstack__foot {
+  display: none;
+}
+
+.ak-runningstack[data-chip-only] .ak-runningstack__chip-only.ak-btn {
+  display: inline-flex;
+}
+
+.ak-runningstack__chip-only.ak-btn[aria-disabled="true"] {
+  cursor: default;
+  opacity: 1;
+}
+
+.ak-runningstack__spin {
+  animation: ak-spin var(--spin-dur) linear infinite;
+}
+
 /* ── Badge ───────────────────────────────────────────────────────────────── */
 .ak-badge {
   display: inline-flex;

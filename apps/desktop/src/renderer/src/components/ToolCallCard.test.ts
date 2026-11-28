@@ -21,6 +21,7 @@
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { backgroundCardStatus } from "../claude-background-tasks.js";
 import type { ChildBadgeKind } from "../child-layout.js";
 import {
   activityRowText,
@@ -42,6 +43,7 @@ import {
   statusLabel,
   statusTone,
   childActionBadge,
+  cardShowsRunning,
   layoutWorkflowMap,
   orderStepsByDependency,
   workflowMapLabel,
@@ -3334,5 +3336,44 @@ describe("Claude subagent transcript Open control gating", () => {
     const html = renderToStaticMarkup(createElement(ToolCallCard, { block }));
     expect(html).toContain("subagent-preview-row");
     expect(html).not.toContain("subagent-activity-row");
+  });
+});
+
+describe("cardShowsRunning", () => {
+  const sub = (final: unknown) => ({ final } as unknown as ToolCallBlock["subagent"]);
+  const task = (status: string) => ({ status } as unknown as Parameters<typeof cardShowsRunning>[1]);
+  const base = { toolName: "Agent", status: "success" as const, input: {}, subagent: null };
+  const cases: Array<[string, Parameters<typeof cardShowsRunning>[0], Parameters<typeof cardShowsRunning>[1], boolean]> = [
+    ["agent running", { ...base, subagent: sub(null) }, undefined, true],
+    ["agent final", { ...base, subagent: sub({ status: "completed" }) }, undefined, false],
+    ["SendMessage finished at once", { ...base, toolName: "SendMessage", subagent: sub({ status: "completed" }) }, undefined, false],
+    ["SendMessage resumed agent", { ...base, toolName: "SendMessage", subagent: sub(null) }, undefined, true],
+    ["Bash + running task", { ...base, toolName: "Bash" }, task("running"), true],
+    ["Bash + completed task", { ...base, toolName: "Bash" }, task("completed"), false],
+    ["Bash without link", { ...base, toolName: "Bash" }, undefined, false],
+    ["Monitor + running task", { ...base, toolName: "Monitor" }, task("running"), true],
+    ["Bash still running, not success", { ...base, toolName: "Bash", status: "running" }, task("running"), false],
+    ["spawn card status running", { ...base, status: "running", input: { detach: true } }, undefined, true],
+    ["spawn card settled, no telemetry", { ...base, input: { detach: true } }, undefined, false],
+    ["Read card", { ...base, toolName: "Read" }, undefined, false],
+  ];
+  it.each(cases)("%s", (_n, block, linked, expected) => {
+    expect(cardShowsRunning(block, linked)).toBe(expected);
+  });
+
+  it("agrees with statusLabel for cards that carry an agent", () => {
+    for (const [, block, linked] of cases) {
+      if (block.subagent == null) continue;
+      const dispatched = statusLabel(block) === "Dispatched" && block.subagent.final === null;
+      expect(cardShowsRunning(block, linked)).toBe(dispatched);
+    }
+  });
+
+  it("agrees with backgroundCardStatus tone for Bash/Monitor cards", () => {
+    for (const [, block, linked] of cases) {
+      if (block.toolName !== "Bash" && block.toolName !== "Monitor") continue;
+      const tone = block.status === "success" && linked !== undefined ? backgroundCardStatus(linked).tone : undefined;
+      expect(cardShowsRunning(block, linked)).toBe(tone === "running");
+    }
   });
 });

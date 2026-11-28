@@ -40,6 +40,7 @@ import { ImageViewer } from "./ImageViewer.js";
 import { Markdown } from "./Markdown.js";
 import { ReasoningBlock } from "./ReasoningBlock.js";
 import { TodoPanel } from "./TodoPanel.js";
+import { RunningDeckHost } from "./RunningDeckHost.js";
 import {
   TranscriptMinimap,
   activeMarkIndex,
@@ -54,6 +55,7 @@ import { ToolCallStack } from "./ToolCallStack.js";
 import { WorkingRow, formatElapsed } from "./WorkingRow.js";
 import { Button } from "../ui/index.js";
 import { formatBlockTime } from "../block-time.js";
+import { escapeSelector, findLaidOutAnchor, isLaidOut, type AnchorElementLike } from "../block-anchor.js";
 import { isOutcomeLost, settledStatus } from "../child-layout.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
@@ -317,10 +319,6 @@ export interface JumpContainer {
   removeEventListener?(type: string, listener: () => void): void;
 }
 
-function escapeSelector(value: string): string {
-  return typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(value) : value;
-}
-
 /**
  * Scroll a block into view by its `data-block-id` (TodoPanel row click, minimap
  * mark click). Extracted from the component so the disclosure handling is
@@ -341,7 +339,9 @@ export function jumpToTranscriptBlock(el: JumpContainer, blockId: string, afterJ
     return;
   }
   const toolStack = target.closest(".tool-call-stack");
-  if (toolStack !== null && target.classList.contains("tool-call-stack-anchor")) {
+  // A collapsed stack carries the HEAD member's id on its own root (an open one carries none, see stackBlockIdLayout), the others on
+  // hidden anchors: either match means the card is not laid out yet.
+  if (toolStack !== null && (target.classList.contains("tool-call-stack-anchor") || toolStack === target)) {
     const toggle = toolStack.querySelector(".tool-call-stack-toggle");
     toggle?.click?.();
     requestAnimationFrame(() => {
@@ -488,35 +488,13 @@ export function shouldShowJumpButton(follow: boolean, blockCount: number): boole
  */
 const savedScroll = new Map<string, { follow: boolean; anchorId: string | null; anchorOffset: number }>();
 
-/**
- * Minimal structural view of a block element — enough to measure it.
- * Structural (not `HTMLElement`) so the anchor helpers can be unit-tested
- * with plain stubs: the node test env has no DOM.
- */
-export interface AnchorElementLike {
-  getBoundingClientRect(): { top: number; bottom: number; width: number; height: number };
-  getClientRects(): ArrayLike<unknown>;
-  getAttribute(name: string): string | null;
-}
+export { findLaidOutAnchor, isLaidOut };
+export type { AnchorElementLike };
 
 /** Minimal structural view of the scrolling container. */
 export interface AnchorContainerLike {
   getBoundingClientRect(): { top: number };
   querySelectorAll(selector: string): Iterable<AnchorElementLike>;
-}
-
-/**
- * Is this element really laid out? A collapsed tool-call stack renders its
- * anchor with `display:none` — no boxes, an all-zero rect — so it must
- * never be used as a scroll anchor (it would pin the list to the wrong
- * place on restore).
- */
-export function isLaidOut(el: AnchorElementLike): boolean {
-  if (el.getClientRects().length === 0) {
-    return false;
-  }
-  const rect = el.getBoundingClientRect();
-  return rect.width > 0 || rect.height > 0;
 }
 
 /**
@@ -538,34 +516,6 @@ export function findAnchorBlock(container: AnchorContainerLike): { id: string; o
         return { id, offset: rect.top - containerTop };
       }
     }
-  }
-  return null;
-}
-
-/**
- * The laid-out element for a saved block id: the first match that actually
- * has boxes, or — when every match is hidden (a collapsed stack's
- * `display:none` anchor shares its id with the visible member card) — the
- * nearest laid-out block ancestor of it.
- */
-function findLaidOutAnchor(container: HTMLElement, id: string): HTMLElement | null {
-  const matches = container.querySelectorAll<HTMLElement>(`[data-block-id="${escapeSelector(id)}"]`);
-  for (const match of matches) {
-    if (isLaidOut(match)) {
-      return match;
-    }
-  }
-  const first = matches[0];
-  if (!first) {
-    return null;
-  }
-  let node: HTMLElement | null = first.parentElement;
-  while (node) {
-    const candidate = node.closest<HTMLElement>("[data-block-id]");
-    if (candidate && isLaidOut(candidate)) {
-      return candidate;
-    }
-    node = candidate ? candidate.parentElement : null;
   }
   return null;
 }
@@ -1433,6 +1383,13 @@ export function MessageList({
       data-tab-id={tabId ?? undefined}
     >
       <TodoPanel transcript={blocks} onJumpToBlock={jumpToBlock} reminderState={todoReminderState} />
+      {/* Running deck: its own sticky height-0 sibling right after the todo
+          overlay. The host owns the store selectors and every changing value,
+          so this list never re-renders because of the deck. It shows live work only: a replay frame must not borrow today's task
+          lists, and a host that exited keeps its lists but is not running them. */}
+      {!readOnly && !replaying && connection === "ready" && (
+        <RunningDeckHost listRef={containerRef} columnRef={columnRef} blocks={blocks} onJumpToBlock={jumpToBlock} />
+      )}
       {/* + 4742: LEFT-edge tick rail (evolved from
           the right-edge dot pill). FIRST-child position (beside TodoPanel)
           on purpose: a `top`-sticky box only gets pushed DOWN to its inset,
