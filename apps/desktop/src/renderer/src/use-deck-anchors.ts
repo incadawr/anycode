@@ -142,7 +142,10 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
         if (!cached?.isConnected && missing.current.has(blockId)) {
           return [r.key, NO_CARD];
         }
-        const el = cached?.isConnected ? cached : resolveAnchorElement(list, blockId);
+        // A cached element counts only while it is the card itself and still laid out. When the card sits in a collapsed tool-call
+        // stack, the stack's root stands in for it; it must not stay cached once the stack opens and the card is laid out.
+        const cachedIsCard = cached !== undefined && cached.isConnected && cached.getAttribute("data-block-id") === blockId && cached.getClientRects().length > 0;
+        const el = cachedIsCard ? cached : resolveAnchorElement(list, blockId);
         if (el === null) {
           nodes.current.delete(blockId);
           missing.current.add(blockId);
@@ -151,9 +154,12 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
         missing.current.delete(blockId);
         nodes.current.set(blockId, el);
         const bottom = el.getBoundingClientRect().bottom;
+        // Not the card itself: the stack that holds it is collapsed. Its header says "Success" and nothing shows that work is running,
+        // so the row must stay listed even while that header is in view.
+        const isCard = el.getAttribute("data-block-id") === blockId;
         return [r.key, {
           hasCard: true,
-          live: cardShowsRunning(block, r.toolCallId === undefined ? undefined : tasks[r.toolCallId]),
+          live: isCard && cardShowsRunning(block, r.toolCallId === undefined ? undefined : tasks[r.toolCallId]),
           above: isAbove(bottom, deckBottom, previous.get(r.key)?.above ?? false),
           distance: bottom - deckBottom,
         }];

@@ -228,3 +228,22 @@ it("does not re-query a block whose element is not laid out until blocks change"
   flush();
   expect(spy.mock.calls.length).toBeGreaterThan(queries);
 });
+
+it("keeps a row listed while its card is hidden inside a collapsed stack, and drops it once the stack opens", () => {
+  const list = attachedList();
+  const stack = card(list, "stack", 50);
+  const member = document.createElement("div");
+  member.setAttribute("data-block-id", "a");
+  member.getClientRects = () => [] as unknown as DOMRectList;
+  member.getBoundingClientRect = vi.fn(() => ({ top: 0, bottom: 0, width: 0, height: 0 }) as DOMRect);
+  stack.append(member);
+  const { seen, schedule } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 10 });
+  // The stack's header stands in for the card: nothing says the task is running, so the card is not live and the row is listed.
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: false });
+  // The user opens the stack: the card is laid out, and its row is no longer needed while the card is in view.
+  member.getClientRects = () => [{}] as unknown as DOMRectList;
+  member.getBoundingClientRect = vi.fn(() => ({ top: 80, bottom: 90, width: 10, height: 10 }) as DOMRect);
+  schedule.current();
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: true, above: false });
+});
