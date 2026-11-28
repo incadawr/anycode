@@ -2,9 +2,10 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { useStore, type StoreApi } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { useShallow } from "zustand/react/shallow";
-import { deckRowsFrom, tasksForEngine, type DeckRow } from "../running-deck.js";
+import { backgroundBashStarts, deckRowsFrom, tasksForEngine, type DeckRow } from "../running-deck.js";
 import type { DesktopState, TranscriptBlock } from "../store.js";
 import { TabContext } from "../tab-context.js";
+import { tabRegistry } from "../tab-registry.js";
 import { blockIdEntry, useDeckAnchors, type BlockIdEntry } from "../use-deck-anchors.js";
 import { taskDescription } from "./ClaudeBackgroundTasks.js";
 import { RunningDeck } from "./RunningDeck.js";
@@ -264,13 +265,33 @@ export function RunningDeckHost(props: RunningDeckHostProps) {
   const { blocks } = props;
   const ctx = useContext(TabContext);
   const tabId = ctx?.tabId ?? "";
-  const { tasks, coreTasks, children } = useStore(
+  const { tasks, coreTasks, children, engineId } = useStore(
     (ctx?.store ?? EMPTY_STORE) as StoreApi<DeckSources>,
     useShallow((state: DeckSources) => {
       const lists = tasksForEngine(state.engine?.id, state.claudeBackgroundTasks, state.backgroundTasks);
-      return { tasks: lists.claude, coreTasks: lists.core, children: state.backgroundChildren };
+      return { tasks: lists.claude, coreTasks: lists.core, children: state.backgroundChildren, engineId: state.engine?.id };
     }),
   );
+  // Core does not announce a background command when it starts (see backgroundBashStarts), so a row for it would wait for the end of
+  // the turn. Ask for the task list once when a new background Bash call returns. Calls already in the transcript when the host mounts
+  // are history: the host sends the list on connect.
+  const seenStarts = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (engineId === "claude" || engineId === "codex") {
+      return;
+    }
+    const starts = backgroundBashStarts(blocks);
+    if (seenStarts.current === null) {
+      seenStarts.current = new Set(starts);
+      return;
+    }
+    const seen = seenStarts.current;
+    const fresh = starts.filter(id => !seen.has(id));
+    if (fresh.length > 0) {
+      fresh.forEach(id => seen.add(id));
+      tabRegistry.sendToTab(tabId, { type: "task_list_request" });
+    }
+  }, [blocks, engineId, tabId]);
   const rows = useMemo(
     () => deckRowsFrom(tasks, children, task => taskDescription(task, blocks), coreTasks),
     [tasks, coreTasks, children, blocks],

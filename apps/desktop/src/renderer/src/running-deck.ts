@@ -1,5 +1,6 @@
 import type { BackgroundTaskSnapshot } from "@anycode/core";
 import type { WireBackgroundChild } from "../../shared/protocol.js";
+import type { TranscriptBlock } from "./store.js";
 import { backgroundTaskKindLabel, visibleBackgroundTasks, type ClaudeBackgroundTask } from "./claude-background-tasks.js";
 
 /** The fields of core's own background task (Bash `run_in_background`) the deck reads. */
@@ -110,4 +111,19 @@ export function visibleDeckRows(rows: readonly DeckRow[], anchors: ReadonlyMap<s
     ...[...listed].sort((a, b) => b.startedAt - a.startedAt || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     ...[...above].sort((a, b) => (anchorOf(b)?.distance ?? 0) - (anchorOf(a)?.distance ?? 0)),
   ];
+}
+
+/**
+ * Tool call ids of Bash calls that started a background command and have returned. The core engine tells the renderer about its
+ * background tasks only at connect, at the end of a turn, when a task settles and when asked, never when one starts, so a command
+ * started in the middle of a long turn is invisible until the turn ends. The deck asks for the list when a new id appears here.
+ */
+export function backgroundBashStarts(blocks: readonly TranscriptBlock[]): readonly string[] {
+  const ids: string[] = [];
+  for (const block of blocks) {
+    if (block.kind === "tool_call" && block.toolName === "Bash" && block.status === "success" && (block.input as { run_in_background?: unknown } | null)?.run_in_background === true) {
+      ids.push(block.toolCallId);
+    }
+  }
+  return ids;
 }
