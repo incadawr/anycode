@@ -123,6 +123,7 @@ interface DeckArgs {
   blockIds?: ReadonlyMap<string, string>;
   onJump?: (id: string) => void;
   anchors?: ReadonlyMap<string, AnchorState>;
+  chipOnly?: boolean;
 }
 
 /** RunningDeck with its collapse flag held in a tiny stateful parent, like the host does. */
@@ -136,6 +137,7 @@ function Deck(props: DeckArgs) {
     onJumpToBlock: props.onJump ?? (() => undefined),
     collapsed,
     onCollapsedChange: setCollapsed,
+    chipOnly: props.chipOnly,
   });
 }
 
@@ -339,8 +341,11 @@ describe("RunningDeck", () => {
     const [a] = rowButtons();
     act(() => { a!.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body })); });
     act(() => { a!.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: region() })); });
+    // Leaving the row armed the delayed collapse; unmounting must disarm it.
+    expect(vi.getTimerCount()).toBe(1);
     act(() => root.unmount());
     roots = roots.filter(r => r !== root);
+    expect(vi.getTimerCount()).toBe(0);
     expect(() => act(() => { vi.advanceTimersByTime(200); })).not.toThrow();
     expect(errors).not.toHaveBeenCalled();
   });
@@ -437,7 +442,8 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
 
   it("makes the chip-only chip a real button that jumps to the first card", () => {
     const jumps: string[] = [];
-    mountInto(deck({ rows: [row("a")], blockIds: new Map([["a", "block-a"]]), onJump: id => jumps.push(id) }));
+    mountInto(deck({ rows: [row("a")], blockIds: new Map([["a", "block-a"]]), onJump: id => jumps.push(id), chipOnly: true }));
+    expect(region()!.hasAttribute("data-chip-only")).toBe(true);
     const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip-only")!;
     expect(chip.tagName).toBe("BUTTON");
     expect(chip.getAttribute("aria-label")).toBe("1 running: run a, jump to its card");
