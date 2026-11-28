@@ -474,6 +474,22 @@ describe("RunningDeckHost store wiring", () => {
     expect(labels().some(l => l?.includes("job bash1"))).toBe(false);
   });
 
+  it("shows a core task as a row without a jump, and only while a core engine is live", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const store = storeWith([]);
+    const coreTask = { taskId: "k1", command: "npm run dev", description: "Dev server", status: "running", startedAt: 1, exitCode: null, outputBytes: 0, outputTruncated: false };
+    store.setState({ backgroundTasks: [coreTask] } as never);
+    mountInto(hostIn("A", store, { current: list }), list);
+    expect(labels()).toEqual(["Bash: Dev server, running"]);
+    act(() => store.setState({ engine: { id: "claude" } } as never));
+    expect(rowButtons()).toHaveLength(0);
+    act(() => store.setState({ engine: { id: "core" } } as never));
+    expect(rowButtons()).toHaveLength(1);
+    act(() => store.setState({ backgroundTasks: [{ ...coreTask, status: "completed" }] } as never));
+    expect(rowButtons()).toHaveLength(0);
+  });
+
   it("does not leak rows between tab stores", () => {
     const listA = document.createElement("div");
     const listB = document.createElement("div");

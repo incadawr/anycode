@@ -1,5 +1,24 @@
+import type { BackgroundTaskSnapshot } from "@anycode/core";
 import type { WireBackgroundChild } from "../../shared/protocol.js";
 import { backgroundTaskKindLabel, visibleBackgroundTasks, type ClaudeBackgroundTask } from "./claude-background-tasks.js";
+
+/** The fields of core's own background task (Bash `run_in_background`) the deck reads. */
+export type CoreDeckTask = Pick<BackgroundTaskSnapshot, "taskId" | "command" | "description" | "status" | "startedAt">;
+
+/**
+ * The task lists that count on a tab: the Claude CLI's own list on a Claude tab, core's task list on a core tab (the engine DeepSeek
+ * and other providers run on). A list left behind by an engine the tab switched away from must not keep rows alive. An engine that is
+ * not known yet counts both lists, which is safe because only the live engine ever fills its own. The empty list is one shared
+ * constant: a selector that returned a fresh `[]` each call would never be shallow-equal and would re-render forever.
+ */
+const NONE: readonly never[] = [];
+
+export function tasksForEngine<C, K>(engineId: string | undefined, claude: readonly C[], core: readonly K[]): { claude: readonly C[]; core: readonly K[] } {
+  return {
+    claude: engineId === undefined || engineId === "claude" ? claude : NONE,
+    core: engineId === undefined || engineId === "core" ? core : NONE,
+  };
+}
 
 /** One running background task or agent in the deck. `waiting` is reserved for stage 2. */
 export interface DeckRow {
@@ -37,6 +56,7 @@ export function deckRowsFrom(
   tasks: readonly ClaudeBackgroundTask[],
   children: readonly WireBackgroundChild[],
   descriptionFor?: (task: ClaudeBackgroundTask) => string | undefined,
+  coreTasks: readonly CoreDeckTask[] = [],
 ): readonly DeckRow[] {
   const taskRows = visibleBackgroundTasks(tasks)
     .filter(task => task.status === "running")
@@ -50,6 +70,19 @@ export function deckRowsFrom(
       waiting: false,
       detail: task.summary || undefined,
     }));
+  // Core's snapshots carry no tool call id, so these rows have no card to jump to: they stay listed while the command runs.
+  const coreRows = coreTasks
+    .filter(task => task.status === "running")
+    .map((task): DeckRow => ({
+      key: `core:${task.taskId}`,
+      kind: "task",
+      toolCallId: undefined,
+      title: task.description || task.command || "Background task",
+      typeLabel: "Bash",
+      startedAt: task.startedAt,
+      waiting: false,
+      detail: task.description && task.command ? task.command : undefined,
+    }));
   const childRows = children
     .filter(child => !isFailedChild(child))
     .map((child): DeckRow => ({
@@ -62,7 +95,7 @@ export function deckRowsFrom(
       waiting: false,
       detail: childDetail(child),
     }));
-  return [...taskRows, ...childRows];
+  return [...taskRows, ...coreRows, ...childRows];
 }
 
 const cardless = (row: DeckRow, anchor: AnchorState | undefined): boolean =>

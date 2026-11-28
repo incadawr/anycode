@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { useStore, type StoreApi } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { useShallow } from "zustand/react/shallow";
-import { deckRowsFrom, type DeckRow } from "../running-deck.js";
+import { deckRowsFrom, tasksForEngine, type DeckRow } from "../running-deck.js";
 import type { DesktopState, TranscriptBlock } from "../store.js";
 import { TabContext } from "../tab-context.js";
 import { blockIdEntry, useDeckAnchors, type BlockIdEntry } from "../use-deck-anchors.js";
@@ -49,10 +49,10 @@ export function deckPlacement(
     : { top, chipOnly: false, maxHeight };
 }
 
-type DeckSources = Pick<DesktopState, "claudeBackgroundTasks" | "backgroundChildren">;
+type DeckSources = Pick<DesktopState, "claudeBackgroundTasks" | "backgroundTasks" | "backgroundChildren" | "engine">;
 
 /** Stand-in when no tab provides a store (render tests): no rows, no deck. */
-const EMPTY_STORE: StoreApi<DeckSources> = createStore<DeckSources>(() => ({ claudeBackgroundTasks: [], backgroundChildren: [] }));
+const EMPTY_STORE: StoreApi<DeckSources> = createStore<DeckSources>(() => ({ claudeBackgroundTasks: [], backgroundTasks: [], backgroundChildren: [], engine: null }));
 
 /**
  * Per-tab "folded" flag. MessageList is remounted per tab (key={tabId}), so the
@@ -263,13 +263,16 @@ export function RunningDeckHost(props: RunningDeckHostProps) {
   const { blocks } = props;
   const ctx = useContext(TabContext);
   const tabId = ctx?.tabId ?? "";
-  const { tasks, children } = useStore(
+  const { tasks, coreTasks, children } = useStore(
     (ctx?.store ?? EMPTY_STORE) as StoreApi<DeckSources>,
-    useShallow((state: DeckSources) => ({ tasks: state.claudeBackgroundTasks, children: state.backgroundChildren })),
+    useShallow((state: DeckSources) => {
+      const lists = tasksForEngine(state.engine?.id, state.claudeBackgroundTasks, state.backgroundTasks);
+      return { tasks: lists.claude, coreTasks: lists.core, children: state.backgroundChildren };
+    }),
   );
   const rows = useMemo(
-    () => deckRowsFrom(tasks, children, task => taskDescription(task, blocks)),
-    [tasks, children, blocks],
+    () => deckRowsFrom(tasks, children, task => taskDescription(task, blocks), coreTasks),
+    [tasks, coreTasks, children, blocks],
   );
   const hasRows = rows.length > 0;
 

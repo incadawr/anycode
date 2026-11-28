@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { WireBackgroundChild } from "../../shared/protocol.js";
 import type { ClaudeBackgroundTask } from "./claude-background-tasks.js";
-import { collapsedRows, deckRowsFrom, visibleDeckRows, type AnchorState, type DeckRow } from "./running-deck.js";
+import { collapsedRows, deckRowsFrom, tasksForEngine, visibleDeckRows, type AnchorState, type CoreDeckTask, type DeckRow } from "./running-deck.js";
 
 const task = (extra: Partial<ClaudeBackgroundTask> = {}): ClaudeBackgroundTask => ({ type: "claude_background_task", taskId: "t", toolCallId: "call", kind: "bash", description: "npm test", startedAt: 10, status: "running", ...extra });
 const child = (extra: Partial<WireBackgroundChild> = {}): WireBackgroundChild => ({ childSessionId: "c", spawnToolCallId: "spawn", agentType: "general-purpose", description: "Explore repo", startedAt: 20, ...extra });
+const coreTask = (extra: Partial<CoreDeckTask> = {}): CoreDeckTask => ({ taskId: "k", command: "npm run dev", status: "running", startedAt: 30, ...extra });
 const row = (extra: Partial<DeckRow> = {}): DeckRow => ({ key: "task:t", kind: "task", toolCallId: "call", title: "x", typeLabel: "Bash", startedAt: 0, waiting: false, detail: undefined, ...extra });
 const anchor = (extra: Partial<AnchorState> = {}): AnchorState => ({ hasCard: true, live: true, above: false, distance: 0, ...extra });
 
@@ -101,5 +102,40 @@ describe("collapsedRows", () => {
   });
   it("honours a custom max", () => {
     expect(collapsedRows(many(4), 1)).toMatchObject({ more: 3 });
+  });
+});
+
+describe("core tasks (the engine DeepSeek and other providers run on)", () => {
+  it("lists only running core tasks, as card-less Bash rows", () => {
+    const rows = deckRowsFrom([], [], undefined, [coreTask({ taskId: "a" }), coreTask({ taskId: "done", status: "completed" }), coreTask({ taskId: "bad", status: "failed" })]);
+    expect(rows).toEqual([{ key: "core:a", kind: "task", toolCallId: undefined, title: "npm run dev", typeLabel: "Bash", startedAt: 30, waiting: false, detail: undefined }]);
+  });
+
+  it("titles by description and keeps the command as the detail line", () => {
+    const [r] = deckRowsFrom([], [], undefined, [coreTask({ description: "Dev server" })]);
+    expect(r).toMatchObject({ title: "Dev server", detail: "npm run dev" });
+    expect(deckRowsFrom([], [], undefined, [coreTask({ command: "", description: undefined })])[0]?.title).toBe("Background task");
+  });
+
+  it("orders Claude tasks, then core tasks, then children, and a core row never waits for a card", () => {
+    const rows = deckRowsFrom([task({ taskId: "c" })], [child()], undefined, [coreTask()]);
+    expect(rows.map(r => r.key)).toEqual(["task:c", "core:k", "child:c"]);
+    expect(visibleDeckRows(rows.filter(r => r.key === "core:k"), new Map()).map(r => r.key)).toEqual(["core:k"]);
+  });
+});
+
+describe("tasksForEngine", () => {
+  const claude = [task()];
+  const core = [coreTask()];
+  it("counts only the list of the engine that is live", () => {
+    expect(tasksForEngine("claude", claude, core)).toEqual({ claude, core: [] });
+    expect(tasksForEngine("core", claude, core)).toEqual({ claude: [], core });
+    expect(tasksForEngine("codex", claude, core)).toEqual({ claude: [], core: [] });
+  });
+  it("counts both while the engine is not known yet", () => {
+    expect(tasksForEngine(undefined, claude, core)).toEqual({ claude, core });
+  });
+  it("returns the same empty list every time, so a shallow selector stays stable", () => {
+    expect(tasksForEngine("codex", claude, core).claude).toBe(tasksForEngine("codex", claude, core).claude);
   });
 });
