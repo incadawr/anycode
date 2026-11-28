@@ -11,7 +11,7 @@ import { blockIdByToolCall, useDeckAnchors } from "./use-deck-anchors.js";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const tool = (id: string): TranscriptBlock => ({ kind: "tool_call", id, toolCallId: id, toolName: "Bash", input: {}, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null } as TranscriptBlock);
-const row = (toolCallId: string): DeckRow => ({ key: `task:${toolCallId}`, kind: "task", toolCallId, title: "x", typeLabel: "Bash", startedAt: 0, waiting: false, detail: undefined });
+const row = (toolCallId: string): DeckRow => ({ key: `task:${toolCallId}`, kind: "task", toolCallId, title: "x", typeLabel: "Bash", startedAt: 0, detail: undefined });
 const task = (toolCallId: string) => ({ type: "claude_background_task", taskId: toolCallId, toolCallId, kind: "bash", description: "d", startedAt: 0, status: "running" });
 
 let roots: Root[] = [];
@@ -265,4 +265,26 @@ it("re-reads when the transcript's DOM changes without a scroll or a block chang
   await act(async () => { await Promise.resolve(); });
   flush();
   expect(seen.at(-1)!.get("task:a")).toMatchObject({ live: true, above: false });
+});
+
+it("keeps a card above through the 4px hysteresis band and releases it only past the band", () => {
+  const list = attachedList();
+  const el = card(list, "a", 100);
+  let bottom = 100;
+  el.getBoundingClientRect = vi.fn(() => ({ top: bottom - 10, bottom, width: 10, height: 10 }) as DOMRect);
+  const { seen, schedule } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 100 });
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ above: true });
+  bottom = 103;
+  schedule.current();
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ above: true });
+  bottom = 105;
+  schedule.current();
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ above: false });
+  bottom = 102;
+  schedule.current();
+  flush();
+  // Back inside the band from below: it does not flip until it reaches the deck edge itself.
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ above: false });
 });

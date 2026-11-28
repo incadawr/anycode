@@ -302,8 +302,11 @@
   transition: transform var(--dur-2) var(--ease-out), height var(--dur-2) var(--ease-out);
 }
 
+/* A row with nothing to jump to is not a disabled control: it still shows live information, so it keeps full opacity (the kit's
+   dimmed aria-disabled look would drop its muted text below the contrast minimum). */
 .ak-peekstack__row.ak-btn[aria-disabled="true"] {
   cursor: default;
+  opacity: 1;
 }
 
 .ak-peekstack__row.ak-btn:hover:not(:disabled) {
@@ -453,6 +456,8 @@
 .ak-peekstack__chip-only.ak-btn {
   pointer-events: auto;
   height: auto;
+  /* WCAG 2.2 target size minimum (24 CSS px). */
+  min-height: var(--peekstack-foot-h);
   padding: 0 var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
@@ -504,6 +509,7 @@
 
 .ak-peekstack__chip-only.ak-btn[aria-disabled="true"] {
   cursor: default;
+  opacity: 1;
 }
 
 .ak-peekstack__spin {

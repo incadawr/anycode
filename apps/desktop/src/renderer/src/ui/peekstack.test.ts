@@ -179,7 +179,7 @@ describe("PeekStack", () => {
     expect(keyDown(rowButtons()[0]!, "Escape").defaultPrevented).toBe(false);
   });
 
-  it("activates an activatable row on click and on Enter, and does nothing for one that cannot", () => {
+  it("activates an activatable row on click, and does nothing for one that cannot", () => {
     const onActivate = vi.fn();
     mount(stack({ items: [item("a"), item("b", { activatable: false })], onActivate }));
     const [a, b] = rowButtons();

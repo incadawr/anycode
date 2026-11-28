@@ -6,7 +6,7 @@ import { backgroundBashStarts, deckRowsFrom, tasksForEngine, visibleDeckRows, ty
 const task = (extra: Partial<ClaudeBackgroundTask> = {}): ClaudeBackgroundTask => ({ type: "claude_background_task", taskId: "t", toolCallId: "call", kind: "bash", description: "npm test", startedAt: 10, status: "running", ...extra });
 const child = (extra: Partial<WireBackgroundChild> = {}): WireBackgroundChild => ({ childSessionId: "c", spawnToolCallId: "spawn", agentType: "general-purpose", description: "Explore repo", startedAt: 20, ...extra });
 const coreTask = (extra: Partial<CoreDeckTask> = {}): CoreDeckTask => ({ taskId: "k", command: "npm run dev", status: "running", startedAt: 30, ...extra });
-const row = (extra: Partial<DeckRow> = {}): DeckRow => ({ key: "task:t", kind: "task", toolCallId: "call", title: "x", typeLabel: "Bash", startedAt: 0, waiting: false, detail: undefined, ...extra });
+const row = (extra: Partial<DeckRow> = {}): DeckRow => ({ key: "task:t", kind: "task", toolCallId: "call", title: "x", typeLabel: "Bash", startedAt: 0, detail: undefined, ...extra });
 const anchor = (extra: Partial<AnchorState> = {}): AnchorState => ({ hasCard: true, live: true, above: false, distance: 0, ...extra });
 
 describe("deckRowsFrom", () => {
@@ -23,10 +23,10 @@ describe("deckRowsFrom", () => {
     expect(rows.map(r => [r.key, r.toolCallId])).toEqual([["task:t", "tc"], ["child:c", "sp"], ["child:c2", undefined]]);
   });
 
-  it("fills kind, type label, start time and waiting", () => {
+  it("fills kind, type label and start time", () => {
     const [t, c] = deckRowsFrom([task({ kind: "monitor" })], [child()]);
-    expect(t).toMatchObject({ kind: "task", typeLabel: "Monitor", startedAt: 10, waiting: false });
-    expect(c).toMatchObject({ kind: "child", typeLabel: "general-purpose", startedAt: 20, waiting: false });
+    expect(t).toMatchObject({ kind: "task", typeLabel: "Monitor", startedAt: 10 });
+    expect(c).toMatchObject({ kind: "child", typeLabel: "general-purpose", startedAt: 20 });
   });
 
   it("title falls back from descriptionFor to description to a constant, including empty descriptions", () => {
@@ -92,7 +92,7 @@ describe("visibleDeckRows", () => {
 describe("core tasks (the engine DeepSeek and other providers run on)", () => {
   it("lists only running core tasks, as card-less Bash rows", () => {
     const rows = deckRowsFrom([], [], undefined, [coreTask({ taskId: "a" }), coreTask({ taskId: "done", status: "completed" }), coreTask({ taskId: "bad", status: "failed" })]);
-    expect(rows).toEqual([{ key: "core:a", kind: "task", toolCallId: undefined, title: "npm run dev", typeLabel: "Bash", startedAt: 30, waiting: false, detail: undefined }]);
+    expect(rows).toEqual([{ key: "core:a", kind: "task", toolCallId: undefined, title: "npm run dev", typeLabel: "Bash", startedAt: 30, detail: undefined }]);
   });
 
   it("titles by description and keeps the command as the detail line", () => {

@@ -3296,7 +3296,7 @@ button.environment-menu-row:hover,
   background: var(--bg-hover);
 }
 
-/* ── Running deck (running-stack design rev 2): what is running and has no
+/* ── Running deck: what is running and has no
    visible live card, stacked Sonner-style. Its own sticky height-0 sibling
    right after .todo-panel, so the transcript never shifts; z-index 6 like the
    todo, DOM order puts it above on a tie. In normal flow (no counter-margin):

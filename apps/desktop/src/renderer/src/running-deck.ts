@@ -6,15 +6,15 @@ import { backgroundTaskKindLabel, visibleBackgroundTasks, type ClaudeBackgroundT
 /** The fields of core's own background task (Bash `run_in_background`) the deck reads. */
 export type CoreDeckTask = Pick<BackgroundTaskSnapshot, "taskId" | "command" | "description" | "status" | "startedAt">;
 
+/** The one empty list every call returns, so a shallow selector over it stays stable. */
+const NONE: readonly never[] = [];
+
 /**
  * The task lists that count on a tab: the Claude CLI's own list on a Claude tab, core's task list on a core tab (the engine DeepSeek
  * and other providers run on). A core store has no engine block, so a missing engine means core, the same reading `store.ts` uses
  * elsewhere. A list left behind by an engine the tab switched away from (a live switch does not reset the lists) must not keep rows
- * alive. The empty list is one shared constant: a selector that returned a fresh `[]` each call would never be shallow-equal and
- * would re-render forever.
+ * alive. Hidden lists are the shared `NONE`: a fresh `[]` per call would never be shallow-equal and would re-render forever.
  */
-const NONE: readonly never[] = [];
-
 export function tasksForEngine<C, K>(engineId: string | undefined, claude: readonly C[], core: readonly K[]): { claude: readonly C[]; core: readonly K[] } {
   return {
     claude: engineId === "claude" ? claude : NONE,
@@ -22,7 +22,7 @@ export function tasksForEngine<C, K>(engineId: string | undefined, claude: reado
   };
 }
 
-/** One running background task or agent in the deck. `waiting` is reserved for stage 2. */
+/** One running background task or agent in the deck. */
 export interface DeckRow {
   readonly key: string;
   readonly kind: "task" | "child";
@@ -30,7 +30,6 @@ export interface DeckRow {
   readonly title: string;
   readonly typeLabel: string;
   readonly startedAt: number;
-  readonly waiting: false;
   readonly detail: string | undefined;
 }
 
@@ -69,7 +68,6 @@ export function deckRowsFrom(
       title: descriptionFor?.(task) || task.description || "Background task",
       typeLabel: backgroundTaskKindLabel(task),
       startedAt: task.startedAt,
-      waiting: false,
       detail: task.summary || undefined,
     }));
   // Core's snapshots carry no tool call id, so these rows have no card to jump to: they stay listed while the command runs.
@@ -82,7 +80,6 @@ export function deckRowsFrom(
       title: task.description || task.command || "Background task",
       typeLabel: "Bash",
       startedAt: task.startedAt,
-      waiting: false,
       detail: task.description && task.command ? task.command : undefined,
     }));
   const childRows = children
@@ -94,7 +91,6 @@ export function deckRowsFrom(
       title: child.description || "Background task",
       typeLabel: child.agentType,
       startedAt: child.startedAt,
-      waiting: false,
       detail: childDetail(child),
     }));
   return [...taskRows, ...coreRows, ...childRows];

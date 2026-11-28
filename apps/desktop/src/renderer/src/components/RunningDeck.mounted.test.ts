@@ -85,7 +85,7 @@ function mountInto(el: ReactElement, host: HTMLElement = document.body) {
 }
 
 const row = (id: string, over: Partial<DeckRow> = {}): DeckRow => ({
-  key: `task:${id}`, kind: "task", toolCallId: id, title: `run ${id}`, typeLabel: "Bash", startedAt: 1_000, waiting: false, detail: undefined, ...over,
+  key: `task:${id}`, kind: "task", toolCallId: id, title: `run ${id}`, typeLabel: "Bash", startedAt: 1_000, detail: undefined, ...over,
 });
 
 interface DeckArgs {
@@ -242,6 +242,18 @@ describe("RunningDeck", () => {
     focus(rowButtons()[0]!);
     rerender(deck({ rows: [...rows, row("c", { startedAt: 1 })] }));
     expect(labels()).toContain("Bash: run c, running");
+  });
+
+  it("still jumps from a row that finished while the pointer holds the list frozen, because its card is still there", () => {
+    const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
+    const blockIds = new Map(rows.map(r => [r.toolCallId!, `block-${r.toolCallId}`]));
+    const onJump = vi.fn();
+    const { rerender } = mountInto(deck({ rows, blockIds, onJump }));
+    over(rowButtons()[0]!);
+    rerender(deck({ rows: rows.slice(0, 2), blockIds, onJump }));
+    expect(labels()).toContain("Bash: run c, running, jump to its card");
+    act(() => rowButtons()[2]!.click());
+    expect(onJump).toHaveBeenCalledWith("block-c");
   });
 
   it("moves focus from an unmounting row to the next row, never to body", () => {
