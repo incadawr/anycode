@@ -192,6 +192,29 @@ describe("PeekStack", () => {
     expect((a as HTMLButtonElement).type).toBe("button");
   });
 
+  it("does not let a mouse press focus a row that cannot be activated, so it cannot pin the stack open", () => {
+    mount(stack({ items: [item("a"), item("b", { activatable: false })] }));
+    const [a, b] = rowButtons();
+    const press = (el: Element) => {
+      const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      act(() => { el.dispatchEvent(event); });
+      return event;
+    };
+    expect(press(b!).defaultPrevented).toBe(true);
+    expect(press(a!).defaultPrevented).toBe(false);
+  });
+
+  it("closes after a row is activated, so a frozen list does not keep a row whose card is now in view", () => {
+    const onActivate = vi.fn();
+    mount(stack({ items: five(), onActivate }));
+    const first = rowButtons()[0]!;
+    over(first);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    act(() => first.click());
+    expect(onActivate).toHaveBeenCalledWith("a");
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+  });
+
   it("freezes the rows while the pointer is on the stack and applies changes when it leaves", () => {
     const rows = [item("a"), item("b"), item("c")];
     const view = mount(stack({ items: rows }));

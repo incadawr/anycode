@@ -309,7 +309,8 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
   });
 
   it("does not focus the region when its background is pressed, but leaves controls alone", () => {
-    mountInto(deck({ rows: five() }));
+    // Rows with a card to jump to are controls; a row without one is not, and a press on it must not take focus either.
+    mountInto(deck({ rows: five(), blockIds: new Map(five().map(r => [r.toolCallId!, `block-${r.toolCallId}`])) }));
     const down = (el: Element) => { const e = new MouseEvent("mousedown", { bubbles: true, cancelable: true }); act(() => { el.dispatchEvent(e); }); return e.defaultPrevented; };
     expect(down(region()!)).toBe(true);
     expect(down(document.querySelector(".ak-peekstack__foot")!)).toBe(true);

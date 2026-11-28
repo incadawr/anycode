@@ -256,10 +256,11 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
       setHovered(true);
     }
   };
-  // A click on the region's own background must not focus it (that would count as focus within and pin the stack open).
+  // A click on the region's own background, or on a row that cannot be activated, must not focus anything: that would count as
+  // focus within and pin the stack open over the transcript after the pointer left. Keyboard focus is not affected.
   const onMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     const hit = event.target instanceof Element ? event.target.closest(INTERACTIVE) : null;
-    if (hit === null || !event.currentTarget.contains(hit)) {
+    if (hit === null || !event.currentTarget.contains(hit) || hit.getAttribute("aria-disabled") === "true") {
       event.preventDefault();
     }
   };
@@ -368,6 +369,11 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
                   onClick={() => {
                     if (activatable) {
                       onActivate?.(item.key);
+                      // Activating a row sends the user to its card, so the stack closes: with the pointer still on it, the frozen
+                      // list would keep showing a row whose card is now in view.
+                      clearTimer();
+                      setExpandedKey(null);
+                      setDismissed(true);
                     }
                   }}
                 >
