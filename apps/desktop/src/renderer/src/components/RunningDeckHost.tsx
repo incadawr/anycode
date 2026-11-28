@@ -120,7 +120,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
   const cardRef = useRef<HTMLElement | null>(null);
   const spacingRef = useRef<DeckSpacing | null>(null);
   const [chipOnly, setChipOnly] = useState(false);
-  const written = useRef<{ top: string | null; max: string | null; chipOnly: boolean }>({ top: null, max: null, chipOnly: false });
+  const written = useRef<{ top: string | null; max: string | null }>({ top: null, max: null });
 
   /** Measure, then write --deck-top/--deck-max straight onto the wrapper (never React state). */
   const place = useCallback((): { originTop: number; top: number; rowHeight: number } | null => {
@@ -154,10 +154,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
     if (max !== last.max) {
       wrap.style.setProperty("--deck-max", max);
     }
-    if (p.chipOnly !== last.chipOnly) {
-      wrap.toggleAttribute("data-chip-only", p.chipOnly);
-    }
-    written.current = { top, max, chipOnly: p.chipOnly };
+    written.current = { top, max };
     setChipOnly(p.chipOnly);
     return { originTop, top: p.top === "default" ? spacing.defaultTop : p.top, rowHeight: spacing.rowHeight };
   }, [listRef]);
@@ -211,7 +208,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
       resize.disconnect();
       mutations?.disconnect();
       cardRef.current = null;
-      written.current = { top: null, max: null, chipOnly: false };
+      written.current = { top: null, max: null };
     };
   }, [listRef, place, schedule]);
 
@@ -253,6 +250,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
         onJumpToBlock={jump}
         collapsed={collapsed}
         onCollapsedChange={onCollapsedChange}
+        chipOnly={chipOnly}
       />
     </div>
   );
