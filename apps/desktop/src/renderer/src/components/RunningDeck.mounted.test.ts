@@ -260,7 +260,7 @@ describe("RunningDeck", () => {
     const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
     const { rerender } = mountInto(deck({ rows }));
     focus(rowButtons()[1]!);
-    keyDown(document.activeElement!, "Escape");
+    expect(region()!.hasAttribute("data-open")).toBe(true);
     rerender(deck({ rows: [rows[0]!, rows[2]!] }));
     expect(document.activeElement?.getAttribute("aria-label")).toBe("Bash: run c, running");
   });
@@ -269,9 +269,29 @@ describe("RunningDeck", () => {
     const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 })];
     const { rerender } = mountInto(deck({ rows }));
     focus(rowButtons()[1]!);
-    keyDown(document.activeElement!, "Escape");
+    expect(region()!.hasAttribute("data-open")).toBe(true);
     rerender(deck({ rows: [rows[0]!] }));
     expect(document.activeElement?.classList.contains("ak-runningstack__fold")).toBe(true);
+  });
+
+  it("moves focus to the front row on Escape, so Enter never activates a row clipped behind it", () => {
+    const onJump = vi.fn();
+    const rows = ["a", "b", "c", "d"].map(id => row(id));
+    mountInto(deck({ rows, blockIds: new Map(rows.map(r => [r.toolCallId!, `block-${r.toolCallId}`])), onJump }));
+    focus(rowButtons()[1]!);
+    keyDown(document.activeElement!, "Escape");
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    expect(document.activeElement).toBe(rowButtons()[0]);
+    expect(document.activeElement!.getAttribute("tabindex")).toBeNull();
+    act(() => (document.activeElement as HTMLButtonElement).click());
+    expect(onJump).toHaveBeenCalledWith("block-a");
+  });
+
+  it("leaves focus on the front row when Escape comes from it", () => {
+    mountInto(deck({ rows: ["a", "b"].map(id => row(id)) }));
+    focus(rowButtons()[0]!);
+    keyDown(document.activeElement!, "Escape");
+    expect(document.activeElement).toBe(rowButtons()[0]);
   });
 
   it("hands focus to the focusable ancestor when the whole deck unmounts", () => {
@@ -393,6 +413,58 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
     expect(chip.getAttribute("aria-label")).toBe("1 running: run a, jump to its card");
     act(() => chip.click());
     expect(jumps).toEqual(["block-a"]);
+  });
+
+  it("keeps focus on the visible chip-only button when the stack is unfolded in chip-only mode", () => {
+    const Chipped = () => {
+      const [collapsed, setCollapsed] = useState(true);
+      return createElement(RunningDeck, {
+        rows: five(), anchors: new Map(), blockIdByToolCall: new Map(), elapsedNow: 61_000, onJumpToBlock: () => undefined,
+        collapsed, onCollapsedChange: setCollapsed, chipOnly: true,
+      });
+    };
+    mountInto(createElement(Chipped));
+    const folded = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip")!;
+    focus(folded);
+    act(() => folded.click());
+    // The rows and the fold control are not rendered in this mode: the chip-only button is the one control left to hold focus.
+    expect(document.activeElement).toBe(document.querySelector(".ak-runningstack__chip-only"));
+  });
+
+  it("does not take Escape from a combobox whose popup is open, with only the pointer on the deck", () => {
+    mountInto(deck({ rows: five() }));
+    over(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    const input = document.createElement("textarea");
+    input.setAttribute("aria-haspopup", "listbox");
+    input.setAttribute("aria-controls", "slash-menu-list");
+    const list = document.createElement("div");
+    list.id = "slash-menu-list";
+    list.setAttribute("role", "listbox");
+    document.body.append(input, list);
+    focus(input);
+    // The slash menu is open: Escape is the menu's, not the deck's.
+    expect(keyDown(input, "Escape").defaultPrevented).toBe(false);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    // The menu is gone: the control keeps its attributes but names nothing, so the deck takes the key again.
+    list.remove();
+    expect(keyDown(input, "Escape").defaultPrevented).toBe(true);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+  });
+
+  it("takes Escape from a control whose popup is closed but still mounted, because aria-expanded says so", () => {
+    mountInto(deck({ rows: five() }));
+    over(rowButtons()[0]!);
+    const input = document.createElement("button");
+    input.setAttribute("aria-haspopup", "menu");
+    input.setAttribute("aria-expanded", "false");
+    input.setAttribute("aria-controls", "kept-menu");
+    const menu = document.createElement("div");
+    menu.id = "kept-menu";
+    document.body.append(input, menu);
+    focus(input);
+    expect(keyDown(input, "Escape").defaultPrevented).toBe(true);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
   });
 
   it("orders nearest-above first in the rendered rows", () => {

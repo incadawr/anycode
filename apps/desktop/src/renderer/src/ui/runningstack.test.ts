@@ -310,4 +310,14 @@ describe("RunningStack", () => {
       expect(glyph.getAttribute("aria-hidden") === "true" || glyph.closest("[aria-hidden='true']") !== null).toBe(true);
     }
   });
+  it("leaves focus on the fold control when Escape comes from the foot, not from a row", () => {
+    mount(stack({ items: five() }));
+    over(rowButtons()[0]!);
+    const fold = document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!;
+    focus(fold);
+    keyDown(fold, "Escape");
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    expect(document.activeElement).toBe(fold);
+  });
+
 });

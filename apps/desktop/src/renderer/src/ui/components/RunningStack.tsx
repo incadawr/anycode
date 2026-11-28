@@ -9,6 +9,31 @@ const NO_OPEN_INDEX = 9999;
 const COLLAPSE_ID = "\u0000collapse";
 const CHIP_ID = "\u0000chip";
 const INTERACTIVE = "button, a, input, select, textarea";
+const POPUP_ROLES = '[role="dialog"], [role="menu"], [role="listbox"]';
+
+/**
+ * Whether the element that has the key owns an open popup, so Escape is the popup's to take. A popup the element sits inside of is
+ * the plain case. A combobox-style control (the composer's textarea with its slash menu) keeps focus on itself and points at the popup
+ * instead: it announces one with `aria-haspopup` and names it with `aria-controls`, or says `aria-expanded="true"`.
+ */
+function ownsOpenPopup(target: Element | null): boolean {
+  if (target === null) {
+    return false;
+  }
+  if (target.closest(POPUP_ROLES) !== null) {
+    return true;
+  }
+  const haspopup = target.getAttribute("aria-haspopup");
+  if (haspopup === null || haspopup === "false") {
+    return false;
+  }
+  // `aria-expanded` is authoritative when the control states it: a closed popup that stays mounted is still named by `aria-controls`.
+  const expanded = target.getAttribute("aria-expanded");
+  if (expanded !== null) {
+    return expanded === "true";
+  }
+  return (target.getAttribute("aria-controls") ?? "").split(/\s+/).some(id => id !== "" && document.getElementById(id) !== null);
+}
 
 export interface RunningStackItem {
   /** Stable identity: the row keeps its place and its expanded state across updates. */
@@ -127,6 +152,7 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
   const rowEls = useRef(new Map<string, HTMLButtonElement>());
   const collapseEl = useRef<HTMLButtonElement | null>(null);
   const chipEl = useRef<HTMLButtonElement | null>(null);
+  const chipOnlyEl = useRef<HTMLButtonElement | null>(null);
   const regionEl = useRef<HTMLDivElement | null>(null);
   const stackEl = useRef<HTMLDivElement | null>(null);
   // Set by the click handlers that swap the chip and the rows, so focus lands on a live element
@@ -151,11 +177,14 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
     const pending = pendingFocus.current;
     pendingFocus.current = null;
     if (pending !== null) {
-      const target = pending === "chip" ? chipEl.current : collapseEl.current ?? [...rowEls.current.values()][0];
+      // In chip-only mode the rows and the foot are `display: none` and cannot take focus; the chip-only button is what shows.
+      const target = pending === "chip" ? chipEl.current : chipOnly ? chipOnlyEl.current : collapseEl.current ?? [...rowEls.current.values()][0];
       if (target?.isConnected) {
         target.focus({ preventScroll: true });
-        prevKeys.current = mounted.map(r => r.key);
-        return;
+        if (document.activeElement === target) {
+          prevKeys.current = mounted.map(r => r.key);
+          return;
+        }
       }
     }
     const active = document.activeElement;
@@ -169,10 +198,18 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
         ? [firstRow, collapseEl.current]
         : id === COLLAPSE_ID
           ? [chipEl.current]
-          : [nextRow, collapseEl.current, chipEl.current];
+          : [nextRow, collapseEl.current, chipOnlyEl.current, chipEl.current];
       const candidates: readonly (HTMLElement | null | undefined)[] = [...chain, regionEl.current];
-      const target = candidates.find((el): el is HTMLElement => el !== null && el !== undefined && el.isConnected);
-      target?.focus({ preventScroll: true });
+      // An element that is not rendered (the rows in chip-only mode) accepts no focus: take the first one that does.
+      for (const el of candidates) {
+        if (el === null || el === undefined || !el.isConnected) {
+          continue;
+        }
+        el.focus({ preventScroll: true });
+        if (document.activeElement === el) {
+          break;
+        }
+      }
     }
     prevKeys.current = mounted.map(r => r.key);
   });
@@ -214,7 +251,7 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
       // An open dialog, menu or popover owns Escape: a modal closes through the key's default action, and a menu handles it
       // itself. This listener runs first (capture), so it must not take the key from them.
       const target = event.target instanceof Element ? event.target : null;
-      if (document.querySelector("dialog[open]") !== null || target?.closest('[role="dialog"], [role="menu"], [role="listbox"]') != null) {
+      if (document.querySelector("dialog[open]") !== null || ownsOpenPopup(target)) {
         return;
       }
       event.preventDefault();
@@ -279,6 +316,15 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
       clearTimer();
       setExpandedKey(null);
       setDismissed(true);
+      // Closing leaves only the front rows peeking, clipped, with all but the first out of the tab order: focus on a row behind the
+      // front one would stay on something the user cannot see, and Enter would activate it. Bring it to the front row.
+      const frontRow = first === undefined ? undefined : rowEls.current.get(first.key);
+      const active = document.activeElement;
+      // Only from a row: the fold control and the chip are in the foot, visible and in the tab order, and keep the focus they have.
+      if (frontRow !== undefined && active !== frontRow && active instanceof Element && active.closest(".ak-runningstack__stack") !== null) {
+        const target = chipOnly ? chipOnlyEl.current : frontRow;
+        target?.focus({ preventScroll: true });
+      }
     }
   };
   const expand = (key: string) => {
@@ -410,6 +456,7 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
             </Button>
           </div>
           <Button
+            ref={chipOnlyEl}
             variant="ghost"
             className="ak-runningstack__chip-only"
             aria-label={`${labels.count(items.length)}${first ? `: ${first.title}` : ""}${first !== undefined && firstActivatable ? `, ${labels.activateHint}` : ""}`}
