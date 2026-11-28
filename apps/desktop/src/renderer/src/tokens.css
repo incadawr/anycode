@@ -214,6 +214,12 @@
   --focus-ring-width: 2px;
   --focus-ring-offset: 1px;
   --spin-dur: 900ms;
+  /* PeekStack (ui kit): a row card plus its transparent tail, the peek strip, the foot, three detail lines, and the height the open stack may use. */
+  --peekstack-row-h: 2.75rem;
+  --peekstack-peek: 0.25rem;
+  --peekstack-foot-h: 1.5rem;
+  --peekstack-detail-h: 3.25rem;
+  --peekstack-max: 50dvh;
   --track-tight: -0.015em;
   /* Text on accent-tinted surfaces must remain legible in both themes. */
   --accent-soft-text: var(--text-1);

@@ -42,3 +42,13 @@ it("gallery shows the Menu trigger with its items",()=>{
   expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
   click(trigger);expect(byRole(container,"menu","Actions")).toBeTruthy();
 });
+it("gallery shows the PeekStack states",()=>{
+  const {container}=mount(h(Gallery));
+  expect(container.querySelectorAll(".ak-peekstack").length).toBeGreaterThanOrEqual(4);
+  expect(container.querySelector(".ak-peekstack__more")).not.toBeNull();
+  expect(container.querySelector(".ak-peekstack__detail")).not.toBeNull();
+  expect(container.querySelector(".ak-peekstack__chip")).toBeNull();
+  const fold=[...container.querySelectorAll<HTMLButtonElement>(".ak-peekstack__fold")].at(-1)!;
+  click(fold);
+  expect(container.querySelector(".ak-peekstack__chip")).not.toBeNull();
+});

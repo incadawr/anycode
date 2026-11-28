@@ -236,6 +236,280 @@
   color: currentColor;
 }
 
+/* ── PeekStack ───────────────────────────────────────────────────────────── */
+/* Sizes come from tokens.css (--peekstack-*); a parent may override them (and --peekstack-max, the height the open stack may use). */
+/* The stack owns hover: collapsed, only the visible row boxes and controls
+   take the pointer (the text beneath stays usable); open, the whole stack
+   area does, so no gap can lose the hover. */
+.ak-peekstack {
+  /* --ak-ps-n / --ak-ps-open (and each row's --ak-ps-i) are set inline by PeekStack. */
+  --ak-ps-n: 1;
+  --ak-ps-open: 9999;
+  --ak-ps-extra: 0rem;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.ak-peekstack:focus {
+  outline: none;
+}
+
+.ak-peekstack[data-open] {
+  pointer-events: auto;
+}
+
+.ak-peekstack[data-expanding] {
+  --ak-ps-extra: var(--peekstack-detail-h);
+}
+
+.ak-peekstack__stack {
+  position: relative;
+}
+
+.ak-peekstack[data-open] .ak-peekstack__stack {
+  height: calc(var(--ak-ps-n) * var(--peekstack-row-h) + var(--ak-ps-extra));
+  max-height: calc(var(--peekstack-max) - var(--peekstack-foot-h));
+  overflow-y: auto;
+}
+
+/* Set by PeekStack only while the open stack really overflows. */
+.ak-peekstack[data-open] .ak-peekstack__stack[data-scrollable] {
+  overscroll-behavior: contain;
+}
+
+/* Rows are kit Buttons (ghost); these compound selectors undo the kit's
+   control box so a row is a plain card plus its transparent tail. */
+.ak-peekstack__row.ak-btn {
+  --ak-ps-i: 0;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--peekstack-row-h);
+  padding: 0 0 var(--sp-2);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+  white-space: normal;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  transform-origin: center bottom;
+  transition: transform var(--dur-2) var(--ease-out), height var(--dur-2) var(--ease-out);
+}
+
+.ak-peekstack__row.ak-btn[aria-disabled="true"] {
+  cursor: default;
+}
+
+.ak-peekstack__row.ak-btn:hover:not(:disabled) {
+  background: transparent;
+}
+
+.ak-peekstack__row.ak-btn:active:not(:disabled) {
+  filter: none;
+}
+
+/* Peek rows sit behind the front one: absolutely placed WITHOUT z-index
+   (the app overlay guard). Each card is clipped to the strip that shows below the
+   row above it, so DOM paint order never hides the front card. */
+.ak-peekstack__row:not([data-front]) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  transform: translateY(calc(var(--ak-ps-i) * var(--peekstack-peek))) scale(calc(1 - var(--ak-ps-i) * 0.04));
+}
+
+.ak-peekstack__row:not([data-front]) .ak-peekstack__card {
+  clip-path: inset(calc(100% - var(--peekstack-peek)) 0 0 0);
+}
+
+/* Open: rows spread out; the rows after the expanded one make room. */
+.ak-peekstack[data-open] .ak-peekstack__row {
+  pointer-events: auto;
+  transform: translateY(calc(var(--ak-ps-i) * var(--peekstack-row-h) + clamp(0, var(--ak-ps-i) - var(--ak-ps-open), 1) * var(--ak-ps-extra)));
+}
+
+.ak-peekstack[data-open] .ak-peekstack__row .ak-peekstack__card {
+  clip-path: inset(-1rem);
+}
+
+.ak-peekstack[data-open] .ak-peekstack__row[data-expanded] {
+  height: calc(var(--peekstack-row-h) + var(--ak-ps-extra));
+}
+
+.ak-peekstack__card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  clip-path: inset(-1rem);
+  transition: clip-path var(--dur-2) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.ak-peekstack__row:hover .ak-peekstack__card,
+.ak-peekstack__row:focus-visible .ak-peekstack__card {
+  border-color: var(--text-3);
+}
+
+.ak-peekstack__row.ak-btn:focus-visible {
+  outline: none;
+}
+
+.ak-peekstack__row:focus-visible .ak-peekstack__card {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.ak-peekstack__line {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--sp-2);
+  height: calc(var(--peekstack-row-h) - var(--sp-2) - 2px);
+  padding: 0 var(--sp-3);
+  min-width: 0;
+}
+
+.ak-peekstack__glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.ak-peekstack__type {
+  flex-shrink: 0;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+}
+
+.ak-peekstack__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.ak-peekstack__meta {
+  flex-shrink: 0;
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ak-peekstack__cue {
+  flex-shrink: 0;
+  color: var(--info);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.ak-peekstack__detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-5));
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease-out);
+}
+
+.ak-peekstack__row[data-expanded] .ak-peekstack__detail,
+.ak-peekstack__row:focus-visible .ak-peekstack__detail {
+  opacity: 1;
+}
+
+.ak-peekstack__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--peekstack-foot-h);
+}
+
+.ak-peekstack__more,
+.ak-peekstack__fold.ak-btn,
+.ak-peekstack__chip.ak-btn,
+.ak-peekstack__chip-only.ak-btn {
+  pointer-events: auto;
+  height: auto;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--bg-card);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-normal);
+  white-space: nowrap;
+}
+
+.ak-peekstack__fold.ak-btn {
+  margin-left: auto;
+}
+
+.ak-peekstack__chip.ak-btn {
+  align-self: flex-start;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-menu);
+  font-size: var(--fs-xs);
+}
+
+.ak-peekstack__fold.ak-btn:hover:not(:disabled),
+.ak-peekstack__fold.ak-btn:focus-visible,
+.ak-peekstack__chip.ak-btn:hover:not(:disabled),
+.ak-peekstack__chip.ak-btn:focus-visible {
+  background: var(--bg-card);
+  color: var(--text);
+  border-color: var(--text-3);
+}
+
+/* Short window + tall todo card: no room for even three rows, so only the
+   "N running" chip shows, left-aligned at the default top, clear of the card. */
+.ak-peekstack__chip-only.ak-btn {
+  display: none;
+  align-self: flex-start;
+  font-size: var(--fs-xs);
+}
+
+.ak-peekstack[data-chip-only] .ak-peekstack__stack,
+.ak-peekstack[data-chip-only] .ak-peekstack__foot {
+  display: none;
+}
+
+.ak-peekstack[data-chip-only] .ak-peekstack__chip-only.ak-btn {
+  display: inline-flex;
+}
+
+.ak-peekstack__chip-only.ak-btn[aria-disabled="true"] {
+  cursor: default;
+}
+
+.ak-peekstack__spin {
+  animation: ak-spin var(--spin-dur) linear infinite;
+}
+
 /* ── Badge ───────────────────────────────────────────────────────────────── */
 .ak-badge {
   display: inline-flex;

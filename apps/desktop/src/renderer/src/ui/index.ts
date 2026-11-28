@@ -14,6 +14,9 @@ export type { ChipProps, AccessMode } from "./components/Chip.js";
 export { Badge } from "./components/Badge.js";
 export type { BadgeProps, BadgeStatus } from "./components/Badge.js";
 
+export { PeekStack } from "./components/PeekStack.js";
+export type { PeekStackProps, PeekStackItem, PeekStackLabels } from "./components/PeekStack.js";
+
 export { Field, Input, Select, Textarea } from "./components/Field.js";
 export type {
   FieldProps,

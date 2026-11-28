@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { IconAuto, IconBuild } from "../components/icons.js";
 import {
   AnchoredPanel,
   Badge,
@@ -11,6 +12,7 @@ import {
   IconButton,
   Input,
   Modal,
+  PeekStack,
   Popover,
   Menu,
   MenuItem,
@@ -69,6 +71,39 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       </h2>
       {children}
     </section>
+  );
+}
+
+const peekItems = (n: number, withDetail = false) =>
+  Array.from({ length: n }, (_, i) => ({
+    key: `row-${i}`,
+    icon: i % 2 === 0 ? <IconAuto size={14} /> : <IconBuild size={14} />,
+    typeLabel: i % 2 === 0 ? "Bash" : "general-purpose",
+    title: i % 2 === 0 ? `npm run dev ${i + 1}` : `Explore the repository ${i + 1}`,
+    meta: `${(i + 1) * 12}s`,
+    detail: withDetail ? "turn 3 · 12 tools" : undefined,
+    activatable: i !== 1,
+  }));
+
+/** Static rows plus a stack whose fold flag the demo owns, like a real parent would. */
+function PeekStackDemo(): React.ReactElement {
+  const [folded, setFolded] = useState(false);
+  const noop = () => undefined;
+  return (
+    <>
+      <Row label="one row">
+        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(1)} collapsed={false} onCollapsedChange={noop} /></div>
+      </Row>
+      <Row label="five rows (+2 running; hover or focus a row to open)">
+        <div style={{ height: "5rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(5)} collapsed={false} onCollapsedChange={noop} /></div>
+      </Row>
+      <Row label="with a detail line">
+        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(2, true)} collapsed={false} onCollapsedChange={noop} /></div>
+      </Row>
+      <Row label="folded (Hide / chip)">
+        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(3)} collapsed={folded} onCollapsedChange={setFolded} /></div>
+      </Row>
+    </>
   );
 }
 
@@ -180,6 +215,10 @@ export function Gallery(): React.ReactElement {
             <Chip label="disabled" disabled />
             <Chip mode="yolo" selected />
           </Row>
+        </Section>
+
+        <Section title="PeekStack">
+          <PeekStackDemo />
         </Section>
 
         <Section title="Badge">

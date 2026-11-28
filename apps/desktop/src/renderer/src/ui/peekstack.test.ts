@@ -1,0 +1,247 @@
+// @vitest-environment jsdom
+import { act, useState, type ReactElement } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { PeekStack, type PeekStackItem, type PeekStackProps } from "./index.js";
+import { createElement as h, mount } from "./ui.test-utils.js";
+
+const item = (id: string, over: Partial<PeekStackItem> = {}): PeekStackItem => ({
+  key: id, icon: h("svg", { "data-glyph": id }), typeLabel: "Bash", title: `run ${id}`, meta: "1m 1s", activatable: true, ...over,
+});
+const five = () => ["a", "b", "c", "d", "e"].map(id => item(id));
+
+/** The stack with its fold flag held by a small stateful parent, like a real consumer. */
+function Stack(props: Omit<PeekStackProps, "collapsed" | "onCollapsedChange"> & { startCollapsed?: boolean }): ReactElement {
+  const [collapsed, setCollapsed] = useState(props.startCollapsed === true);
+  return h(PeekStack, { ...props, collapsed, onCollapsedChange: setCollapsed });
+}
+const stack = (props: Omit<PeekStackProps, "collapsed" | "onCollapsedChange"> & { startCollapsed?: boolean }) => h(Stack, props);
+
+const region = () => document.querySelector<HTMLElement>('[role="region"]');
+const rowButtons = () => [...document.querySelectorAll<HTMLButtonElement>(".ak-peekstack__row")];
+const labels = () => rowButtons().map(b => b.getAttribute("aria-label"));
+const textOf = (text: string) => [...document.querySelectorAll<HTMLElement>("button, span")].find(el => el.textContent?.trim() === text);
+const over = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body })); });
+const out = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); });
+const leave = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent("pointerleave", { bubbles: false, relatedTarget: document.body })); });
+const focus = (el: HTMLElement) => act(() => el.focus());
+const keyDown = (target: Element, key: string) => {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+  act(() => { target.dispatchEvent(event); });
+  return event;
+};
+const outside = () => {
+  const b = document.createElement("button");
+  document.body.append(b);
+  return b;
+};
+
+describe("PeekStack", () => {
+  it("renders nothing for an empty list", () => {
+    mount(stack({ items: [] }));
+    expect(region()).toBeNull();
+  });
+
+  it("is a labelled region that can take programmatic focus, without aria-live", () => {
+    mount(stack({ items: [item("a")] }));
+    expect(region()!.getAttribute("aria-label")).toBe("Running");
+    expect(region()!.tabIndex).toBe(-1);
+    expect(document.querySelector("[aria-live]")).toBeNull();
+  });
+
+  it("names each row from its parts, and says when it cannot be activated", () => {
+    mount(stack({ items: [item("a"), item("b", { activatable: false })] }));
+    expect(labels()).toEqual(["Bash: run a, running, jump to its card", "Bash: run b, running"]);
+    expect(rowButtons()[1]!.getAttribute("aria-disabled")).toBe("true");
+    expect(rowButtons()[0]!.hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  it("takes every string from labels, falling back to the English defaults", () => {
+    mount(stack({ items: [item("a")], labels: { region: "Läuft", state: "läuft", activateHint: "springen", fold: "Aus", foldName: "Ausblenden" } }));
+    expect(region()!.getAttribute("aria-label")).toBe("Läuft");
+    expect(labels()).toEqual(["Bash: run a, läuft, springen"]);
+    expect(document.querySelector(".ak-peekstack__fold")!.getAttribute("aria-label")).toBe("Ausblenden");
+    expect(textOf("Aus")).toBeDefined();
+  });
+
+  it("shows three rows and a +N chip when closed, and every row once open", () => {
+    mount(stack({ items: five() }));
+    expect(rowButtons()).toHaveLength(3);
+    expect(textOf("+2 running")).toBeDefined();
+    over(rowButtons()[0]!);
+    expect(rowButtons()).toHaveLength(5);
+    expect(textOf("+2 running")).toBeUndefined();
+  });
+
+  it("respects maxVisible", () => {
+    mount(stack({ items: five(), maxVisible: 1 }));
+    expect(rowButtons()).toHaveLength(1);
+    expect(textOf("+4 running")).toBeDefined();
+  });
+
+  it("shows the meta, the cue of an activatable row and the type pill", () => {
+    mount(stack({ items: [item("a"), item("b", { activatable: false, meta: undefined })] }));
+    const [a, b] = rowButtons();
+    expect(a!.querySelector(".ak-peekstack__meta")!.textContent).toBe("1m 1s");
+    expect(a!.querySelector(".ak-peekstack__cue")!.textContent).toBe("↑ jump");
+    expect(a!.querySelector(".ak-peekstack__type")!.textContent).toBe("Bash");
+    expect(b!.querySelector(".ak-peekstack__meta")).toBeNull();
+    expect(b!.querySelector(".ak-peekstack__cue")).toBeNull();
+  });
+
+  it("describes a row by its detail line only when it has one", () => {
+    mount(stack({ items: [item("a", { detail: "turn 3 · 12 tools" }), item("b")] }));
+    const [a, b] = rowButtons();
+    const id = a!.getAttribute("aria-describedby")!;
+    expect(document.getElementById(id)!.textContent).toBe("turn 3 · 12 tools");
+    expect(b!.hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  it("folds into one count chip and reopens on click", () => {
+    mount(stack({ items: five() }));
+    act(() => textOf("Hide")!.click());
+    expect(rowButtons()).toHaveLength(0);
+    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip")!;
+    expect(chip.textContent).toBe("5 running");
+    act(() => chip.click());
+    expect(rowButtons()).toHaveLength(3);
+  });
+
+  it("opens on focus within, and mounts every row", () => {
+    mount(stack({ items: five() }));
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    focus(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    expect(rowButtons()).toHaveLength(5);
+  });
+
+  it("does not open when the fold control takes focus", () => {
+    mount(stack({ items: five() }));
+    focus(document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+  });
+
+  it("closes on Escape, consumes it, and stays closed until focus leaves", () => {
+    mount(stack({ items: five() }));
+    const first = rowButtons()[0]!;
+    focus(first);
+    const event = keyDown(first, "Escape");
+    expect(event.defaultPrevented).toBe(true);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    focus(outside());
+    focus(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+  });
+
+  it("does not consume Escape while closed, so a global Escape handler still sees it", () => {
+    mount(stack({ items: five() }));
+    expect(keyDown(rowButtons()[0]!, "Escape").defaultPrevented).toBe(false);
+  });
+
+  it("activates an activatable row on click and on Enter, and does nothing for one that cannot", () => {
+    const onActivate = vi.fn();
+    mount(stack({ items: [item("a"), item("b", { activatable: false })], onActivate }));
+    const [a, b] = rowButtons();
+    act(() => a!.click());
+    expect(onActivate).toHaveBeenCalledWith("a");
+    act(() => b!.click());
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    // A native button turns Enter into a click; jsdom does not, so the same path is exercised through click().
+    expect(a!.tagName).toBe("BUTTON");
+  });
+
+  it("freezes the rows while the pointer is on the stack and applies changes when it leaves", () => {
+    const rows = [item("a"), item("b"), item("c")];
+    const view = mount(stack({ items: rows }));
+    const first = rowButtons()[0]!;
+    over(first);
+    view.render(stack({ items: rows.slice(0, 2) }));
+    expect(labels().some(l => l?.includes("run c"))).toBe(true);
+    leave(region()!);
+    out(first);
+    expect(labels().some(l => l?.includes("run c"))).toBe(false);
+  });
+
+  it("follows the live rows under keyboard focus alone, and does not bring a finished row back when the pointer arrives", () => {
+    const rows = [item("a"), item("b"), item("c")];
+    const view = mount(stack({ items: rows }));
+    focus(rowButtons()[0]!);
+    view.render(stack({ items: rows.slice(0, 2) }));
+    expect(labels().some(l => l?.includes("run c"))).toBe(false);
+    over(rowButtons()[0]!);
+    expect(labels().some(l => l?.includes("run c"))).toBe(false);
+  });
+
+  it("shows a row added while keyboard focus holds the stack open", () => {
+    const rows = [item("a"), item("b")];
+    const view = mount(stack({ items: rows }));
+    focus(rowButtons()[0]!);
+    view.render(stack({ items: [...rows, item("c")] }));
+    expect(labels().some(l => l?.includes("run c"))).toBe(true);
+  });
+
+  it("moves focus from an unmounting row to the next row, never to body", () => {
+    const rows = [item("a"), item("b"), item("c")];
+    const view = mount(stack({ items: rows }));
+    focus(rowButtons()[1]!);
+    view.render(stack({ items: [rows[0]!, rows[2]!] }));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Bash: run c, running, jump to its card");
+  });
+
+  it("moves focus to the fold control when the last row unmounts", () => {
+    const rows = [item("a"), item("b")];
+    const view = mount(stack({ items: rows }));
+    focus(rowButtons()[1]!);
+    view.render(stack({ items: [rows[0]!] }));
+    expect(document.activeElement).not.toBe(document.body);
+    view.render(stack({ items: [] }));
+    expect(region()).toBeNull();
+  });
+
+  it("hands focus to the focusable ancestor when the whole stack unmounts", () => {
+    const withParent = (items: PeekStackItem[]) => h("div", { tabIndex: -1, "data-parent": "" }, items.length === 0 ? null : stack({ items }));
+    const view = mount(withParent([item("a")]));
+    focus(rowButtons()[0]!);
+    expect(document.activeElement?.closest("[data-parent]")).not.toBeNull();
+    view.render(withParent([]));
+    expect(document.activeElement).toBe(document.querySelector("[data-parent]"));
+  });
+
+  it("shows only the count chip in chip-only mode, which activates the first row", () => {
+    const onActivate = vi.fn();
+    mount(stack({ items: five(), chipOnly: true, onActivate }));
+    expect(region()!.hasAttribute("data-chip-only")).toBe(true);
+    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip-only")!;
+    expect(chip.getAttribute("aria-label")).toBe("5 running: run a, jump to its card");
+    act(() => chip.click());
+    expect(onActivate).toHaveBeenCalledWith("a");
+  });
+
+  it("marks the chip-only chip as disabled when the first row cannot be activated", () => {
+    const onActivate = vi.fn();
+    mount(stack({ items: [item("a", { activatable: false }), item("b")], chipOnly: true, onActivate }));
+    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip-only")!;
+    expect(chip.getAttribute("aria-disabled")).toBe("true");
+    expect(chip.getAttribute("aria-label")).toBe("2 running: run a");
+    act(() => chip.click());
+    expect(onActivate).not.toHaveBeenCalled();
+  });
+
+  it("only rows open the stack: the foot never opens or moves it", () => {
+    mount(stack({ items: five() }));
+    const hide = document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!;
+    over(hide);
+    expect(region()!.hasAttribute("data-open")).toBe(false);
+    over(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+  });
+
+  it("keeps decorative glyphs out of the accessibility tree", () => {
+    mount(stack({ items: [item("a")] }));
+    const glyphs = [...document.querySelectorAll(".ak-peekstack__glyph")];
+    expect(glyphs.length).toBeGreaterThanOrEqual(2);
+    for (const glyph of glyphs) {
+      expect(glyph.getAttribute("aria-hidden") === "true" || glyph.closest("[aria-hidden='true']") !== null).toBe(true);
+    }
+  });
+});
