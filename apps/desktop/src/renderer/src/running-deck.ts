@@ -7,16 +7,17 @@ export type CoreDeckTask = Pick<BackgroundTaskSnapshot, "taskId" | "command" | "
 
 /**
  * The task lists that count on a tab: the Claude CLI's own list on a Claude tab, core's task list on a core tab (the engine DeepSeek
- * and other providers run on). A list left behind by an engine the tab switched away from must not keep rows alive. An engine that is
- * not known yet counts both lists, which is safe because only the live engine ever fills its own. The empty list is one shared
- * constant: a selector that returned a fresh `[]` each call would never be shallow-equal and would re-render forever.
+ * and other providers run on). A core store has no engine block, so a missing engine means core, the same reading `store.ts` uses
+ * elsewhere. A list left behind by an engine the tab switched away from (a live switch does not reset the lists) must not keep rows
+ * alive. The empty list is one shared constant: a selector that returned a fresh `[]` each call would never be shallow-equal and
+ * would re-render forever.
  */
 const NONE: readonly never[] = [];
 
 export function tasksForEngine<C, K>(engineId: string | undefined, claude: readonly C[], core: readonly K[]): { claude: readonly C[]; core: readonly K[] } {
   return {
-    claude: engineId === undefined || engineId === "claude" ? claude : NONE,
-    core: engineId === undefined || engineId === "core" ? core : NONE,
+    claude: engineId === "claude" ? claude : NONE,
+    core: (engineId ?? "core") === "core" ? core : NONE,
   };
 }
 

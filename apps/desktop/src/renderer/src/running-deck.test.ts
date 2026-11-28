@@ -132,8 +132,8 @@ describe("tasksForEngine", () => {
     expect(tasksForEngine("core", claude, core)).toEqual({ claude: [], core });
     expect(tasksForEngine("codex", claude, core)).toEqual({ claude: [], core: [] });
   });
-  it("counts both while the engine is not known yet", () => {
-    expect(tasksForEngine(undefined, claude, core)).toEqual({ claude, core });
+  it("reads a missing engine as core, as a core store has no engine block", () => {
+    expect(tasksForEngine(undefined, claude, core)).toEqual({ claude: [], core });
   });
   it("returns the same empty list every time, so a shallow selector stays stable", () => {
     expect(tasksForEngine("codex", claude, core).claude).toBe(tasksForEngine("codex", claude, core).claude);

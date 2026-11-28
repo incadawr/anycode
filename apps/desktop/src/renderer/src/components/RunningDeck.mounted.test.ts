@@ -367,7 +367,7 @@ const task = (id: string, startedAt = 1_000) => ({ type: "claude_background_task
 
 function storeWith(ids: readonly string[]) {
   const store = createDesktopStore();
-  store.setState({ claudeBackgroundTasks: ids.map((id, i) => task(id, 1_000 + i)) } as never);
+  store.setState({ engine: { id: "claude" }, claudeBackgroundTasks: ids.map((id, i) => task(id, 1_000 + i)) } as never);
   return store;
 }
 
@@ -437,7 +437,7 @@ describe("RunningDeckHost", () => {
     const list = document.createElement("div");
     document.body.append(list);
     const store = createDesktopStore();
-    store.setState({ claudeBackgroundTasks: [{ ...task("x"), description: "" }] } as never);
+    store.setState({ engine: { id: "claude" }, claudeBackgroundTasks: [{ ...task("x"), description: "" }] } as never);
     const blocks = [{ kind: "tool_call", id: "x", toolCallId: "x", toolName: "Bash", input: { command: "npm test" }, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null }] as unknown as TranscriptBlock[];
     mountInto(createElement(TabContext.Provider, { value: { tabId: "t", store } },
       createElement(RunningDeckHost, { listRef: { current: list }, blocks, onJumpToBlock: () => undefined })), list);
@@ -474,19 +474,29 @@ describe("RunningDeckHost store wiring", () => {
     expect(labels().some(l => l?.includes("job bash1"))).toBe(false);
   });
 
-  it("shows a core task as a row without a jump, and only while a core engine is live", () => {
+  it("shows a core task as a row without a jump, and only while no other engine is live", () => {
     const list = document.createElement("div");
     document.body.append(list);
-    const store = storeWith([]);
+    const store = createDesktopStore();
     const coreTask = { taskId: "k1", command: "npm run dev", description: "Dev server", status: "running", startedAt: 1, exitCode: null, outputBytes: 0, outputTruncated: false };
     store.setState({ backgroundTasks: [coreTask] } as never);
     mountInto(hostIn("A", store, { current: list }), list);
     expect(labels()).toEqual(["Bash: Dev server, running"]);
     act(() => store.setState({ engine: { id: "claude" } } as never));
     expect(rowButtons()).toHaveLength(0);
-    act(() => store.setState({ engine: { id: "core" } } as never));
+    act(() => store.setState({ engine: null } as never));
     expect(rowButtons()).toHaveLength(1);
     act(() => store.setState({ backgroundTasks: [{ ...coreTask, status: "completed" }] } as never));
+    expect(rowButtons()).toHaveLength(0);
+  });
+
+  it("drops the Claude rows when a live tab switches from Claude to core, where the engine block goes away", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const store = storeWith(["bash1"]);
+    mountInto(hostIn("A", store, { current: list }), list);
+    expect(rowButtons()).toHaveLength(1);
+    act(() => store.setState({ engine: null } as never));
     expect(rowButtons()).toHaveLength(0);
   });
 
