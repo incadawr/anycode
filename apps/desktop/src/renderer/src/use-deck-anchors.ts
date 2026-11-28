@@ -83,6 +83,8 @@ export interface UseDeckAnchorsArgs {
 
 export interface DeckAnchors {
   readonly anchors: AnchorMap;
+  /** True once a read has run with the list attached. Rows for calls that have a card must not paint before that: their position is unknown. */
+  readonly ready: boolean;
   /** Coalesces into one rAF read; for callers that know the geometry changed (e.g. the todo card resized). */
   readonly schedule: () => void;
 }
@@ -90,6 +92,8 @@ export interface DeckAnchors {
 export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
   const ctx = useContext(TabContext);
   const [anchors, setAnchors] = useState<AnchorMap>(EMPTY_ANCHORS);
+  const [ready, setReady] = useState(false);
+  const readyRef = useRef(false);
   // O(blocks) work happens only when `blocks` or the SET of wanted toolCallIds changes
   // (a key string), never on a rows-only change and never per scroll frame.
   const wantedKey = args.rows.flatMap(r => (r.toolCallId === undefined ? [] : [r.toolCallId])).sort().join("\u0000");
@@ -110,6 +114,10 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
   const read = useRef(() => {
     const { args: a, ctx: c, anchors: previous, derived: d } = latest.current;
     const list = a.listRef.current;
+    if (list && !readyRef.current) {
+      readyRef.current = true;
+      setReady(true);
+    }
     if (!list || a.rows.length === 0) {
       if (previous.size !== 0) {
         setAnchors(EMPTY_ANCHORS);
@@ -221,5 +229,5 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
     });
   }, [ctx, schedule]);
 
-  return { anchors, schedule };
+  return { anchors, ready, schedule };
 }

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { formatTaskElapsed } from "../claude-background-tasks.js";
 import { visibleDeckRows, type AnchorState, type DeckRow } from "../running-deck.js";
 import { PeekStack, type PeekStackItem } from "../ui/index.js";
@@ -29,6 +29,9 @@ export function RunningDeck(props: RunningDeckProps) {
     (row: DeckRow): string | undefined => (row.toolCallId === undefined ? undefined : blockIdByToolCall.get(row.toolCallId)),
     [blockIdByToolCall],
   );
+  // The kit freezes the list while the pointer is on the stack, so a row can be clicked after its work ended and it left `rows`.
+  // Its card is still there: remember each row's block id, so that click still jumps.
+  const knownBlocks = useRef(new Map<string, string>());
   const items = useMemo<readonly PeekStackItem[]>(
     () => visibleDeckRows(rows, anchors).map(row => ({
       key: row.key,
@@ -37,16 +40,25 @@ export function RunningDeck(props: RunningDeckProps) {
       title: row.title,
       meta: formatTaskElapsed(row.startedAt, elapsedNow),
       detail: row.detail,
-      activatable: blockIdOf(row) !== undefined,
+      activatable: remember(row) !== undefined,
     })),
     [rows, anchors, elapsedNow, blockIdOf],
   );
+  function remember(row: DeckRow): string | undefined {
+    const blockId = blockIdOf(row);
+    if (blockId !== undefined) {
+      knownBlocks.current.set(row.key, blockId);
+    }
+    return blockId;
+  }
+  if (rows.length === 0) {
+    knownBlocks.current.clear();
+  }
   const onActivate = useCallback((key: string) => {
-    const row = rows.find(r => r.key === key);
-    const blockId = row === undefined ? undefined : blockIdOf(row);
+    const blockId = knownBlocks.current.get(key);
     if (blockId !== undefined) {
       onJumpToBlock(blockId);
     }
-  }, [rows, blockIdOf, onJumpToBlock]);
+  }, [onJumpToBlock]);
   return <PeekStack items={items} collapsed={collapsed} onCollapsedChange={onCollapsedChange} onActivate={onActivate} chipOnly={chipOnly} />;
 }

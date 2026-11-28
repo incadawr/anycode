@@ -644,10 +644,22 @@ function messageList(store: ReturnType<typeof createDesktopStore>, readOnly = fa
     }));
 }
 
+/** Animation frames run by hand: the first anchor read of a deck whose list mounts in the same commit waits for one. */
+function manualFrames(): () => void {
+  const queue: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { queue.push(callback); return queue.length; });
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  return () => act(() => { queue.splice(0).forEach(callback => callback(0)); });
+}
+
 describe("MessageList and the deck", () => {
-  it("renders the deck inside the list", () => {
+  it("renders the deck inside the list, and holds its rows until the first anchor read so none flashes on a remount", () => {
+    const flush = manualFrames();
     mountInto(messageList(storeWith(["a"])));
     expect(document.querySelector(".message-list > .running-deck-wrap")).not.toBeNull();
+    // The list mounts in the same commit as the deck, so its position is not known yet: nothing is painted.
+    expect(rowButtons()).toHaveLength(0);
+    flush();
     expect(rowButtons()).toHaveLength(1);
   });
 
@@ -658,8 +670,10 @@ describe("MessageList and the deck", () => {
   });
 
   it("does not re-render when the deck's stores change", () => {
+    const flush = manualFrames();
     const store = storeWith(["a"]);
     mountInto(messageList(store));
+    flush();
     const renders = todoRenders.count;
     act(() => store.setState({ claudeBackgroundTasks: [task("a"), task("b")] } as never));
     act(() => store.setState({ backgroundChildren: [{ childSessionId: "c", agentType: "general", description: "d", startedAt: 1 }] } as never));

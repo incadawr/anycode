@@ -49,6 +49,9 @@ export function deckPlacement(
     : { top, chipOnly: false, maxHeight };
 }
 
+/** Nothing to show until the first anchor read: a row for a card that is on screen would otherwise flash on a remount of the list. */
+const NO_ROWS: readonly DeckRow[] = [];
+
 type DeckSources = Pick<DesktopState, "claudeBackgroundTasks" | "backgroundTasks" | "backgroundChildren" | "engine">;
 
 /** Stand-in when no tab provides a store (render tests): no rows, no deck. */
@@ -159,7 +162,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
     return { originTop, top: p.top === "default" ? spacing.defaultTop : p.top, rowHeight: spacing.rowHeight };
   }, [listRef]);
 
-  const { anchors, schedule } = useDeckAnchors({
+  const { anchors, ready, schedule } = useDeckAnchors({
     listRef,
     blocks,
     rows,
@@ -243,7 +246,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
   return (
     <div className="running-deck-wrap" ref={wrapRef}>
       <RunningDeck
-        rows={rows}
+        rows={ready ? rows : NO_ROWS}
         anchors={anchors}
         blockIdByToolCall={blockIds}
         elapsedNow={now}

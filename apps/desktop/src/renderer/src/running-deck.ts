@@ -111,7 +111,3 @@ export function visibleDeckRows(rows: readonly DeckRow[], anchors: ReadonlyMap<s
     ...[...above].sort((a, b) => (anchorOf(b)?.distance ?? 0) - (anchorOf(a)?.distance ?? 0)),
   ];
 }
-
-export function collapsedRows(rows: readonly DeckRow[], max = 3): { front: readonly DeckRow[]; more: number } {
-  return { front: rows.slice(0, max), more: Math.max(0, rows.length - max) };
-}

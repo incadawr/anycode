@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WireBackgroundChild } from "../../shared/protocol.js";
 import type { ClaudeBackgroundTask } from "./claude-background-tasks.js";
-import { collapsedRows, deckRowsFrom, tasksForEngine, visibleDeckRows, type AnchorState, type CoreDeckTask, type DeckRow } from "./running-deck.js";
+import { deckRowsFrom, tasksForEngine, visibleDeckRows, type AnchorState, type CoreDeckTask, type DeckRow } from "./running-deck.js";
 
 const task = (extra: Partial<ClaudeBackgroundTask> = {}): ClaudeBackgroundTask => ({ type: "claude_background_task", taskId: "t", toolCallId: "call", kind: "bash", description: "npm test", startedAt: 10, status: "running", ...extra });
 const child = (extra: Partial<WireBackgroundChild> = {}): WireBackgroundChild => ({ childSessionId: "c", spawnToolCallId: "spawn", agentType: "general-purpose", description: "Explore repo", startedAt: 20, ...extra });
@@ -86,22 +86,6 @@ describe("visibleDeckRows", () => {
     const rows = Object.freeze([row({ key: "b", toolCallId: undefined, startedAt: 1 }), row({ key: "a", toolCallId: undefined, startedAt: 2 })]);
     expect(visibleDeckRows(rows, new Map()).map(r => r.key)).toEqual(["a", "b"]);
     expect(rows.map(r => r.key)).toEqual(["b", "a"]);
-  });
-});
-
-describe("collapsedRows", () => {
-  const many = (n: number) => Array.from({ length: n }, (_, i) => row({ key: `k${i}` }));
-  it("caps at 3 and counts the rest", () => {
-    const { front, more } = collapsedRows(many(5));
-    expect(front.map(r => r.key)).toEqual(["k0", "k1", "k2"]);
-    expect(more).toBe(2);
-  });
-  it("shows everything when under the cap", () => {
-    expect(collapsedRows(many(2))).toMatchObject({ more: 0 });
-    expect(collapsedRows(many(2)).front).toHaveLength(2);
-  });
-  it("honours a custom max", () => {
-    expect(collapsedRows(many(4), 1)).toMatchObject({ more: 3 });
   });
 });
 
