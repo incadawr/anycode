@@ -323,6 +323,7 @@ it("keeps the two lists disjoint and every layout exception justified", () => {
   }
 });
 
+// Parses the whole renderer tree: ~2 s alone, past the 5 s default on a loaded CI runner.
 it("has no new overlay signals outside ui/, and no stale entries in either list", () => {
   const actual = collectEntries();
   const exceptionKeys = Object.keys(LAYOUT_EXCEPTIONS);
@@ -334,4 +335,4 @@ it("has no new overlay signals outside ui/, and no stale entries in either list"
     ...staleLegacy.map(entry => `stale legacy entry (migrated; remove it): ${entry}`),
     ...staleExceptions.map(entry => `stale layout exception (remove it): ${entry}`),
   ].join("\n")).toEqual({ added: [], staleLegacy: [], staleExceptions: [] });
-});
+}, 60_000);

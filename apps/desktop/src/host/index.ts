@@ -525,6 +525,7 @@ import { type CompactionRecordSeam } from "./compaction-records.js";
 import { claudeAgentPermissionMode, claudeChildPresetId, codexChildPosture, nativePeerAuthorityMode } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
+import { shouldForwardClaudeDetachedEvent } from "./claude-detached-forwarding.js";
 // the host-side consent reader. Host never WRITES settings.json
 // (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
 // fail-soft read, same standing custody as seedAlwaysAllowRules above.
@@ -1052,12 +1053,11 @@ let session: Session | null = null;
  * Forwards a subagent_* event of the Claude CLI's own agents that has no owner
  * turn to ride. Only the engine the session runs on speaks for its cards, with
  * one exception: an engine the session already switched away from still
- * settles the agents that died with it (subagent_end), or their cards would
- * keep spinning in the transcript.
+ * settles what died with it (see shouldForwardClaudeDetachedEvent).
  */
 function forwardClaudeDetachedEvent(engine: SessionEngine, event: AgentEvent): void {
   if (session === null) return;
-  if (session.ownsRuntime(engine) || event.type === "subagent_end") session.emitDetachedSubagentEvent(event);
+  if (shouldForwardClaudeDetachedEvent(session.ownsRuntime(engine), event)) session.emitDetachedSubagentEvent(event);
 }
 
 const hostDiagnosticSink = createReplayDiagnosticSink(
