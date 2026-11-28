@@ -919,3 +919,56 @@ describe("Session — engine switch", () => {
     }
   });
 });
+
+class TaskCoreFakeEngine extends SwitchableFakeEngine {
+  override readonly capabilities = { ...NO_CORE_CAPS, supportsTasks: true };
+}
+
+/** A minimal task manager: a fixed list, listeners the test fires by hand. */
+function fakeTasks(taskId: string) {
+  const started = new Set<() => void>();
+  const settled = new Set<() => void>();
+  const snapshot = { taskId, command: `run ${taskId}`, status: "running" as const, exitCode: null, startedAt: 1, outputBytes: 0, outputTruncated: false };
+  return {
+    started, settled,
+    drainNotices: () => [],
+    list: () => [snapshot],
+    peekOutput: (id: string) => (id === taskId ? { snapshot, output: `out ${taskId}` } : undefined),
+    onTaskStarted: (listener: () => void) => { started.add(listener); return () => { started.delete(listener); }; },
+    onTaskSettled: (listener: () => void) => { settled.add(listener); return () => { settled.delete(listener); }; },
+  };
+}
+
+describe("Session — engine switch rebinds the background task manager", () => {
+  it("lists, reads and live-pushes the switched-in runtime's tasks, not the boot manager's", async () => {
+    const boot = fakeTasks("boot-task");
+    const switched = fakeTasks("switched-task");
+    // Boots on a native engine (the Claude → core case) with the boot-time manager the host always builds.
+    const h = createHarness({ steps: [], engine: new NextFakeEngine(), tasks: boot as never,
+      switchEngineFactory: async () => ({ engine: new TaskCoreFakeEngine([]), tasks: switched as never }) });
+    const lists = () => h.received.filter((m): m is Of<"task_list"> => m.type === "task_list").map(m => m.tasks.map(t => t.taskId));
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "switch", engine: "core", model: "test-model" });
+      await h.waitFor(isEngineSwitched);
+      // The commit pushes the new manager's snapshot, and the boot manager's listeners are gone.
+      await h.waitUntil(() => lists().some(ids => ids.includes("switched-task")));
+      expect(boot.started.size + boot.settled.size).toBe(0);
+      expect(switched.started.size).toBe(1);
+      expect(switched.settled.size).toBe(1);
+
+      const before = lists().length;
+      for (const listener of switched.started) listener();
+      await h.waitUntil(() => lists().length > before);
+      expect(lists().at(-1)).toEqual(["switched-task"]);
+
+      h.send({ type: "task_list_request" });
+      await h.waitUntil(() => lists().length > before + 1);
+      expect(lists().at(-1)).toEqual(["switched-task"]);
+
+      h.send({ type: "task_output_request", taskId: "switched-task" });
+      await h.waitUntil(() => h.received.some(m => m.type === "task_output" && m.taskId === "switched-task" && m.newOutput === "out switched-task"));
+    } finally { h.close(); }
+  });
+});

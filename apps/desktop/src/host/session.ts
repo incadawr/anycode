@@ -831,6 +831,8 @@ export interface SwitchRuntime {
   identity?: EngineSwitchIdentity;
   presentation?: Pick<SessionOptions, "shell" | "imageInputEnabled" | "imageFallbackAvailable" | "contextWindowAssumed" | "modelSettingsConnectionId"> & { pinnedConnection?: { connectionId: string; providerId: string } | null };
   backgroundChildren?: SessionOptions["backgroundChildren"];
+  /** The background task manager the new runtime's tools start commands on (core); replaces the boot one on commit. */
+  tasks?: SessionOptions["tasks"];
   onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
   callbacks?: Pick<SessionOptions, "persistence" | "usageAudit" | "effortResolution" | "saveTurnError" | "saveContextUsage" | "reportProviderHealth" | "reportProviderQuota" | "refineTitle" | "restoreHistoryAndTurnErrors" | "currentTurnErrorIds" | "compactionRecords" | "orchestratorRouteCheck" | "applyRecognizerConfig" | "checkpoints">;
 }
@@ -1008,6 +1010,8 @@ export interface SessionOptions {
     /** Non-consuming whole-buffer read: preferred over readOutput so the UI never advances the model's BashOutput cursor. */
     peekOutput?(taskId: string): { snapshot: BackgroundTaskSnapshot; output: string } | undefined;
     kill?(taskId: string): boolean;
+    /** "a background task just started" registration: the panel and the deck learn of a start mid-turn. */
+    onTaskStarted?(listener: (snapshot: BackgroundTaskSnapshot) => void): () => void;
     /**
      * "a background task just left running" registration.
      * Fires at the settle moment itself (finalize — natural exit, timeout,
@@ -1409,7 +1413,7 @@ export class Session {
   private readonly git: GitUiBridge | undefined;
   /** Design §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
   private shell: ShellCapabilitiesProjection | undefined;
-  private readonly tasks: SessionOptions["tasks"];
+  private tasks: SessionOptions["tasks"];
   /** the renderer's own read cursor per background task (see pushTaskOutput). */
   private readonly uiTaskOutputCursors = new Map<string, number>();
   /** slice 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
@@ -2079,14 +2083,23 @@ export class Session {
     // sendDirect), so an absent seam (legacy tests/fakes) and a
     // not-yet-ready renderer see zero new messages; supportsTasks is implicit
     // — engines without the tasks capability never wire this seam.
-    this.tasksSettledUnsubscribe = this.tasks?.onTaskSettled?.(() => {
-      if (this.uiReady && this.engine.capabilities.supportsTasks) this.pushTaskList();
-    });
+    this.tasksSettledUnsubscribe = this.subscribeTaskChanges();
     // Phase 2 of the settings ack (cut §2(k).3). This fires from inside
     // the engine's turn/start, i.e. always while a turn is running and therefore
     // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
     // survives a renderer reload via replay rather than racing it.
     this.engineSettingsUnsubscribe = this.subscribeEngineSettings(this.engineSettings);
+  }
+
+  /** Live task_list pushes when a task starts or settles, so the renderer never waits for the turn teardown. */
+  private subscribeTaskChanges(): (() => void) | undefined {
+    const push = () => {
+      if (this.uiReady && this.engine.capabilities.supportsTasks) this.pushTaskList();
+    };
+    const settled = this.tasks?.onTaskSettled?.(push);
+    const started = this.tasks?.onTaskStarted?.(push);
+    if (settled === undefined && started === undefined) return undefined;
+    return () => { settled?.(); started?.(); };
   }
 
   ownsRuntime(engine: SessionEngine): boolean { return !this.shuttingDown && this.engine === engine; }
@@ -5038,6 +5051,15 @@ export class Session {
         this.backgroundChildrenUnsubscribe = candidateChildrenUnsubscribe;
         candidateChildrenUnsubscribe = undefined;
       } else if (this.engineSwitchCoordinator) { this.backgroundChildren = undefined; this.backgroundChildrenUnsubscribe = undefined; }
+      // The task manager follows the runtime: a switched-in core runtime starts its commands on its own manager, so the
+      // session must list, read, kill and drain notices there, not on the boot one (whose tasks retire with its runtime).
+      if (nextRuntime?.tasks || this.engineSwitchCoordinator) {
+        unsubscribe(this.tasksSettledUnsubscribe);
+        this.tasks = nextRuntime?.tasks;
+        this.uiTaskOutputCursors.clear();
+        this.tasksSettledUnsubscribe = this.subscribeTaskChanges();
+        if (this.uiReady) this.pushTaskList();
+      }
       if (nextRuntime?.onOrchestrateChanged) this.onOrchestrateChanged = nextRuntime.onOrchestrateChanged;
       this.engineSwitchImportPending = this.runtimeHistory ? null : pendingImport;
       this.orchestrationController?.invalidate();

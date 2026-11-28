@@ -93,6 +93,8 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   private counter = 0;
   /** settled-listener set (host live-push); see onTaskSettled. */
   private readonly settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
+  /** started-listener set (host live-push); see onTaskStarted. */
+  private readonly startedListeners = new Set<(snapshot: BackgroundTaskSnapshot) => void>();
 
   constructor(private readonly exec: ExecutionPort) {}
 
@@ -139,6 +141,14 @@ export class InProcessTaskManager implements BackgroundTaskPort {
       (result) => this.finalize(record, mapExecStatus(result.status), result.exitCode),
       () => this.finalize(record, "spawn_error", null),
     );
+    const snapshot = this.toSnapshot(record);
+    for (const listener of this.startedListeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        // a broken listener never breaks the start itself
+      }
+    }
 
     return { ok: true, taskId };
   }
@@ -189,6 +199,13 @@ export class InProcessTaskManager implements BackgroundTaskPort {
    * payload (a BackgroundTaskNotice) but is a side channel, never drained:
    * the next-turn injection queue is untouched by this call.
    */
+  onTaskStarted(listener: (snapshot: BackgroundTaskSnapshot) => void): () => void {
+    this.startedListeners.add(listener);
+    return () => {
+      this.startedListeners.delete(listener);
+    };
+  }
+
   onTaskSettled(listener: (notice: BackgroundTaskNotice) => void): () => void {
     this.settledListeners.add(listener);
     return () => {

@@ -164,7 +164,7 @@ export function createProductionCoreResolver(ctx:ProductionCoreResolverContext):
             readOrchestrator:() => {try {const parsed=parseSettings(JSON.parse(readFileSync(settingsPath ?? defaultSettingsPath(),"utf8")));return parsed.status === "ok" ? resolveProfileRoles(parsed.settings,workspace)?.orchestrator : undefined;}catch{return undefined;}},
             health:() => roleHealth.snapshot(),sendProviderEvent:event => ctx.sendProviderEvent(event),
             pricing:() => ({catalogEntry:entry,baseUrl:envConfig.baseUrl,pricingRaw:pricingSnapshotWithKeyDefault(JSON.stringify(modelSettings.pricingSnapshot()),entry,envConfig.apiKey)})},
-          configure: runtime => { routing.configure(runtime); runtime.presentation = { ...runtime.presentation,
+          configure: runtime => { routing.configure(runtime); runtime.tasks = tasks; runtime.presentation = { ...runtime.presentation,
             pinnedConnection: { connectionId: connectionId, providerId: envConfig.providerId ?? "custom" },
             modelSettingsConnectionId: connectionId,
             ...controls.presentation,

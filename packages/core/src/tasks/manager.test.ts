@@ -338,6 +338,31 @@ describe("InProcessTaskManager", () => {
     20_000,
   );
 
+  // the host's mid-turn "task started" event — fired once per accepted start, never for a refused one.
+  it(
+    "onTaskStarted fires once per started task with its running snapshot, and stops after unsubscribe",
+    async () => {
+      await fresh();
+      const started: Array<{ taskId: string; status: string; description?: string }> = [];
+      const unsubscribe = manager.onTaskStarted((snapshot) => started.push({ taskId: snapshot.taskId, status: snapshot.status, ...(snapshot.description ? { description: snapshot.description } : {}) }));
+      const gone = manager.onTaskStarted(() => started.push({ taskId: "never", status: "never" }));
+      gone();
+
+      const res = manager.start({ command: "true", cwd: tmpDir, description: "quick" });
+      const taskId = res.ok ? res.taskId : "";
+      expect(started).toEqual([{ taskId, status: "running", description: "quick" }]);
+      await waitFor(() => manager.get(taskId)?.status === "completed");
+      expect(started).toHaveLength(1);
+
+      unsubscribe();
+      const later = manager.start({ command: "true", cwd: tmpDir });
+      expect(later.ok).toBe(true);
+      expect(started).toHaveLength(1);
+      if (later.ok) await waitFor(() => manager.get(later.taskId)?.status === "completed");
+    },
+    20_000,
+  );
+
   // §6#9 — concurrency cap is on running tasks; a finished task frees a slot.
   it(
     "enforces the running-task cap and frees a slot when a task ends",

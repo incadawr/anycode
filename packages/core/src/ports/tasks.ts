@@ -61,6 +61,12 @@ export interface BackgroundTaskPort {
    * "task exited" event). Never fires for a task that never started.
    */
   onTaskSettled?(listener: (notice: BackgroundTaskNotice) => void): () => void;
+  /**
+   * Registers a listener fired once per task, right after `start` registered it as running. Returns an
+   * unsubscribe fn. Optional like onTaskSettled: the host learns of a start in the middle of a long turn
+   * from it, not only at turn teardown.
+   */
+  onTaskStarted?(listener: (snapshot: BackgroundTaskSnapshot) => void): () => void;
   /** Terminal-notice queue, exactly-once semantics (drain empties it). */
   drainNotices(): BackgroundTaskNotice[];
   /** Aborts every live task and awaits reaping, bounded by BACKGROUND_DISPOSE_DEADLINE_MS. */
