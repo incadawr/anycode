@@ -43,6 +43,35 @@ describe("deckPlacement", () => {
     expect(p.top).toBe("default");
   });
 
+  it("keeps the chip at the default top while it fits beside the todo card", () => {
+    // Deck box 0..600, card from 300: a 120px chip ends at 120, clear of the card.
+    const p = deckPlacement({ left: 0, width: 600 }, card(300, 560, 400), SPACING, 520, { width: 120, height: 24 });
+    expect(p).toMatchObject({ chipOnly: true, top: "default" });
+  });
+
+  it("drops the chip below the todo card in a narrow pane where it would paint over the card", () => {
+    // The pane is so narrow that the card (from 40) covers the start of the deck's box (from 16): a chip at the default top paints over its header.
+    const p = deckPlacement({ left: 16, width: 280 }, card(40, 296, 400), SPACING, 520, { width: 90, height: 24 });
+    expect(p).toEqual({ top: 408, chipOnly: true, maxHeight: 520 - 408 - 56 });
+    // The chip is measured only once it has rendered, so the first pass has no box and keeps the default top.
+    expect(deckPlacement({ left: 16, width: 280 }, card(40, 296, 400), SPACING, 520).top).toBe("default");
+  });
+
+  it("keeps the chip at the default top when dropping below the card would leave it no room above the jump-to-latest chip", () => {
+    // Dropping the chip below the card puts it at 408 and needs its 24px plus the 56px chip zone above the list's bottom: 488.
+    const clash = { left: 16, width: 280 } as const;
+    expect(deckPlacement(clash, card(40, 296, 400), SPACING, 470, { width: 90, height: 24 })).toMatchObject({ chipOnly: true, top: "default" });
+    // Exactly enough room drops it; one pixel less keeps it at the default top.
+    expect(deckPlacement(clash, card(40, 296, 400), SPACING, 488, { width: 90, height: 24 }).top).toBe(408);
+    expect(deckPlacement(clash, card(40, 296, 400), SPACING, 487, { width: 90, height: 24 }).top).toBe("default");
+  });
+
+  it("moves the chip only when its own right edge reaches the card", () => {
+    // Chip from 16: a 284px chip ends at 300, exactly where the card starts.
+    expect(deckPlacement({ left: 16, width: 340 }, card(300, 560, 400), SPACING, 520, { width: 284, height: 24 }).top).toBe("default");
+    expect(deckPlacement({ left: 16, width: 340 }, card(300, 560, 400), SPACING, 520, { width: 285, height: 24 }).top).toBe(408);
+  });
+
   it("computes maxHeight from the list height, the top and the chip zone", () => {
     expect(deckPlacement({ left: 0, width: 600 }, card(300, 560, 100), SPACING, 700).maxHeight).toBe(700 - 108 - 56);
     // exactly the floor (3 rows) is enough room
@@ -684,9 +713,9 @@ describe("RunningDeckHost machinery", () => {
   });
   const flush = () => { const run = frames; frames = []; act(() => run.forEach(cb => cb(0))); };
 
-  function listWithCard() {
+  function listWithCard(height = 800) {
     const list = document.createElement("div");
-    Object.defineProperty(list, "clientHeight", { value: 800 });
+    Object.defineProperty(list, "clientHeight", { value: height });
     const panel = document.createElement("div");
     panel.className = "todo-panel";
     const todo = document.createElement("div");
@@ -725,6 +754,28 @@ describe("RunningDeckHost machinery", () => {
     act(() => { cardObserver!.callback([], {} as ResizeObserver); });
     flush();
     expect(reads()).toBe(before + 1);
+  });
+
+  it("keeps the folded chip clear of the todo card in a narrow pane, like the chip-only button", () => {
+    const { list, todo } = listWithCard(250);
+    const rect = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === list) return rect(0, 0, 340, 250);
+      if (this === todo) return rect(40, 12, 256, 88); // bottom 100
+      if (this.classList.contains("running-deck-wrap")) return rect(16, 12, 280, 0);
+      // Only the folded chip has a box here: the chip-only button would be display:none.
+      if (this.classList.contains("ak-runningstack__chip")) return rect(16, 12, 90, 24);
+      return rect(0, 0, 0, 0);
+    });
+    mountInto(hostIn("A", storeWith(["a1"]), { current: list }), list);
+    const wrap = list.querySelector<HTMLElement>(".running-deck-wrap")!;
+    // Not folded: the chip-only button is not laid out on the first pass, so the chip stays where it is.
+    expect(wrap.style.getPropertyValue("--deck-top")).toBe("");
+    act(() => document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")?.click());
+    expect(document.querySelector(".ak-runningstack__chip")).not.toBeNull();
+    // Folded: the chip would paint over the card's header (the card starts at 40, the chip ends at 106), so it drops below the card.
+    expect(wrap.style.getPropertyValue("--deck-top")).toBe("108px");
   });
 
   it("attaches observers and places when mounted in the same commit as the list (real MessageList)", () => {

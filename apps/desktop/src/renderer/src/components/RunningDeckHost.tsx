@@ -33,21 +33,35 @@ export interface DeckPlacement {
  * scrollport's top/left). Only HORIZONTAL overlap between the deck's default
  * box and the todo card is tested: the card is always top-anchored, and the
  * result never feeds back into its own input, so it cannot oscillate.
+ *
+ * Whether the deck shows rows or only its chip depends on the room alone. In chip-only mode the chip sits left-aligned at the default
+ * top, and `chipBox` (its measured size; absent until it has been laid out) says whether that spot is clear of the todo card: when
+ * the pane is so narrow that the chip would paint over the card's header, the chip drops below the card like the rows would, unless
+ * that leaves no room for it above the jump-to-latest chip: a chip nobody can reach is worse than one beside the card.
  */
 export function deckPlacement(
   deckBoxDefault: { readonly left: number; readonly width: number },
   todoCard: Pick<DOMRect, "left" | "right" | "bottom"> | null,
   spacing: DeckSpacing,
   listClientHeight: number,
+  chipBox?: { readonly width: number; readonly height: number },
 ): DeckPlacement {
   const overlaps = todoCard !== null
     && todoCard.left < deckBoxDefault.left + deckBoxDefault.width
     && deckBoxDefault.left < todoCard.right;
   const top = overlaps ? todoCard.bottom + spacing.gap : "default";
   const maxHeight = listClientHeight - (top === "default" ? spacing.defaultTop : top) - spacing.chipZone;
-  return maxHeight < spacing.floorRows * spacing.rowHeight
-    ? { top: "default", chipOnly: true, maxHeight: listClientHeight - spacing.defaultTop - spacing.chipZone }
-    : { top, chipOnly: false, maxHeight };
+  if (maxHeight >= spacing.floorRows * spacing.rowHeight) {
+    return { top, chipOnly: false, maxHeight };
+  }
+  let chipTop: "default" | number = "default";
+  if (todoCard !== null && chipBox !== undefined && todoCard.left < deckBoxDefault.left + chipBox.width && deckBoxDefault.left < todoCard.right) {
+    const dropped = todoCard.bottom + spacing.gap;
+    if (listClientHeight - dropped - spacing.chipZone >= chipBox.height) {
+      chipTop = dropped;
+    }
+  }
+  return { top: chipTop, chipOnly: true, maxHeight: listClientHeight - (chipTop === "default" ? spacing.defaultTop : chipTop) - spacing.chipZone };
 }
 
 /** Nothing to show until the first anchor read: a row for a card that is on screen would otherwise flash on a remount of the list. */
@@ -139,11 +153,15 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
     const originLeft = listRect.left + list.clientLeft;
     const wrapRect = wrap.getBoundingClientRect();
     const card = cardRef.current?.isConnected ? cardRef.current.getBoundingClientRect() : null;
+    // The count chip is the chip-only button or the folded chip; only one of them is rendered, and the chip-only button is
+    // `display: none` until the deck is in that mode, so it has a size only from the second pass on.
+    const chip = wrap.querySelector(".ak-runningstack__chip-only, .ak-runningstack__chip")?.getBoundingClientRect();
     const p = deckPlacement(
       { left: wrapRect.left - originLeft, width: wrapRect.width },
       card === null ? null : { left: card.left - originLeft, right: card.right - originLeft, bottom: card.bottom - originTop },
       spacing,
       list.clientHeight,
+      chip !== undefined && chip.width > 0 ? { width: chip.width, height: chip.height } : undefined,
     );
     const top = p.top === "default" ? null : `${p.top}px`;
     const max = `${Math.max(0, p.maxHeight)}px`;
@@ -226,6 +244,14 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
     cardRef.current = findTodoCard(list);
     place();
   }, [listRef, place]);
+
+  // The chip's size is known only after it renders, and it changes with the count ("5 running" -> "10 running") and with the fold:
+  // place again then.
+  useLayoutEffect(() => {
+    if (chipOnly || collapsed) {
+      place();
+    }
+  }, [chipOnly, collapsed, rows.length, place]);
 
   const [now, setNow] = useState(() => Date.now());
   // Elapsed text exists only on rows; the folded chip and the chip-only mode show none.
