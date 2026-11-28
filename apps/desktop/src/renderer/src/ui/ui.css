@@ -426,16 +426,26 @@
 }
 
 .ak-runningstack__detail {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
+  display: block;
   padding: 0 var(--sp-3) var(--sp-2) calc(var(--sp-3) + var(--sp-5));
   color: var(--text-3);
   font-size: var(--fs-xs);
   line-height: var(--lh-tight);
   opacity: 0;
   transition: opacity var(--dur-1) var(--ease-out);
+}
+
+/* Three lines at most, and the text rests on the bottom edge of that window: what does not fit is cut at the TOP, so the latest lines
+   stay visible (a line clamp would keep the first ones). The window is three line boxes of the detail's own font (1lh), so the row
+   keeps the height --runningstack-detail-h reserves. */
+.ak-runningstack__detail-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(3 * 1lh);
+  overflow: hidden;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .ak-runningstack__row[data-expanded] .ak-runningstack__detail,

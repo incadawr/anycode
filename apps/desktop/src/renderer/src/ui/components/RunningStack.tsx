@@ -45,7 +45,7 @@ export interface RunningStackItem {
   readonly title: string;
   /** Preformatted trailing text, such as an elapsed time. The caller owns its updates. */
   readonly meta?: string;
-  /** Second line, shown when the row is expanded or focused. */
+  /** Extra text, shown when the row is expanded or focused: up to three lines, and when it is longer the LAST lines show, since the latest are the ones that matter. Line breaks are kept. */
   readonly detail?: string;
   /** The row can be activated (click or Enter calls `onActivate`). A row that cannot is announced as such and does nothing. */
   readonly activatable?: boolean;
@@ -434,7 +434,11 @@ export function RunningStack(props: RunningStackProps): React.ReactElement | nul
                       {item.meta !== undefined && <span className="ak-runningstack__meta">{item.meta}</span>}
                       {activatable && <span className="ak-runningstack__cue">{labels.activateCue}</span>}
                     </span>
-                    {item.detail !== undefined && <span className="ak-runningstack__detail" id={detailId}>{item.detail}</span>}
+                    {item.detail !== undefined && (
+                      <span className="ak-runningstack__detail" id={detailId}>
+                        <span className="ak-runningstack__detail-text">{item.detail.trimEnd()}</span>
+                      </span>
+                    )}
                   </span>
                 </Button>
               );

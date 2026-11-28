@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { act, useState, type ReactElement } from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { RunningStack, type RunningStackItem, type RunningStackProps } from "./index.js";
 import { createElement as h, mount } from "./ui.test-utils.js";
@@ -333,4 +335,30 @@ describe("RunningStack", () => {
     expect(document.activeElement).toBe(fold);
   });
 
+  it("puts the detail in a text window and drops its trailing whitespace, so a final newline is not a blank last line", () => {
+    mount(stack({ items: [item("a", { detail: "one\ntwo\nthree\nfour\n\n" })] }));
+    const text = document.querySelector<HTMLElement>(".ak-runningstack__detail > .ak-runningstack__detail-text")!;
+    expect(text.textContent).toBe("one\ntwo\nthree\nfour");
+    // The row is still described by the detail, as before.
+    const row = rowButtons()[0]!;
+    expect(document.getElementById(row.getAttribute("aria-describedby")!)!.textContent).toBe("one\ntwo\nthree\nfour");
+  });
+
+  // jsdom does no layout, so the cut-from-the-top behaviour is pinned in the stylesheet: the text rests on the bottom edge of a
+  // three-line window and the overflow is clipped at the top. A line clamp would keep the FIRST lines.
+  it("styles the detail to keep its last lines visible, not its first", () => {
+    const css = readFileSync(join(import.meta.dirname, "ui.css"), "utf8");
+    const block = (selector: string) => {
+      const start = css.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return css.slice(start, css.indexOf("}", start));
+    };
+    const text = block(".ak-runningstack__detail-text");
+    expect(text).toContain("justify-content: flex-end");
+    expect(text).toContain("flex-direction: column");
+    expect(text).toContain("overflow: hidden");
+    expect(text).toContain("max-height: calc(3 * 1lh)");
+    expect(text).toContain("white-space: pre-line");
+    expect(css).not.toContain("-webkit-line-clamp");
+  });
 });

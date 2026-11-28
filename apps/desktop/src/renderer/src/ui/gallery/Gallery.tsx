@@ -100,6 +100,15 @@ function RunningStackDemo(): React.ReactElement {
       <Row label="with a detail line">
         <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><RunningStack items={peekItems(2, true)} collapsed={false} onCollapsedChange={noop} /></div>
       </Row>
+      <Row label="long detail (the last three lines show)">
+        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}>
+          <RunningStack
+            items={[{ ...peekItems(1)[0]!, detail: ["Installing dependencies", "Compiling 212 modules", "Compiling 480 modules", "Running 64 tests", "Running 128 tests", "All 212 tests passed"].join("\n") }]}
+            collapsed={false}
+            onCollapsedChange={noop}
+          />
+        </div>
+      </Row>
       <Row label="folded (Hide / chip)">
         <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><RunningStack items={peekItems(3)} collapsed={folded} onCollapsedChange={setFolded} /></div>
       </Row>
