@@ -435,12 +435,13 @@ describe("ClaudeSubagentTasks — background agent count", () => {
     expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: true }]);
   });
 
-  it("abandonAll during the hold reports 0 abandoned at once and cancels the hold", () => {
+  it("abandonAll during the hold, after the agents finished, reports 0 at once as not abandoned and cancels the hold", () => {
     const { tasks, updates } = tracker();
     tasks.onFrame(started("a"));
     tasks.onFrame(settled("a"));
     tasks.abandonAll();
-    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: true }]);
+    // The agents had finished: only their 0 was still unreported, so the tab may still raise its completion dot.
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: false }]);
     vi.runAllTimers();
     expect(updates).toHaveLength(2);
     expect(vi.getTimerCount()).toBe(0);

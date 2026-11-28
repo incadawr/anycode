@@ -361,11 +361,13 @@ export class ClaudeSubagentTasks {
       events.push(this.endEvent(task, "cancelled", -1));
       this.settle(taskId, task);
     }
+    // The real count before the reset: a pending zero-hold means the agents already finished and only the 0 is unreported,
+    // so that is not an abandon and the tab may still raise its completion dot.
+    const hadWork = this.lastCount > 0;
     this.census = EMPTY_AGENT_CENSUS;
     this.lastCount = 0;
-    // A pending hold means a non-zero count is still the one reported.
     this.cancelZeroHold();
-    if (this.publishedCount > 0) this.publish(0, true);
+    if (this.publishedCount > 0) this.publish(0, hadWork);
     return events;
   }
 

@@ -77,21 +77,21 @@ export function backgroundAgentsLabel(count: number): string | null {
   return count === 1 ? "1 background agent" : `${count} background agents`;
 }
 
-/** Accessible-name fragment for the background tasks (Bash commands, monitors) badge group; `null` when there are none. */
+/** Accessible-name fragment for the background commands (Bash commands, monitors) badge group; `null` when there are none. */
 export function backgroundTasksLabel(count: number): string | null {
   if (count <= 0) {
     return null;
   }
-  return count === 1 ? "1 background task" : `${count} background tasks`;
+  return count === 1 ? "1 background command" : `${count} background commands`;
 }
 
-/** Tooltip for the background work pill: "{N background agents} · {N background tasks}"; `null` when there is none. */
+/** Tooltip for the background work pill: "{N background agents} · {N background commands}"; `null` when there is none. */
 export function backgroundWorkSummary(agents: number, tasks: number): string | null {
   const parts = [backgroundAgentsLabel(agents), backgroundTasksLabel(tasks)].filter((part): part is string => part !== null);
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** Row button aria-label: "{title}, {status}, {N background agents}, {N background tasks}"; `undefined` when none applies. */
+/** Row button aria-label: "{title}, {status}, {N background agents}, {N background commands}"; `undefined` when none applies. */
 export function rowAriaLabel(
   title: string,
   kind: RowStatusKind | null,

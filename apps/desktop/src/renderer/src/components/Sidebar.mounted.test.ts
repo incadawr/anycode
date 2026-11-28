@@ -147,7 +147,7 @@ it("shows no badge when there are no background agents", async () => {
   } finally { await cleanup(); }
 });
 
-it("shows only the terminal group for a tasks-only row", async () => {
+it("shows only the prompt group for a commands-only row", async () => {
   const { container, cleanup } = await mountWithStatus(0, 1);
   try {
     const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
@@ -155,7 +155,7 @@ it("shows only the terminal group for a tasks-only row", async () => {
     expect(row.querySelector(".sidebar-row-bg-agents-robot")).toBeNull();
     expect(row.querySelector(".sidebar-row-bg-agents-prompt")).not.toBeNull();
     expect(row.querySelector(".sidebar-row-bg-agents")!.textContent).toBe("1");
-    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 1 background task");
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 1 background command");
   } finally { await cleanup(); }
 });
 
@@ -178,22 +178,15 @@ it("shows both groups inside one pill with one ring", async () => {
     expect(row.querySelector(".sidebar-row-bg-agents-robot")).not.toBeNull();
     expect(row.querySelector(".sidebar-row-bg-agents-prompt")).not.toBeNull();
     expect(row.querySelector(".sidebar-row-bg-agents")!.textContent).toBe("21");
-    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents, 1 background task");
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents, 1 background command");
   } finally { await cleanup(); }
 });
 
-it("shows no pill with neither agents nor tasks", async () => {
-  const { container, cleanup } = await mountWithStatus(0, 0);
-  try {
-    expect(container.querySelector(".sidebar-row-bg-agents")).toBeNull();
-  } finally { await cleanup(); }
-});
-
-it("gives the pill a plain-words tooltip for agents-only, tasks-only and both", async () => {
+it("gives the pill a plain-words tooltip for agents-only, commands-only and both", async () => {
   for (const [agents, tasks, title] of [
     [3, 0, "3 background agents"],
-    [0, 1, "1 background task"],
-    [2, 1, "2 background agents · 1 background task"],
+    [0, 1, "1 background command"],
+    [2, 1, "2 background agents · 1 background command"],
   ] as const) {
     const { container, cleanup } = await mountWithStatus(agents, tasks);
     try {
@@ -202,13 +195,12 @@ it("gives the pill a plain-words tooltip for agents-only, tasks-only and both", 
   }
 });
 
-it("draws the tasks group with the frameless prompt icon, not the framed terminal", async () => {
+it("draws the commands group with the frameless prompt icon", async () => {
   const { container, cleanup } = await mountWithStatus(0, 1);
   try {
     const group = container.querySelector(".sidebar-row-bg-agents-group")!;
     const icon = group.querySelector(".sidebar-row-bg-agents-prompt")!;
     expect(icon).not.toBeNull();
     expect(icon.querySelector("rect")).toBeNull();
-    expect(group.querySelector(".sidebar-row-bg-agents-terminal")).toBeNull();
   } finally { await cleanup(); }
 });

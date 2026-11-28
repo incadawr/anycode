@@ -10084,6 +10084,55 @@ describe("runningBackgroundTasks", () => {
     expect(store.getState().runningBackgroundTasks).toBe(0);
   });
 
+  describe("core tasks (the engine DeepSeek and other providers run on)", () => {
+    const coreTask = (taskId: string, status: string) => ({ taskId, command: "sleep 30", status, exitCode: null, startedAt: 1, outputBytes: 0, outputTruncated: false });
+
+    it("counts the running tasks of core's own list, from the snapshot and from live updates", () => {
+      const store = createDesktopStore();
+      store.getState().applyHostMessage({ type: "task_list", tasks: [coreTask("a", "running"), coreTask("b", "completed")] as never });
+      expect(store.getState().runningBackgroundTasks).toBe(1);
+      store.getState().applyHostMessage({ type: "task_output", taskId: "c", snapshot: coreTask("c", "running") as never, newOutput: "" });
+      expect(store.getState().runningBackgroundTasks).toBe(2);
+      store.getState().applyHostMessage({ type: "task_output", taskId: "a", snapshot: coreTask("a", "completed") as never, newOutput: "done" });
+      expect(store.getState().runningBackgroundTasks).toBe(1);
+    });
+
+    it("adds nothing to the Claude count on a tab with no engine, and the two lists do not overlap in practice", () => {
+      const store = createDesktopStore();
+      store.getState().applyHostMessage({ type: "task_list", tasks: [coreTask("a", "running")] as never });
+      sendTask(store, { taskId: "x", toolCallId: "cx", status: "running" });
+      expect(store.getState().runningBackgroundTasks).toBe(2);
+    });
+  });
+
+  describe("leaving the Claude engine", () => {
+    it("settles the commands the CLI was still running, drops them from the count and flags an abandon", () => {
+      const store = createDesktopStore();
+      sendTask(store, { taskId: "a", toolCallId: "ca", status: "running" });
+      sendTask(store, { taskId: "b", toolCallId: "cb", status: "running" });
+      expect(store.getState().runningBackgroundTasks).toBe(2);
+
+      store.getState().applyHostMessage({ type: "engine_switched", requestId: "sw", engine: "core", previousEngine: "claude" });
+
+      expect(store.getState().runningBackgroundTasks).toBe(0);
+      expect(store.getState().claudeBackgroundTasks.every((task) => task.status === "unknown")).toBe(true);
+      expect(store.getState().claudeTaskByToolCall.ca?.status).toBe("unknown");
+      expect(store.getState().engineBackgroundAgents.abandoned).toBe(true);
+    });
+
+    it("does not touch anything when switching to Claude, or when nothing was running", () => {
+      const store = createDesktopStore();
+      sendTask(store, { taskId: "a", toolCallId: "ca", status: "running" });
+      store.getState().applyHostMessage({ type: "engine_switched", requestId: "sw", engine: "claude", previousEngine: "core" });
+      expect(store.getState().runningBackgroundTasks).toBe(1);
+      expect(store.getState().engineBackgroundAgents.abandoned).toBe(false);
+
+      const idle = createDesktopStore();
+      idle.getState().applyHostMessage({ type: "engine_switched", requestId: "sw", engine: "core", previousEngine: "claude" });
+      expect(idle.getState().engineBackgroundAgents.abandoned).toBe(false);
+    });
+  });
+
   it("flags the engine abandon when a running task becomes unknown, and clears it when new work starts", () => {
     const store = createDesktopStore();
     sendTask(store, { taskId: "a", status: "running" });

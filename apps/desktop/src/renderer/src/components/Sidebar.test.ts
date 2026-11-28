@@ -1043,15 +1043,15 @@ describe("background agents badge labels", () => {
     expect(rowAriaLabel("T", null, 2, 0)).toBe("T, 2 background agents");
     expect(rowAriaLabel("T", "running", 2, 0)).toBe("T, running, 2 background agents");
   });
-  it("labels background tasks, singular and plural, and nothing for zero", () => {
+  it("labels background commands, singular and plural, and nothing for zero", () => {
     expect(backgroundTasksLabel(0)).toBeNull();
-    expect(backgroundTasksLabel(1)).toBe("1 background task");
-    expect(backgroundTasksLabel(4)).toBe("4 background tasks");
+    expect(backgroundTasksLabel(1)).toBe("1 background command");
+    expect(backgroundTasksLabel(4)).toBe("4 background commands");
   });
-  it("appends the background tasks part after status and agents", () => {
-    expect(rowAriaLabel("T", null, 0, 1)).toBe("T, 1 background task");
-    expect(rowAriaLabel("T", null, 0, 3)).toBe("T, 3 background tasks");
-    expect(rowAriaLabel("T", "running", 2, 1)).toBe("T, running, 2 background agents, 1 background task");
+  it("appends the background commands part after status and agents", () => {
+    expect(rowAriaLabel("T", null, 0, 1)).toBe("T, 1 background command");
+    expect(rowAriaLabel("T", null, 0, 3)).toBe("T, 3 background commands");
+    expect(rowAriaLabel("T", "running", 2, 1)).toBe("T, running, 2 background agents, 1 background command");
   });
 });
 
@@ -1064,10 +1064,10 @@ describe("backgroundWorkSummary (badge tooltip)", () => {
     expect(backgroundWorkSummary(3, 0)).toBe("3 background agents");
   });
   it("names tasks, singular and plural", () => {
-    expect(backgroundWorkSummary(0, 1)).toBe("1 background task");
-    expect(backgroundWorkSummary(0, 2)).toBe("2 background tasks");
+    expect(backgroundWorkSummary(0, 1)).toBe("1 background command");
+    expect(backgroundWorkSummary(0, 2)).toBe("2 background commands");
   });
   it("joins agents and tasks with a middle dot", () => {
-    expect(backgroundWorkSummary(2, 1)).toBe("2 background agents · 1 background task");
+    expect(backgroundWorkSummary(2, 1)).toBe("2 background agents · 1 background command");
   });
 });

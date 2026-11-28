@@ -147,7 +147,7 @@ import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, isSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
 import { countRunningBackgroundChildren } from "./background-children.js";
-import { runningBackgroundTaskCount } from "./claude-background-tasks.js";
+import { badgeTaskCount } from "./claude-background-tasks.js";
 import { dismissFailedChild, recordFailedChild } from "./failed-background-children.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 // the global settings-store (NOT part of DesktopState) — the
@@ -5008,7 +5008,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             if (event.foreground === true) {
               if (!state.claudeBackgroundTasks.some(task => task.taskId === event.taskId)) return {};
               const remaining = state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId);
-              return { claudeBackgroundTasks: remaining, runningBackgroundTasks: runningBackgroundTaskCount(remaining) };
+              return { claudeBackgroundTasks: remaining, runningBackgroundTasks: badgeTaskCount(state.engine?.id, remaining, state.backgroundTasks) };
             }
             const previous = state.claudeBackgroundTasks.find(task => task.taskId === event.taskId);
             const tasks = [...state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId), event];
@@ -5025,7 +5025,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return {
               claudeTaskByToolCall: byCall,
               claudeBackgroundTasks,
-              runningBackgroundTasks: runningBackgroundTaskCount(claudeBackgroundTasks),
+              runningBackgroundTasks: badgeTaskCount(state.engine?.id, claudeBackgroundTasks, state.backgroundTasks),
               ...(abandoned !== state.engineBackgroundAgents.abandoned ? { engineBackgroundAgents: { ...state.engineBackgroundAgents, abandoned } } : {}),
             };
           });
@@ -6323,14 +6323,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "task_list":
             // Renderer Panels sub-slice D: full snapshot replacement; output is
             // carried by task_output chunks below because core exposes a cursor.
-            set({ backgroundTasks: message.tasks });
+            set((state) => ({
+              backgroundTasks: message.tasks,
+              runningBackgroundTasks: badgeTaskCount(state.engine?.id, state.claudeBackgroundTasks, message.tasks),
+            }));
             return;
           case "task_output":
             if (message.snapshot !== null) {
-              set((state) => ({
-                backgroundTasks: state.backgroundTasks.some((task) => task.taskId === message.snapshot!.taskId)
+              set((state) => {
+                const backgroundTasks = state.backgroundTasks.some((task) => task.taskId === message.snapshot!.taskId)
                   ? state.backgroundTasks.map((task) => (task.taskId === message.snapshot!.taskId ? message.snapshot! : task))
-                  : [...state.backgroundTasks, message.snapshot!],
+                  : [...state.backgroundTasks, message.snapshot!];
+                return {
+                backgroundTasks,
+                runningBackgroundTasks: badgeTaskCount(state.engine?.id, state.claudeBackgroundTasks, backgroundTasks),
                 backgroundTaskOutput:
                   message.newOutput.length === 0
                     ? state.backgroundTaskOutput
@@ -6338,7 +6344,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                         ...state.backgroundTaskOutput,
                         [message.taskId]: (state.backgroundTaskOutput[message.taskId] ?? "") + message.newOutput,
                       },
-              }));
+                };
+              });
             }
             return;
           case "claude_task_output":
@@ -6723,6 +6730,25 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             } else if (!state.engineSwitch) {
               set({ ...(state.engine ? { engine: { ...state.engine, id: message.engine } } : {}), pendingEngineChange: null, contextUsage: null });
             }
+            // Commands the Claude CLI was still running when the tab left it are orphaned: its process is gone and its settle events are
+            // not forwarded to a non-owning engine, so they would stay "running" (pill, composer list, cards) forever. Settle them here,
+            // flagged as an abandon so the sidebar mirror raises no completion dot.
+            if (message.engine !== "claude") {
+              set((current) => {
+                if (!current.claudeBackgroundTasks.some((task) => task.status === "running")) return current;
+                const orphan = <T extends { status: string }>(task: T): T => (task.status === "running" ? { ...task, status: "unknown" } : task);
+                return {
+                  claudeBackgroundTasks: current.claudeBackgroundTasks.map(orphan),
+                  claudeTaskByToolCall: Object.fromEntries(Object.entries(current.claudeTaskByToolCall).map(([key, task]) => [key, orphan(task)])),
+                  engineBackgroundAgents: { ...current.engineBackgroundAgents, abandoned: true },
+                };
+              });
+            }
+            // The pill counts only the engine that is live now.
+            set((current) => {
+              const count = badgeTaskCount(current.engine?.id ?? message.engine, current.claudeBackgroundTasks, current.backgroundTasks);
+              return count === current.runningBackgroundTasks ? current : { runningBackgroundTasks: count };
+            });
             return;
           }
           case "engine_switch_failed": {
