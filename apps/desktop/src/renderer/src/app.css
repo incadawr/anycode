@@ -1256,8 +1256,8 @@ body {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: var(--sp-1);
-  padding: 1px var(--sp-1);
+  gap: var(--sp-2);
+  padding: 2px var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--r-full);
   color: var(--text-3);
@@ -1273,18 +1273,19 @@ body {
 }
 
 .sidebar-row-bg-agents-robot {
-  width: 11px;
-  height: 11px;
+  width: 13px;
+  height: 13px;
 }
 
 .sidebar-row-bg-agents-prompt {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
 }
 
 .sidebar-row-bg-agents-ring {
-  width: 9px;
-  height: 9px;
+  /* same size as the row's own spinner (.sidebar-row-spinner) */
+  width: 10px;
+  height: 10px;
 }
 
 .sidebar-row-age {
