@@ -339,7 +339,9 @@ export function jumpToTranscriptBlock(el: JumpContainer, blockId: string, afterJ
     return;
   }
   const toolStack = target.closest(".tool-call-stack");
-  if (toolStack !== null && target.classList.contains("tool-call-stack-anchor")) {
+  // A collapsed stack carries the HEAD member's id on its own root (an open one carries none, see stackBlockIdLayout), the others on
+  // hidden anchors: either match means the card is not laid out yet.
+  if (toolStack !== null && (target.classList.contains("tool-call-stack-anchor") || toolStack === target)) {
     const toggle = toolStack.querySelector(".tool-call-stack-toggle");
     toggle?.click?.();
     requestAnimationFrame(() => {
