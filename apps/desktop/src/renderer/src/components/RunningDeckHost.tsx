@@ -2,10 +2,9 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { useStore, type StoreApi } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { useShallow } from "zustand/react/shallow";
-import { backgroundBashStarts, deckRowsFrom, tasksForEngine, type DeckRow } from "../running-deck.js";
+import { deckRowsFrom, tasksForEngine, type DeckRow } from "../running-deck.js";
 import type { DesktopState, TranscriptBlock } from "../store.js";
 import { TabContext } from "../tab-context.js";
-import { tabRegistry } from "../tab-registry.js";
 import { blockIdEntry, useDeckAnchors, type BlockIdEntry } from "../use-deck-anchors.js";
 import { taskDescription } from "./ClaudeBackgroundTasks.js";
 import { RunningDeck } from "./RunningDeck.js";
@@ -294,33 +293,13 @@ export function RunningDeckHost(props: RunningDeckHostProps) {
   const { blocks } = props;
   const ctx = useContext(TabContext);
   const tabId = ctx?.tabId ?? "";
-  const { tasks, coreTasks, children, engineId } = useStore(
+  const { tasks, coreTasks, children } = useStore(
     (ctx?.store ?? EMPTY_STORE) as StoreApi<DeckSources>,
     useShallow((state: DeckSources) => {
       const lists = tasksForEngine(state.engine?.id, state.claudeBackgroundTasks, state.backgroundTasks);
-      return { tasks: lists.claude, coreTasks: lists.core, children: state.backgroundChildren, engineId: state.engine?.id };
+      return { tasks: lists.claude, coreTasks: lists.core, children: state.backgroundChildren };
     }),
   );
-  // Core does not announce a background command when it starts (see backgroundBashStarts), so a row for it would wait for the end of
-  // the turn. Ask for the task list once when a new background Bash call returns. Calls already in the transcript when the host mounts
-  // are history: the host sends the list on connect.
-  const seenStarts = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    if (engineId === "claude" || engineId === "codex") {
-      return;
-    }
-    const starts = backgroundBashStarts(blocks);
-    if (seenStarts.current === null) {
-      seenStarts.current = new Set(starts);
-      return;
-    }
-    const seen = seenStarts.current;
-    const fresh = starts.filter(id => !seen.has(id));
-    if (fresh.length > 0) {
-      fresh.forEach(id => seen.add(id));
-      tabRegistry.sendToTab(tabId, { type: "task_list_request" });
-    }
-  }, [blocks, engineId, tabId]);
   // A task with no description of its own is titled from its tool call's input, found in the transcript. Doing that per `blocks` would
   // scan the transcript on every text flush of a streaming turn and give `rows` a new identity each time. The lookup instead reruns
   // when the tool calls change (the index keeps its identity otherwise), and only while such a task exists.

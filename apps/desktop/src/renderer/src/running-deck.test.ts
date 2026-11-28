@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WireBackgroundChild } from "../../shared/protocol.js";
 import type { ClaudeBackgroundTask } from "./claude-background-tasks.js";
-import { backgroundBashStarts, deckRowsFrom, tasksForEngine, visibleDeckRows, type AnchorState, type CoreDeckTask, type DeckRow } from "./running-deck.js";
+import { deckRowsFrom, tasksForEngine, visibleDeckRows, type AnchorState, type CoreDeckTask, type DeckRow } from "./running-deck.js";
 
 const task = (extra: Partial<ClaudeBackgroundTask> = {}): ClaudeBackgroundTask => ({ type: "claude_background_task", taskId: "t", toolCallId: "call", kind: "bash", description: "npm test", startedAt: 10, status: "running", ...extra });
 const child = (extra: Partial<WireBackgroundChild> = {}): WireBackgroundChild => ({ childSessionId: "c", spawnToolCallId: "spawn", agentType: "general-purpose", description: "Explore repo", startedAt: 20, ...extra });
@@ -121,23 +121,5 @@ describe("tasksForEngine", () => {
   });
   it("returns the same empty list every time, so a shallow selector stays stable", () => {
     expect(tasksForEngine("codex", claude, core).claude).toBe(tasksForEngine("codex", claude, core).claude);
-  });
-});
-
-describe("backgroundBashStarts", () => {
-  const bash = (id: string, input: unknown, status: string = "success", toolName = "Bash") =>
-    ({ kind: "tool_call", id, toolCallId: id, toolName, input, status }) as never;
-  it("lists only Bash calls that returned and asked to run in the background", () => {
-    const ids = backgroundBashStarts([
-      bash("a", { command: "x", run_in_background: true }),
-      bash("b", { command: "x" }),
-      bash("c", { command: "x", run_in_background: false }),
-      bash("d", { command: "x", run_in_background: true }, "running"),
-      bash("e", { command: "x", run_in_background: true }, "error"),
-      bash("f", { run_in_background: true }, "success", "Read"),
-      bash("g", null),
-      { kind: "assistant_text", id: "h", text: "x" } as never,
-    ]);
-    expect(ids).toEqual(["a"]);
   });
 });

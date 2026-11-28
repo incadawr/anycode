@@ -670,33 +670,20 @@ describe("RunningDeckHost store wiring", () => {
     expect(rowButtons()).toHaveLength(0);
   });
 
-  describe("asking core for its task list when a background command starts", () => {
-    const bash = (id: string, over: Record<string, unknown> = {}) =>
-      ({ kind: "tool_call", id, toolCallId: id, toolName: "Bash", input: { command: "sleep 9", run_in_background: true }, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null, ...over }) as unknown as TranscriptBlock;
+  describe("task lists", () => {
+    const bash = (id: string) =>
+      ({ kind: "tool_call", id, toolCallId: id, toolName: "Bash", input: { command: "sleep 9", run_in_background: true }, status: "success", modelText: null, snapshots: { before: null, after: null }, subagent: null }) as unknown as TranscriptBlock;
     const hostWith = (store: ReturnType<typeof createDesktopStore>, blocks: TranscriptBlock[]) =>
       createElement(TabContext.Provider, { value: { tabId: "A", store } },
         createElement(RunningDeckHost, { listRef: { current: document.body }, blocks, onJumpToBlock: () => undefined }));
 
-    it("sends one request when a new background Bash call returns, not for history, foreground calls or repeats", () => {
+    it.each([["claude"], ["codex"], [null]] as const)("never asks the host for the list itself on a %s tab: every engine announces its own tasks", engine => {
       const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => undefined as never);
       const store = createDesktopStore();
+      store.setState({ engine: engine === null ? null : { id: engine } } as never);
       const { rerender } = mountInto(hostWith(store, [bash("old")]));
-      expect(send).not.toHaveBeenCalled();
-      rerender(hostWith(store, [bash("old"), bash("fg", { input: { command: "ls" } })]));
-      expect(send).not.toHaveBeenCalled();
-      rerender(hostWith(store, [bash("old"), bash("fg", { input: { command: "ls" } }), bash("new")]));
-      expect(send).toHaveBeenCalledTimes(1);
-      expect(send).toHaveBeenCalledWith("A", { type: "task_list_request" });
-      rerender(hostWith(store, [bash("old"), bash("fg", { input: { command: "ls" } }), bash("new"), { kind: "assistant_text", id: "t", text: "x" } as never]));
-      expect(send).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not ask on a Claude or Codex tab, whose engines announce their own tasks", () => {
-      const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => undefined as never);
-      const store = createDesktopStore();
-      store.setState({ engine: { id: "claude" } } as never);
-      const { rerender } = mountInto(hostWith(store, []));
-      rerender(hostWith(store, [bash("new")]));
+      rerender(hostWith(store, [bash("old"), bash("new")]));
+      rerender(hostWith(store, [bash("old"), bash("new"), { kind: "assistant_text", id: "t", text: "x" } as never]));
       expect(send).not.toHaveBeenCalled();
     });
   });
