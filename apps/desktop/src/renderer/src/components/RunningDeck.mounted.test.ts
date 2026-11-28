@@ -205,14 +205,25 @@ describe("RunningDeck", () => {
     expect(onJump).toHaveBeenCalledTimes(1);
   });
 
-  it("freezes the rendered rows while open and applies changes on close", () => {
+  it("freezes the rendered rows while the pointer is on the stack and applies changes when it leaves", () => {
+    const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
+    const { rerender } = mountInto(deck({ rows }));
+    const first = rowButtons()[0]!;
+    over(first);
+    rerender(deck({ rows: rows.slice(0, 2) }));
+    expect(labels()).toContain("Bash: run c, running");
+    act(() => { first.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); });
+    expect(labels()).not.toContain("Bash: run c, running");
+  });
+
+  it("drops a row whose work ended at once when only keyboard focus has the deck open", () => {
     const rows = [row("a", { startedAt: 3 }), row("b", { startedAt: 2 }), row("c", { startedAt: 1 })];
     const { rerender } = mountInto(deck({ rows }));
     focus(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
     rerender(deck({ rows: rows.slice(0, 2) }));
-    expect(labels()).toContain("Bash: run c, running");
-    focus(outside());
     expect(labels()).not.toContain("Bash: run c, running");
+    expect(labels()).toEqual(["Bash: run a, running", "Bash: run b, running"]);
   });
 
   it("moves focus from an unmounting row to the next row, never to body", () => {

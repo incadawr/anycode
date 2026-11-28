@@ -60,13 +60,26 @@ function mount(opts: { list: HTMLElement; blocks: TranscriptBlock[]; rows: DeckR
   return { seen, store, schedule, rerender: (p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) => act(() => root.render(el(p))) };
 }
 
-it("reports a card scrolled above after one frame", () => {
+it("reports a card scrolled above before the first paint, with no frame needed", () => {
   const list = attachedList();
   card(list, "a", 50);
   const { seen } = mount({ list, blocks: [tool("a")], rows: [row("a")] });
-  expect(seen.at(-1)!.size).toBe(0);
+  expect(seen.at(-1)!.get("task:a")).toEqual({ hasCard: true, live: true, above: true, distance: -50 });
   flush();
   expect(seen.at(-1)!.get("task:a")).toEqual({ hasCard: true, live: true, above: true, distance: -50 });
+});
+
+it("reads a newly added row synchronously, but leaves block-only changes to the frame", () => {
+  const list = attachedList();
+  const a = card(list, "a", 50);
+  card(list, "b", 60);
+  const { seen, rerender } = mount({ list, blocks: [tool("a"), tool("b")], rows: [row("a")] });
+  flush();
+  const reads = (a.getBoundingClientRect as ReturnType<typeof vi.fn>).mock.calls.length;
+  rerender({ blocks: [tool("a"), tool("b"), tool("c")], rows: [row("a")] });
+  expect((a.getBoundingClientRect as ReturnType<typeof vi.fn>).mock.calls.length).toBe(reads);
+  rerender({ blocks: [tool("a"), tool("b"), tool("c")], rows: [row("a"), row("b")] });
+  expect(seen.at(-1)!.get("task:b")).toBeDefined();
 });
 
 it("coalesces two scrolls in a frame into one read and one update, none when unchanged", () => {

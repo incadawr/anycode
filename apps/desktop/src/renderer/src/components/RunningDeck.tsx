@@ -56,7 +56,9 @@ export function RunningDeck(props: RunningDeckProps) {
     setFrozen(null);
   }
   const latest = new Map(rows.map(r => [r.key, r] as const));
-  const shown = (open ? frozen ?? live : live).map(r => latest.get(r.key) ?? r);
+  // The freeze keeps a finished row from vanishing under a pointer that is on it. Keyboard focus alone does not freeze: a row whose
+  // work ended is dropped at once, so it never reads "running" while a user parked on it waits for the result.
+  const shown = (open ? frozen ?? live : live).filter(r => hovered || latest.has(r.key)).map(r => latest.get(r.key) ?? r);
   const { front, more } = collapsedRows(shown);
   const mounted = open ? shown : front;
   const expandedIndex = open ? mounted.findIndex(r => r.key === expandedKey) : -1;

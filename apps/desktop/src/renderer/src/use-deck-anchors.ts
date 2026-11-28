@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { cardShowsRunning } from "./components/ToolCallCard.js";
 import { findLaidOutAnchor } from "./block-anchor.js";
 import type { AnchorState, DeckRow } from "./running-deck.js";
@@ -194,6 +194,13 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
   useEffect(() => {
     missing.current.clear();
   }, [args.blocks]);
+
+  // A row for a call that has a card appears in the deck only once the card's position is known. Read it synchronously, before the
+  // paint, when the set of wanted calls changes: waiting for the next frame would flash a row for a card that is on screen. This is
+  // the one synchronous read (rare: a task starting or ending); every other trigger stays on the coalesced rAF.
+  useLayoutEffect(() => {
+    read();
+  }, [wantedKey, read]);
 
   useEffect(() => {
     schedule();
