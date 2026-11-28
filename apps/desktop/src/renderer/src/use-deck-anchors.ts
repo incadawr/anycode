@@ -8,6 +8,14 @@ import { TabContext } from "./tab-context.js";
 type AnchorMap = ReadonlyMap<string, AnchorState>;
 
 const EMPTY_ANCHORS: AnchorMap = new Map();
+/**
+ * The root of a collapsed stack of cards. A collapsed stack puts its FIRST member's block id on its own root, and the other members on
+ * hidden anchors, so an element carrying a card's id can still be only the stack that holds it: its header reads "Success" and shows
+ * nothing about running work.
+ */
+const STACK_ROOT = ".tool-call-stack, .agent-message-stack";
+const isTheCard = (el: HTMLElement, blockId: string): boolean => el.getAttribute("data-block-id") === blockId && !el.matches(STACK_ROOT);
+
 const NO_CARD: AnchorState = { hasCard: false, live: false, above: false, distance: Number.POSITIVE_INFINITY };
 
 export interface BlockIdEntry {
@@ -144,7 +152,7 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
         }
         // A cached element counts only while it is the card itself and still laid out. When the card sits in a collapsed tool-call
         // stack, the stack's root stands in for it; it must not stay cached once the stack opens and the card is laid out.
-        const cachedIsCard = cached !== undefined && cached.isConnected && cached.getAttribute("data-block-id") === blockId && cached.getClientRects().length > 0;
+        const cachedIsCard = cached !== undefined && cached.isConnected && isTheCard(cached, blockId) && cached.getClientRects().length > 0;
         const el = cachedIsCard ? cached : resolveAnchorElement(list, blockId);
         if (el === null) {
           nodes.current.delete(blockId);
@@ -156,7 +164,7 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
         const bottom = el.getBoundingClientRect().bottom;
         // Not the card itself: the stack that holds it is collapsed. Its header says "Success" and nothing shows that work is running,
         // so the row must stay listed even while that header is in view.
-        const isCard = el.getAttribute("data-block-id") === blockId;
+        const isCard = isTheCard(el, blockId);
         return [r.key, {
           hasCard: true,
           live: isCard && cardShowsRunning(block, r.toolCallId === undefined ? undefined : tasks[r.toolCallId]),

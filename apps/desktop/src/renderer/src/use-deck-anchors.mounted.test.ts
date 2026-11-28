@@ -288,3 +288,12 @@ it("keeps a card above through the 4px hysteresis band and releases it only past
   // Back inside the band from below: it does not flip until it reaches the deck edge itself.
   expect(seen.at(-1)!.get("task:a")).toMatchObject({ above: false });
 });
+
+it("keeps the row of the FIRST call of a collapsed stack listed: the stack's root carries that call's own id", () => {
+  const list = attachedList();
+  // A collapsed tool-call stack: the root takes the head's block id, the other members are hidden anchors.
+  const root = card(list, "a", 50);
+  root.className = "tool-call-stack";
+  const { seen } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 10 });
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: false });
+});
