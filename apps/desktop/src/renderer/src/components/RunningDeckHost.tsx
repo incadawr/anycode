@@ -73,7 +73,8 @@ const EMPTY_STORE: StoreApi<DeckSources> = createStore<DeckSources>(() => ({ cla
 
 /**
  * Per-tab "folded" flag. MessageList is remounted per tab (key={tabId}), so the
- * flag lives at module level like MessageList's savedScroll.
+ * flag lives at module level like MessageList's savedScroll. A tab's entry is dropped once it has no rows, so the set holds only tabs
+ * that are folding work right now.
  */
 const foldedTabs = new Set<string>();
 
@@ -314,6 +315,13 @@ export function RunningDeckHost(props: RunningDeckHostProps) {
     [tasks, coreTasks, children, toolCalls],
   );
   const hasRows = rows.length > 0;
+  // Nothing left to fold: forget the flag, so the next batch of work starts open. A tab that is closed, or whose deck unmounts, while
+  // folded keeps its one entry, like MessageList's savedScroll does: the set is bounded by the number of tabs.
+  useEffect(() => {
+    if (!hasRows) {
+      foldedTabs.delete(tabId);
+    }
+  }, [hasRows, tabId]);
 
   const [, setVersion] = useState(0);
   const onCollapsedChange = useCallback((collapsed: boolean) => {

@@ -552,6 +552,20 @@ describe("RunningDeckHost", () => {
     expect(rowButtons()).toHaveLength(0);
   });
 
+  it("forgets the folded flag once the tab has no rows, so the next batch of work starts open", () => {
+    const list = document.createElement("div");
+    document.body.append(list);
+    const store = storeWith(["a1"]);
+    mountInto(hostIn("A", store, { current: list }), list);
+    act(() => document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!.click());
+    expect(document.querySelector(".ak-runningstack__chip")).not.toBeNull();
+    act(() => store.setState({ claudeBackgroundTasks: [] } as never));
+    expect(region()).toBeNull();
+    act(() => store.setState({ claudeBackgroundTasks: [task("b1", 2_000)] } as never));
+    expect(document.querySelector(".ak-runningstack__chip")).toBeNull();
+    expect(rowButtons()).toHaveLength(1);
+  });
+
   it("does not look the transcript up again on every text flush while a task has no description", () => {
     const list = document.createElement("div");
     document.body.append(list);
