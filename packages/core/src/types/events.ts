@@ -236,6 +236,13 @@ export type CeilingRefusalReason =
 export type AgentEvent =
   | ModelStreamEvent
   | { type: "claude_background_task"; taskId: string; toolCallId: string; kind: "bash" | "monitor"; description: string; startedAt: number; status: "running" | "completed" | "failed" | "stopped" | "unknown"; summary?: string; outputFile?: string; /** The CLI tracks it for a foreground call (`is_backgrounded:false`): not a background task for display. */ foreground?: true }
+  /**
+   * How many agents the session's engine has working in the background. Emitted
+   * today by the Claude engine, so another engine can emit the same event
+   * later. `abandoned` is true when the count fell to 0 because the engine
+   * process that ran them is gone, not because they finished.
+   */
+  | { type: "engine_background_agents"; count: number; abandoned: boolean }
   /** Ephemeral unassigned Claude output; never a transcript or history item. */
   | { type: "claude_turn_preview"; preview: { text: string; tools: Array<{ id: string; name: string; status: "preparing" | "requested" | "completed" | "failed" }> } | null }
   | { type: "turn_start"; turn: number }

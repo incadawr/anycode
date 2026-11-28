@@ -16,6 +16,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { usePendingResumes } from "../pending-resumes.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useTabStatusStore } from "../tab-status-store.js";
 import { Sidebar } from "./Sidebar.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -32,6 +33,7 @@ function session(id: string): SessionSummary {
 afterEach(() => {
   usePendingResumes.setState({ marks: new Map(), armBaselines: new Map() });
   useTabsStore.setState({ tabs: [] });
+  useTabStatusStore.setState({ statuses: new Map() });
   delete (window as unknown as { anycode?: unknown }).anycode;
 });
 
@@ -109,4 +111,96 @@ it("renames open rows by double click and history rows by F2 without resuming", 
     await act(async () => history.click());
     expect(createTab).toHaveBeenCalledOnce();
   } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+async function mountWithStatus(backgroundAgents: number, backgroundTasks = 0): Promise<{ container: HTMLElement; cleanup: () => Promise<void> }> {
+  (window as unknown as { anycode: unknown }).anycode = { listSessions: async () => [session("history")] };
+  useTabsStore.getState().addTab({ tabId: "t", workspace: "/w" });
+  useTabStatusStore.setState({
+    statuses: new Map([["t", { running: true, needsApproval: false, attention: false, backgroundAgents, backgroundTasks }]]),
+  });
+  const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
+  const noop = () => {};
+  await act(async () => root.render(createElement(Sidebar, { tabs: useTabsStore.getState().tabs, activeTabId: "t", onRenameRequest: noop, onSelectTab: noop, onCloseTab: noop, onTabCreated: noop, onFocusTab: noop, onOpenSettings: noop, collapsed: false, onToggleCollapsed: noop })));
+  return { container, cleanup: async () => { await act(async () => root.unmount()); container.remove(); } };
+}
+
+it("shows the background agents badge on an open row, before the spinner, with the count in the label", async () => {
+  const { container, cleanup } = await mountWithStatus(2);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    const badge = row.querySelector(".ak-countpill")!;
+    expect(badge.textContent).toBe("2");
+    const spinner = row.querySelector(".sidebar-row-spinner")!;
+    expect(badge.compareDocumentPosition(spinner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents");
+    const resumable = container.querySelector(".sidebar-row-resumable");
+    expect(resumable).not.toBeNull();
+    expect(resumable!.querySelector(".ak-countpill")).toBeNull();
+  } finally { await cleanup(); }
+});
+
+it("shows no badge when there are no background agents", async () => {
+  const { container, cleanup } = await mountWithStatus(0);
+  try {
+    expect(container.querySelector(".ak-countpill")).toBeNull();
+  } finally { await cleanup(); }
+});
+
+it("shows only the prompt group for a commands-only row", async () => {
+  const { container, cleanup } = await mountWithStatus(0, 1);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    expect(row.querySelector(".ak-countpill")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=agents]")).toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=commands]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill")!.textContent).toBe("1");
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 1 background command");
+  } finally { await cleanup(); }
+});
+
+it("shows only the robot group for an agents-only row", async () => {
+  const { container, cleanup } = await mountWithStatus(2, 0);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    expect(row.querySelector(".ak-countpill__item[data-item=agents]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=commands]")).toBeNull();
+  } finally { await cleanup(); }
+});
+
+it("shows both groups inside one pill with one ring", async () => {
+  const { container, cleanup } = await mountWithStatus(2, 1);
+  try {
+    const row = container.querySelector<HTMLButtonElement>(".sidebar-row-open")!;
+    expect(row.querySelectorAll(".ak-countpill")).toHaveLength(1);
+    expect(row.querySelectorAll(".ak-countpill__ring")).toHaveLength(1);
+    expect(row.querySelectorAll(".ak-countpill__item")).toHaveLength(2);
+    expect(row.querySelector(".ak-countpill__item[data-item=agents]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill__item[data-item=commands]")).not.toBeNull();
+    expect(row.querySelector(".ak-countpill")!.textContent).toBe("21");
+    expect(row.getAttribute("aria-label")).toBe("Untitled task, running, 2 background agents, 1 background command");
+  } finally { await cleanup(); }
+});
+
+it("gives the pill a plain-words tooltip for agents-only, commands-only and both", async () => {
+  for (const [agents, tasks, title] of [
+    [3, 0, "3 background agents"],
+    [0, 1, "1 background command"],
+    [2, 1, "2 background agents · 1 background command"],
+  ] as const) {
+    const { container, cleanup } = await mountWithStatus(agents, tasks);
+    try {
+      expect(container.querySelector(".ak-countpill")!.getAttribute("title")).toBe(title);
+    } finally { await cleanup(); }
+  }
+});
+
+it("draws the commands group with the frameless prompt icon", async () => {
+  const { container, cleanup } = await mountWithStatus(0, 1);
+  try {
+    const group = container.querySelector(".ak-countpill__item[data-item=commands]")!;
+    const icon = group.querySelector("svg")!;
+    expect(icon).not.toBeNull();
+    expect(icon.querySelector("rect")).toBeNull();
+  } finally { await cleanup(); }
 });

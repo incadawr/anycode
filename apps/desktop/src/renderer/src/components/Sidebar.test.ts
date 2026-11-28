@@ -28,6 +28,10 @@ import {
   limitGroupRows,
   parseOlderThanDays,
   agentProjectMenuItem,
+  backgroundAgentsLabel,
+  backgroundTasksLabel,
+  backgroundWorkSummary,
+  rowAriaLabel,
   PROJECT_MENU_ITEM_COUNT,
   removeProjectDisabledReason,
   sidebarConfirmCopy,
@@ -1025,4 +1029,45 @@ it("positions menus below, flips above, and clamps oversized menus", () => {
   expect(menuTop(20, 40, 100, 500)).toBe(44);
   expect(menuTop(450, 470, 100, 500)).toBe(346);
   expect(menuTop(30, 50, 700, 500)).toBe(8);
+});
+
+describe("background agents badge labels", () => {
+  it("labels the count, singular and plural, and nothing for zero", () => {
+    expect(backgroundAgentsLabel(0)).toBeNull();
+    expect(backgroundAgentsLabel(1)).toBe("1 background agent");
+    expect(backgroundAgentsLabel(3)).toBe("3 background agents");
+  });
+  it("composes the row aria-label: status first, then background agents", () => {
+    expect(rowAriaLabel("T", null, 0, 0)).toBeUndefined();
+    expect(rowAriaLabel("T", "running", 0, 0)).toBe("T, running");
+    expect(rowAriaLabel("T", null, 2, 0)).toBe("T, 2 background agents");
+    expect(rowAriaLabel("T", "running", 2, 0)).toBe("T, running, 2 background agents");
+  });
+  it("labels background commands, singular and plural, and nothing for zero", () => {
+    expect(backgroundTasksLabel(0)).toBeNull();
+    expect(backgroundTasksLabel(1)).toBe("1 background command");
+    expect(backgroundTasksLabel(4)).toBe("4 background commands");
+  });
+  it("appends the background commands part after status and agents", () => {
+    expect(rowAriaLabel("T", null, 0, 1)).toBe("T, 1 background command");
+    expect(rowAriaLabel("T", null, 0, 3)).toBe("T, 3 background commands");
+    expect(rowAriaLabel("T", "running", 2, 1)).toBe("T, running, 2 background agents, 1 background command");
+  });
+});
+
+describe("backgroundWorkSummary (badge tooltip)", () => {
+  it("is null with nothing running", () => {
+    expect(backgroundWorkSummary(0, 0)).toBeNull();
+  });
+  it("names agents, singular and plural", () => {
+    expect(backgroundWorkSummary(1, 0)).toBe("1 background agent");
+    expect(backgroundWorkSummary(3, 0)).toBe("3 background agents");
+  });
+  it("names tasks, singular and plural", () => {
+    expect(backgroundWorkSummary(0, 1)).toBe("1 background command");
+    expect(backgroundWorkSummary(0, 2)).toBe("2 background commands");
+  });
+  it("joins agents and tasks with a middle dot", () => {
+    expect(backgroundWorkSummary(2, 1)).toBe("2 background agents · 1 background command");
+  });
 });

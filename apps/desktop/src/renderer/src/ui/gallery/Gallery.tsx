@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { IconAuto, IconBuild } from "../components/icons.js";
 import {
   AnchoredPanel,
   Badge,
@@ -6,6 +7,7 @@ import {
   Button,
   Chip,
   ContextRing,
+  CountPill,
   Drawer,
   EmptyState,
   IconButton,
@@ -179,6 +181,27 @@ export function Gallery(): React.ReactElement {
             <Chip label="selected" selected />
             <Chip label="disabled" disabled />
             <Chip mode="yolo" selected />
+          </Row>
+        </Section>
+
+        <Section title="CountPill">
+          <Row label="one group">
+            <CountPill items={[{ id: "a", icon: <IconBuild size={12} />, count: 2 }]} title="2 agents" />
+          </Row>
+          <Row label="two groups">
+            <CountPill
+              items={[
+                { id: "a", icon: <IconBuild size={12} />, count: 2 },
+                { id: "b", icon: <IconAuto size={12} />, count: 1 },
+              ]}
+              title="2 agents, 1 command"
+            />
+          </Row>
+          <Row label="busy (rotating ring)">
+            <CountPill items={[{ id: "a", icon: <IconBuild size={12} />, count: 1 }, { id: "b", icon: <IconAuto size={12} />, count: 12 }]} busy />
+          </Row>
+          <Row label="zero groups are hidden">
+            <CountPill items={[{ id: "a", icon: <IconBuild size={12} />, count: 0 }, { id: "b", icon: <IconAuto size={12} />, count: 3 }]} busy />
           </Row>
         </Section>
 

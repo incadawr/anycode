@@ -7,6 +7,27 @@ export function visibleBackgroundTasks(tasks: readonly ClaudeBackgroundTask[]): 
   return tasks.filter(task => task.foreground !== true);
 }
 
+/** How many listed (non-foreground) tasks are still running: the sidebar badge's task count. */
+export function runningBackgroundTaskCount(tasks: readonly ClaudeBackgroundTask[]): number {
+  return visibleBackgroundTasks(tasks).filter(task => task.status === "running").length;
+}
+
+/**
+ * The command count the sidebar pill shows for a tab: the CLI's own list on a Claude tab, core's task list on a core tab
+ * (the engines AnyCode runs DeepSeek and other providers on), and none on other engines. Only the engine that is live
+ * counts, so a list left behind by an engine the tab switched away from can not keep the pill lit. An engine that is
+ * not known yet counts both lists, which is safe because only the live engine ever fills its own.
+ */
+export function badgeTaskCount(
+  engineId: string | undefined,
+  claudeTasks: readonly ClaudeBackgroundTask[],
+  coreTasks: readonly { status: string }[],
+): number {
+  const claude = engineId === undefined || engineId === "claude" ? runningBackgroundTaskCount(claudeTasks) : 0;
+  const core = engineId === undefined || engineId === "core" ? coreTasks.filter(task => task.status === "running").length : 0;
+  return claude + core;
+}
+
 /** Exit code from the CLI's closing wording: `... completed (exit code 0)` / `... failed with exit code 144`. Anchored to the end: the description may mention "exit 3". */
 export function backgroundExitCode(summary: string | undefined): number | undefined {
   const match = summary?.trim().match(/(?:\(exit code (-?\d{1,4})\)|exit code (-?\d{1,4}))\.?$/i);

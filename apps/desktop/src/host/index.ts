@@ -1050,10 +1050,11 @@ const PREVIEW_CONSOLE_TURN_ID = "preview-console";
 let session: Session | null = null;
 
 /**
- * Forwards a subagent_* event of the Claude CLI's own agents that has no owner
- * turn to ride. Only the engine the session runs on speaks for its cards, with
- * one exception: an engine the session already switched away from still
- * settles what died with it (see shouldForwardClaudeDetachedEvent).
+ * Forwards a subagent_* event (or the background-agent count event) of the
+ * Claude CLI's own agents and commands that has no owner turn to ride. Only
+ * the engine the session runs on speaks for its cards, with one exception: an
+ * engine the session already switched away from still settles what died with
+ * it (see shouldForwardClaudeDetachedEvent).
  */
 function forwardClaudeDetachedEvent(engine: SessionEngine, event: AgentEvent): void {
   if (session === null) return;

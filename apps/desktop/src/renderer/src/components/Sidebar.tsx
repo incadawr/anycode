@@ -24,7 +24,8 @@ import { handleCreateTabResult, resolveConnectionMissingAction } from "./Session
 import { pendingResumeRowSets, resumeWithMarker, usePendingResumes } from "../pending-resumes.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
-import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
+import { CountPill } from "../ui/index.js";
+import { ArrowUp, Chevron, Collapse, CommandPrompt, Cube, Dot, Ellipsis, Folder, Gear, Plus, Robot, Search, Spinner, Trash, X } from "./icons.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import { AccountBudgetCard } from "./AccountBudgetCard.js";
 
@@ -69,6 +70,60 @@ const ROW_STATUS_LABEL: Record<RowStatusKind, string> = {
   attention: "new results",
 };
 
+/** Accessible-name fragment for the background agents badge; `null` when there are none. */
+export function backgroundAgentsLabel(count: number): string | null {
+  if (count <= 0) {
+    return null;
+  }
+  return count === 1 ? "1 background agent" : `${count} background agents`;
+}
+
+/** Accessible-name fragment for the background commands (Bash commands, monitors) badge group; `null` when there are none. */
+export function backgroundTasksLabel(count: number): string | null {
+  if (count <= 0) {
+    return null;
+  }
+  return count === 1 ? "1 background command" : `${count} background commands`;
+}
+
+/** Tooltip for the background work pill: "{N background agents} · {N background commands}"; `null` when there is none. */
+export function backgroundWorkSummary(agents: number, tasks: number): string | null {
+  const parts = [backgroundAgentsLabel(agents), backgroundTasksLabel(tasks)].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/** Row button aria-label: "{title}, {status}, {N background agents}, {N background commands}"; `undefined` when none applies. */
+export function rowAriaLabel(
+  title: string,
+  kind: RowStatusKind | null,
+  backgroundAgents: number,
+  backgroundTasks: number,
+): string | undefined {
+  const parts = [
+    kind !== null ? ROW_STATUS_LABEL[kind] : null,
+    backgroundAgentsLabel(backgroundAgents),
+    backgroundTasksLabel(backgroundTasks),
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? `${title}, ${parts.join(", ")}` : undefined;
+}
+
+/**
+ * One pill for the background work of an open session: an agents group and a commands group (Bash commands, monitors), each shown
+ * only when non-zero, sharing one slowly rotating ring. The glyphs are decorative, the row's aria-label carries the meaning.
+ */
+function BackgroundWorkBadge({ agents, tasks }: { agents: number; tasks: number }) {
+  return (
+    <CountPill
+      busy
+      title={backgroundWorkSummary(agents, tasks) ?? undefined}
+      items={[
+        { id: "agents", icon: <Robot width={13} height={13} />, count: agents },
+        { id: "commands", icon: <CommandPrompt width={14} height={14} />, count: tasks },
+      ]}
+    />
+  );
+}
+
 /**
  * R10: the ONE status indicator an open row shows (precedence ruled in
  * rowStatusKind, tab-status-store.ts). Bare glyphs only — no wrapper element,
@@ -77,6 +132,9 @@ const ROW_STATUS_LABEL: Record<RowStatusKind, string> = {
  * host-exited branch renders byte-identical markup to the pre-R10 slot
  * (`<Dot className="sidebar-row-dot" />`) so the existing danger-dot
  * sign-off carries over unchanged.
+ *
+ * The background-agents badge is a separate element next to this indicator,
+ * not a status kind: it coexists with the turn spinner and the dots.
  */
 function RowStatusIndicator({ kind }: { kind: RowStatusKind | null }) {
   if (kind === null) {
@@ -1317,14 +1375,17 @@ export function Sidebar({
                   if (row.kind === "open") {
                     // R10: mirror read by tabId — survives filterSidebarGroups
                     // because open rows carry tabId through the wrapper.
-                    const statusKind = rowStatusKind(statuses.get(row.tabId!), row.hostExited === true);
+                    const rowStatus = statuses.get(row.tabId!);
+                    const statusKind = rowStatusKind(rowStatus, row.hostExited === true);
+                    const backgroundAgents = rowStatus?.backgroundAgents ?? 0;
+                    const backgroundTasks = rowStatus?.backgroundTasks ?? 0;
                     return (
                       <div key={row.key} className="sidebar-row-wrap">
                         <button
                           type="button"
                           className={`sidebar-row sidebar-row-open${row.hostExited ? " sidebar-row-host-exited" : ""}`}
                           aria-current={row.tabId === activeTabId ? "true" : undefined}
-                          aria-label={statusKind !== null ? `${row.title}, ${ROW_STATUS_LABEL[statusKind]}` : undefined}
+                          aria-label={rowAriaLabel(row.title, statusKind, backgroundAgents, backgroundTasks)}
                           onClick={() => onSelectTab(row.tabId!)}
                           onDoubleClick={() => onRenameRequest(row)}
                           onKeyDown={event => { if (event.key === "F2") { event.preventDefault(); onRenameRequest(row); } }}
@@ -1341,6 +1402,7 @@ export function Sidebar({
                               WT · {row.worktree.id}
                             </span>
                           )}
+                          {backgroundAgents + backgroundTasks > 0 && <BackgroundWorkBadge agents={backgroundAgents} tasks={backgroundTasks} />}
                           <RowStatusIndicator kind={statusKind} />
                         </button>
                         <button type="button" className="sidebar-row-menu-button" aria-label={`Actions for ${row.title}`} aria-haspopup="menu" onClick={e => showRowMenu(row, e.currentTarget)}><Ellipsis /></button>

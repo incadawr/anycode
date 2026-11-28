@@ -2499,6 +2499,8 @@ describe("tab-registry — status mirror (slice-R10)", () => {
       running: false,
       needsApproval: false,
       attention: false,
+      backgroundAgents: 0,
+      backgroundTasks: 0,
     });
   });
 
@@ -2622,6 +2624,8 @@ describe("tab-registry — status mirror (slice-R10)", () => {
       running: false,
       needsApproval: false,
       attention: false,
+      backgroundAgents: 0,
+      backgroundTasks: 0,
     });
   });
 

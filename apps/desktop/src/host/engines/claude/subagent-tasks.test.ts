@@ -6,10 +6,10 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import type { ClaudeStreamMessage } from "./protocol.js";
-import { ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
+import { BACKGROUND_AGENTS_ZERO_HOLD_MS, ClaudeSubagentTasks, isClaudeSubagentFrame } from "./subagent-tasks.js";
 
 const FIXTURES_DIR = join(new URL(".", import.meta.url).pathname, "contract", "fixtures");
 
@@ -337,6 +337,152 @@ describe("ClaudeSubagentTasks — an agent resumed by SendMessage", () => {
     expect(tasks.onFrame(child("msg_5", [{ type: "tool_use", id: "toolu_r3", name: "Read", input: {} }]))).toEqual([
       { type: "subagent_activity", toolCallId: SEND_CALL, toolName: "Read", summary: "" },
     ]);
+  });
+});
+
+describe("ClaudeSubagentTasks — background agent count", () => {
+  type Update = { count: number; abandoned: boolean };
+  function tracker(): { tasks: ClaudeSubagentTasks; updates: Update[] } {
+    const updates: Update[] = [];
+    return { tasks: new ClaudeSubagentTasks(() => {}, (update) => updates.push(update)), updates };
+  }
+  const feed = (tasks: ClaudeSubagentTasks, file: string, end?: number): void => {
+    for (const frame of frames(file).slice(0, end)) tasks.onFrame(frame);
+  };
+  const started = (taskId: string): ClaudeStreamMessage => system("task_started", { task_id: taskId, tool_use_id: `toolu_${taskId}`, task_type: "local_agent" });
+  const settled = (taskId: string): ClaudeStreamMessage => system("task_updated", { task_id: taskId, patch: { status: "completed" } });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("w0-19 reports one background agent, then none once the zero hold ends", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-19-background-agent.jsonl");
+    expect(updates).toEqual([{ count: 1, abandoned: false }]);
+    vi.advanceTimersByTime(BACKGROUND_AGENTS_ZERO_HOLD_MS);
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: false }]);
+  });
+
+  it("w0-20 (a foreground agent) reports nothing", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-20-foreground-agent.jsonl");
+    vi.runAllTimers();
+    expect(updates).toEqual([]);
+  });
+
+  it("w0-21 reports 1, 2, 1, 0 as the nested foreground children come and go", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-21-nested-foreground-agents.jsonl");
+    vi.runAllTimers();
+    expect(updates.map((update) => update.count)).toEqual([1, 2, 1, 0]);
+    expect(updates.every((update) => !update.abandoned)).toBe(true);
+  });
+
+  it("w0-23 publishes no 0 while the nested agent waits on its Bash or restarts, only the final one", () => {
+    const { tasks, updates } = tracker();
+    const list = frames("w0-23-agent-restarted-by-own-task.jsonl");
+    const restart = list.findIndex((frame, index) => index > 0 && (frame as { subtype?: string; run_id?: string }).subtype === "task_started" && (frame as { run_id?: string }).run_id === "0mwuleame-d87af27b");
+    expect(restart).toBeGreaterThan(0);
+    for (const frame of list.slice(0, restart)) tasks.onFrame(frame);
+    // The CLI restarts the agent ~15 ms after its command ends.
+    vi.advanceTimersByTime(15);
+    for (const frame of list.slice(restart)) tasks.onFrame(frame);
+    expect(updates.map((update) => update.count)).toEqual([1, 2, 1]);
+    vi.advanceTimersByTime(BACKGROUND_AGENTS_ZERO_HOLD_MS);
+    expect(updates).toEqual([
+      { count: 1, abandoned: false },
+      { count: 2, abandoned: false },
+      { count: 1, abandoned: false },
+      { count: 0, abandoned: false },
+    ]);
+  });
+
+  it("publishes a real drop to 0 only after the hold", () => {
+    const { tasks, updates } = tracker();
+    tasks.onFrame(started("a"));
+    tasks.onFrame(settled("a"));
+    vi.advanceTimersByTime(BACKGROUND_AGENTS_ZERO_HOLD_MS - 1);
+    expect(updates).toEqual([{ count: 1, abandoned: false }]);
+    vi.advanceTimersByTime(1);
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: false }]);
+    vi.runAllTimers();
+    expect(updates).toHaveLength(2);
+  });
+
+  it("a rise during the hold cancels it, publishing only a count that differs from the last one", () => {
+    const { tasks, updates } = tracker();
+    tasks.onFrame(started("a"));
+    tasks.onFrame(settled("a"));
+    tasks.onFrame(started("b"));
+    vi.runAllTimers();
+    expect(updates).toEqual([{ count: 1, abandoned: false }]);
+    tasks.onFrame(settled("b"));
+    tasks.onFrame(started("c"));
+    tasks.onFrame(started("d"));
+    vi.runAllTimers();
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 2, abandoned: false }]);
+  });
+
+  it("abandonAll reports 0 abandoned", () => {
+    const { tasks, updates } = tracker();
+    tasks.onFrame(frames("w0-19-background-agent.jsonl").find((frame) => (frame as { subtype?: string }).subtype === "task_started")!);
+    tasks.abandonAll();
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: true }]);
+  });
+
+  it("abandonAll during the hold, after the agents finished, reports 0 at once as not abandoned and cancels the hold", () => {
+    const { tasks, updates } = tracker();
+    tasks.onFrame(started("a"));
+    tasks.onFrame(settled("a"));
+    tasks.abandonAll();
+    // The agents had finished: only their 0 was still unreported, so the tab may still raise its completion dot.
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: false }]);
+    vi.runAllTimers();
+    expect(updates).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("abandonAll with nothing counted reports nothing", () => {
+    const { tasks, updates } = tracker();
+    tasks.abandonAll();
+    expect(updates).toEqual([]);
+  });
+
+  it("dispose cancels a pending hold", () => {
+    const { tasks, updates } = tracker();
+    tasks.onFrame(started("a"));
+    tasks.onFrame(settled("a"));
+    expect(vi.getTimerCount()).toBe(1);
+    tasks.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.runAllTimers();
+    expect(updates).toEqual([{ count: 1, abandoned: false }]);
+  });
+
+  it("counts again after an abandon", () => {
+    const { tasks, updates } = tracker();
+    const start = frames("w0-19-background-agent.jsonl").find((frame) => (frame as { subtype?: string }).subtype === "task_started")!;
+    tasks.onFrame(start);
+    tasks.abandonAll();
+    updates.length = 0;
+    feed(tasks, "w0-19-background-agent.jsonl");
+    vi.runAllTimers();
+    expect(updates).toEqual([{ count: 1, abandoned: false }, { count: 0, abandoned: false }]);
+  });
+
+  it("detachLive does not change the count", () => {
+    const { tasks, updates } = tracker();
+    feed(tasks, "w0-21-nested-foreground-agents.jsonl", 19);
+    expect(updates.at(-1)).toEqual({ count: 2, abandoned: false });
+    const before = updates.length;
+    tasks.detachLive();
+    vi.runAllTimers();
+    expect(updates).toHaveLength(before);
   });
 });
 

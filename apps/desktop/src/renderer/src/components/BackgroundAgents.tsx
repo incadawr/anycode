@@ -8,6 +8,7 @@
  */
 import { useEffect, useState } from "react";
 import type { WireBackgroundChild } from "../../../shared/protocol.js";
+import { isFailedBackgroundChild } from "../background-children.js";
 import { childLayoutStore } from "../child-layout.js";
 import { childRelationStore, sameChildPredicate, spawnToolCallIdForChild } from "../child-sessions.js";
 import { useTabContextTabId, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
@@ -25,11 +26,6 @@ export function backgroundHeading(running: number, failed = 0): string {
   if (failed === 0) return running === 1 ? "1 background agent running" : `${running} background agents running`;
   if (running === 0) return failed === 1 ? "1 background agent failed" : `${failed} background agents failed`;
   return `${running} running · ${failed} failed`;
-}
-
-/** A failed row carries a frozen end time (or a failure reason); a running one never does. */
-export function isFailedBackgroundChild(child: Pick<WireBackgroundChild, "endedAt" | "failureReason">): boolean {
-  return child.endedAt !== undefined || child.failureReason !== undefined;
 }
 
 /**

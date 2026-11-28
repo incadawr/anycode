@@ -15,12 +15,22 @@
  * the engine is idle — which is why this state lives for the engine's
  * lifetime rather than one turn.
  *
+ * The tracker also keeps the agent census (agent-census.ts) over the same
+ * frames and reports the count of background agents as it changes. A drop to
+ * zero is held for `BACKGROUND_AGENTS_ZERO_HOLD_MS` first: an agent waiting on
+ * its own background command reads 0 for the ~15 ms between the command's end
+ * and the CLI restarting the agent, and that 0 must not reach the badge.
+ *
  * Only `local_agent` tasks are mapped: other task types (a background Bash
  * command) already own a card of their own and must not turn into one.
  */
 
 import { summarizeChildToolCall, type AgentEvent } from "@anycode/core";
+import { countWorkingBackgroundAgents, EMPTY_AGENT_CENSUS, reduceAgentCensus, type AgentCensus } from "./agent-census.js";
 import type { ClaudeStreamMessage } from "./protocol.js";
+
+/** How long a drop of the background agent count to 0 waits before it is reported; a rise meanwhile cancels it. */
+export const BACKGROUND_AGENTS_ZERO_HOLD_MS = 250;
 
 type SubagentEndStatus = Extract<AgentEvent, { type: "subagent_end" }>["status"];
 
@@ -94,13 +104,26 @@ export class ClaudeSubagentTasks {
    * original Agent call (the child frames' parent) and the cumulative count.
    */
   private readonly history = new Map<string, { agentCall: string; toolUses: number }>();
+  /** Immutable; only ever reassigned. Independent of the card state: `detachLive` leaves it alone. */
+  private census: AgentCensus = EMPTY_AGENT_CENSUS;
+  /** The census's count after the last frame. */
+  private lastCount = 0;
+  /** The count last reported to `onBackgroundAgents`. */
+  private publishedCount = 0;
+  /** A pending report of 0, started when the count dropped to it. */
+  private zeroHold: ReturnType<typeof setTimeout> | undefined;
+  private disposed = false;
 
   /**
    * @param detach receives the events of a task that outlived its owner turn
    * (`detachLive`), wherever its frames arrive — between turns or inside a
    * later owner turn, which must not adopt another turn's card.
    */
-  constructor(private readonly detach: (event: AgentEvent) => void = () => {}) {}
+  constructor(
+    private readonly detach: (event: AgentEvent) => void = () => {},
+    /** Receives the number of agents working in the background whenever it changes. */
+    private readonly onBackgroundAgents: (update: { count: number; abandoned: boolean }) => void = () => {},
+  ) {}
 
   /** Check before translating: translation consumes a terminal task. */
   knowsNotification(frame: ClaudeStreamMessage): boolean {
@@ -113,10 +136,52 @@ export class ClaudeSubagentTasks {
    * instead. Never throws on an unexpected shape.
    */
   onFrame(frame: ClaudeStreamMessage): AgentEvent[] {
+    const next = reduceAgentCensus(this.census, frame);
+    if (next !== this.census) {
+      this.census = next;
+      this.countChanged(countWorkingBackgroundAgents(next));
+    }
     const { task, events } = this.translate(frame);
     if (task?.detached !== true) return events;
     for (const event of events) this.detach(event);
     return [];
+  }
+
+  /**
+   * Reports a non-zero count at once; a 0 only when it outlasts the hold, so
+   * an agent restarted right after its command ends never reads as finished.
+   */
+  private countChanged(count: number): void {
+    if (count === this.lastCount) return;
+    this.lastCount = count;
+    if (count === 0) {
+      if (this.publishedCount === 0 || this.zeroHold !== undefined || this.disposed) return;
+      this.zeroHold = setTimeout(() => {
+        this.zeroHold = undefined;
+        this.publish(0, false);
+      }, BACKGROUND_AGENTS_ZERO_HOLD_MS);
+      this.zeroHold.unref?.();
+      return;
+    }
+    this.cancelZeroHold();
+    if (count !== this.publishedCount) this.publish(count, false);
+  }
+
+  private publish(count: number, abandoned: boolean): void {
+    this.publishedCount = count;
+    this.onBackgroundAgents({ count, abandoned });
+  }
+
+  private cancelZeroHold(): void {
+    if (this.zeroHold === undefined) return;
+    clearTimeout(this.zeroHold);
+    this.zeroHold = undefined;
+  }
+
+  /** The engine is gone: a pending report of 0 is dropped. */
+  dispose(): void {
+    this.disposed = true;
+    this.cancelZeroHold();
   }
 
   /**
@@ -296,6 +361,13 @@ export class ClaudeSubagentTasks {
       events.push(this.endEvent(task, "cancelled", -1));
       this.settle(taskId, task);
     }
+    // The real count before the reset: a pending zero-hold means the agents already finished and only the 0 is unreported,
+    // so that is not an abandon and the tab may still raise its completion dot.
+    const hadWork = this.lastCount > 0;
+    this.census = EMPTY_AGENT_CENSUS;
+    this.lastCount = 0;
+    this.cancelZeroHold();
+    if (this.publishedCount > 0) this.publish(0, hadWork);
     return events;
   }
 

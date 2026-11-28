@@ -236,6 +236,33 @@
   color: currentColor;
 }
 
+/* ── CountPill ───────────────────────────────────────────────────────────── */
+.ak-countpill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-3);
+  font-family: var(--font-ui);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--lh-tight);
+}
+.ak-countpill__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.ak-countpill__ring {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  animation: ak-spin calc(var(--spin-dur) * 3) linear infinite;
+}
+
 /* ── Badge ───────────────────────────────────────────────────────────────── */
 .ak-badge {
   display: inline-flex;

@@ -3,7 +3,7 @@
  * One tiny zustand store the Sidebar subscribes to INSTEAD of subscribing to
  * every background tab's full DesktopStore: tab-registry.ts pipes each tab
  * store's coarse status (turn running / permission pending / connection
- * liveness) through `applyCoarse`, which writes the map ONLY when the tuple
+ * liveness, background agent count) through `applyCoarse`, which writes the map ONLY when the tuple
  * actually flips — a transcript delta, a context_usage tick, or any other
  * high-frequency setState on a tab store bails here without touching the map,
  * so the map's identity (and therefore Sidebar's re-render cadence) moves at
@@ -17,6 +17,9 @@
  *     `DesktopState` — a separate store is structurally invisible to the
  *     byte-snapshot contract (slice-R10-cut §2.5 hard invariant).
  *
+ * The background agent count rides along: it flips at human speed (an agent
+ * starts or settles), and its drop to 0 on an unseen tab raises attention too.
+ *
  * Attention ("unseen completion") semantics — the R8 pairing:
  * `isTurnCompletion` below is the ONE shared atom (running→idle edge) that
  * both R8's OS notification (window-level unseen: hidden/unfocused) and R10's
@@ -25,7 +28,7 @@
  *
  * Factory-plus-singleton, mirroring tabs-store.ts: `createTabStatusStore`
  * for test isolation, `useTabStatusStore` for the app. Pure renderer module:
- * imports zustand + store.ts TYPES only — safe in the node test env, safe to
+ * imports zustand, store.ts TYPES and the pure background-children.js only — safe in the node test env, safe to
  * import from Sidebar.tsx (which must never import tab-registry.ts and its
  * port/xterm graph).
  */
@@ -40,6 +43,10 @@ export interface TabStatus {
   needsApproval: boolean;
   /** Turn completed while the tab was backgrounded; cleared on visit or on the next turn start. */
   attention: boolean;
+  /** Background agents working on a live host: the Claude CLI's plus our own running detached children. */
+  backgroundAgents: number;
+  /** Background Bash commands and monitors running on a live host (the composer's background-task list). */
+  backgroundTasks: number;
 }
 
 /**
@@ -55,6 +62,12 @@ export interface CoarseStatus {
   turn: TurnState["status"];
   needsApproval: boolean;
   live: boolean;
+  /** The engine's background agents (Claude CLI today) plus running detached children, regardless of liveness (`applyCoarse` gates it). */
+  backgroundAgents: number;
+  /** The session ended with the engine's agents unsettled: their drop to 0 is not a completion. */
+  backgroundAgentsAbandoned: boolean;
+  /** Running background Bash/monitor tasks, regardless of liveness (`applyCoarse` gates it). */
+  backgroundTasks: number;
 }
 
 /**
@@ -77,15 +90,19 @@ export function isTurnCompletion(prev: TurnState["status"], next: TurnState["sta
  * `patchSubagentAttention`/`patchSubagentEnd`, store.ts) rather than scanning
  * the transcript: this function runs on EVERY setState of every tab store
  * (tab-registry.ts's per-tab mirror subscription), including high-frequency
- * stream deltas, so it must stay O(1).
+ * stream deltas, so it must stay O(1) — the running detached-children count is
+ * kept in `runningBackgroundChildren` rather than recomputed here.
  */
 export function deriveCoarse(
-  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "backgroundChildren">,
+  state: Pick<DesktopState, "turn" | "connection" | "permission" | "waitingSubagents" | "liveSubagents" | "backgroundChildren" | "engineBackgroundAgents" | "runningBackgroundChildren" | "runningBackgroundTasks">,
 ): CoarseStatus {
   return {
     turn: state.liveSubagents.size || state.backgroundChildren.length ? "running" : state.turn.status,
     needsApproval: state.permission !== null || state.waitingSubagents.size > 0,
     live: state.connection === "ready",
+    backgroundAgents: state.engineBackgroundAgents.count + state.runningBackgroundChildren,
+    backgroundAgentsAbandoned: state.engineBackgroundAgents.abandoned,
+    backgroundTasks: state.runningBackgroundTasks,
   };
 }
 
@@ -126,19 +143,24 @@ export interface TabStatusState {
   /**
    * Applies one coarse snapshot for `tabId`. THE STORM GUARD LIVES HERE
    * (slice-R10-cut §2.2): the stored entry is the last-written tuple; if the
-   * derived {running, needsApproval, attention} equals it field-by-field,
+   * derived {running, needsApproval, attention, backgroundAgents, backgroundTasks} equals it field-by-field,
    * return WITHOUT calling set() — no zustand notification, no Sidebar
    * re-render. tab-registry.ts calls this on EVERY setState of every tab
    * store; the per-call cost on the bail path is one Map.get plus at most
-   * four boolean compares.
+   * three boolean compares and one number compare.
    *
    * Transition semantics:
    *  - running       = next.live && next.turn === "running"
    *  - needsApproval = next.live && next.needsApproval
    *  - completion    = stored.running && next.live && isTurnCompletion(...)
    *    (the `next.live` gate suppresses host-exit / respawn-reset edges)
+   *  - backgroundAgents = next.live ? next.backgroundAgents : 0
+   *  - backgroundTasks  = next.live ? next.backgroundTasks : 0
+   *  - agentsCompleted  = stored total (agents + tasks) > 0 && shown total === 0 && next.live
+   *    && next.turn !== "running" && !next.backgroundAgentsAbandoned
+   *    (work settling mid-turn, or an abandoned session, are not completions)
    *  - attention     = running ? false            // a new turn clears it
-   *                  : completion ? background     // set only when unseen
+   *                  : completion || agentsCompleted ? background  // set only when unseen
    *                  : stored.attention            // otherwise sticky
    * `background` (activeTabId !== tabId) is read by the CALLER at event time —
    * the completion moment decides, not registration order.
@@ -166,17 +188,28 @@ export function createTabStatusStore() {
       const needsApproval = next.live && next.needsApproval;
       const completed =
         prev !== undefined && next.live && isTurnCompletion(prev.running ? "running" : "idle", next.turn);
-      const attention = running ? false : completed ? background : (prev?.attention ?? false);
+      const backgroundAgents = next.live ? next.backgroundAgents : 0;
+      const backgroundTasks = next.live ? next.backgroundTasks : 0;
+      const agentsCompleted =
+        prev !== undefined &&
+        prev.backgroundAgents + prev.backgroundTasks > 0 &&
+        backgroundAgents + backgroundTasks === 0 &&
+        next.live &&
+        next.turn !== "running" &&
+        !next.backgroundAgentsAbandoned;
+      const attention = running ? false : completed || agentsCompleted ? background : (prev?.attention ?? false);
       if (
         prev !== undefined &&
         prev.running === running &&
         prev.needsApproval === needsApproval &&
-        prev.attention === attention
+        prev.attention === attention &&
+        prev.backgroundAgents === backgroundAgents &&
+        prev.backgroundTasks === backgroundTasks
       ) {
         return;
       }
       const statuses = new Map(get().statuses);
-      statuses.set(tabId, { running, needsApproval, attention });
+      statuses.set(tabId, { running, needsApproval, attention, backgroundAgents, backgroundTasks });
       set({ statuses });
     },
 

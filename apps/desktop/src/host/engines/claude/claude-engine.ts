@@ -1074,7 +1074,10 @@ export class ClaudeEngine implements SessionEngine {
    * turn-scoped: a background agent starts inside one turn and reports the
    * rest of its life while the engine is idle.
    */
-  private readonly subagentTasks = new ClaudeSubagentTasks((event) => this.emitDetached(event));
+  private readonly subagentTasks = new ClaudeSubagentTasks(
+    (event) => this.emitDetached(event),
+    (update) => this.emitDetached({ type: "engine_background_agents", ...update }),
+  );
   private readonly nativeBackgroundTasks = new ClaudeNativeBackgroundTasks();
   /**
    * Receives the subagent_* events of the CLI's own agents that arrive with
@@ -2664,6 +2667,7 @@ export class ClaudeEngine implements SessionEngine {
     this.replacementAbort?.abort(new ClaudeTransportAbortError("claude_transport_retired"));
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
     this.settleOrphanedTasks();
+    this.subagentTasks.dispose();
     // epoch bump + wake stops the idle reader; the disposal wait
     // settles a waiting owner turn, which terminalizes cancelled.
     this.stopIdleReader();

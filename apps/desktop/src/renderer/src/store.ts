@@ -146,6 +146,8 @@ import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, isSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
+import { countRunningBackgroundChildren } from "./background-children.js";
+import { badgeTaskCount } from "./claude-background-tasks.js";
 import { dismissFailedChild, recordFailedChild } from "./failed-background-children.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 // the global settings-store (NOT part of DesktopState) — the
@@ -1523,6 +1525,12 @@ export interface DesktopState {
    * Their parent turn has already ended, so this is the only live sign of them.
    */
   backgroundChildren: WireBackgroundChild[];
+  /** `countRunningBackgroundChildren(backgroundChildren)`, kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundChildren: number;
+  /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
+  engineBackgroundAgents: { count: number; abandoned: boolean };
+  /** Running Bash/monitor tasks the composer lists (`claudeBackgroundTasks`), kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundTasks: number;
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
   /**
@@ -1934,6 +1942,12 @@ interface SessionSlice {
   claudeTurnPreview: Extract<WireAgentEvent, { type: "claude_turn_preview" }>["preview"];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
+  /** `countRunningBackgroundChildren(backgroundChildren)`, kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundChildren: number;
+  /** The engine's background agent count as the host last reported it (Claude CLI today); `abandoned` = the session ended with agents unsettled. */
+  engineBackgroundAgents: { count: number; abandoned: boolean };
+  /** Running Bash/monitor tasks the composer lists (`claudeBackgroundTasks`), kept in step so the per-tab status derivation stays O(1). */
+  runningBackgroundTasks: number;
   recentBackgroundChildren: WireBackgroundChild[];
   failedBackgroundChildren: WireBackgroundChild[];
   modelTurns: number;
@@ -2023,6 +2037,9 @@ function initialSessionSlice(): SessionSlice {
     claudeTurnPreview: null,
     backgroundTaskOutput: {},
     backgroundChildren: [],
+    runningBackgroundChildren: 0,
+    engineBackgroundAgents: { count: 0, abandoned: false },
+    runningBackgroundTasks: 0,
     recentBackgroundChildren: [],
     failedBackgroundChildren: [],
     modelTurns: 0,
@@ -4044,7 +4061,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         get().turn.turnId !== turnId &&
         event.type !== "context_usage" &&
         event.type !== "preview_console" &&
-        !(event.type === "claude_background_task" && turnId === "detached-subagent") &&
+        !((event.type === "claude_background_task" || event.type === "engine_background_agents") && turnId === "detached-subagent") &&
         event.type !== "compaction_start" &&
         event.type !== "compaction_end" &&
         !(turnId === "detached-subagent" && (event.type === "subagent_start" || event.type === "subagent_progress" || event.type === "subagent_activity" || event.type === "subagent_end" || event.type === "engine_quota")) &&
@@ -4978,16 +4995,39 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "claude_turn_preview":
           set({ claudeTurnPreview: event.preview });
           return;
+        case "engine_background_agents":
+          set(state =>
+            state.engineBackgroundAgents.count === event.count && state.engineBackgroundAgents.abandoned === event.abandoned
+              ? state
+              : { engineBackgroundAgents: { count: event.count, abandoned: event.abandoned } },
+          );
+          return;
         case "claude_background_task":
           set(state => {
             // A foreground-tracked call is not a background task: never listed (a later move to the background arrives unflagged).
-            if (event.foreground === true) return state.claudeBackgroundTasks.some(task => task.taskId === event.taskId) ? { claudeBackgroundTasks: state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId) } : {};
+            if (event.foreground === true) {
+              if (!state.claudeBackgroundTasks.some(task => task.taskId === event.taskId)) return {};
+              const remaining = state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId);
+              return { claudeBackgroundTasks: remaining, runningBackgroundTasks: badgeTaskCount(state.engine?.id, remaining, state.backgroundTasks) };
+            }
+            const previous = state.claudeBackgroundTasks.find(task => task.taskId === event.taskId);
             const tasks = [...state.claudeBackgroundTasks.filter(task => task.taskId !== event.taskId), event];
             const { [event.toolCallId]: _previous, ...rest } = state.claudeTaskByToolCall;
             const byCall = { ...rest, [event.toolCallId]: event };
             const keys = Object.keys(byCall);
             for (const key of keys.slice(0, Math.max(0, keys.length - 100))) delete byCall[key];
-            return { claudeTaskByToolCall: byCall, claudeBackgroundTasks: [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)] };
+            const claudeBackgroundTasks = [...tasks.filter(task => task.status === "running"), ...tasks.filter(task => task.status !== "running").slice(-5)];
+            // The CLI going away settles its running commands as "unknown" (abandonAll) without an engine_background_agents abandon when only commands ran:
+            // flag it here, in the same snapshot, so the sidebar mirror raises no completion dot. New running work makes that abandon history.
+            const abandoned = previous?.status === "running" && event.status === "unknown"
+              ? true
+              : previous?.status !== "running" && event.status === "running" ? false : state.engineBackgroundAgents.abandoned;
+            return {
+              claudeTaskByToolCall: byCall,
+              claudeBackgroundTasks,
+              runningBackgroundTasks: badgeTaskCount(state.engine?.id, claudeBackgroundTasks, state.backgroundTasks),
+              ...(abandoned !== state.engineBackgroundAgents.abandoned ? { engineBackgroundAgents: { ...state.engineBackgroundAgents, abandoned } } : {}),
+            };
           });
           return;
         case "engine_notice":
@@ -6283,14 +6323,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "task_list":
             // Renderer Panels sub-slice D: full snapshot replacement; output is
             // carried by task_output chunks below because core exposes a cursor.
-            set({ backgroundTasks: message.tasks });
+            set((state) => ({
+              backgroundTasks: message.tasks,
+              runningBackgroundTasks: badgeTaskCount(state.engine?.id, state.claudeBackgroundTasks, message.tasks),
+            }));
             return;
           case "task_output":
             if (message.snapshot !== null) {
-              set((state) => ({
-                backgroundTasks: state.backgroundTasks.some((task) => task.taskId === message.snapshot!.taskId)
+              set((state) => {
+                const backgroundTasks = state.backgroundTasks.some((task) => task.taskId === message.snapshot!.taskId)
                   ? state.backgroundTasks.map((task) => (task.taskId === message.snapshot!.taskId ? message.snapshot! : task))
-                  : [...state.backgroundTasks, message.snapshot!],
+                  : [...state.backgroundTasks, message.snapshot!];
+                return {
+                backgroundTasks,
+                runningBackgroundTasks: badgeTaskCount(state.engine?.id, state.claudeBackgroundTasks, backgroundTasks),
                 backgroundTaskOutput:
                   message.newOutput.length === 0
                     ? state.backgroundTaskOutput
@@ -6298,7 +6344,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                         ...state.backgroundTaskOutput,
                         [message.taskId]: (state.backgroundTaskOutput[message.taskId] ?? "") + message.newOutput,
                       },
-              }));
+                };
+              });
             }
             return;
           case "claude_task_output":
@@ -6609,6 +6656,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // admit/terminal of a detached child (host/session.ts).
             set((state) => ({
               backgroundChildren: message.children,
+              runningBackgroundChildren: countRunningBackgroundChildren(message.children),
+              // A Claude abandon is stale once AnyCode children report: the
+              // next drop to 0 is theirs and a real completion.
+              ...(state.engineBackgroundAgents.abandoned ? { engineBackgroundAgents: { ...state.engineBackgroundAgents, abandoned: false } } : {}),
               failedBackgroundChildren: state.failedBackgroundChildren.filter((child) => !message.children.some((item) => item.childSessionId === child.childSessionId)),
               recentBackgroundChildren: [...state.recentBackgroundChildren, ...state.backgroundChildren.filter((child) => !message.children.some((item) => item.childSessionId === child.childSessionId))].slice(-20),
             }));
@@ -6679,6 +6730,25 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             } else if (!state.engineSwitch) {
               set({ ...(state.engine ? { engine: { ...state.engine, id: message.engine } } : {}), pendingEngineChange: null, contextUsage: null });
             }
+            // Commands the Claude CLI was still running when the tab left it are orphaned: its process is gone and its settle events are
+            // not forwarded to a non-owning engine, so they would stay "running" (pill, composer list, cards) forever. Settle them here,
+            // flagged as an abandon so the sidebar mirror raises no completion dot.
+            if (message.engine !== "claude") {
+              set((current) => {
+                if (!current.claudeBackgroundTasks.some((task) => task.status === "running")) return current;
+                const orphan = <T extends { status: string }>(task: T): T => (task.status === "running" ? { ...task, status: "unknown" } : task);
+                return {
+                  claudeBackgroundTasks: current.claudeBackgroundTasks.map(orphan),
+                  claudeTaskByToolCall: Object.fromEntries(Object.entries(current.claudeTaskByToolCall).map(([key, task]) => [key, orphan(task)])),
+                  engineBackgroundAgents: { ...current.engineBackgroundAgents, abandoned: true },
+                };
+              });
+            }
+            // The pill counts only the engine that is live now.
+            set((current) => {
+              const count = badgeTaskCount(current.engine?.id ?? message.engine, current.claudeBackgroundTasks, current.backgroundTasks);
+              return count === current.runningBackgroundTasks ? current : { runningBackgroundTasks: count };
+            });
             return;
           }
           case "engine_switch_failed": {

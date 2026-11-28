@@ -4,8 +4,8 @@ import {
   backgroundHeading,
   backgroundProgressText,
   backgroundWaitingText,
-  isFailedBackgroundChild,
 } from "./BackgroundAgents.js";
+import { isFailedBackgroundChild } from "../background-children.js";
 
 describe("BackgroundAgents helpers", () => {
   it("elapsed shows seconds under the minutes, then hours", () => {

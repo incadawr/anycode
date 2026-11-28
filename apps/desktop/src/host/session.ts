@@ -1328,6 +1328,8 @@ export class Session {
   private readonly presentationJournal: PresentationJournal;
   private readonly detachedCardStates = new Map<string, { start?: WireAgentEvent; latest?: WireAgentEvent; finished: boolean }>();
   private readonly claudeBackgroundTasks = new Map<string, Extract<WireAgentEvent, { type: "claude_background_task" }>>();
+  /** Latest background-agent count of the engine (Claude CLI today); replayed as a single event, never as history. */
+  private engineBackgroundAgentCount = 0;
   private claudeTurnPreview: { turnId: string; event: Extract<WireAgentEvent, { type: "claude_turn_preview" }> } | null = null;
   private readonly outbound: Outbound;
   /**
@@ -3175,6 +3177,7 @@ export class Session {
     this.presentationJournal.clear();
     this.detachedCardStates.clear();
     this.claudeBackgroundTasks.clear();
+    this.engineBackgroundAgentCount = 0;
   }
 
   private route(raw: unknown, canonicalHydrated = false): void {
@@ -3449,6 +3452,7 @@ export class Session {
           }
         }
         for (const event of this.claudeBackgroundTasks.values()) this.outbound.sendDirect({ type: "agent_event", turnId: "detached-subagent", event });
+        if (this.engineBackgroundAgentCount > 0) this.outbound.sendDirect({ type: "agent_event", turnId: "detached-subagent", event: { type: "engine_background_agents", count: this.engineBackgroundAgentCount, abandoned: false } });
         this.outbound.sendDirect(this.broker.approvalState());
         this.outbound.sendDirect({ type: "context_usage_checkpoint", contextUsage: this.checkpointContextUsage });
         // GitHub #19: re-assert the authoritative title on every ui_ready, as
@@ -5199,6 +5203,11 @@ export class Session {
   /** Detached events intentionally bypass presentationJournal and durable history; they have no turn, step, or attempt. */
   emitDetachedSubagentEvent(event: AgentEvent): void {
     const wire = sanitizeAgentEvent(event, this.engine.id);
+    if (wire.type === "engine_background_agents") {
+      this.engineBackgroundAgentCount = wire.count;
+      this.outbound.sendDirect({ type: "agent_event", turnId: "detached-subagent", event: wire });
+      return;
+    }
     if (wire.type === "claude_background_task") this.rememberClaudeBackgroundTask(wire);
     if (wire.type === "subagent_start" || wire.type === "subagent_progress" || wire.type === "subagent_end") {
       const state = this.detachedCardStates.get(wire.toolCallId) ?? { finished: false };
