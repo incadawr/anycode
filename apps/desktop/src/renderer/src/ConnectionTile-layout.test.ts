@@ -30,6 +30,6 @@ describe("connection tile layout", () => {
         expect(row.quotaHeight).toBeGreaterThanOrEqual(row.quotaLine * 1.9);
         expect(row.scroll).toBeLessThanOrEqual(row.client + 1);
       }
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 60000);
 });

@@ -9821,7 +9821,7 @@ describe("Agent managed worktree admission", () => {
       const children = [];
       for (const id of ["one", "two"]) {
         r.host.emit("message", spawnRequest({ requestId: id, spawnToolCallId: id }));
-        await vi.waitFor(() => expect(r.fork).toHaveBeenCalledTimes(children.length + 2));
+        await waitForCi(() => expect(r.fork).toHaveBeenCalledTimes(children.length + 2));
         const accepted = childRunEvents(r.host).filter(e => e.kind === "accepted").at(-1)!;
         if (accepted.kind !== "accepted") throw Error("missing child");
         const tab = r.manager.getTab(accepted.childTabId)!;
@@ -9858,7 +9858,7 @@ describe("Agent managed worktree admission", () => {
       const r = rig("core", { childWorktrees: resources });
       r.tab.workspace = scratch; r.tab.projectRoot = scratch;
       r.host.emit("message", spawnRequest());
-      await vi.waitFor(() => expect(r.fork).toHaveBeenCalledTimes(2));
+      await waitForCi(() => expect(r.fork).toHaveBeenCalledTimes(2));
       const c = child(r), receipt = c.tab.childWorktree!;
       c.host.postMessage.mockImplementation(() => {});
       const remove = vi.spyOn(NodeGitAdapter.prototype, "worktreeRemove");

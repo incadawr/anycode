@@ -146,7 +146,7 @@ function measure(html: string, width: number): Measured {
     expect(match, run.stdout.slice(0, 2000)).not.toBeNull();
     return JSON.parse(match![1]!) as Measured;
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 

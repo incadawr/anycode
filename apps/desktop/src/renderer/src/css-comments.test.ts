@@ -75,6 +75,6 @@ describe("renderer stylesheets — comment integrity", () => {
       expect(result.git.position).toBe("relative");
       expect(result.git.display).toBe("flex");
       expect(result.skills.rowGap).toBe("16px");
-    } finally { rmSync(directory, { recursive: true, force: true }); }
+    } finally { rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
   }, 30_000);
 });

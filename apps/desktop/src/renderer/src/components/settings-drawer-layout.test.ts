@@ -66,7 +66,7 @@ describe("connection drawer field rhythm", () => {
       expect(result.detail).toBe(12);
       expect(result.curationDisplay).toBe("grid");
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   }, 30_000);
 });
