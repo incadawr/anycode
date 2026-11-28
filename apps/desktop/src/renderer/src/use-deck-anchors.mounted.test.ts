@@ -247,3 +247,22 @@ it("keeps a row listed while its card is hidden inside a collapsed stack, and dr
   flush();
   expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: true, above: false });
 });
+
+it("re-reads when the transcript's DOM changes without a scroll or a block change, such as opening a stack", async () => {
+  const list = attachedList();
+  const stack = card(list, "stack", 50);
+  const member = document.createElement("div");
+  member.setAttribute("data-block-id", "a");
+  member.getClientRects = () => [] as unknown as DOMRectList;
+  member.getBoundingClientRect = vi.fn(() => ({ top: 0, bottom: 0, width: 0, height: 0 }) as DOMRect);
+  stack.append(member);
+  const { seen } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 10 });
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ live: false });
+  // Opening the stack lays the member out and changes the DOM; nothing scrolls and `blocks` stays the same.
+  member.getClientRects = () => [{}] as unknown as DOMRectList;
+  member.getBoundingClientRect = vi.fn(() => ({ top: 80, bottom: 90, width: 10, height: 10 }) as DOMRect);
+  list.append(document.createElement("span"));
+  await act(async () => { await Promise.resolve(); });
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ live: true, above: false });
+});

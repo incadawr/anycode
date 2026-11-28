@@ -195,9 +195,15 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
     list.addEventListener("scroll", schedule, { passive: true });
     const observer = new ResizeObserver(schedule);
     observer.observe(list);
+    // A card can move, or appear, with no scroll and no change to `blocks`: the user opens or closes a tool-call stack or a card
+    // above it. Its box does not change either, so the list's resize does not fire. A DOM change inside the list schedules a read;
+    // many changes in a frame still cost one read.
+    const mutations = typeof MutationObserver === "undefined" ? null : new MutationObserver(schedule);
+    mutations?.observe(list, { childList: true, subtree: true });
     return () => {
       list.removeEventListener("scroll", schedule);
       observer.disconnect();
+      mutations?.disconnect();
       if (frame.current !== null) {
         cancelAnimationFrame(frame.current);
         frame.current = null;
