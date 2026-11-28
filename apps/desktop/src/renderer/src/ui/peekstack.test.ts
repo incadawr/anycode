@@ -157,6 +157,23 @@ describe("PeekStack", () => {
     expect(keyDown(elsewhere, "Escape").defaultPrevented).toBe(false);
   });
 
+  it("leaves Escape to an open dialog or menu even while the pointer rests on the stack", () => {
+    mount(stack({ items: five() }));
+    over(rowButtons()[0]!);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    document.body.append(menu);
+    expect(keyDown(menu, "Escape").defaultPrevented).toBe(false);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+    menu.remove();
+    const dialog = document.createElement("dialog");
+    dialog.setAttribute("open", "");
+    document.body.append(dialog);
+    expect(keyDown(document.body, "Escape").defaultPrevented).toBe(false);
+    expect(region()!.hasAttribute("data-open")).toBe(true);
+  });
+
   it("does not consume Escape while closed, so a global Escape handler still sees it", () => {
     mount(stack({ items: five() }));
     expect(keyDown(rowButtons()[0]!, "Escape").defaultPrevented).toBe(false);

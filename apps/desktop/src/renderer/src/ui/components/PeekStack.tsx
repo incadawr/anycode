@@ -211,6 +211,12 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
       if (event.key !== "Escape" || event.defaultPrevented) {
         return;
       }
+      // An open dialog, menu or popover owns Escape: a modal closes through the key's default action, and a menu handles it
+      // itself. This listener runs first (capture), so it must not take the key from them.
+      const target = event.target instanceof Element ? event.target : null;
+      if (document.querySelector("dialog[open]") !== null || target?.closest('[role="dialog"], [role="menu"], [role="listbox"]') != null) {
+        return;
+      }
       event.preventDefault();
       clearTimer();
       setExpandedKey(null);

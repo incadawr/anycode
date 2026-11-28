@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { formatTaskElapsed } from "../claude-background-tasks.js";
 import { visibleDeckRows, type AnchorState, type DeckRow } from "../running-deck.js";
 import { PeekStack, type PeekStackItem } from "../ui/index.js";
@@ -33,27 +33,28 @@ export function RunningDeck(props: RunningDeckProps) {
   // Its card is still there: remember each row's block id, so that click still jumps.
   const knownBlocks = useRef(new Map<string, string>());
   const items = useMemo<readonly PeekStackItem[]>(
-    () => visibleDeckRows(rows, anchors).map(row => ({
-      key: row.key,
-      icon: row.kind === "child" ? <Robot width={14} height={14} /> : <Terminal width={14} height={14} />,
-      typeLabel: row.typeLabel,
-      title: row.title,
-      meta: formatTaskElapsed(row.startedAt, elapsedNow),
-      detail: row.detail,
-      activatable: remember(row) !== undefined,
-    })),
+    () => visibleDeckRows(rows, anchors).map(row => {
+      const blockId = blockIdOf(row);
+      if (blockId !== undefined) {
+        knownBlocks.current.set(row.key, blockId);
+      }
+      return {
+        key: row.key,
+        icon: row.kind === "child" ? <Robot width={14} height={14} /> : <Terminal width={14} height={14} />,
+        typeLabel: row.typeLabel,
+        title: row.title,
+        meta: formatTaskElapsed(row.startedAt, elapsedNow),
+        detail: row.detail,
+        activatable: blockId !== undefined,
+      };
+    }),
     [rows, anchors, elapsedNow, blockIdOf],
   );
-  function remember(row: DeckRow): string | undefined {
-    const blockId = blockIdOf(row);
-    if (blockId !== undefined) {
-      knownBlocks.current.set(row.key, blockId);
+  useEffect(() => {
+    if (rows.length === 0) {
+      knownBlocks.current.clear();
     }
-    return blockId;
-  }
-  if (rows.length === 0) {
-    knownBlocks.current.clear();
-  }
+  }, [rows.length]);
   const onActivate = useCallback((key: string) => {
     const blockId = knownBlocks.current.get(key);
     if (blockId !== undefined) {
