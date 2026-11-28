@@ -41,14 +41,15 @@ function card(list: HTMLElement, id: string, bottom: number): HTMLElement {
   return el;
 }
 
-function mount(opts: { list: HTMLElement; blocks: TranscriptBlock[]; rows: DeckRow[]; deckBottom?: number }) {
+function mount(opts: { list: HTMLElement; blocks: TranscriptBlock[]; rows: DeckRow[]; deckBottom?: number; column?: HTMLElement }) {
   const store = createStore(() => ({ claudeTaskByToolCall: Object.fromEntries(opts.rows.map(r => [r.toolCallId!, task(r.toolCallId!)])) }));
   const seen: ReadonlyMap<string, AnchorState>[] = [];
   const schedule = { current: (() => undefined) as () => void };
   const listRef = { current: opts.list } as RefObject<HTMLElement | null>;
+  const columnRef = opts.column === undefined ? undefined : { current: opts.column } as RefObject<HTMLElement | null>;
   function Probe(p: { blocks: TranscriptBlock[]; rows: DeckRow[] }) {
     const idByCall = useMemo(() => blockIdByToolCall(p.blocks), [p.blocks]);
-    const result = useDeckAnchors({ listRef, blocks: p.blocks, rows: p.rows, collapsedDeckBottom: () => opts.deckBottom ?? 100, idByCall });
+    const result = useDeckAnchors({ listRef, columnRef, blocks: p.blocks, rows: p.rows, collapsedDeckBottom: () => opts.deckBottom ?? 100, idByCall });
     schedule.current = result.schedule;
     seen.push(result.anchors);
     return null;
@@ -296,4 +297,29 @@ it("keeps the row of the FIRST call of a collapsed stack listed: the stack's roo
   root.className = "tool-call-stack";
   const { seen } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 10 });
   expect(seen.at(-1)!.get("task:a")).toMatchObject({ hasCard: true, live: false });
+});
+it("re-reads when the transcript column changes size, with no scroll, no list resize and no DOM change", () => {
+  const targets: Element[] = [];
+  const callbacks: ResizeObserverCallback[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+    observe(target: Element) { targets.push(target); }
+    unobserve() {}
+    disconnect() {}
+  });
+  const list = attachedList();
+  const column = document.createElement("div");
+  list.append(column);
+  let bottom = 50;
+  const el = card(column, "a", 50);
+  el.getBoundingClientRect = vi.fn(() => ({ top: bottom - 10, bottom, width: 10, height: 10 }) as DOMRect);
+  const { seen } = mount({ list, blocks: [tool("a")], rows: [row("a")], deckBottom: 100, column });
+  flush();
+  expect(targets).toContain(column);
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ above: true });
+  // An image above the card gets its height: the card moves down, the column's box grows, nothing else happens.
+  bottom = 400;
+  act(() => callbacks.forEach(callback => callback([], {} as ResizeObserver)));
+  flush();
+  expect(seen.at(-1)!.get("task:a")).toMatchObject({ above: false });
 });

@@ -81,6 +81,8 @@ const aboveOrder = (anchors: AnchorMap): string =>
 
 export interface UseDeckAnchorsArgs {
   readonly listRef: RefObject<HTMLElement | null>;
+  /** The transcript column inside the list. Its size changes when content above a card changes height (an image loads) with no scroll, no resize of the list and no DOM insertion. */
+  readonly columnRef?: RefObject<HTMLElement | null>;
   readonly blocks: readonly TranscriptBlock[];
   readonly rows: readonly DeckRow[];
   /** toolCallId -> block id, built once per `blocks` by the caller. */
@@ -203,6 +205,10 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
     list.addEventListener("scroll", schedule, { passive: true });
     const observer = new ResizeObserver(schedule);
     observer.observe(list);
+    const column = args.columnRef?.current;
+    if (column) {
+      observer.observe(column);
+    }
     // A card can move, or appear, with no scroll and no change to `blocks`: the user opens or closes a tool-call stack or a card
     // above it. Its box does not change either, so the list's resize does not fire. A DOM change inside the list schedules a read;
     // many changes in a frame still cost one read.
@@ -217,7 +223,7 @@ export function useDeckAnchors(args: UseDeckAnchorsArgs): DeckAnchors {
         frame.current = null;
       }
     };
-  }, [args.listRef, schedule]);
+  }, [args.listRef, args.columnRef, schedule]);
 
   useEffect(() => {
     missing.current.clear();

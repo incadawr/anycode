@@ -112,6 +112,8 @@ function findTodoCard(list: HTMLElement): HTMLElement | null {
 
 export interface RunningDeckHostProps {
   readonly listRef: RefObject<HTMLElement | null>;
+  /** The transcript column in the list; its size is a trigger for re-reading where the cards are. */
+  readonly columnRef?: RefObject<HTMLElement | null>;
   readonly blocks: readonly TranscriptBlock[];
   readonly onJumpToBlock: (blockId: string) => void;
 }
@@ -127,7 +129,7 @@ interface DeckMachineryProps extends RunningDeckHostProps {
  * Mounted only while rows exist, so a transcript with no background work pays
  * for none of it.
  */
-function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onCollapsedChange }: DeckMachineryProps) {
+function DeckMachinery({ listRef, columnRef, blocks, onJumpToBlock, rows, collapsed, onCollapsedChange }: DeckMachineryProps) {
   const idEntry = useRef<BlockIdEntry | null>(null);
   const blockIds = useMemo(() => {
     idEntry.current = blockIdEntry(idEntry.current, blocks);
@@ -183,6 +185,7 @@ function DeckMachinery({ listRef, blocks, onJumpToBlock, rows, collapsed, onColl
 
   const { anchors, ready, schedule } = useDeckAnchors({
     listRef,
+    columnRef,
     blocks,
     rows,
     idByCall: blockIds,

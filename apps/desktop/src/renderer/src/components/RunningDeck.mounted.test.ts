@@ -6,6 +6,7 @@ import { TabContext } from "../tab-context.js";
 import { tabRegistry } from "../tab-registry.js";
 import type { AnchorState, DeckRow } from "../running-deck.js";
 import { createDesktopStore, type TranscriptBlock } from "../store.js";
+import { replayStore } from "../replay.js";
 import { RunningDeck } from "./RunningDeck.js";
 import { RunningDeckHost, deckPlacement, resetFoldedDecks } from "./RunningDeckHost.js";
 import { MessageList } from "./MessageList.js";
@@ -804,10 +805,10 @@ describe("RunningDeckHost machinery", () => {
 
 // ── MessageList wiring ──
 
-function messageList(store: ReturnType<typeof createDesktopStore>, readOnly = false) {
+function messageList(store: ReturnType<typeof createDesktopStore>, readOnly = false, connection: "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited" = "ready") {
   return createElement(TabContext.Provider, { value: { tabId: "t", store } },
     createElement(MessageList, {
-      blocks: [] as TranscriptBlock[], turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
+      blocks: [] as TranscriptBlock[], turn: { status: "idle" } as never, workspace: null, connection, retry: null,
       onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 0, readOnly,
     }));
 }
@@ -835,6 +836,26 @@ describe("MessageList and the deck", () => {
     mountInto(messageList(storeWith(["a"]), true));
     expect(document.querySelector(".running-deck-wrap")).toBeNull();
     expect(region()).toBeNull();
+  });
+
+  it.each(["awaiting_port", "awaiting_host_ready", "host_exited"] as const)("renders no deck while the connection is %s: the lists outlive a host that is no longer running them", connection => {
+    manualFrames();
+    mountInto(messageList(storeWith(["a"]), false, connection));
+    expect(document.querySelector(".running-deck-wrap")).toBeNull();
+    expect(region()).toBeNull();
+  });
+
+  it("renders no deck in a replay frame, which must not borrow today's task lists", () => {
+    const flush = manualFrames();
+    replayStore.setState({ armed: { rootTabId: "t", epoch: 1 } });
+    try {
+      mountInto(messageList(storeWith(["a"])));
+      flush();
+      expect(document.querySelector(".running-deck-wrap")).toBeNull();
+      expect(rowButtons()).toHaveLength(0);
+    } finally {
+      replayStore.setState({ armed: null });
+    }
   });
 
   it("does not re-render when the deck's stores change", () => {

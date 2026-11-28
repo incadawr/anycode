@@ -1385,8 +1385,11 @@ export function MessageList({
       <TodoPanel transcript={blocks} onJumpToBlock={jumpToBlock} reminderState={todoReminderState} />
       {/* Running deck: its own sticky height-0 sibling right after the todo
           overlay. The host owns the store selectors and every changing value,
-          so this list never re-renders because of the deck. */}
-      {!readOnly && <RunningDeckHost listRef={containerRef} blocks={blocks} onJumpToBlock={jumpToBlock} />}
+          so this list never re-renders because of the deck. It shows live work only: a replay frame must not borrow today's task
+          lists, and a host that exited keeps its lists but is not running them. */}
+      {!readOnly && !replaying && connection === "ready" && (
+        <RunningDeckHost listRef={containerRef} columnRef={columnRef} blocks={blocks} onJumpToBlock={jumpToBlock} />
+      )}
       {/* + 4742: LEFT-edge tick rail (evolved from
           the right-edge dot pill). FIRST-child position (beside TodoPanel)
           on purpose: a `top`-sticky box only gets pushed DOWN to its inset,
