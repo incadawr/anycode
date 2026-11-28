@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { formatTaskElapsed } from "../claude-background-tasks.js";
 import { visibleDeckRows, type AnchorState, type DeckRow } from "../running-deck.js";
-import { PeekStack, type PeekStackItem } from "../ui/index.js";
+import { RunningStack, type RunningStackItem } from "../ui/index.js";
 import { Robot, Terminal } from "./icons.js";
 
 export interface RunningDeckProps {
@@ -20,7 +20,7 @@ export interface RunningDeckProps {
 }
 
 /**
- * The sticky "Running" deck: what is running and has no visible live card, as a PeekStack. This adapter maps the deck's rows
+ * The sticky "Running" deck: what is running and has no visible live card, as a RunningStack. This adapter maps the deck's rows
  * (the model in running-deck.ts) onto the kit's items; the host owns the store, the anchors and the placement.
  */
 export function RunningDeck(props: RunningDeckProps) {
@@ -32,7 +32,7 @@ export function RunningDeck(props: RunningDeckProps) {
   // The kit freezes the list while the pointer is on the stack, so a row can be clicked after its work ended and it left `rows`.
   // Its card is still there: remember each row's block id, so that click still jumps.
   const knownBlocks = useRef(new Map<string, string>());
-  const items = useMemo<readonly PeekStackItem[]>(
+  const items = useMemo<readonly RunningStackItem[]>(
     () => visibleDeckRows(rows, anchors).map(row => {
       const blockId = blockIdOf(row);
       if (blockId !== undefined) {
@@ -61,5 +61,5 @@ export function RunningDeck(props: RunningDeckProps) {
       onJumpToBlock(blockId);
     }
   }, [onJumpToBlock]);
-  return <PeekStack items={items} collapsed={collapsed} onCollapsedChange={onCollapsedChange} onActivate={onActivate} chipOnly={chipOnly} />;
+  return <RunningStack items={items} collapsed={collapsed} onCollapsedChange={onCollapsedChange} onActivate={onActivate} chipOnly={chipOnly} />;
 }

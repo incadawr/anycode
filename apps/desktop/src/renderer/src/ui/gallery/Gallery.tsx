@@ -12,7 +12,7 @@ import {
   IconButton,
   Input,
   Modal,
-  PeekStack,
+  RunningStack,
   Popover,
   Menu,
   MenuItem,
@@ -86,22 +86,22 @@ const peekItems = (n: number, withDetail = false) =>
   }));
 
 /** Static rows plus a stack whose fold flag the demo owns, like a real parent would. */
-function PeekStackDemo(): React.ReactElement {
+function RunningStackDemo(): React.ReactElement {
   const [folded, setFolded] = useState(false);
   const noop = () => undefined;
   return (
     <>
       <Row label="one row">
-        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(1)} collapsed={false} onCollapsedChange={noop} /></div>
+        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><RunningStack items={peekItems(1)} collapsed={false} onCollapsedChange={noop} /></div>
       </Row>
       <Row label="five rows (+2 running; hover or focus a row to open)">
-        <div style={{ height: "5rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(5)} collapsed={false} onCollapsedChange={noop} /></div>
+        <div style={{ height: "5rem", width: "100%", maxWidth: "26rem" }}><RunningStack items={peekItems(5)} collapsed={false} onCollapsedChange={noop} /></div>
       </Row>
       <Row label="with a detail line">
-        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(2, true)} collapsed={false} onCollapsedChange={noop} /></div>
+        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><RunningStack items={peekItems(2, true)} collapsed={false} onCollapsedChange={noop} /></div>
       </Row>
       <Row label="folded (Hide / chip)">
-        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><PeekStack items={peekItems(3)} collapsed={folded} onCollapsedChange={setFolded} /></div>
+        <div style={{ height: "4rem", width: "100%", maxWidth: "26rem" }}><RunningStack items={peekItems(3)} collapsed={folded} onCollapsedChange={setFolded} /></div>
       </Row>
     </>
   );
@@ -217,8 +217,8 @@ export function Gallery(): React.ReactElement {
           </Row>
         </Section>
 
-        <Section title="PeekStack">
-          <PeekStackDemo />
+        <Section title="RunningStack">
+          <RunningStackDemo />
         </Section>
 
         <Section title="Badge">

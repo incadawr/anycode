@@ -3303,16 +3303,16 @@ button.environment-menu-row:hover,
    it takes the column's measure, centring and the has-rail padding.
    RunningDeckHost writes --deck-top (below the todo card when they overlap
    horizontally) and --deck-max onto this wrapper. The stack itself is the
-   kit's PeekStack (ui/ui.css); this wrapper only places it and hands it the
+   kit's RunningStack (ui/ui.css); this wrapper only places it and hands it the
    row height and the room it may use. --deck-row-h and --deck-chip-zone must
    resolve to a literal rem: the host reads them. ── */
 .running-deck-wrap {
-  --deck-row-h: var(--peekstack-row-h);  /* the stack's row: card + a transparent tail, so rows are contiguous */
+  --deck-row-h: var(--runningstack-row-h);  /* the stack's row: card + a transparent tail, so rows are contiguous */
   --deck-chip-zone: 3.5rem;  /* the jump-to-latest chip and its inset */
   /* Defaults; RunningDeckHost overrides both inline from its measured read. */
   --deck-top: var(--sp-3);
   --deck-max: 50dvh;
-  --peekstack-max: var(--deck-max);
+  --runningstack-max: var(--deck-max);
   position: sticky;
   top: var(--deck-top);
   z-index: 6;

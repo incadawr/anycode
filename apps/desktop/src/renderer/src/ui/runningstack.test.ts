@@ -1,23 +1,23 @@
 // @vitest-environment jsdom
 import { act, useState, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { PeekStack, type PeekStackItem, type PeekStackProps } from "./index.js";
+import { RunningStack, type RunningStackItem, type RunningStackProps } from "./index.js";
 import { createElement as h, mount } from "./ui.test-utils.js";
 
-const item = (id: string, over: Partial<PeekStackItem> = {}): PeekStackItem => ({
+const item = (id: string, over: Partial<RunningStackItem> = {}): RunningStackItem => ({
   key: id, icon: h("svg", { "data-glyph": id }), typeLabel: "Bash", title: `run ${id}`, meta: "1m 1s", activatable: true, ...over,
 });
 const five = () => ["a", "b", "c", "d", "e"].map(id => item(id));
 
 /** The stack with its fold flag held by a small stateful parent, like a real consumer. */
-function Stack(props: Omit<PeekStackProps, "collapsed" | "onCollapsedChange"> & { startCollapsed?: boolean }): ReactElement {
+function Stack(props: Omit<RunningStackProps, "collapsed" | "onCollapsedChange"> & { startCollapsed?: boolean }): ReactElement {
   const [collapsed, setCollapsed] = useState(props.startCollapsed === true);
-  return h(PeekStack, { ...props, collapsed, onCollapsedChange: setCollapsed });
+  return h(RunningStack, { ...props, collapsed, onCollapsedChange: setCollapsed });
 }
-const stack = (props: Omit<PeekStackProps, "collapsed" | "onCollapsedChange"> & { startCollapsed?: boolean }) => h(Stack, props);
+const stack = (props: Omit<RunningStackProps, "collapsed" | "onCollapsedChange"> & { startCollapsed?: boolean }) => h(Stack, props);
 
 const region = () => document.querySelector<HTMLElement>('[role="region"]');
-const rowButtons = () => [...document.querySelectorAll<HTMLButtonElement>(".ak-peekstack__row")];
+const rowButtons = () => [...document.querySelectorAll<HTMLButtonElement>(".ak-runningstack__row")];
 const labels = () => rowButtons().map(b => b.getAttribute("aria-label"));
 const textOf = (text: string) => [...document.querySelectorAll<HTMLElement>("button, span")].find(el => el.textContent?.trim() === text);
 const over = (el: Element) => act(() => { el.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, relatedTarget: document.body })); });
@@ -35,7 +35,7 @@ const outside = () => {
   return b;
 };
 
-describe("PeekStack", () => {
+describe("RunningStack", () => {
   it("renders nothing for an empty list", () => {
     mount(stack({ items: [] }));
     expect(region()).toBeNull();
@@ -59,7 +59,7 @@ describe("PeekStack", () => {
     mount(stack({ items: [item("a")], labels: { region: "Läuft", state: "läuft", activateHint: "springen", fold: "Aus", foldName: "Ausblenden" } }));
     expect(region()!.getAttribute("aria-label")).toBe("Läuft");
     expect(labels()).toEqual(["Bash: run a, läuft, springen"]);
-    expect(document.querySelector(".ak-peekstack__fold")!.getAttribute("aria-label")).toBe("Ausblenden");
+    expect(document.querySelector(".ak-runningstack__fold")!.getAttribute("aria-label")).toBe("Ausblenden");
     expect(textOf("Aus")).toBeDefined();
   });
 
@@ -81,11 +81,11 @@ describe("PeekStack", () => {
   it("shows the meta, the cue of an activatable row and the type pill", () => {
     mount(stack({ items: [item("a"), item("b", { activatable: false, meta: undefined })] }));
     const [a, b] = rowButtons();
-    expect(a!.querySelector(".ak-peekstack__meta")!.textContent).toBe("1m 1s");
-    expect(a!.querySelector(".ak-peekstack__cue")!.textContent).toBe("↑ jump");
-    expect(a!.querySelector(".ak-peekstack__type")!.textContent).toBe("Bash");
-    expect(b!.querySelector(".ak-peekstack__meta")).toBeNull();
-    expect(b!.querySelector(".ak-peekstack__cue")).toBeNull();
+    expect(a!.querySelector(".ak-runningstack__meta")!.textContent).toBe("1m 1s");
+    expect(a!.querySelector(".ak-runningstack__cue")!.textContent).toBe("↑ jump");
+    expect(a!.querySelector(".ak-runningstack__type")!.textContent).toBe("Bash");
+    expect(b!.querySelector(".ak-runningstack__meta")).toBeNull();
+    expect(b!.querySelector(".ak-runningstack__cue")).toBeNull();
   });
 
   it("describes a row by its detail line only when it has one", () => {
@@ -100,7 +100,7 @@ describe("PeekStack", () => {
     mount(stack({ items: five() }));
     act(() => textOf("Hide")!.click());
     expect(rowButtons()).toHaveLength(0);
-    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip")!;
+    const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip")!;
     expect(chip.textContent).toBe("5 running");
     expect(chip.getAttribute("aria-expanded")).toBe("false");
     act(() => chip.click());
@@ -117,7 +117,7 @@ describe("PeekStack", () => {
 
   it("does not open when the fold control takes focus", () => {
     mount(stack({ items: five() }));
-    focus(document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!);
+    focus(document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!);
     expect(region()!.hasAttribute("data-open")).toBe(false);
   });
 
@@ -265,7 +265,7 @@ describe("PeekStack", () => {
   });
 
   it("hands focus to the focusable ancestor when the whole stack unmounts", () => {
-    const withParent = (items: PeekStackItem[]) => h("div", { tabIndex: -1, "data-parent": "" }, items.length === 0 ? null : stack({ items }));
+    const withParent = (items: RunningStackItem[]) => h("div", { tabIndex: -1, "data-parent": "" }, items.length === 0 ? null : stack({ items }));
     const view = mount(withParent([item("a")]));
     focus(rowButtons()[0]!);
     expect(document.activeElement?.closest("[data-parent]")).not.toBeNull();
@@ -277,7 +277,7 @@ describe("PeekStack", () => {
     const onActivate = vi.fn();
     mount(stack({ items: five(), chipOnly: true, onActivate }));
     expect(region()!.hasAttribute("data-chip-only")).toBe(true);
-    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip-only")!;
+    const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip-only")!;
     expect(chip.getAttribute("aria-label")).toBe("5 running: run a, jump to its card");
     act(() => chip.click());
     expect(onActivate).toHaveBeenCalledWith("a");
@@ -286,7 +286,7 @@ describe("PeekStack", () => {
   it("marks the chip-only chip as disabled when the first row cannot be activated", () => {
     const onActivate = vi.fn();
     mount(stack({ items: [item("a", { activatable: false }), item("b")], chipOnly: true, onActivate }));
-    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip-only")!;
+    const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip-only")!;
     expect(chip.getAttribute("aria-disabled")).toBe("true");
     expect(chip.getAttribute("aria-label")).toBe("2 running: run a");
     act(() => chip.click());
@@ -295,7 +295,7 @@ describe("PeekStack", () => {
 
   it("only rows open the stack: the foot never opens or moves it", () => {
     mount(stack({ items: five() }));
-    const hide = document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!;
+    const hide = document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!;
     over(hide);
     expect(region()!.hasAttribute("data-open")).toBe(false);
     over(rowButtons()[0]!);
@@ -304,7 +304,7 @@ describe("PeekStack", () => {
 
   it("keeps decorative glyphs out of the accessibility tree", () => {
     mount(stack({ items: [item("a")] }));
-    const glyphs = [...document.querySelectorAll(".ak-peekstack__glyph")];
+    const glyphs = [...document.querySelectorAll(".ak-runningstack__glyph")];
     expect(glyphs.length).toBeGreaterThanOrEqual(2);
     for (const glyph of glyphs) {
       expect(glyph.getAttribute("aria-hidden") === "true" || glyph.closest("[aria-hidden='true']") !== null).toBe(true);

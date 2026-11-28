@@ -4,13 +4,13 @@ import { IconSpinner } from "./icons.js";
 
 /** How long an expanded row stays expanded after the pointer leaves it, so a pass to the next row does not skip. */
 const COLLAPSE_DELAY_MS = 100;
-/** `--ak-ps-open` when no row is expanded: larger than any `--ak-ps-i`, so no row shifts. */
+/** `--ak-rs-open` when no row is expanded: larger than any `--ak-rs-i`, so no row shifts. */
 const NO_OPEN_INDEX = 9999;
 const COLLAPSE_ID = "\u0000collapse";
 const CHIP_ID = "\u0000chip";
 const INTERACTIVE = "button, a, input, select, textarea";
 
-export interface PeekStackItem {
+export interface RunningStackItem {
   /** Stable identity: the row keeps its place and its expanded state across updates. */
   readonly key: string;
   /** Decorative glyph for the kind of thing the row is. Give it its own size. */
@@ -27,7 +27,7 @@ export interface PeekStackItem {
 }
 
 /** Every string the stack shows or announces. Pass only what differs from the English defaults. */
-export interface PeekStackLabels {
+export interface RunningStackLabels {
   /** Accessible name of the region. */
   readonly region: string;
   /** What each row is doing, in the row's accessible name: "{type}: {title}, {state}". The order and the ", " separators are fixed; only the words are yours. */
@@ -46,7 +46,7 @@ export interface PeekStackLabels {
   readonly more: (n: number) => string;
 }
 
-const DEFAULT_LABELS: PeekStackLabels = {
+const DEFAULT_LABELS: RunningStackLabels = {
   region: "Running",
   state: "running",
   activateHint: "jump to its card",
@@ -57,9 +57,9 @@ const DEFAULT_LABELS: PeekStackLabels = {
   more: n => `+${n} running`,
 };
 
-export interface PeekStackProps {
+export interface RunningStackProps {
   /** The rows to show, in order. The stack decides how many peek out; an empty list renders nothing. */
-  readonly items: readonly PeekStackItem[];
+  readonly items: readonly RunningStackItem[];
   /** Folded into one count chip. Controlled by the parent. */
   readonly collapsed: boolean;
   readonly onCollapsedChange: (collapsed: boolean) => void;
@@ -69,21 +69,21 @@ export interface PeekStackProps {
   readonly chipOnly?: boolean;
   /** How many rows peek out while the stack is closed. */
   readonly maxVisible?: number;
-  readonly labels?: Partial<PeekStackLabels>;
+  readonly labels?: Partial<RunningStackLabels>;
   readonly className?: string;
 }
 
 const cssVars = (vars: Record<string, string | number>): CSSProperties => vars as CSSProperties;
 
 /**
- * PeekStack: a Sonner-style stack of running rows. Collapsed, at most `maxVisible` rows peek out behind the front one and an overflow
+ * RunningStack: a Sonner-style stack of running rows. Collapsed, at most `maxVisible` rows peek out behind the front one and an overflow
  * chip counts the rest; hovering a row, or keyboard focus inside, opens every row; Escape closes it; the fold control folds the whole
  * stack into one count chip. Presentational and controlled: it owns only hover, focus and expansion state, and the parent owns the
  * rows, the fold flag and where the stack sits. While the pointer is on the open stack its rows are frozen, so nothing moves or
  * vanishes under it; with keyboard focus alone they follow `items`. Escape is consumed only while the stack is open, so a global
  * Escape handler still sees it otherwise.
  */
-export function PeekStack(props: PeekStackProps): React.ReactElement | null {
+export function RunningStack(props: RunningStackProps): React.ReactElement | null {
   const idBase = useId();
   const { items, collapsed, onCollapsedChange, onActivate, chipOnly = false, maxVisible = 3, className } = props;
   const labels = { ...DEFAULT_LABELS, ...props.labels };
@@ -91,7 +91,7 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
   const [focusWithin, setFocusWithin] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const [frozen, setFrozen] = useState<readonly PeekStackItem[] | null>(null);
+  const [frozen, setFrozen] = useState<readonly RunningStackItem[] | null>(null);
 
   const open = (hovered || focusWithin) && !dismissed && !collapsed;
   // While the pointer is on the open stack, the rendered list is frozen so nothing moves or vanishes under it; changes apply when the
@@ -232,7 +232,7 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
   // Like hover, only a row opens the stack: pressing the fold control or the chip focuses them, and opening then would move the foot away mid-click.
   const onFocus = (event: FocusEvent<HTMLDivElement>) => {
     focusInside.current = true;
-    if (event.target instanceof Element && event.target.closest(".ak-peekstack__stack") !== null) {
+    if (event.target instanceof Element && event.target.closest(".ak-runningstack__stack") !== null) {
       setFocusWithin(true);
     }
   };
@@ -252,7 +252,7 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
   };
   // Only the row stack opens it: the foot (fold control, overflow chip) must not move away under the pointer.
   const onPointerOver = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.target instanceof Element && event.target.closest(".ak-peekstack__stack") !== null) {
+    if (event.target instanceof Element && event.target.closest(".ak-runningstack__stack") !== null) {
       setHovered(true);
     }
   };
@@ -292,11 +292,11 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
       setExpandedKey(current => (current === key ? null : current));
     }, COLLAPSE_DELAY_MS);
   };
-  const rowName = (item: PeekStackItem): string =>
+  const rowName = (item: RunningStackItem): string =>
     `${item.typeLabel}: ${item.title}, ${labels.state}${item.activatable === true ? `, ${labels.activateHint}` : ""}`;
   const first = shown[0];
   const firstActivatable = first?.activatable === true;
-  const classes = ["ak-peekstack", className ?? ""].filter(Boolean).join(" ");
+  const classes = ["ak-runningstack", className ?? ""].filter(Boolean).join(" ");
 
   return (
     <div
@@ -308,7 +308,7 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
       data-open={open || undefined}
       data-expanding={expanding || undefined}
       data-chip-only={chipOnly || undefined}
-      style={cssVars({ "--ak-ps-n": mounted.length, "--ak-ps-open": expanding ? expandedIndex : NO_OPEN_INDEX })}
+      style={cssVars({ "--ak-rs-n": mounted.length, "--ak-rs-open": expanding ? expandedIndex : NO_OPEN_INDEX })}
       onFocus={onFocus}
       onBlur={onBlur}
       onPointerOver={onPointerOver}
@@ -320,7 +320,7 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
         <Button
           ref={chipEl}
           variant="ghost"
-          className="ak-peekstack__chip"
+          className="ak-runningstack__chip"
           aria-expanded={false}
           onFocus={() => { focusedId.current = CHIP_ID; }}
           onClick={() => {
@@ -328,12 +328,12 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
             onCollapsedChange(false);
           }}
         >
-          <IconSpinner size={12} className="ak-peekstack__spin" />
+          <IconSpinner size={12} className="ak-runningstack__spin" />
           {labels.count(items.length)}
         </Button>
       ) : (
         <>
-          <div className="ak-peekstack__stack" ref={stackEl}>
+          <div className="ak-runningstack__stack" ref={stackEl}>
             {mounted.map((item, i) => {
               const activatable = item.activatable === true;
               const detailId = `${idBase}-${i}`;
@@ -352,14 +352,14 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
                       }
                     };
                   }}
-                  className="ak-peekstack__row"
+                  className="ak-runningstack__row"
                   aria-label={rowName(item)}
                   aria-describedby={item.detail === undefined ? undefined : detailId}
                   aria-disabled={!activatable || undefined}
                   tabIndex={open || i === 0 ? undefined : -1}
                   data-front={i === 0 || undefined}
                   data-expanded={(open && expandedKey === item.key) || undefined}
-                  style={cssVars({ "--ak-ps-i": i })}
+                  style={cssVars({ "--ak-rs-i": i })}
                   onPointerEnter={() => expand(item.key)}
                   onPointerLeave={() => collapseLater(item.key)}
                   onFocus={() => {
@@ -377,28 +377,28 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
                     }
                   }}
                 >
-                  <span className="ak-peekstack__card">
-                    <span className="ak-peekstack__line">
-                      <IconSpinner size={12} className="ak-peekstack__spin ak-peekstack__glyph" />
-                      <span className="ak-peekstack__glyph" aria-hidden="true">{item.icon}</span>
-                      <span className="ak-peekstack__type">{item.typeLabel}</span>
-                      <span className="ak-peekstack__title">{item.title}</span>
-                      {item.meta !== undefined && <span className="ak-peekstack__meta">{item.meta}</span>}
-                      {activatable && <span className="ak-peekstack__cue">{labels.activateCue}</span>}
+                  <span className="ak-runningstack__card">
+                    <span className="ak-runningstack__line">
+                      <IconSpinner size={12} className="ak-runningstack__spin ak-runningstack__glyph" />
+                      <span className="ak-runningstack__glyph" aria-hidden="true">{item.icon}</span>
+                      <span className="ak-runningstack__type">{item.typeLabel}</span>
+                      <span className="ak-runningstack__title">{item.title}</span>
+                      {item.meta !== undefined && <span className="ak-runningstack__meta">{item.meta}</span>}
+                      {activatable && <span className="ak-runningstack__cue">{labels.activateCue}</span>}
                     </span>
-                    {item.detail !== undefined && <span className="ak-peekstack__detail" id={detailId}>{item.detail}</span>}
+                    {item.detail !== undefined && <span className="ak-runningstack__detail" id={detailId}>{item.detail}</span>}
                   </span>
                 </Button>
               );
             })}
           </div>
-          <div className="ak-peekstack__foot">
-            {!open && more > 0 && <span className="ak-peekstack__more">{labels.more(more)}</span>}
+          <div className="ak-runningstack__foot">
+            {!open && more > 0 && <span className="ak-runningstack__more">{labels.more(more)}</span>}
             <Button
               ref={collapseEl}
               variant="ghost"
               size="sm"
-              className="ak-peekstack__fold"
+              className="ak-runningstack__fold"
               aria-label={labels.foldName}
               onFocus={() => { focusedId.current = COLLAPSE_ID; }}
               onClick={() => {
@@ -411,7 +411,7 @@ export function PeekStack(props: PeekStackProps): React.ReactElement | null {
           </div>
           <Button
             variant="ghost"
-            className="ak-peekstack__chip-only"
+            className="ak-runningstack__chip-only"
             aria-label={`${labels.count(items.length)}${first ? `: ${first.title}` : ""}${first !== undefined && firstActivatable ? `, ${labels.activateHint}` : ""}`}
             aria-disabled={first === undefined || !firstActivatable || undefined}
             onClick={() => {

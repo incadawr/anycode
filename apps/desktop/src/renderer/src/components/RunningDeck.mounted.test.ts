@@ -111,7 +111,7 @@ function Deck(props: DeckArgs) {
 
 const deck = (args: DeckArgs) => createElement(Deck, args);
 const region = () => document.querySelector<HTMLElement>('[role="region"]');
-const rowButtons = () => [...document.querySelectorAll<HTMLButtonElement>(".ak-peekstack__row")];
+const rowButtons = () => [...document.querySelectorAll<HTMLButtonElement>(".ak-runningstack__row")];
 const labels = () => rowButtons().map(b => b.getAttribute("aria-label"));
 const byText = (text: string) => [...document.querySelectorAll<HTMLElement>("button, span")].find(el => el.textContent?.trim() === text);
 const keyDown = (target: Element, key: string) => {
@@ -155,11 +155,11 @@ describe("RunningDeck", () => {
 
   it("folds into one N running chip and reopens on click", () => {
     mountInto(deck({ rows: ["a", "b", "c", "d"].map(id => row(id)) }));
-    const collapse = document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!;
+    const collapse = document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!;
     focus(collapse);
     act(() => collapse.click());
     expect(rowButtons()).toHaveLength(0);
-    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip")!;
+    const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip")!;
     expect(chip.textContent).toContain("4 running");
     expect(document.activeElement).toBe(chip);
     act(() => chip.click());
@@ -271,7 +271,7 @@ describe("RunningDeck", () => {
     focus(rowButtons()[1]!);
     keyDown(document.activeElement!, "Escape");
     rerender(deck({ rows: [rows[0]!] }));
-    expect(document.activeElement?.classList.contains("ak-peekstack__fold")).toBe(true);
+    expect(document.activeElement?.classList.contains("ak-runningstack__fold")).toBe(true);
   });
 
   it("hands focus to the focusable ancestor when the whole deck unmounts", () => {
@@ -304,7 +304,7 @@ const five = () => ["a", "b", "c", "d", "e"].map(id => row(id));
 describe("RunningDeck pointer, focus and a11y guards", () => {
   it("opens from the row stack only: the foot never opens or moves the deck", () => {
     mountInto(deck({ rows: five() }));
-    const hide = document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!;
+    const hide = document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!;
     over(hide);
     expect(region()!.hasAttribute("data-open")).toBe(false);
     over(rowButtons()[0]!);
@@ -315,7 +315,7 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
 
   it("does not open the deck when Hide takes focus (a press would otherwise move it)", () => {
     mountInto(deck({ rows: five() }));
-    focus(document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!);
+    focus(document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!);
     expect(region()!.hasAttribute("data-open")).toBe(false);
     expect(rowButtons()).toHaveLength(3);
   });
@@ -325,15 +325,15 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
     mountInto(deck({ rows: five(), blockIds: new Map(five().map(r => [r.toolCallId!, `block-${r.toolCallId}`])) }));
     const down = (el: Element) => { const e = new MouseEvent("mousedown", { bubbles: true, cancelable: true }); act(() => { el.dispatchEvent(e); }); return e.defaultPrevented; };
     expect(down(region()!)).toBe(true);
-    expect(down(document.querySelector(".ak-peekstack__foot")!)).toBe(true);
+    expect(down(document.querySelector(".ak-runningstack__foot")!)).toBe(true);
     expect(down(rowButtons()[0]!)).toBe(false);
-    expect(down(document.querySelector(".ak-peekstack__fold")!)).toBe(false);
+    expect(down(document.querySelector(".ak-runningstack__fold")!)).toBe(false);
   });
 
   it("leaves focus on a live element when the chip is clicked, even if the browser blurs the removed chip", () => {
     mountInto(deck({ rows: five() }));
-    act(() => document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!.click());
-    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip")!;
+    act(() => document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!.click());
+    const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip")!;
     focus(chip);
     const remove = Node.prototype.removeChild;
     vi.spyOn(Node.prototype, "removeChild").mockImplementation(function (this: Node, child: Node) {
@@ -344,7 +344,7 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
     } as never);
     act(() => chip.click());
     expect(document.activeElement).not.toBe(document.body);
-    expect(document.activeElement).toBe(document.querySelector(".ak-peekstack__fold"));
+    expect(document.activeElement).toBe(document.querySelector(".ak-runningstack__fold"));
     expect(region()!.hasAttribute("data-open")).toBe(false);
   });
 
@@ -372,7 +372,7 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
     const sh = vi.spyOn(Element.prototype, "scrollHeight", "get").mockReturnValue(500);
     const ch = vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(100);
     mountInto(deck({ rows: five() }));
-    const stack = () => document.querySelector<HTMLElement>(".ak-peekstack__stack")!;
+    const stack = () => document.querySelector<HTMLElement>(".ak-runningstack__stack")!;
     expect(stack().hasAttribute("data-scrollable")).toBe(false);
     focus(rowButtons()[0]!);
     expect(stack().hasAttribute("data-scrollable")).toBe(true);
@@ -388,7 +388,7 @@ describe("RunningDeck pointer, focus and a11y guards", () => {
   it("makes the chip-only chip a real button that jumps to the first card", () => {
     const jumps: string[] = [];
     mountInto(deck({ rows: [row("a")], blockIds: new Map([["a", "block-a"]]), onJump: id => jumps.push(id) }));
-    const chip = document.querySelector<HTMLButtonElement>(".ak-peekstack__chip-only")!;
+    const chip = document.querySelector<HTMLButtonElement>(".ak-runningstack__chip-only")!;
     expect(chip.tagName).toBe("BUTTON");
     expect(chip.getAttribute("aria-label")).toBe("1 running: run a, jump to its card");
     act(() => chip.click());
@@ -426,13 +426,13 @@ describe("RunningDeckHost", () => {
     const a = storeWith(["a1"]);
     const b = storeWith(["b1"]);
     const { rerender } = mountInto(hostIn("A", a, listRef), list);
-    act(() => document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!.click());
-    expect(document.querySelector(".ak-peekstack__chip")).not.toBeNull();
+    act(() => document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!.click());
+    expect(document.querySelector(".ak-runningstack__chip")).not.toBeNull();
     rerender(hostIn("B", b, listRef));
-    expect(document.querySelector(".ak-peekstack__chip")).toBeNull();
+    expect(document.querySelector(".ak-runningstack__chip")).toBeNull();
     expect(rowButtons()).toHaveLength(1);
     rerender(hostIn("A", a, listRef));
-    expect(document.querySelector(".ak-peekstack__chip")).not.toBeNull();
+    expect(document.querySelector(".ak-runningstack__chip")).not.toBeNull();
   });
 
   it("keeps the folded flag when the tab's list is remounted (key={tabId})", () => {
@@ -440,13 +440,13 @@ describe("RunningDeckHost", () => {
     document.body.append(list);
     const store = storeWith(["a1", "a2"]);
     const first = mountInto(hostIn("A", store, { current: list }), list);
-    act(() => document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!.click());
-    expect(document.querySelector(".ak-peekstack__chip")).not.toBeNull();
+    act(() => document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!.click());
+    expect(document.querySelector(".ak-runningstack__chip")).not.toBeNull();
     act(() => first.root.unmount());
     roots = roots.filter(r => r !== first.root);
     document.body.replaceChildren(list);
     mountInto(hostIn("A", store, { current: list }), list);
-    expect(document.querySelector(".ak-peekstack__chip")).not.toBeNull();
+    expect(document.querySelector(".ak-runningstack__chip")).not.toBeNull();
     expect(rowButtons()).toHaveLength(0);
   });
 
@@ -469,9 +469,9 @@ describe("RunningDeckHost", () => {
     document.body.append(list);
     mountInto(hostIn("A", storeWith(["a1"]), { current: list }), list);
     expect(set).toHaveBeenCalledTimes(1);
-    act(() => document.querySelector<HTMLButtonElement>(".ak-peekstack__fold")!.click());
+    act(() => document.querySelector<HTMLButtonElement>(".ak-runningstack__fold")!.click());
     expect(clear).toHaveBeenCalledTimes(1);
-    act(() => document.querySelector<HTMLButtonElement>(".ak-peekstack__chip")!.click());
+    act(() => document.querySelector<HTMLButtonElement>(".ak-runningstack__chip")!.click());
     expect(set).toHaveBeenCalledTimes(2);
   });
 
@@ -581,11 +581,11 @@ describe("RunningDeckHost store wiring", () => {
     const b = storeWith(["b1", "b2"]);
     mountInto(hostIn("A", a, { current: listA }), listA);
     mountInto(hostIn("B", b, { current: listB }), listB);
-    expect(listA.querySelectorAll(".ak-peekstack__row")).toHaveLength(1);
-    expect(listB.querySelectorAll(".ak-peekstack__row")).toHaveLength(2);
+    expect(listA.querySelectorAll(".ak-runningstack__row")).toHaveLength(1);
+    expect(listB.querySelectorAll(".ak-runningstack__row")).toHaveLength(2);
     act(() => a.setState({ claudeBackgroundTasks: [] } as never));
-    expect(listA.querySelectorAll(".ak-peekstack__row")).toHaveLength(0);
-    expect(listB.querySelectorAll(".ak-peekstack__row")).toHaveLength(2);
+    expect(listA.querySelectorAll(".ak-runningstack__row")).toHaveLength(0);
+    expect(listB.querySelectorAll(".ak-runningstack__row")).toHaveLength(2);
   });
 });
 
